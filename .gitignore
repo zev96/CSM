@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+config/settings.json
+config/vault_index.cache.json
+output/
+templates/.trash/
+.vscode/
+.idea/
