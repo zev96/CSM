@@ -1,7 +1,7 @@
 """Article workspace — 3-column layout: slots / markdown / controls."""
 from __future__ import annotations
 from pathlib import Path
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
 from ..widgets.slot_list import SlotList
 from ..widgets.markdown_view import MarkdownView
@@ -9,16 +9,20 @@ from ..widgets.controls_panel import ControlsPanel
 
 
 class ArticlePage(QWidget):
+    reroll_slot_requested = pyqtSignal(str)
+
     def __init__(self, skill_dir=None, default_provider="mock", parent=None):
         super().__init__(parent)
         self.setObjectName("ArticlePage")
         self.current_result = None
         self._template = None
+        self._reroll_counter = 0
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
         self.slot_list = SlotList(self.splitter)
         self.slot_list.setMinimumWidth(300)
+        self.slot_list.reroll_requested.connect(self._on_reroll_slot)
         # Keep attribute alias for backward compatibility with earlier tasks.
         self.slot_panel = self.slot_list
 
@@ -59,6 +63,11 @@ class ArticlePage(QWidget):
         )
         self.markdown_view.set_draft(draft)
         self.markdown_view.set_polished(result.final_text)
+
+    def _on_reroll_slot(self, slot_id: str):
+        if not self.current_result or not self._template:
+            return
+        self.reroll_slot_requested.emit(slot_id)
 
     def apply_config(self, cfg):
         self.controls.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)

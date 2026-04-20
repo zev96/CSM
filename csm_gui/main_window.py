@@ -37,6 +37,7 @@ class MainWindow(FluentWindow):
             default_provider=self.config.default_provider,
             parent=self,
         )
+        self.article.reroll_slot_requested.connect(self._on_reroll_slot)
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
         self.addSubInterface(self.home, FluentIcon.HOME, "首页")
@@ -94,6 +95,33 @@ class MainWindow(FluentWindow):
         template = load_template(self._last_template_path)
         self.article.load_result(template, result)
         self.switchTo(self.article)
+
+    def _on_reroll_slot(self, slot_id: str) -> None:
+        from .workers.reroll import reroll_slot
+        from csm_core.vault.scanner import scan_vault
+        from csm_core.vault.brand_registry import build_brand_registry
+        if not self.article.current_result or not self.article._template:
+            return
+        if not self.config.vault_root:
+            return
+        index = scan_vault(Path(self.config.vault_root))
+        registry = build_brand_registry(Path(self.config.vault_root))
+        self.article._reroll_counter += 1
+        new_plan = reroll_slot(
+            slot_id=slot_id, template=self.article._template,
+            index=index, registry=registry,
+            current_plan=self.article.current_result.plan,
+            counter=self.article._reroll_counter,
+            user_config={
+                "brand_competitors": int(self.article.controls.brand_count_input.value())
+            },
+        )
+        self.article.current_result.plan = new_plan
+        self.article.slot_list.load(self.article._template, new_plan)
+        draft = "\n\n".join(
+            "\n\n".join(p.text for p in s.picks) for s in new_plan.slots if s.picks
+        )
+        self.article.markdown_view.set_draft(draft)
 
     def _on_generate_failed(self, msg: str) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition
