@@ -39,3 +39,5 @@ def test_markdown_view_sets_draft_and_polished(qtbot):
     view.set_polished("# Polished\n\nbetter content")
     assert "Draft" in view.draft_edit.toPlainText()
     assert "Polished" in view.polished_edit.toPlainText()
+    # set_polished switches the pivot — a silent regression here is easy to miss
+    assert view._pivot.currentRouteKey() == "polished"
