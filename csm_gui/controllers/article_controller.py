@@ -71,8 +71,14 @@ class ArticleController(QObject):
 
     def _on_generate_finished(self, result) -> None:
         from csm_core.template.loader import load_template
+        try:
+            template = load_template(self._last_template_path)
+        except Exception as exc:  # noqa: BLE001 — boundary, surface to UI
+            self.generate_failed.emit(f"{type(exc).__name__}: {exc}")
+            self.busy_changed.emit(False)
+            return
         self._current_result = result
-        self._current_template = load_template(self._last_template_path)
+        self._current_template = template
         self._reroll_counter = 0
         self.generated.emit(result)
         if getattr(result.plan, "warnings", None):

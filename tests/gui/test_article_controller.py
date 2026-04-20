@@ -86,6 +86,30 @@ def test_request_generate_emits_busy_changed_true(qtbot, tmp_path, monkeypatch):
     assert sig.args == [True]
 
 
+def test_generate_finished_template_load_failure_emits_generate_failed(qtbot, tmp_path, monkeypatch):
+    """If load_template raises after the worker succeeds, surface via generate_failed."""
+    from csm_core.pipeline import GenerateResult
+    from csm_core.assembler.plan import AssemblyPlan
+
+    c = ArticleController(AppConfig(out_dir=str(tmp_path)))
+    c._last_template_path = tmp_path / "missing.json"  # does not exist
+
+    monkeypatch.setattr(
+        "csm_core.template.loader.load_template",
+        lambda p: (_ for _ in ()).throw(FileNotFoundError(f"no such file: {p}")),
+    )
+
+    fake_result = GenerateResult(
+        markdown_path="", assembly_json_path="",
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        final_text="",
+    )
+    with qtbot.waitSignal(c.generate_failed, timeout=500) as sig:
+        c._on_generate_finished(fake_result)
+    assert "FileNotFoundError" in sig.args[0]
+    assert c._current_result is None  # state not corrupted
+
+
 class _FakeSig:
     def connect(self, _slot):
         pass
