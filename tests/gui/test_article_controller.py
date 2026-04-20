@@ -178,7 +178,9 @@ def test_reroll_slot_emits_reroll_completed_on_success(qtbot, tmp_path, monkeypa
 
 def test_polish_no_op_without_current_result(qtbot, tmp_path):
     c = ArticleController(AppConfig(out_dir=str(tmp_path)))
-    c.polish("mock", None)  # should not raise
+    with qtbot.assertNotEmitted(c.busy_changed):
+        c.polish("mock", None)
+    assert c._polish_worker is None
 
 
 def test_polish_rejected_when_busy(qtbot, tmp_path):
@@ -196,7 +198,8 @@ def test_polish_rejected_when_busy(qtbot, tmp_path):
     c._polish_worker = FakePolishWorker()
 
     before_id = id(c._polish_worker)
-    c.polish("mock", None)
+    with qtbot.assertNotEmitted(c.busy_changed):
+        c.polish("mock", None)
     assert id(c._polish_worker) == before_id
 
 
