@@ -65,8 +65,10 @@ class HomePage(QWidget):
         self.single_panel.request_generate.connect(self.request_generate.emit)
         self.stack.addWidget(self.single_panel)
 
-        self.batch_panel_placeholder = QWidget(self)
-        self.stack.addWidget(self.batch_panel_placeholder)
+        from ..widgets.batch_panel import BatchPanel
+        self.batch_panel = BatchPanel(config, self)
+        self.batch_panel.request_batch.connect(self.request_batch.emit)
+        self.stack.addWidget(self.batch_panel)
 
         self.pivot.addItem(routeKey="single", text="单篇",
                            onClick=lambda: self.stack.setCurrentIndex(0))
@@ -80,6 +82,8 @@ class HomePage(QWidget):
     def apply_config(self, cfg: AppConfig) -> None:
         self._config = cfg
         self.single_panel.apply_config(cfg)
+        self.batch_panel.apply_config(cfg)
 
     def set_busy(self, busy: bool) -> None:
         self.single_panel.set_busy(busy)
+        self.batch_panel.set_busy(busy)

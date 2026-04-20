@@ -66,3 +66,25 @@ def test_home_page_apply_config_clears_when_config_cleared(qtbot, tmp_path):
     page.apply_config(AppConfig())
     assert page.single_panel.form.template_input.text() == ""
     assert page.single_panel.form.vault_input.text() == ""
+
+
+def test_home_page_emits_request_batch(qtbot, tmp_path):
+    from csm_gui.pages.home_page import HomePage
+    from csm_gui.config import AppConfig
+    cfg = AppConfig(default_template=str(tmp_path / "t.json"),
+                    vault_root=str(tmp_path), default_provider="mock")
+    home = HomePage(cfg)
+    qtbot.addWidget(home)
+    home.batch_panel.keyword_edit.setPlainText("kw1")
+    qtbot.wait(300)
+    with qtbot.waitSignal(home.request_batch, timeout=500) as sig:
+        home.batch_panel.start_button.click()
+    assert sig.args[0]["keywords"] == ["kw1"]
+
+
+def test_home_page_has_two_tabs(qtbot):
+    from csm_gui.pages.home_page import HomePage
+    from csm_gui.config import AppConfig
+    home = HomePage(AppConfig(default_provider="mock"))
+    qtbot.addWidget(home)
+    assert home.stack.count() == 2
