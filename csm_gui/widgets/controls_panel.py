@@ -20,6 +20,10 @@ from qfluentwidgets import (
 
 
 class ControlsPanel(QWidget):
+    # Signal payloads:
+    #   rerun_all_requested(seed: int, user_config: dict[str, int])
+    #   polish_requested(provider: str, skill_path: Path | None)
+    #   export_requested()
     rerun_all_requested = pyqtSignal(int, dict)
     polish_requested = pyqtSignal(str, object)
     export_requested = pyqtSignal()
@@ -75,6 +79,18 @@ class ControlsPanel(QWidget):
         self.rerun_all_button.clicked.connect(self._emit_rerun)
         self.polish_button.clicked.connect(self._emit_polish)
         self.export_button.clicked.connect(self.export_requested.emit)
+
+    def set_skill_dir(self, skill_dir: Path | None) -> None:
+        """Repoint at a new skill directory and rebuild the combo."""
+        self._skill_dir = Path(skill_dir) if skill_dir else None
+        self.skill_combo.clear()
+        self._populate_skills()
+
+    def set_provider_default(self, name: str) -> None:
+        """Select `name` in the provider combo if present; no-op otherwise."""
+        idx = self.provider_combo.findText(name)
+        if idx >= 0:
+            self.provider_combo.setCurrentIndex(idx)
 
     def _populate_skills(self) -> None:
         self.skill_combo.addItem("无")

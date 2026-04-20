@@ -61,9 +61,5 @@ class ArticlePage(QWidget):
         self.markdown_view.set_polished(result.final_text)
 
     def apply_config(self, cfg):
-        self.controls._skill_dir = Path(cfg.skill_dir) if cfg.skill_dir else None
-        self.controls.skill_combo.clear()
-        self.controls._populate_skills()
-        idx = self.controls.provider_combo.findText(cfg.default_provider)
-        if idx >= 0:
-            self.controls.provider_combo.setCurrentIndex(idx)
+        self.controls.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)
+        self.controls.set_provider_default(cfg.default_provider)
