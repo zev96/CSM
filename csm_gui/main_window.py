@@ -27,7 +27,8 @@ class MainWindow(FluentWindow):
         self.resize(1280, 820)
         self.setWindowTitle("CSM — Content SEO Maker")
 
-        self.home = HomePage(self)
+        self.home = HomePage(config=self.config, parent=self)
+        self.home.request_generate.connect(self._on_request_generate)
         self.article = ArticlePage(self)
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
@@ -44,3 +45,8 @@ class MainWindow(FluentWindow):
     def _on_settings_save(self, new_cfg: AppConfig) -> None:
         self.config = new_cfg
         self.save_config()
+        self.home.apply_config(new_cfg)
+
+    def _on_request_generate(self, payload: dict) -> None:
+        # Replaced in Task B4 with GenerateWorker dispatch.
+        print("generate requested:", payload)
