@@ -7,6 +7,8 @@ from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
 from .controllers.article_controller import ArticleController
+from .controllers.batch_controller import BatchController
+from .pages.batch_result_page import BatchResultPage
 
 
 class MainWindow(FluentWindow):
@@ -41,6 +43,24 @@ class MainWindow(FluentWindow):
 
         self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
+
+        self.batch_controller = BatchController(self.config, parent=self)
+        self.batch_controller.batch_started.connect(self._on_batch_started)
+        self.batch_controller.batch_progress.connect(self._on_batch_progress)
+        self.batch_controller.item_finished.connect(self._on_batch_item_finished)
+        self.batch_controller.batch_completed.connect(self._on_batch_completed)
+        self.batch_controller.batch_cancelled.connect(self._on_batch_cancelled)
+        self.batch_controller.batch_failed.connect(self._on_generate_failed)
+
+        self.batch_result_page = BatchResultPage(self)
+        self.batch_result_page.cancel_requested.connect(self.batch_controller.cancel)
+        self.batch_result_page.return_requested.connect(lambda: self.switchTo(self.home))
+        self.stackedWidget.addWidget(self.batch_result_page)
+
+        self.article_controller.busy_changed.connect(self._on_any_busy)
+        self.batch_controller.busy_changed.connect(self._on_any_busy)
+
+        self.home.request_batch.connect(self._on_request_batch)
         self.article = ArticlePage(
             skill_dir=Path(self.config.skill_dir) if self.config.skill_dir else None,
             default_provider=self.config.default_provider,
@@ -66,6 +86,7 @@ class MainWindow(FluentWindow):
         self.save_config()
         self.home.apply_config(new_cfg)
         self.article.apply_config(new_cfg)
+        self.batch_controller.apply_config(new_cfg)
 
     def _on_request_generate(self, payload: dict) -> None:
         ok = self.article_controller.request_generate(payload)
@@ -154,6 +175,74 @@ class MainWindow(FluentWindow):
             "导出失败", first_line,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
         )
+
+    def _on_request_batch(self, payload: dict) -> None:
+        if self.article_controller.is_busy():
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning("正在生成", "请先完成当前单篇任务",
+                            parent=self, position=InfoBarPosition.TOP)
+            return
+        ok = self.batch_controller.start_batch(payload)
+        if not ok:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error("批量启动失败", "检查输出目录/关键词/资料库路径",
+                          parent=self, position=InfoBarPosition.TOP, duration=5000)
+            return
+        from csm_core.batch.report import BatchReport
+        cleaned = []
+        seen = set()
+        for k in payload["keywords"]:
+            k = k.strip()
+            if k and k not in seen:
+                seen.add(k); cleaned.append(k)
+        initial = BatchReport(
+            batch_id="pending", batch_dir="",
+            started_at="", finished_at=None,
+            template_path=payload["template_path"],
+            vault_root=payload["vault_root"],
+            seed=int(payload.get("seed", self.config.last_seed)),
+            total=len(cleaned),
+        )
+        self.batch_result_page.on_batch_started(initial)
+        self.switchTo(self.batch_result_page)
+
+    def _on_batch_progress(self, done, total, keyword):
+        self.batch_result_page.on_batch_progress(done, total, keyword)
+
+    def _on_batch_item_finished(self, item):
+        self.batch_result_page.on_item_finished(item)
+
+    def _on_batch_started(self, report):
+        self.batch_result_page.on_batch_started(report)
+
+    def _on_batch_completed(self, report):
+        self.batch_result_page.on_batch_completed(report)
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        success = sum(1 for i in report.items if i.status == "success")
+        failed = sum(1 for i in report.items if i.status == "failed")
+        if failed == 0:
+            InfoBar.success(
+                "批量完成", f"{report.total} 个关键词全部成功",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+        else:
+            InfoBar.warning(
+                "批量完成（部分失败）", f"成功 {success} / 失败 {failed}",
+                parent=self, position=InfoBarPosition.TOP, duration=6000,
+            )
+
+    def _on_batch_cancelled(self, report):
+        self.batch_result_page.on_batch_cancelled(report)
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        done = len(report.items)
+        InfoBar.info(
+            "批量已取消", f"已完成 {done} / {report.total}",
+            parent=self, position=InfoBarPosition.TOP, duration=5000,
+        )
+
+    def _on_any_busy(self, busy: bool) -> None:
+        any_busy = busy or self.article_controller.is_busy() or self.batch_controller.is_busy()
+        self.home.set_busy(any_busy)
 
     def _on_generate_failed(self, msg: str) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition

@@ -5,9 +5,9 @@ def test_main_window_has_three_nav_items(qtbot, tmp_path):
     win = MainWindow(config_dir=tmp_path)
     qtbot.addWidget(win)
 
-    assert win.stackedWidget.count() == 3
+    assert win.stackedWidget.count() == 4
     names = {win.stackedWidget.widget(i).objectName() for i in range(win.stackedWidget.count())}
-    assert names == {"HomePage", "ArticlePage", "SettingsPage"}
+    assert names == {"HomePage", "ArticlePage", "SettingsPage", "BatchResultPage"}
 
 
 def test_main_window_loads_config(qtbot, tmp_path):
@@ -144,3 +144,58 @@ def test_export_without_result_is_noop(qtbot, tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == [tmp_path / "settings.json"]
     assert errors == []
     assert successes == []
+
+
+def test_main_window_has_batch_controller(qtbot, tmp_path):
+    from csm_gui.config import AppConfig, save_config
+    save_config(AppConfig(out_dir=str(tmp_path)), tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    assert hasattr(win, "batch_controller")
+    assert hasattr(win, "batch_result_page")
+
+
+def test_busy_during_batch_disables_single_generate(qtbot, tmp_path):
+    from csm_gui.config import AppConfig, save_config
+    save_config(AppConfig(out_dir=str(tmp_path)), tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.batch_controller.busy_changed.emit(True)
+    assert win.home.single_panel.generate_button.isEnabled() is False
+    assert win.home.batch_panel.start_button.isEnabled() is False
+    win.batch_controller.busy_changed.emit(False)
+
+
+def test_batch_completed_shows_success_infobar(qtbot, tmp_path, monkeypatch):
+    from csm_gui.config import AppConfig, save_config
+    from csm_core.batch.report import BatchReport, BatchItem
+    save_config(AppConfig(out_dir=str(tmp_path)), tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    shown = _capture_infobar(monkeypatch, "success")
+    report = BatchReport(
+        batch_id="b", batch_dir=str(tmp_path), started_at="", finished_at="",
+        template_path="t", vault_root="v", seed=0, total=1,
+        items=[BatchItem(index=1, keyword="k", status="success")],
+    )
+    win.batch_controller.batch_completed.emit(report)
+    assert len(shown) == 1
+
+
+def test_batch_completed_with_failures_shows_warning(qtbot, tmp_path, monkeypatch):
+    from csm_gui.config import AppConfig, save_config
+    from csm_core.batch.report import BatchReport, BatchItem
+    save_config(AppConfig(out_dir=str(tmp_path)), tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    shown = _capture_infobar(monkeypatch, "warning")
+    report = BatchReport(
+        batch_id="b", batch_dir=str(tmp_path), started_at="", finished_at="",
+        template_path="t", vault_root="v", seed=0, total=2,
+        items=[
+            BatchItem(index=1, keyword="k1", status="success"),
+            BatchItem(index=2, keyword="k2", status="failed", error_type="X", error_message="y"),
+        ],
+    )
+    win.batch_controller.batch_completed.emit(report)
+    assert len(shown) == 1
