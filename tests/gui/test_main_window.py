@@ -109,7 +109,7 @@ def test_show_plan_warnings_emits_when_present(qtbot, tmp_path, monkeypatch):
         keyword="k", template_id="t", seed=0, slots=[],
         warnings=["缺数据: slot_a", "缺数据: slot_b"],
     )
-    win._show_plan_warnings(plan)
+    win._show_plan_warnings_list(plan.warnings)
     assert len(shown) == 1
     assert "缺数据" in shown[0][1]["content"]
 
@@ -127,7 +127,7 @@ def test_show_plan_warnings_silent_when_empty(qtbot, tmp_path, monkeypatch):
         staticmethod(lambda *a, **kw: shown.append(1)),
     )
     plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
-    win._show_plan_warnings(plan)
+    win._show_plan_warnings_list([])
     assert shown == []
 
 

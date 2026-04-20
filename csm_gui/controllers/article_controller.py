@@ -11,6 +11,9 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from csm_core.pipeline import GenerateResult
 from csm_core.template.schema import Template
 from ..config import AppConfig
+from csm_core.pipeline import GenerateRequest
+from ..workers.generate_worker import GenerateWorker
+from ..llm_factory import build_client
 
 
 class ArticleController(QObject):
@@ -45,7 +48,40 @@ class ArticleController(QObject):
                 self._vault_cache = None
 
     def request_generate(self, payload: dict) -> bool:
-        raise NotImplementedError  # Task 3
+        if not self._config.out_dir:
+            return False
+        if self._generate_worker is not None and self._generate_worker.isRunning():
+            return False
+        client = build_client(self._config, payload["provider"])
+        self._last_template_path = Path(payload["template_path"])
+        req = GenerateRequest(
+            keyword=payload["keyword"],
+            vault_root=Path(payload["vault_root"]),
+            template_path=self._last_template_path,
+            out_dir=Path(self._config.out_dir),
+            llm_client=client,
+            seed=self._config.last_seed,
+        )
+        self._generate_worker = GenerateWorker(req, self)
+        self._generate_worker.finished.connect(self._on_generate_finished)
+        self._generate_worker.failed.connect(self._on_generate_failed)
+        self._generate_worker.start()
+        self.busy_changed.emit(True)
+        return True
+
+    def _on_generate_finished(self, result) -> None:
+        from csm_core.template.loader import load_template
+        self._current_result = result
+        self._current_template = load_template(self._last_template_path)
+        self._reroll_counter = 0
+        self.generated.emit(result)
+        if getattr(result.plan, "warnings", None):
+            self.plan_warnings.emit(list(result.plan.warnings))
+        self.busy_changed.emit(False)
+
+    def _on_generate_failed(self, msg: str) -> None:
+        self.generate_failed.emit(msg)
+        self.busy_changed.emit(False)
 
     def reroll_slot(self, slot_id: str, user_config: dict) -> None:
         raise NotImplementedError  # Task 4
