@@ -94,6 +94,20 @@ def test_sample_brand_pool_respects_user_config(mini_vault_path: Path):
     assert "CEWEY" not in brands
 
 
+def test_sample_user_config_out_of_range_raises(mini_vault_path: Path):
+    index = scan_vault(mini_vault_path)
+    registry = build_brand_registry(mini_vault_path)
+    slot = Slot(
+        id="comp", label="竞品",
+        source=BrandPoolSource(exclude_brands=["CEWEY"]),
+        pick_notes=PickCountSpec(user_configurable=True, default=2, range=[1, 3]),
+    )
+    with pytest.raises(ValueError, match="out of range"):
+        sample_slot(slot, index, registry, seed=0, user_config={"comp": 99})
+    with pytest.raises(ValueError, match="out of range"):
+        sample_slot(slot, index, registry, seed=0, user_config={"comp": 0})
+
+
 def test_sample_empty_pool_raises(mini_vault_path: Path):
     index = scan_vault(mini_vault_path)
     registry = build_brand_registry(mini_vault_path)

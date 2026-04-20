@@ -28,7 +28,14 @@ def _resolve_pick_count(
         lo, hi = pick_notes.random_between
         return rng.randint(lo, hi)
     if pick_notes.user_configurable:
-        return user_config.get(slot_id, pick_notes.default or 1)
+        n = user_config.get(slot_id, pick_notes.default or 1)
+        if pick_notes.range is not None:
+            lo, hi = pick_notes.range
+            if not (lo <= n <= hi):
+                raise ValueError(
+                    f"slot '{slot_id}': pick count {n} out of range [{lo}, {hi}]"
+                )
+        return n
     return 1
 
 
@@ -113,10 +120,11 @@ def sample_slot(
             )
         picks = []
         for model in aligned_models:
-            note = index.get(f"{model}-测试结果")
+            matches = index.query(module=src.module, filters={"型号": model})
+            note = matches[0] if matches else None
             if not note:
                 picks.append(PickedVariant(
-                    note_id=f"{model}-测试结果",
+                    note_id=f"__missing__:{model}-测试结果",
                     variant_index=0,
                     text=f"[缺数据：{model} 测试结果]",
                     meta={"model": model, "missing": True},

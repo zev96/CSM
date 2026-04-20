@@ -22,6 +22,7 @@ class BrandPoolSource(BaseModel):
 
 
 class TestResultsAlignedSource(BaseModel):
+    __test__ = False  # prevent pytest from collecting this as a test class
     type: Literal["test_results_aligned"] = "test_results_aligned"
     follow_slot: str
     module: str

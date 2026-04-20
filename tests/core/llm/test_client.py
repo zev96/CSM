@@ -28,6 +28,18 @@ def test_make_client_unknown_provider_raises():
         make_client(provider="nonexistent")
 
 
+def test_anthropic_client_reuses_sdk_across_calls():
+    fake_response = MagicMock()
+    fake_response.content = [MagicMock(text="ok")]
+    with patch("csm_core.llm.providers.anthropic.Anthropic") as fake_sdk:
+        fake_sdk.return_value.messages.create.return_value = fake_response
+        client = AnthropicClient(api_key="sk-x", model="claude-opus-4-7")
+        client.complete(system="S", user="U")
+        client.complete(system="S", user="U")
+        # SDK should be constructed once per client, reused across complete() calls
+        assert fake_sdk.call_count == 1
+
+
 def test_anthropic_client_calls_sdk():
     fake_response = MagicMock()
     fake_response.content = [MagicMock(text="Claude says hi")]
