@@ -26,6 +26,7 @@ class SlotList(ScrollArea):
             w = item.widget()
             if w:
                 w.setParent(None)
+                w.deleteLater()
         slot_map = {s.id: s for s in template.slots}
         for assignment in plan.slots:
             slot = slot_map.get(assignment.slot_id)
