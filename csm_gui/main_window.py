@@ -83,6 +83,7 @@ class MainWindow(FluentWindow):
 
     def _on_generated(self, result) -> None:
         self._current_result = result
+        self.article.load_result(result)
         self.switchTo(self.article)
 
     def _on_generate_failed(self, msg: str) -> None:
