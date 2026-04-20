@@ -42,6 +42,7 @@ class MainWindow(FluentWindow):
         )
         self.article.reroll_slot_requested.connect(self._on_reroll_slot)
         self.article.controls.polish_requested.connect(self._on_polish)
+        self.article.controls.export_requested.connect(self._on_export)
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
         self.addSubInterface(self.home, FluentIcon.HOME, "首页")
@@ -175,6 +176,42 @@ class MainWindow(FluentWindow):
         if self.article.current_result is not None:
             self.article.current_result.final_text = text
         self.article.markdown_view.set_polished(text)
+
+    def _on_export(self) -> None:
+        from csm_core.export.markdown import export_article
+        from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
+        import os
+        res = self.article.current_result
+        if not res:
+            return
+        if not self.config.out_dir:
+            InfoBar.error(
+                "缺少输出目录", "请先在设置页配置输出目录",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        out_dir = Path(self.config.out_dir)
+        try:
+            paths = export_article(
+                out_dir=out_dir,
+                keyword=res.plan.keyword,
+                final_text=res.final_text,
+                plan=res.plan,
+                prompt_snapshot={},
+            )
+        except (OSError, FileNotFoundError) as exc:
+            InfoBar.error(
+                "导出失败", str(exc),
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        bar = InfoBar.success(
+            title="导出成功", content=paths["markdown"],
+            parent=self, position=InfoBarPosition.TOP, duration=5000,
+        )
+        open_btn = PushButton("打开文件夹", bar)
+        open_btn.clicked.connect(lambda: os.startfile(str(out_dir)))
+        bar.addWidget(open_btn)
 
     def _on_generate_failed(self, msg: str) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition
