@@ -206,3 +206,48 @@ def test_polish_rejected_when_busy(qtbot, tmp_path):
 class _MockTemplate:
     system_prompt_default = "sys"
     seo_defaults = {}
+
+
+from pathlib import Path as _P
+from csm_core.template.loader import load_template as _load_template
+
+
+def test_export_no_op_without_result(qtbot, tmp_path):
+    c = ArticleController(AppConfig(out_dir=str(tmp_path)))
+    received = []
+    c.exported.connect(lambda d: received.append(d))
+    c.export_failed.connect(lambda m: received.append(m))
+    c.export()
+    assert received == []
+
+
+def test_export_emits_exported_on_success(qtbot, tmp_path):
+    from csm_core.assembler.plan import SlotAssignment, PickedVariant
+    c = ArticleController(AppConfig(out_dir=str(tmp_path)))
+    plan = AssemblyPlan(
+        keyword="kw", template_id="t", seed=0,
+        slots=[SlotAssignment(slot_id="s", picks=[
+            PickedVariant(note_id="n", variant_index=0, text="hi"),
+        ])],
+    )
+    c._current_result = GenerateResult(
+        markdown_path="", assembly_json_path="",
+        plan=plan, final_text="# hello",
+    )
+    with qtbot.waitSignal(c.exported, timeout=500) as sig:
+        c.export()
+    paths = sig.args[0]
+    assert "markdown" in paths
+    assert _P(paths["markdown"]).exists()
+
+
+def test_export_emits_export_failed_on_missing_out_dir(qtbot, tmp_path):
+    c = ArticleController(AppConfig(out_dir=str(tmp_path / "does_not_exist")))
+    c._current_result = GenerateResult(
+        markdown_path="", assembly_json_path="",
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        final_text="",
+    )
+    with qtbot.waitSignal(c.export_failed, timeout=500) as sig:
+        c.export()
+    assert "FileNotFoundError" in sig.args[0]

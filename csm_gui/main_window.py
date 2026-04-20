@@ -36,6 +36,8 @@ class MainWindow(FluentWindow):
         self.article_controller.reroll_completed.connect(self._on_reroll_completed)
         self.article_controller.polished.connect(self._on_polished)
         self.article_controller.polish_failed.connect(self._on_generate_failed)
+        self.article_controller.exported.connect(self._on_exported)
+        self.article_controller.export_failed.connect(self._on_export_failed)
 
         self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
@@ -120,33 +122,12 @@ class MainWindow(FluentWindow):
         self.article.markdown_view.set_polished(text)
 
     def _on_export(self) -> None:
-        from csm_core.export.markdown import export_article
+        self.article_controller.export()
+
+    def _on_exported(self, paths: dict) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
         import os
-        res = self.article.current_result
-        if not res:
-            return
-        if not self.config.out_dir:
-            InfoBar.error(
-                "缺少输出目录", "请先在设置页配置输出目录",
-                parent=self, position=InfoBarPosition.TOP, duration=5000,
-            )
-            return
         out_dir = Path(self.config.out_dir)
-        try:
-            paths = export_article(
-                out_dir=out_dir,
-                keyword=res.plan.keyword,
-                final_text=res.final_text,
-                plan=res.plan,
-                prompt_snapshot={},
-            )
-        except Exception as exc:  # noqa: BLE001 — UI boundary, surface all errors as toast
-            InfoBar.error(
-                "导出失败", f"{type(exc).__name__}: {exc}",
-                parent=self, position=InfoBarPosition.TOP, duration=5000,
-            )
-            return
         bar = InfoBar.success(
             title="导出成功", content=paths["markdown"],
             parent=self, position=InfoBarPosition.TOP, duration=5000,
@@ -155,6 +136,20 @@ class MainWindow(FluentWindow):
         open_btn.clicked.connect(lambda: os.startfile(str(out_dir)))
         bar.addWidget(open_btn)
         bar.show()
+
+    def _on_export_failed(self, msg: str) -> None:
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        first_line = msg.splitlines()[0] if msg else "未知错误"
+        if first_line.startswith("OutputDirectoryMissing"):
+            InfoBar.error(
+                "缺少输出目录", "请先在设置页配置输出目录",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        InfoBar.error(
+            "导出失败", first_line,
+            parent=self, position=InfoBarPosition.TOP, duration=5000,
+        )
 
     def _on_generate_failed(self, msg: str) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition

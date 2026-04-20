@@ -18,6 +18,7 @@ from ..workers.polish_worker import PolishWorker
 from ..llm_factory import build_client
 from csm_core.llm.prompts import build_prompt, PromptInputs
 from csm_core.assembler.render import compose_draft
+from csm_core.export.markdown import export_article
 
 
 class ArticleController(QObject):
@@ -154,7 +155,24 @@ class ArticleController(QObject):
         self.busy_changed.emit(False)
 
     def export(self) -> None:
-        raise NotImplementedError  # Task 6
+        if self._current_result is None:
+            return
+        if not self._config.out_dir:
+            self.export_failed.emit("OutputDirectoryMissing: 请先在设置页配置输出目录")
+            return
+        out_dir = Path(self._config.out_dir)
+        try:
+            paths = export_article(
+                out_dir=out_dir,
+                keyword=self._current_result.plan.keyword,
+                final_text=self._current_result.final_text,
+                plan=self._current_result.plan,
+                prompt_snapshot={},
+            )
+        except Exception as exc:  # noqa: BLE001 — boundary, surface to UI
+            self.export_failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+        self.exported.emit(paths)
 
     def is_busy(self) -> bool:
         gen_busy = self._generate_worker is not None and self._generate_worker.isRunning()
