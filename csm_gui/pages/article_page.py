@@ -1,11 +1,12 @@
 """Article workspace — 3-column layout: slots / markdown / controls.
 
-Preview and controls panels are still placeholder QFrames; Tasks 7/8 populate them.
+Controls panel is still a placeholder QFrame; Task 8 populates it.
 """
 from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QFrame
 from ..widgets.slot_list import SlotList
+from ..widgets.markdown_view import MarkdownView
 
 
 class ArticlePage(QWidget):
@@ -22,16 +23,16 @@ class ArticlePage(QWidget):
         # Keep attribute alias for backward compatibility with earlier tasks.
         self.slot_panel = self.slot_list
 
-        self.preview_panel = QFrame(self.splitter)
-        self.preview_panel.setMinimumWidth(480)
-        QVBoxLayout(self.preview_panel)
+        self.markdown_view = MarkdownView(self.splitter)
+        self.markdown_view.setMinimumWidth(480)
+        self.preview_panel = self.markdown_view  # alias for compat
 
         self.controls_panel = QFrame(self.splitter)
         self.controls_panel.setMinimumWidth(280)
         QVBoxLayout(self.controls_panel)
 
         self.splitter.addWidget(self.slot_list)
-        self.splitter.addWidget(self.preview_panel)
+        self.splitter.addWidget(self.markdown_view)
         self.splitter.addWidget(self.controls_panel)
         self.splitter.setSizes([320, 720, 300])
 
@@ -42,9 +43,16 @@ class ArticlePage(QWidget):
     def clear(self) -> None:
         self.current_result = None
         self._template = None
+        self.markdown_view.set_draft("")
+        self.markdown_view.set_polished("")
 
     def load_result(self, template, result) -> None:
         """Populate from a Template + GenerateResult."""
         self.current_result = result
         self._template = template
         self.slot_list.load(template, result.plan)
+        draft = "\n\n".join(
+            "\n\n".join(p.text for p in s.picks) for s in result.plan.slots if s.picks
+        )
+        self.markdown_view.set_draft(draft)
+        self.markdown_view.set_polished(result.final_text)
