@@ -39,13 +39,11 @@ def test_export_action_writes_files(qtbot, tmp_path):
             PickedVariant(note_id="n", variant_index=0, text="hello"),
         ])],
     )
-    win.article._template = load_template(template_path)
-    result = GenerateResult(
+    win.article_controller._current_template = load_template(template_path)
+    win.article_controller._current_result = GenerateResult(
         markdown_path="", assembly_json_path="",
         plan=plan, final_text="# exported",
     )
-    win.article.current_result = result
-    win.article_controller._current_result = result
     win._on_export()
     written = list(tmp_path.iterdir())
     assert any(p.suffix == ".md" for p in written)

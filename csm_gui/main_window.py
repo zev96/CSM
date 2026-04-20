@@ -83,10 +83,11 @@ class MainWindow(FluentWindow):
                 )
 
     def _on_generated(self, result) -> None:
-        self._current_result = result
+        from csm_core.assembler.render import compose_draft
+        draft = compose_draft(result.plan)
         self.article.load_result(
             self.article_controller._current_template,
-            result,
+            result.plan, draft, result.final_text,
         )
         self.switchTo(self.article)
 
@@ -112,8 +113,11 @@ class MainWindow(FluentWindow):
 
     def _on_reroll_completed(self, new_plan) -> None:
         from csm_core.assembler.render import compose_draft
-        self.article.slot_list.load(self.article_controller._current_template, new_plan)
-        self.article.markdown_view.set_draft(compose_draft(new_plan))
+        self.article.update_plan(
+            self.article_controller._current_template,
+            new_plan,
+            compose_draft(new_plan),
+        )
 
     def _on_polish(self, provider: str, skill_path) -> None:
         self.article_controller.polish(provider, skill_path)

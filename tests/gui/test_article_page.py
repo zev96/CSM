@@ -10,15 +10,17 @@ def test_article_page_has_three_panels(qtbot):
     assert page.splitter.count() == 3
 
 
-def test_article_page_clear_sets_current_result_none(qtbot):
+def test_article_page_clear_empties_markdown(qtbot):
     page = ArticlePage()
     qtbot.addWidget(page)
+    page.markdown_view.set_draft("something")
+    page.markdown_view.set_polished("something else")
     page.clear()
-    assert page.current_result is None
+    assert page.markdown_view.draft_edit.toPlainText() == ""
+    assert page.markdown_view.polished_edit.toPlainText() == ""
 
 
-def test_article_page_load_result_stores_reference(qtbot):
-    from types import SimpleNamespace
+def test_article_page_load_result_renders_inputs(qtbot):
     from csm_core.template.schema import Template
     from csm_core.assembler.plan import AssemblyPlan
 
@@ -26,9 +28,9 @@ def test_article_page_load_result_stores_reference(qtbot):
     qtbot.addWidget(page)
     template = Template(id="t", name="t", product="p", slots=[], render_order=[])
     plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
-    result_obj = SimpleNamespace(plan=plan, final_text="")
-    page.load_result(template, result_obj)
-    assert page.current_result is result_obj
+    page.load_result(template, plan, "draft-text", "polished-text")
+    assert "draft-text" in page.markdown_view.draft_edit.toPlainText()
+    assert "polished-text" in page.markdown_view.polished_edit.toPlainText()
 
 
 def test_markdown_view_sets_draft_and_polished(qtbot):
