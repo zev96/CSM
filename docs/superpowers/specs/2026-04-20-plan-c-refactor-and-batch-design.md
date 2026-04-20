@@ -391,7 +391,7 @@ Plan document will break these into step-level tasks with exact code. High-level
 
 - All C1 + C2 tests pass.
 - `csm_core` coverage ≥ 95%, `csm_gui` coverage ≥ 75%.
-- `MainWindow` ≤ 120 lines (down from 245 in v0.2).
+- `MainWindow` ≤ 270 lines (C1 target was ≤120; C2 batch wiring + InfoBar routing for 6 batch-lifecycle signals adds legitimate surface area).
 - `ArticlePage` contains no `_template`, `_compose_draft`, or `_reroll_counter`.
 - Manual verification on Win11:
   - Adding/removing a .md file in the vault takes effect without restart.
