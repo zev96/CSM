@@ -50,6 +50,87 @@ def test_export_action_writes_files(qtbot, tmp_path):
     assert any(p.name.endswith(".assembly.json") for p in written)
 
 
+def _capture_infobar(monkeypatch, method: str):
+    shown = []
+
+    def fake(*args, **kwargs):
+        shown.append((args, kwargs))
+        from types import SimpleNamespace
+        return SimpleNamespace(show=lambda: None, addWidget=lambda w: None)
+
+    monkeypatch.setattr(f"qfluentwidgets.InfoBar.{method}", staticmethod(fake))
+    return shown
+
+
+def test_generate_failed_shows_error_infobar(qtbot, tmp_path, monkeypatch):
+    from csm_gui.config import AppConfig, save_config
+    cfg = AppConfig(out_dir=str(tmp_path))
+    save_config(cfg, tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    shown = _capture_infobar(monkeypatch, "error")
+    win._on_generate_failed("RuntimeError: bad\ntraceback line")
+    assert len(shown) == 1
+    args, kwargs = shown[0]
+    content = kwargs.get("content") or (args[1] if len(args) > 1 else "")
+    assert "RuntimeError" in content
+    assert "traceback" not in content  # only first line surfaced
+
+
+def test_empty_pool_routes_to_warning(qtbot, tmp_path, monkeypatch):
+    from csm_gui.config import AppConfig, save_config
+    cfg = AppConfig(out_dir=str(tmp_path))
+    save_config(cfg, tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    warnings = _capture_infobar(monkeypatch, "warning")
+    errors = _capture_infobar(monkeypatch, "error")
+    win._on_generate_failed("EmptyPoolError: slot 'x': empty pool")
+    assert len(warnings) == 1
+    assert len(errors) == 0
+
+
+def test_show_plan_warnings_emits_when_present(qtbot, tmp_path, monkeypatch):
+    from csm_core.assembler.plan import AssemblyPlan
+    from csm_gui.config import AppConfig, save_config
+    cfg = AppConfig(out_dir=str(tmp_path))
+    save_config(cfg, tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    shown = []
+
+    def fake_warning(*args, **kwargs):
+        shown.append((args, kwargs))
+        from types import SimpleNamespace
+        return SimpleNamespace(show=lambda: None)
+
+    monkeypatch.setattr("qfluentwidgets.InfoBar.warning", staticmethod(fake_warning))
+    plan = AssemblyPlan(
+        keyword="k", template_id="t", seed=0, slots=[],
+        warnings=["缺数据: slot_a", "缺数据: slot_b"],
+    )
+    win._show_plan_warnings(plan)
+    assert len(shown) == 1
+    assert "缺数据" in shown[0][1]["content"]
+
+
+def test_show_plan_warnings_silent_when_empty(qtbot, tmp_path, monkeypatch):
+    from csm_core.assembler.plan import AssemblyPlan
+    from csm_gui.config import AppConfig, save_config
+    cfg = AppConfig(out_dir=str(tmp_path))
+    save_config(cfg, tmp_path / "settings.json")
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    shown = []
+    monkeypatch.setattr(
+        "qfluentwidgets.InfoBar.warning",
+        staticmethod(lambda *a, **kw: shown.append(1)),
+    )
+    plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
+    win._show_plan_warnings(plan)
+    assert shown == []
+
+
 def test_export_without_result_is_noop(qtbot, tmp_path):
     from csm_gui.config import AppConfig, save_config
     cfg = AppConfig(out_dir=str(tmp_path))

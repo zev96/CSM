@@ -107,7 +107,20 @@ class MainWindow(FluentWindow):
         self._current_result = result
         template = load_template(self._last_template_path)
         self.article.load_result(template, result)
+        self._show_plan_warnings(result.plan)
         self.switchTo(self.article)
+
+    def _show_plan_warnings(self, plan) -> None:
+        if not getattr(plan, "warnings", None):
+            return
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.warning(
+            title="注意",
+            content="\n".join(plan.warnings[:3]),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=6000,
+        )
 
     def _on_reroll_slot(self, slot_id: str) -> None:
         from .workers.reroll import reroll_slot
@@ -216,6 +229,14 @@ class MainWindow(FluentWindow):
     def _on_generate_failed(self, msg: str) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition
         first_line = msg.splitlines()[0] if msg else "未知错误"
+        # EmptyPoolError (vault too small for the template) is a data issue,
+        # not a system error — surface as warning, not red.
+        if "EmptyPoolError" in first_line:
+            InfoBar.warning(
+                "素材不足", first_line,
+                parent=self, position=InfoBarPosition.TOP, duration=6000,
+            )
+            return
         InfoBar.error(
             "生成失败", first_line,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
