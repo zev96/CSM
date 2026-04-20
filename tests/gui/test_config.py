@@ -10,6 +10,8 @@ def test_appconfig_defaults():
     assert cfg.api_keys == {}
     assert cfg.default_template is None
     assert cfg.skill_dir is None
+    assert cfg.last_seed == 0
+    assert cfg.default_model == {}
 
 
 def test_save_and_load_roundtrip(tmp_path: Path):
@@ -34,5 +36,18 @@ def test_load_nonexistent_returns_defaults(tmp_path: Path):
 def test_load_malformed_returns_defaults(tmp_path: Path):
     p = tmp_path / "bad.json"
     p.write_text("{not json", encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg == AppConfig()
+
+
+def test_save_config_creates_parent_dirs(tmp_path: Path):
+    target = tmp_path / "nested" / "deep" / "settings.json"
+    save_config(AppConfig(), target)
+    assert target.exists()
+
+
+def test_load_type_error_returns_defaults(tmp_path: Path):
+    p = tmp_path / "bad.json"
+    p.write_text('{"last_seed": "not-an-int"}', encoding="utf-8")
     cfg = load_config(p)
     assert cfg == AppConfig()
