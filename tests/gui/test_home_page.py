@@ -9,6 +9,7 @@ def test_home_page_emits_request_generate(qtbot, tmp_path):
         vault_root=str(tmp_path),
         out_dir=str(tmp_path),
         default_template=str(tpl),
+        default_provider="anthropic",
     )
     page = HomePage(config=cfg)
     qtbot.addWidget(page)
@@ -19,6 +20,7 @@ def test_home_page_emits_request_generate(qtbot, tmp_path):
     assert payload["keyword"] == "宠物吸尘器推荐"
     assert payload["template_path"] == str(tpl)
     assert payload["vault_root"] == str(tmp_path)
+    assert payload["provider"] == "anthropic"
 
 
 def test_home_page_disables_generate_when_required_missing(qtbot):
@@ -27,3 +29,40 @@ def test_home_page_disables_generate_when_required_missing(qtbot):
     qtbot.addWidget(page)
     page.keyword_input.setText("x")
     assert not page.generate_button.isEnabled()
+
+
+def test_home_page_apply_config_reflects_new_values(qtbot, tmp_path):
+    tpl_old = tmp_path / "old.json"
+    tpl_old.write_text("{}", encoding="utf-8")
+    tpl_new = tmp_path / "new.json"
+    tpl_new.write_text("{}", encoding="utf-8")
+    cfg_old = AppConfig(
+        vault_root=str(tmp_path / "old"),
+        default_template=str(tpl_old),
+        default_provider="mock",
+    )
+    page = HomePage(config=cfg_old)
+    qtbot.addWidget(page)
+
+    cfg_new = AppConfig(
+        vault_root=str(tmp_path / "new"),
+        default_template=str(tpl_new),
+        default_provider="deepseek",
+    )
+    page.apply_config(cfg_new)
+    assert page.template_input.text() == str(tpl_new)
+    assert page.vault_input.text() == str(tmp_path / "new")
+    assert page.provider_combo.currentText() == "deepseek"
+
+
+def test_home_page_apply_config_clears_when_config_cleared(qtbot, tmp_path):
+    tpl = tmp_path / "t.json"
+    tpl.write_text("{}", encoding="utf-8")
+    cfg_full = AppConfig(vault_root=str(tmp_path), default_template=str(tpl))
+    page = HomePage(config=cfg_full)
+    qtbot.addWidget(page)
+
+    # Settings cleared the fields
+    page.apply_config(AppConfig())
+    assert page.template_input.text() == ""
+    assert page.vault_input.text() == ""

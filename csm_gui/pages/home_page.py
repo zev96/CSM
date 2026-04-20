@@ -82,8 +82,8 @@ class HomePage(QWidget):
     def apply_config(self, cfg: AppConfig) -> None:
         """Called by MainWindow after settings are saved."""
         self._config = cfg
-        self.template_input.setText(cfg.default_template or self.template_input.text())
-        self.vault_input.setText(cfg.vault_root or self.vault_input.text())
+        self.template_input.setText(cfg.default_template or "")
+        self.vault_input.setText(cfg.vault_root or "")
         idx = self.provider_combo.findText(cfg.default_provider)
         if idx >= 0:
             self.provider_combo.setCurrentIndex(idx)
