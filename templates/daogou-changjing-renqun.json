@@ -1,0 +1,58 @@
+{
+  "id": "daogou-changjing-renqun",
+  "name": "导购文-场景人群型",
+  "product": "吸尘器",
+  "version": 1,
+  "system_prompt_default": "你是资深家电导购编辑，风格为小红书笔记体：口语化、有情绪钩子、分段清晰、H2 标题明确。",
+  "seo_defaults": {
+    "target_word_count": [1500, 2000],
+    "keyword_density": [5, 8],
+    "long_tail_keywords": [],
+    "tone": "小红书笔记体",
+    "force_h2": true
+  },
+  "slots": [
+    {
+      "id": "intro",
+      "label": "引言-痛点共鸣",
+      "source": {
+        "type": "notes_query",
+        "module": "引言模块",
+        "filter": {"组件类型": "痛点共鸣"}
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1
+    },
+    {
+      "id": "keypoints",
+      "label": "科普大点",
+      "source": {
+        "type": "notes_query",
+        "module": "科普模块/挑选攻略",
+        "filter": {}
+      },
+      "pick_notes": {"random_between": [2, 3]},
+      "pick_variants_per_note": 1,
+      "constraints": ["unique_notes"]
+    },
+    {
+      "id": "brand_self",
+      "label": "自有品牌",
+      "source": {
+        "type": "brand_fixed",
+        "brand": "CEWEY",
+        "model": "CEWEYDS18"
+      }
+    },
+    {
+      "id": "brand_competitors",
+      "label": "竞品",
+      "source": {
+        "type": "brand_pool",
+        "exclude_brands": ["CEWEY"]
+      },
+      "pick_notes": {"user_configurable": true, "default": 2, "range": [1, 5]}
+    }
+  ],
+  "render_order": ["intro", "keypoints", "brand_self", "brand_competitors"]
+}
