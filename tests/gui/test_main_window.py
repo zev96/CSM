@@ -131,12 +131,16 @@ def test_show_plan_warnings_silent_when_empty(qtbot, tmp_path, monkeypatch):
     assert shown == []
 
 
-def test_export_without_result_is_noop(qtbot, tmp_path):
+def test_export_without_result_is_noop(qtbot, tmp_path, monkeypatch):
     from csm_gui.config import AppConfig, save_config
     cfg = AppConfig(out_dir=str(tmp_path))
     save_config(cfg, tmp_path / "settings.json")
     win = MainWindow(config_dir=tmp_path)
     qtbot.addWidget(win)
-    # Nothing to export — should not raise, should not write files.
+    errors = _capture_infobar(monkeypatch, "error")
+    successes = _capture_infobar(monkeypatch, "success")
+    # Nothing to export — should not raise, should not write files, no toasts.
     win._on_export()
     assert list(tmp_path.iterdir()) == [tmp_path / "settings.json"]
+    assert errors == []
+    assert successes == []

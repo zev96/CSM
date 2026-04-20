@@ -212,9 +212,9 @@ class MainWindow(FluentWindow):
                 plan=res.plan,
                 prompt_snapshot={},
             )
-        except (OSError, FileNotFoundError) as exc:
+        except Exception as exc:  # noqa: BLE001 — UI boundary, surface all errors as toast
             InfoBar.error(
-                "导出失败", str(exc),
+                "导出失败", f"{type(exc).__name__}: {exc}",
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
@@ -225,6 +225,7 @@ class MainWindow(FluentWindow):
         open_btn = PushButton("打开文件夹", bar)
         open_btn.clicked.connect(lambda: os.startfile(str(out_dir)))
         bar.addWidget(open_btn)
+        bar.show()
 
     def _on_generate_failed(self, msg: str) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition

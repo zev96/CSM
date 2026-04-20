@@ -50,6 +50,7 @@ class ArticlePage(QWidget):
     def clear(self) -> None:
         self.current_result = None
         self._template = None
+        self._reroll_counter = 0
         self.markdown_view.set_draft("")
         self.markdown_view.set_polished("")
 
@@ -64,6 +65,7 @@ class ArticlePage(QWidget):
         """Populate from a Template + GenerateResult."""
         self.current_result = result
         self._template = template
+        self._reroll_counter = 0
         self.slot_list.load(template, result.plan)
         self.markdown_view.set_draft(self._compose_draft(result.plan))
         self.markdown_view.set_polished(result.final_text)
