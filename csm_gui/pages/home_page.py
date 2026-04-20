@@ -1,16 +1,54 @@
-"""Home page — keyword + template form, emits request_generate dict."""
+"""Home page — single + batch tabs."""
 from __future__ import annotations
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog
-from qfluentwidgets import (
-    SubtitleLabel, BodyLabel, LineEdit, PrimaryPushButton, PushButton,
-    ComboBox, FluentIcon,
-)
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QStackedWidget
+from qfluentwidgets import SubtitleLabel, BodyLabel, LineEdit, PrimaryPushButton, FluentIcon, Pivot
 from ..config import AppConfig
+from ..widgets.generation_form import GenerationForm
+
+
+class _SingleArticlePanel(QWidget):
+    request_generate = pyqtSignal(dict)
+
+    def __init__(self, config: AppConfig, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.addWidget(BodyLabel("关键词"))
+        self.keyword_input = LineEdit(self)
+        self.keyword_input.setPlaceholderText("例：宠物家庭吸尘器推荐")
+        self.keyword_input.textChanged.connect(self._refresh_enabled)
+        root.addWidget(self.keyword_input)
+
+        self.form = GenerationForm(config, self)
+        self.form.changed.connect(self._refresh_enabled)
+        root.addWidget(self.form)
+
+        self.generate_button = PrimaryPushButton("开始生成", self, FluentIcon.PLAY)
+        self.generate_button.clicked.connect(self._emit)
+        root.addWidget(self.generate_button)
+        root.addStretch(1)
+        self._refresh_enabled()
+
+    def _refresh_enabled(self):
+        ok = self.form.is_valid() and bool(self.keyword_input.text().strip())
+        self.generate_button.setEnabled(ok)
+
+    def _emit(self):
+        payload = dict(self.form.payload())
+        payload["keyword"] = self.keyword_input.text().strip()
+        self.request_generate.emit(payload)
+
+    def apply_config(self, cfg: AppConfig) -> None:
+        self.form.apply_config(cfg)
+
+    def set_busy(self, busy: bool) -> None:
+        self.generate_button.setEnabled((not busy) and self.form.is_valid()
+                                        and bool(self.keyword_input.text().strip()))
 
 
 class HomePage(QWidget):
     request_generate = pyqtSignal(dict)
+    request_batch = pyqtSignal(dict)
 
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -18,72 +56,30 @@ class HomePage(QWidget):
         self._config = config
 
         root = QVBoxLayout(self)
-        root.addWidget(SubtitleLabel("单篇精修"))
+        root.addWidget(SubtitleLabel("生成"))
 
-        root.addWidget(BodyLabel("关键词"))
-        self.keyword_input = LineEdit(self)
-        self.keyword_input.setPlaceholderText("例：宠物家庭吸尘器推荐")
-        self.keyword_input.textChanged.connect(self._refresh_enabled)
-        root.addWidget(self.keyword_input)
+        self.pivot = Pivot(self)
+        self.stack = QStackedWidget(self)
 
-        root.addWidget(BodyLabel("模板"))
-        row = QHBoxLayout()
-        self.template_input = LineEdit(self)
-        self.template_input.setText(config.default_template or "")
-        self.template_input.textChanged.connect(self._refresh_enabled)
-        row.addWidget(self.template_input, 1)
-        self.template_browse = PushButton("选择", self, FluentIcon.FOLDER)
-        self.template_browse.clicked.connect(self._pick_template)
-        row.addWidget(self.template_browse)
-        root.addLayout(row)
+        self.single_panel = _SingleArticlePanel(config, self)
+        self.single_panel.request_generate.connect(self.request_generate.emit)
+        self.stack.addWidget(self.single_panel)
 
-        root.addWidget(BodyLabel("资料库"))
-        self.vault_input = LineEdit(self)
-        self.vault_input.setText(config.vault_root or "")
-        self.vault_input.textChanged.connect(self._refresh_enabled)
-        root.addWidget(self.vault_input)
+        self.batch_panel_placeholder = QWidget(self)
+        self.stack.addWidget(self.batch_panel_placeholder)
 
-        root.addWidget(BodyLabel("LLM 供应商"))
-        self.provider_combo = ComboBox(self)
-        self.provider_combo.addItems(["mock", "anthropic", "deepseek"])
-        idx = self.provider_combo.findText(config.default_provider)
-        if idx >= 0:
-            self.provider_combo.setCurrentIndex(idx)
-        root.addWidget(self.provider_combo)
+        self.pivot.addItem(routeKey="single", text="单篇",
+                           onClick=lambda: self.stack.setCurrentIndex(0))
+        self.pivot.addItem(routeKey="batch", text="批量",
+                           onClick=lambda: self.stack.setCurrentIndex(1))
+        self.pivot.setCurrentItem("single")
 
-        self.generate_button = PrimaryPushButton("开始生成", self, FluentIcon.PLAY)
-        self.generate_button.clicked.connect(self._emit)
-        root.addWidget(self.generate_button)
-
-        root.addStretch(1)
-        self._refresh_enabled()
-
-    def _pick_template(self):
-        p, _ = QFileDialog.getOpenFileName(self, "选择模板", filter="JSON (*.json)")
-        if p:
-            self.template_input.setText(p)
-
-    def _refresh_enabled(self):
-        ok = bool(
-            self.keyword_input.text().strip()
-            and self.template_input.text().strip()
-            and self.vault_input.text().strip()
-        )
-        self.generate_button.setEnabled(ok)
-
-    def _emit(self):
-        self.request_generate.emit({
-            "keyword": self.keyword_input.text().strip(),
-            "template_path": self.template_input.text().strip(),
-            "vault_root": self.vault_input.text().strip(),
-            "provider": self.provider_combo.currentText(),
-        })
+        root.addWidget(self.pivot)
+        root.addWidget(self.stack, 1)
 
     def apply_config(self, cfg: AppConfig) -> None:
-        """Called by MainWindow after settings are saved."""
         self._config = cfg
-        self.template_input.setText(cfg.default_template or "")
-        self.vault_input.setText(cfg.vault_root or "")
-        idx = self.provider_combo.findText(cfg.default_provider)
-        if idx >= 0:
-            self.provider_combo.setCurrentIndex(idx)
+        self.single_panel.apply_config(cfg)
+
+    def set_busy(self, busy: bool) -> None:
+        self.single_panel.set_busy(busy)

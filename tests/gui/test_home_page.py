@@ -13,9 +13,9 @@ def test_home_page_emits_request_generate(qtbot, tmp_path):
     )
     page = HomePage(config=cfg)
     qtbot.addWidget(page)
-    page.keyword_input.setText("宠物吸尘器推荐")
+    page.single_panel.keyword_input.setText("宠物吸尘器推荐")
     with qtbot.waitSignal(page.request_generate, timeout=1000) as sig:
-        page.generate_button.click()
+        page.single_panel.generate_button.click()
     payload = sig.args[0]
     assert payload["keyword"] == "宠物吸尘器推荐"
     assert payload["template_path"] == str(tpl)
@@ -27,8 +27,8 @@ def test_home_page_disables_generate_when_required_missing(qtbot):
     cfg = AppConfig()
     page = HomePage(config=cfg)
     qtbot.addWidget(page)
-    page.keyword_input.setText("x")
-    assert not page.generate_button.isEnabled()
+    page.single_panel.keyword_input.setText("x")
+    assert not page.single_panel.generate_button.isEnabled()
 
 
 def test_home_page_apply_config_reflects_new_values(qtbot, tmp_path):
@@ -50,9 +50,9 @@ def test_home_page_apply_config_reflects_new_values(qtbot, tmp_path):
         default_provider="deepseek",
     )
     page.apply_config(cfg_new)
-    assert page.template_input.text() == str(tpl_new)
-    assert page.vault_input.text() == str(tmp_path / "new")
-    assert page.provider_combo.currentText() == "deepseek"
+    assert page.single_panel.form.template_input.text() == str(tpl_new)
+    assert page.single_panel.form.vault_input.text() == str(tmp_path / "new")
+    assert page.single_panel.form.provider_combo.currentText() == "deepseek"
 
 
 def test_home_page_apply_config_clears_when_config_cleared(qtbot, tmp_path):
@@ -64,5 +64,5 @@ def test_home_page_apply_config_clears_when_config_cleared(qtbot, tmp_path):
 
     # Settings cleared the fields
     page.apply_config(AppConfig())
-    assert page.template_input.text() == ""
-    assert page.vault_input.text() == ""
+    assert page.single_panel.form.template_input.text() == ""
+    assert page.single_panel.form.vault_input.text() == ""
