@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from qfluentwidgets import FluentWindow, FluentIcon, NavigationItemPosition
+from .config import AppConfig, load_config, save_config as _save_config
 from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
@@ -11,6 +12,8 @@ class MainWindow(FluentWindow):
     def __init__(self, config_dir: Path):
         super().__init__()
         self.config_dir = Path(config_dir)
+        self._config_path = self.config_dir / "settings.json"
+        self.config: AppConfig = load_config(self._config_path)
         self.resize(1280, 820)
         self.setWindowTitle("CSM — Content SEO Maker")
 
@@ -24,3 +27,6 @@ class MainWindow(FluentWindow):
             self.settings, FluentIcon.SETTING, "设置",
             position=NavigationItemPosition.BOTTOM,
         )
+
+    def save_config(self) -> None:
+        _save_config(self.config, self._config_path)
