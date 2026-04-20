@@ -1,16 +1,15 @@
-"""Article workspace — 3-column layout: slots / markdown / controls.
-
-Controls panel is still a placeholder QFrame; Task 8 populates it.
-"""
+"""Article workspace — 3-column layout: slots / markdown / controls."""
 from __future__ import annotations
+from pathlib import Path
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QFrame
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
 from ..widgets.slot_list import SlotList
 from ..widgets.markdown_view import MarkdownView
+from ..widgets.controls_panel import ControlsPanel
 
 
 class ArticlePage(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, skill_dir=None, default_provider="mock", parent=None):
         super().__init__(parent)
         self.setObjectName("ArticlePage")
         self.current_result = None
@@ -27,9 +26,13 @@ class ArticlePage(QWidget):
         self.markdown_view.setMinimumWidth(480)
         self.preview_panel = self.markdown_view  # alias for compat
 
-        self.controls_panel = QFrame(self.splitter)
-        self.controls_panel.setMinimumWidth(280)
-        QVBoxLayout(self.controls_panel)
+        self.controls = ControlsPanel(
+            skill_dir=skill_dir,
+            provider_default=default_provider,
+            parent=self.splitter,
+        )
+        self.controls.setMinimumWidth(280)
+        self.controls_panel = self.controls  # alias
 
         self.splitter.addWidget(self.slot_list)
         self.splitter.addWidget(self.markdown_view)
@@ -56,3 +59,11 @@ class ArticlePage(QWidget):
         )
         self.markdown_view.set_draft(draft)
         self.markdown_view.set_polished(result.final_text)
+
+    def apply_config(self, cfg):
+        self.controls._skill_dir = Path(cfg.skill_dir) if cfg.skill_dir else None
+        self.controls.skill_combo.clear()
+        self.controls._populate_skills()
+        idx = self.controls.provider_combo.findText(cfg.default_provider)
+        if idx >= 0:
+            self.controls.provider_combo.setCurrentIndex(idx)

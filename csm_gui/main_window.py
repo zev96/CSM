@@ -32,7 +32,11 @@ class MainWindow(FluentWindow):
 
         self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
-        self.article = ArticlePage(self)
+        self.article = ArticlePage(
+            skill_dir=Path(self.config.skill_dir) if self.config.skill_dir else None,
+            default_provider=self.config.default_provider,
+            parent=self,
+        )
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
         self.addSubInterface(self.home, FluentIcon.HOME, "首页")
@@ -49,6 +53,7 @@ class MainWindow(FluentWindow):
         self.config = new_cfg
         self.save_config()
         self.home.apply_config(new_cfg)
+        self.article.apply_config(new_cfg)
 
     def _on_request_generate(self, payload: dict) -> None:
         if not self.config.out_dir:
