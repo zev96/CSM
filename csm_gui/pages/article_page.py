@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
+from csm_core.assembler.render import compose_draft
 from ..widgets.slot_list import SlotList
 from ..widgets.markdown_view import MarkdownView
 from ..widgets.controls_panel import ControlsPanel
@@ -56,10 +57,7 @@ class ArticlePage(QWidget):
 
     @staticmethod
     def _compose_draft(plan) -> str:
-        """Render an AssemblyPlan into the nested-join draft text."""
-        return "\n\n".join(
-            "\n\n".join(p.text for p in s.picks) for s in plan.slots if s.picks
-        )
+        return compose_draft(plan)
 
     def load_result(self, template, result) -> None:
         """Populate from a Template + GenerateResult."""

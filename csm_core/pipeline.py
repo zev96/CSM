@@ -8,6 +8,7 @@ from .vault.brand_registry import build_brand_registry
 from .template.loader import load_template
 from .assembler.constraints import assemble_plan
 from .assembler.plan import AssemblyPlan
+from .assembler.render import compose_draft
 from .llm.client import LLMClient
 from .llm.prompts import build_prompt, PromptInputs
 from .export.markdown import export_article
@@ -36,15 +37,6 @@ class GenerateResult:
     final_text: str
 
 
-def _render_draft(plan: AssemblyPlan) -> str:
-    parts: list[str] = []
-    for slot in plan.slots:
-        if not slot.picks:
-            continue
-        parts.append("\n\n".join(p.text for p in slot.picks))
-    return "\n\n".join(parts)
-
-
 def generate(req: GenerateRequest, on_stage: Callable[[str], None] | None = None) -> GenerateResult:
     def _emit(name: str) -> None:
         if on_stage is not None:
@@ -68,7 +60,7 @@ def generate(req: GenerateRequest, on_stage: Callable[[str], None] | None = None
     )
 
     _emit("组装 prompt")
-    draft = _render_draft(plan)
+    draft = compose_draft(plan)
     system, user = build_prompt(PromptInputs(
         template_system_prompt=template.system_prompt_default,
         user_skill_prompt=req.user_skill_prompt,
