@@ -143,7 +143,9 @@ def test_get_vault_invalidates_on_mtime_change(qtbot, tmp_path):
 
 def test_reroll_slot_no_op_when_no_current_result(qtbot, tmp_path):
     c = ArticleController(AppConfig(vault_root=str(tmp_path)))
-    c.reroll_slot("some_slot", {"brand_competitors": 2})
+    with qtbot.assertNotEmitted(c.reroll_completed):
+        c.reroll_slot("some_slot", {"brand_competitors": 2})
+    assert c._reroll_counter == 0
 
 
 def test_reroll_slot_emits_reroll_completed_on_success(qtbot, tmp_path, monkeypatch):
@@ -157,7 +159,10 @@ def test_reroll_slot_emits_reroll_completed_on_success(qtbot, tmp_path, monkeypa
         final_text="",
     )
     c._current_template = object()
-    c._vault_cache = (tmp_path, 0.0, object(), object())
+    monkeypatch.setattr(
+        c, "_get_vault",
+        lambda root: (object(), object()),
+    )
 
     monkeypatch.setattr(
         "csm_gui.controllers.article_controller.reroll_slot",
