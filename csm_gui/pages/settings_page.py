@@ -1,12 +1,12 @@
 """Settings page — all persistent user preferences."""
 from __future__ import annotations
-from typing import Callable
+from typing import Callable, cast
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QFileDialog, QHBoxLayout
 from qfluentwidgets import (
     ComboBox, SpinBox, LineEdit, PasswordLineEdit,
     PrimaryPushButton, PushButton, FluentIcon, SubtitleLabel, BodyLabel, CardWidget,
 )
-from ..config import AppConfig
+from ..config import AppConfig, Provider
 
 
 class _PathCard(CardWidget):
@@ -101,14 +101,16 @@ class SettingsPage(QWidget):
         self.seed_card.setValue(cfg.last_seed)
 
     def _save(self) -> None:
+        raw_keys = {
+            "anthropic": self.anthropic_key_input.text(),
+            "deepseek": self.deepseek_key_input.text(),
+        }
+        api_keys = {k: v for k, v in raw_keys.items() if v}
         new_cfg = AppConfig(
             vault_root=self.vault_card.text() or None,
             out_dir=self.out_card.text() or None,
-            default_provider=self.provider_card.currentText(),  # type: ignore[arg-type]
-            api_keys={
-                "anthropic": self.anthropic_key_input.text(),
-                "deepseek": self.deepseek_key_input.text(),
-            },
+            default_provider=cast(Provider, self.provider_card.currentText()),
+            api_keys=api_keys,
             default_template=self.template_card.text() or None,
             skill_dir=self.skill_card.text() or None,
             last_seed=self.seed_card.value(),

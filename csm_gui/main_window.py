@@ -9,6 +9,16 @@ from .pages.settings_page import SettingsPage
 
 
 class MainWindow(FluentWindow):
+    """FluentWindow shell.
+
+    Config mutation contract: pages that need current config should read
+    ``self.window().config`` (or receive config via constructor and re-read
+    on user action). There is currently NO ``configChanged`` signal — when
+    SettingsPage fires ``_on_settings_save``, MainWindow rebinds
+    ``self.config`` but does not notify other pages. Revisit if Task B3+
+    requires live observation.
+    """
+
     def __init__(self, config_dir: Path):
         super().__init__()
         self.config_dir = Path(config_dir)

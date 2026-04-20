@@ -28,3 +28,16 @@ def test_settings_page_writes_to_config_on_save(qtbot):
     assert len(saved) == 1
     assert saved[0].vault_root == "D:/new-vault"
     assert saved[0].last_seed == 42
+
+
+def test_settings_page_provider_roundtrip(qtbot):
+    saved = []
+    cfg = AppConfig()
+    page = SettingsPage(config=cfg, on_save=lambda c: saved.append(c))
+    qtbot.addWidget(page)
+    idx = page.provider_card.findText("deepseek")
+    assert idx >= 0
+    page.provider_card.setCurrentIndex(idx)
+    page.save_button.click()
+    assert saved[0].default_provider == "deepseek"
+    assert saved[0].api_keys == {}  # empty inputs were filtered out
