@@ -14,7 +14,10 @@ from ..config import AppConfig
 from csm_core.pipeline import GenerateRequest
 from ..workers.generate_worker import GenerateWorker
 from ..workers.reroll import reroll_slot
+from ..workers.polish_worker import PolishWorker
 from ..llm_factory import build_client
+from csm_core.llm.prompts import build_prompt, PromptInputs
+from csm_core.assembler.render import compose_draft
 
 
 class ArticleController(QObject):
@@ -110,7 +113,45 @@ class ArticleController(QObject):
         self.reroll_completed.emit(new_plan)
 
     def polish(self, provider: str, skill_path: Path | None) -> None:
-        raise NotImplementedError  # Task 5
+        if self._current_result is None or self._current_template is None:
+            return
+        if self._polish_worker is not None and self._polish_worker.isRunning():
+            return
+
+        skill_text: str | None = None
+        if skill_path:
+            try:
+                skill_text = Path(skill_path).read_text(encoding="utf-8")
+            except OSError as exc:
+                self.polish_failed.emit(f"{type(exc).__name__}: {exc}")
+                return
+
+        template = self._current_template
+        plan = self._current_result.plan
+        draft = compose_draft(plan)
+        system, user = build_prompt(PromptInputs(
+            template_system_prompt=template.system_prompt_default,
+            user_skill_prompt=skill_text,
+            seo=template.seo_defaults,
+            keyword=plan.keyword,
+            draft=draft,
+        ))
+        client = build_client(self._config, provider)
+        self._polish_worker = PolishWorker(client=client, system=system, user=user, parent=self)
+        self._polish_worker.finished.connect(self._on_polish_finished)
+        self._polish_worker.failed.connect(self._on_polish_failed)
+        self._polish_worker.start()
+        self.busy_changed.emit(True)
+
+    def _on_polish_finished(self, text: str) -> None:
+        if self._current_result is not None:
+            self._current_result.final_text = text
+        self.polished.emit(text)
+        self.busy_changed.emit(False)
+
+    def _on_polish_failed(self, msg: str) -> None:
+        self.polish_failed.emit(msg)
+        self.busy_changed.emit(False)
 
     def export(self) -> None:
         raise NotImplementedError  # Task 6

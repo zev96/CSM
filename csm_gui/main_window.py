@@ -6,7 +6,6 @@ from .config import AppConfig, load_config, save_config as _save_config
 from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
-from .workers.polish_worker import PolishWorker
 from .controllers.article_controller import ArticleController
 
 
@@ -27,7 +26,6 @@ class MainWindow(FluentWindow):
         self._config_path = self.config_dir / "settings.json"
         self.config: AppConfig = load_config(self._config_path)
         self._current_result = None
-        self._polish_worker: PolishWorker | None = None
         self.resize(1280, 820)
         self.setWindowTitle("CSM — Content SEO Maker")
 
@@ -36,6 +34,8 @@ class MainWindow(FluentWindow):
         self.article_controller.generate_failed.connect(self._on_generate_failed)
         self.article_controller.plan_warnings.connect(self._show_plan_warnings_list)
         self.article_controller.reroll_completed.connect(self._on_reroll_completed)
+        self.article_controller.polished.connect(self._on_polished)
+        self.article_controller.polish_failed.connect(self._on_generate_failed)
 
         self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
@@ -114,50 +114,9 @@ class MainWindow(FluentWindow):
         self.article.markdown_view.set_draft(compose_draft(new_plan))
 
     def _on_polish(self, provider: str, skill_path) -> None:
-        if not self.article.current_result or not self.article._template:
-            return
-        if self._polish_worker is not None and self._polish_worker.isRunning():
-            from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.warning(
-                "正在润色", "请等待当前润色任务完成",
-                parent=self, position=InfoBarPosition.TOP,
-            )
-            return
-        from csm_core.llm.prompts import build_prompt, PromptInputs
-        from .llm_factory import build_client
-
-        template = self.article._template
-        plan = self.article.current_result.plan
-        draft = self.article._compose_draft(plan)
-
-        skill_text: str | None = None
-        if skill_path:
-            try:
-                skill_text = Path(skill_path).read_text(encoding="utf-8")
-            except OSError as exc:
-                from qfluentwidgets import InfoBar, InfoBarPosition
-                InfoBar.error(
-                    "读取 skill 失败", str(exc),
-                    parent=self, position=InfoBarPosition.TOP,
-                )
-                return
-
-        system, user = build_prompt(PromptInputs(
-            template_system_prompt=template.system_prompt_default,
-            user_skill_prompt=skill_text,
-            seo=template.seo_defaults,
-            keyword=plan.keyword,
-            draft=draft,
-        ))
-        client = build_client(self.config, provider)
-        self._polish_worker = PolishWorker(client=client, system=system, user=user, parent=self)
-        self._polish_worker.finished.connect(self._on_polished)
-        self._polish_worker.failed.connect(self._on_generate_failed)
-        self._polish_worker.start()
+        self.article_controller.polish(provider, skill_path)
 
     def _on_polished(self, text: str) -> None:
-        if self.article.current_result is not None:
-            self.article.current_result.final_text = text
         self.article.markdown_view.set_polished(text)
 
     def _on_export(self) -> None:

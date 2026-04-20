@@ -174,3 +174,32 @@ def test_reroll_slot_emits_reroll_completed_on_success(qtbot, tmp_path, monkeypa
     assert sig.args[0] is fake_plan
     assert c._current_result.plan is fake_plan
     assert c._reroll_counter == 1
+
+
+def test_polish_no_op_without_current_result(qtbot, tmp_path):
+    c = ArticleController(AppConfig(out_dir=str(tmp_path)))
+    c.polish("mock", None)  # should not raise
+
+
+def test_polish_rejected_when_busy(qtbot, tmp_path):
+    c = ArticleController(AppConfig(out_dir=str(tmp_path)))
+    c._current_result = GenerateResult(
+        markdown_path="", assembly_json_path="",
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        final_text="",
+    )
+    c._current_template = _MockTemplate()
+
+    class FakePolishWorker:
+        def isRunning(self):
+            return True
+    c._polish_worker = FakePolishWorker()
+
+    before_id = id(c._polish_worker)
+    c.polish("mock", None)
+    assert id(c._polish_worker) == before_id
+
+
+class _MockTemplate:
+    system_prompt_default = "sys"
+    seo_defaults = {}
