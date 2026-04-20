@@ -19,7 +19,7 @@ class MainWindow(FluentWindow):
 
         self.home = HomePage(self)
         self.article = ArticlePage(self)
-        self.settings = SettingsPage(self)
+        self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
         self.addSubInterface(self.home, FluentIcon.HOME, "首页")
         self.addSubInterface(self.article, FluentIcon.DOCUMENT, "文章")
@@ -30,3 +30,7 @@ class MainWindow(FluentWindow):
 
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
+
+    def _on_settings_save(self, new_cfg: AppConfig) -> None:
+        self.config = new_cfg
+        self.save_config()
