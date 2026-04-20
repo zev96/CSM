@@ -6,6 +6,7 @@ from .config import AppConfig, load_config, save_config as _save_config
 from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
+from .workers.polish_worker import PolishWorker
 
 
 class MainWindow(FluentWindow):
@@ -26,6 +27,7 @@ class MainWindow(FluentWindow):
         self.config: AppConfig = load_config(self._config_path)
         self._current_result = None
         self._worker = None
+        self._polish_worker: PolishWorker | None = None
         self._last_template_path: Path | None = None
         self._vault_cache: tuple[Path, object, object] | None = None
         self.resize(1280, 820)
@@ -39,6 +41,7 @@ class MainWindow(FluentWindow):
             parent=self,
         )
         self.article.reroll_slot_requested.connect(self._on_reroll_slot)
+        self.article.controls.polish_requested.connect(self._on_polish)
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
         self.addSubInterface(self.home, FluentIcon.HOME, "首页")
@@ -124,10 +127,54 @@ class MainWindow(FluentWindow):
         )
         self.article.current_result.plan = new_plan
         self.article.slot_list.load(self.article._template, new_plan)
-        draft = "\n\n".join(
-            "\n\n".join(p.text for p in s.picks) for s in new_plan.slots if s.picks
-        )
-        self.article.markdown_view.set_draft(draft)
+        self.article.markdown_view.set_draft(self.article._compose_draft(new_plan))
+
+    def _on_polish(self, provider: str, skill_path) -> None:
+        if not self.article.current_result or not self.article._template:
+            return
+        if self._polish_worker is not None and self._polish_worker.isRunning():
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning(
+                "正在润色", "请等待当前润色任务完成",
+                parent=self, position=InfoBarPosition.TOP,
+            )
+            return
+        from csm_core.llm.prompts import build_prompt, PromptInputs
+        from .llm_factory import build_client
+
+        template = self.article._template
+        plan = self.article.current_result.plan
+        draft = self.article._compose_draft(plan)
+
+        skill_text: str | None = None
+        if skill_path:
+            try:
+                skill_text = Path(skill_path).read_text(encoding="utf-8")
+            except OSError as exc:
+                from qfluentwidgets import InfoBar, InfoBarPosition
+                InfoBar.error(
+                    "读取 skill 失败", str(exc),
+                    parent=self, position=InfoBarPosition.TOP,
+                )
+                return
+
+        system, user = build_prompt(PromptInputs(
+            template_system_prompt=template.system_prompt_default,
+            user_skill_prompt=skill_text,
+            seo=template.seo_defaults,
+            keyword=plan.keyword,
+            draft=draft,
+        ))
+        client = build_client(self.config, provider)
+        self._polish_worker = PolishWorker(client=client, system=system, user=user, parent=self)
+        self._polish_worker.finished.connect(self._on_polished)
+        self._polish_worker.failed.connect(self._on_generate_failed)
+        self._polish_worker.start()
+
+    def _on_polished(self, text: str) -> None:
+        if self.article.current_result is not None:
+            self.article.current_result.final_text = text
+        self.article.markdown_view.set_polished(text)
 
     def _on_generate_failed(self, msg: str) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition

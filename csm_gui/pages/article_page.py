@@ -53,15 +53,19 @@ class ArticlePage(QWidget):
         self.markdown_view.set_draft("")
         self.markdown_view.set_polished("")
 
+    @staticmethod
+    def _compose_draft(plan) -> str:
+        """Render an AssemblyPlan into the nested-join draft text."""
+        return "\n\n".join(
+            "\n\n".join(p.text for p in s.picks) for s in plan.slots if s.picks
+        )
+
     def load_result(self, template, result) -> None:
         """Populate from a Template + GenerateResult."""
         self.current_result = result
         self._template = template
         self.slot_list.load(template, result.plan)
-        draft = "\n\n".join(
-            "\n\n".join(p.text for p in s.picks) for s in result.plan.slots if s.picks
-        )
-        self.markdown_view.set_draft(draft)
+        self.markdown_view.set_draft(self._compose_draft(result.plan))
         self.markdown_view.set_polished(result.final_text)
 
     def _on_reroll_slot(self, slot_id: str):
