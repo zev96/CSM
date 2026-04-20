@@ -1,8 +1,1 @@
-import pytest
-from PyQt6.QtWidgets import QApplication
-
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
+"""GUI test fixtures. pytest-qt provides the session-scoped ``qapp`` fixture."""
