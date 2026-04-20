@@ -18,8 +18,14 @@ def test_article_page_clear_sets_current_result_none(qtbot):
 
 
 def test_article_page_load_result_stores_reference(qtbot):
+    from types import SimpleNamespace
+    from csm_core.template.schema import Template
+    from csm_core.assembler.plan import AssemblyPlan
+
     page = ArticlePage()
     qtbot.addWidget(page)
-    sentinel = object()
-    page.load_result(sentinel)
-    assert page.current_result is sentinel
+    template = Template(id="t", name="t", product="p", slots=[], render_order=[])
+    plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
+    result_obj = SimpleNamespace(plan=plan)
+    page.load_result(template, result_obj)
+    assert page.current_result is result_obj

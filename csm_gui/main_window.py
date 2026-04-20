@@ -26,6 +26,7 @@ class MainWindow(FluentWindow):
         self.config: AppConfig = load_config(self._config_path)
         self._current_result = None
         self._worker = None
+        self._last_template_path: Path | None = None
         self.resize(1280, 820)
         self.setWindowTitle("CSM — Content SEO Maker")
 
@@ -68,10 +69,11 @@ class MainWindow(FluentWindow):
         from .workers.generate_worker import GenerateWorker
         from .llm_factory import build_client
         client = build_client(self.config, payload["provider"])
+        self._last_template_path = Path(payload["template_path"])
         req = GenerateRequest(
             keyword=payload["keyword"],
             vault_root=Path(payload["vault_root"]),
-            template_path=Path(payload["template_path"]),
+            template_path=self._last_template_path,
             out_dir=Path(self.config.out_dir),
             llm_client=client,
             seed=self.config.last_seed,
@@ -82,8 +84,10 @@ class MainWindow(FluentWindow):
         self._worker.start()
 
     def _on_generated(self, result) -> None:
+        from csm_core.template.loader import load_template
         self._current_result = result
-        self.article.load_result(result)
+        template = load_template(self._last_template_path)
+        self.article.load_result(template, result)
         self.switchTo(self.article)
 
     def _on_generate_failed(self, msg: str) -> None:
