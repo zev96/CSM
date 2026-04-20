@@ -86,7 +86,7 @@ class MainWindow(FluentWindow):
         from csm_core.assembler.render import compose_draft
         draft = compose_draft(result.plan)
         self.article.load_result(
-            self.article_controller._current_template,
+            self.article_controller.current_template,
             result.plan, draft, result.final_text,
         )
         self.switchTo(self.article)
@@ -114,7 +114,7 @@ class MainWindow(FluentWindow):
     def _on_reroll_completed(self, new_plan) -> None:
         from csm_core.assembler.render import compose_draft
         self.article.update_plan(
-            self.article_controller._current_template,
+            self.article_controller.current_template,
             new_plan,
             compose_draft(new_plan),
         )

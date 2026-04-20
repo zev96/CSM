@@ -181,6 +181,11 @@ class ArticleController(QObject):
 
     # --- internals ---
 
+    @property
+    def current_template(self):
+        """Read-only view of the loaded template (for UI rendering)."""
+        return self._current_template
+
     def _get_vault(self, vault_root: Path):
         from csm_core.vault.scanner import scan_vault
         from csm_core.vault.brand_registry import build_brand_registry
