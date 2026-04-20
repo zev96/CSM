@@ -27,6 +27,7 @@ class MainWindow(FluentWindow):
         self._current_result = None
         self._worker = None
         self._last_template_path: Path | None = None
+        self._vault_cache: tuple[Path, object, object] | None = None
         self.resize(1280, 820)
         self.setWindowTitle("CSM — Content SEO Maker")
 
@@ -50,11 +51,19 @@ class MainWindow(FluentWindow):
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
 
+    def _get_vault(self, vault_root):
+        if self._vault_cache is None or self._vault_cache[0] != vault_root:
+            from csm_core.vault.scanner import scan_vault
+            from csm_core.vault.brand_registry import build_brand_registry
+            self._vault_cache = (vault_root, scan_vault(vault_root), build_brand_registry(vault_root))
+        return self._vault_cache[1], self._vault_cache[2]
+
     def _on_settings_save(self, new_cfg: AppConfig) -> None:
         self.config = new_cfg
         self.save_config()
         self.home.apply_config(new_cfg)
         self.article.apply_config(new_cfg)
+        self._vault_cache = None
 
     def _on_request_generate(self, payload: dict) -> None:
         if not self.config.out_dir:
@@ -98,14 +107,11 @@ class MainWindow(FluentWindow):
 
     def _on_reroll_slot(self, slot_id: str) -> None:
         from .workers.reroll import reroll_slot
-        from csm_core.vault.scanner import scan_vault
-        from csm_core.vault.brand_registry import build_brand_registry
         if not self.article.current_result or not self.article._template:
             return
         if not self.config.vault_root:
             return
-        index = scan_vault(Path(self.config.vault_root))
-        registry = build_brand_registry(Path(self.config.vault_root))
+        index, registry = self._get_vault(Path(self.config.vault_root))
         self.article._reroll_counter += 1
         new_plan = reroll_slot(
             slot_id=slot_id, template=self.article._template,

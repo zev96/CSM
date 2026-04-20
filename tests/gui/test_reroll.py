@@ -26,6 +26,10 @@ def test_reroll_changes_single_slot(mini_vault_path):
         registry=registry, current_plan=plan, counter=1,
         user_config={"brand_competitors": 2},
     )
+    # Keypoints picks should actually change after reroll.
+    before = [(p.note_id, p.variant_index) for p in plan.get_slot("keypoints").picks]
+    after = [(p.note_id, p.variant_index) for p in new_plan.get_slot("keypoints").picks]
+    assert before != after, "reroll should change keypoints picks"
     # Other independent slots unchanged.
     assert (
         plan.get_slot("brand_self").picks[0].meta

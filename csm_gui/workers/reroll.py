@@ -1,5 +1,6 @@
 """Pure function to reroll a single slot plus its downstream dependents."""
 from __future__ import annotations
+import zlib
 from collections import deque
 from csm_core.assembler.plan import AssemblyPlan, SlotAssignment
 from csm_core.assembler.sampler import sample_slot
@@ -70,7 +71,8 @@ def reroll_slot(
     # Start from current plan's assignments (shallow copy — we only replace whole entries).
     assignments: dict[str, SlotAssignment] = {s.slot_id: s for s in current_plan.slots}
 
-    derived = hash(f"{current_plan.seed}-{slot_id}-{counter}") & 0x7FFFFFFF
+    derived_key = f"{current_plan.seed}-{slot_id}-{counter}"
+    derived_seed = zlib.crc32(derived_key.encode("utf-8"))
 
     to_refresh = _downstream(template, slot_id)
     warnings: list[str] = list(current_plan.warnings)
@@ -81,7 +83,7 @@ def reroll_slot(
             aligned = _resolve_aligned_models(slot.source.follow_slot, assignments)
         picks = sample_slot(
             slot, index, registry,
-            seed=derived, user_config=user_config,
+            seed=derived_seed, user_config=user_config,
             aligned_models=aligned,
         )
         assignments[sid] = SlotAssignment(slot_id=sid, picks=picks)
