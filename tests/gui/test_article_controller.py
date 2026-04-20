@@ -115,3 +115,57 @@ class _FakeSig:
         pass
     def emit(self, *a, **kw):
         pass
+
+
+import time
+from csm_core.assembler.plan import AssemblyPlan
+from csm_core.pipeline import GenerateResult
+
+
+def test_get_vault_caches_result(qtbot, tmp_path):
+    (tmp_path / "brands.json").write_text('{"brands":[]}', encoding="utf-8")
+    c = ArticleController(AppConfig(vault_root=str(tmp_path)))
+    idx1, reg1 = c._get_vault(tmp_path)
+    idx2, reg2 = c._get_vault(tmp_path)
+    assert idx1 is idx2
+    assert reg1 is reg2
+
+
+def test_get_vault_invalidates_on_mtime_change(qtbot, tmp_path):
+    (tmp_path / "brands.json").write_text('{"brands":[]}', encoding="utf-8")
+    c = ArticleController(AppConfig(vault_root=str(tmp_path)))
+    idx1, _ = c._get_vault(tmp_path)
+    time.sleep(0.05)
+    (tmp_path / "new.md").write_text("# x", encoding="utf-8")
+    idx2, _ = c._get_vault(tmp_path)
+    assert idx1 is not idx2
+
+
+def test_reroll_slot_no_op_when_no_current_result(qtbot, tmp_path):
+    c = ArticleController(AppConfig(vault_root=str(tmp_path)))
+    c.reroll_slot("some_slot", {"brand_competitors": 2})
+
+
+def test_reroll_slot_emits_reroll_completed_on_success(qtbot, tmp_path, monkeypatch):
+    (tmp_path / "brands.json").write_text('{"brands":[]}', encoding="utf-8")
+    c = ArticleController(AppConfig(vault_root=str(tmp_path)))
+
+    fake_plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
+    c._current_result = GenerateResult(
+        markdown_path="", assembly_json_path="",
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        final_text="",
+    )
+    c._current_template = object()
+    c._vault_cache = (tmp_path, 0.0, object(), object())
+
+    monkeypatch.setattr(
+        "csm_gui.controllers.article_controller.reroll_slot",
+        lambda **kwargs: fake_plan,
+    )
+
+    with qtbot.waitSignal(c.reroll_completed, timeout=500) as sig:
+        c.reroll_slot("slot_a", {"brand_competitors": 2})
+    assert sig.args[0] is fake_plan
+    assert c._current_result.plan is fake_plan
+    assert c._reroll_counter == 1

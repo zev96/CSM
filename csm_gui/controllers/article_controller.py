@@ -13,6 +13,7 @@ from csm_core.template.schema import Template
 from ..config import AppConfig
 from csm_core.pipeline import GenerateRequest
 from ..workers.generate_worker import GenerateWorker
+from ..workers.reroll import reroll_slot
 from ..llm_factory import build_client
 
 
@@ -90,7 +91,23 @@ class ArticleController(QObject):
         self.busy_changed.emit(False)
 
     def reroll_slot(self, slot_id: str, user_config: dict) -> None:
-        raise NotImplementedError  # Task 4
+        if self._current_result is None or self._current_template is None:
+            return
+        if not self._config.vault_root:
+            return
+        index, registry = self._get_vault(Path(self._config.vault_root))
+        self._reroll_counter += 1
+        new_plan = reroll_slot(
+            slot_id=slot_id,
+            template=self._current_template,
+            index=index,
+            registry=registry,
+            current_plan=self._current_result.plan,
+            counter=self._reroll_counter,
+            user_config=user_config,
+        )
+        self._current_result.plan = new_plan
+        self.reroll_completed.emit(new_plan)
 
     def polish(self, provider: str, skill_path: Path | None) -> None:
         raise NotImplementedError  # Task 5

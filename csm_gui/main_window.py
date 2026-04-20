@@ -28,7 +28,6 @@ class MainWindow(FluentWindow):
         self.config: AppConfig = load_config(self._config_path)
         self._current_result = None
         self._polish_worker: PolishWorker | None = None
-        self._vault_cache: tuple[Path, object, object] | None = None
         self.resize(1280, 820)
         self.setWindowTitle("CSM — Content SEO Maker")
 
@@ -36,6 +35,7 @@ class MainWindow(FluentWindow):
         self.article_controller.generated.connect(self._on_generated)
         self.article_controller.generate_failed.connect(self._on_generate_failed)
         self.article_controller.plan_warnings.connect(self._show_plan_warnings_list)
+        self.article_controller.reroll_completed.connect(self._on_reroll_completed)
 
         self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
@@ -59,19 +59,11 @@ class MainWindow(FluentWindow):
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
 
-    def _get_vault(self, vault_root):
-        if self._vault_cache is None or self._vault_cache[0] != vault_root:
-            from csm_core.vault.scanner import scan_vault
-            from csm_core.vault.brand_registry import build_brand_registry
-            self._vault_cache = (vault_root, scan_vault(vault_root), build_brand_registry(vault_root))
-        return self._vault_cache[1], self._vault_cache[2]
-
     def _on_settings_save(self, new_cfg: AppConfig) -> None:
         self.config = new_cfg
         self.save_config()
         self.home.apply_config(new_cfg)
         self.article.apply_config(new_cfg)
-        self._vault_cache = None
 
     def _on_request_generate(self, payload: dict) -> None:
         ok = self.article_controller.request_generate(payload)
@@ -109,25 +101,17 @@ class MainWindow(FluentWindow):
         )
 
     def _on_reroll_slot(self, slot_id: str) -> None:
-        from .workers.reroll import reroll_slot
-        if not self.article.current_result or not self.article._template:
-            return
-        if not self.config.vault_root:
-            return
-        index, registry = self._get_vault(Path(self.config.vault_root))
-        self.article._reroll_counter += 1
-        new_plan = reroll_slot(
-            slot_id=slot_id, template=self.article._template,
-            index=index, registry=registry,
-            current_plan=self.article.current_result.plan,
-            counter=self.article._reroll_counter,
+        self.article_controller.reroll_slot(
+            slot_id,
             user_config={
                 "brand_competitors": int(self.article.controls.brand_count_input.value())
             },
         )
-        self.article.current_result.plan = new_plan
-        self.article.slot_list.load(self.article._template, new_plan)
-        self.article.markdown_view.set_draft(self.article._compose_draft(new_plan))
+
+    def _on_reroll_completed(self, new_plan) -> None:
+        from csm_core.assembler.render import compose_draft
+        self.article.slot_list.load(self.article_controller._current_template, new_plan)
+        self.article.markdown_view.set_draft(compose_draft(new_plan))
 
     def _on_polish(self, provider: str, skill_path) -> None:
         if not self.article.current_result or not self.article._template:
