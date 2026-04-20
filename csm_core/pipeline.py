@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 from .vault.scanner import scan_vault
 from .vault.brand_registry import build_brand_registry
 from .template.loader import load_template
@@ -10,6 +11,9 @@ from .assembler.plan import AssemblyPlan
 from .llm.client import LLMClient
 from .llm.prompts import build_prompt, PromptInputs
 from .export.markdown import export_article
+
+
+STAGES = ("扫描资料库", "加载模板", "采样 slots", "组装 prompt", "调用 LLM", "导出")
 
 
 @dataclass
@@ -41,11 +45,19 @@ def _render_draft(plan: AssemblyPlan) -> str:
     return "\n\n".join(parts)
 
 
-def generate(req: GenerateRequest) -> GenerateResult:
+def generate(req: GenerateRequest, on_stage: Callable[[str], None] | None = None) -> GenerateResult:
+    def _emit(name: str) -> None:
+        if on_stage is not None:
+            on_stage(name)
+
+    _emit("扫描资料库")
     index = scan_vault(req.vault_root)
     registry = build_brand_registry(req.vault_root)
+
+    _emit("加载模板")
     template = load_template(req.template_path)
 
+    _emit("采样 slots")
     plan = assemble_plan(
         keyword=req.keyword,
         template=template,
@@ -55,8 +67,8 @@ def generate(req: GenerateRequest) -> GenerateResult:
         user_config=req.user_config or {},
     )
 
+    _emit("组装 prompt")
     draft = _render_draft(plan)
-
     system, user = build_prompt(PromptInputs(
         template_system_prompt=template.system_prompt_default,
         user_skill_prompt=req.user_skill_prompt,
@@ -64,8 +76,11 @@ def generate(req: GenerateRequest) -> GenerateResult:
         keyword=req.keyword,
         draft=draft,
     ))
+
+    _emit("调用 LLM")
     final_text = req.llm_client.complete(system=system, user=user)
 
+    _emit("导出")
     paths = export_article(
         out_dir=req.out_dir,
         keyword=req.keyword,

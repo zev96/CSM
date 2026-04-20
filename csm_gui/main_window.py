@@ -57,9 +57,17 @@ class MainWindow(FluentWindow):
                 parent=self, position=InfoBarPosition.TOP,
             )
             return
+        if self._worker is not None and self._worker.isRunning():
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning(
+                "正在生成", "请等待当前任务完成",
+                parent=self, position=InfoBarPosition.TOP,
+            )
+            return
         from csm_core.pipeline import GenerateRequest
         from .workers.generate_worker import GenerateWorker
-        client = self._build_client(payload["provider"])
+        from .llm_factory import build_client
+        client = build_client(self.config, payload["provider"])
         req = GenerateRequest(
             keyword=payload["keyword"],
             vault_root=Path(payload["vault_root"]),
@@ -72,18 +80,6 @@ class MainWindow(FluentWindow):
         self._worker.finished.connect(self._on_generated)
         self._worker.failed.connect(self._on_generate_failed)
         self._worker.start()
-
-    def _build_client(self, provider: str):
-        from csm_core.llm.client import make_client
-        kwargs = {}
-        if provider == "mock":
-            kwargs["response"] = "# (mock polished output)"
-        else:
-            kwargs["api_key"] = self.config.api_keys.get(provider, "")
-            default = self.config.default_model.get(provider)
-            if default:
-                kwargs["model"] = default
-        return make_client(provider=provider, **kwargs)
 
     def _on_generated(self, result) -> None:
         self._current_result = result

@@ -1,6 +1,6 @@
 from pathlib import Path
 from csm_gui.workers.generate_worker import GenerateWorker
-from csm_core.pipeline import GenerateRequest
+from csm_core.pipeline import GenerateRequest, STAGES
 from csm_core.llm.providers.mock import MockClient
 
 
@@ -42,4 +42,4 @@ def test_generate_worker_emits_stage(qtbot, mini_vault_path, tmp_path):
     worker.stage_changed.connect(stages.append)
     with qtbot.waitSignal(worker.finished, timeout=10_000):
         worker.start()
-    assert len(stages) >= 1
+    assert stages == list(STAGES)
