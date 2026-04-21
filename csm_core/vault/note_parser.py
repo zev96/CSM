@@ -8,6 +8,7 @@ import frontmatter
 
 VARIANT_MARKERS = ("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨")
 _VARIANT_RE = re.compile(r"^[①②③④⑤⑥⑦⑧⑨]\s*", re.MULTILINE)
+_BACKLINK_MARKER = "← 返回"
 
 
 @dataclass
@@ -19,9 +20,27 @@ class ParsedNote:
     raw_body: str = ""
 
 
+def _strip_backlinks(body: str) -> str:
+    """Drop the Obsidian backlink block starting at `← 返回` (inclusive).
+
+    Vault notes often end with a navigation block like:
+        ← 返回: [[引言模块总索引|返回引言模块索引]]
+        相关笔记
+          - [[乱象-...]] - ...
+    That block must not leak into the generated draft.
+    """
+    if _BACKLINK_MARKER not in body:
+        return body
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
+        if _BACKLINK_MARKER in line:
+            return "\n".join(lines[:i]).rstrip()
+    return body
+
+
 def parse_note(path: Path) -> ParsedNote:
     post = frontmatter.load(str(path))
-    body = post.content.strip()
+    body = _strip_backlinks(post.content.strip())
     variants = _split_variants(body)
     return ParsedNote(
         path=path,

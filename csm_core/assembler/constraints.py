@@ -73,7 +73,14 @@ def assemble_plan(
             warnings.append(
                 f"slot '{slot.id}': {len(missing)} 测试数据缺失 ({[p.note_id for p in missing]})"
             )
-        assignments[slot_id] = SlotAssignment(slot_id=slot_id, picks=picks)
+        note_text = ""
+        capped = next((p for p in picks if p.meta.get("capped")), None)
+        if capped is not None:
+            note_text = (
+                f"请求 {capped.meta['requested']} 条，池内仅 {capped.meta['available']} 条可用"
+            )
+            warnings.append(f"slot '{slot.id}': {note_text}")
+        assignments[slot_id] = SlotAssignment(slot_id=slot_id, picks=picks, note=note_text)
 
     rendered_slots = [assignments[sid] for sid in template.render_order]
     return AssemblyPlan(

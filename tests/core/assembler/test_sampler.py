@@ -108,6 +108,21 @@ def test_sample_user_config_out_of_range_raises(mini_vault_path: Path):
         sample_slot(slot, index, registry, seed=0, user_config={"comp": 0})
 
 
+def test_sample_brand_pool_marks_capped_when_pool_too_small(mini_vault_path: Path):
+    # fixture has 2 non-CEWEY competitors (小狗, 戴森); request 5 → cap to 2 + flag
+    index = scan_vault(mini_vault_path)
+    registry = build_brand_registry(mini_vault_path)
+    slot = Slot(
+        id="comp", label="竞品",
+        source=BrandPoolSource(exclude_brands=["CEWEY"]),
+        pick_notes=PickCountSpec(user_configurable=True, default=5, range=[1, 10]),
+    )
+    picks = sample_slot(slot, index, registry, seed=0, user_config={"comp": 5})
+    assert len(picks) == 2
+    assert all(p.meta.get("capped") is True for p in picks)
+    assert all(p.meta["requested"] == 5 and p.meta["available"] == 2 for p in picks)
+
+
 def test_sample_empty_pool_raises(mini_vault_path: Path):
     index = scan_vault(mini_vault_path)
     registry = build_brand_registry(mini_vault_path)
