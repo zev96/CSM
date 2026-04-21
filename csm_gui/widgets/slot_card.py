@@ -12,13 +12,14 @@ _TEXT_PREVIEW_LEN = 80
 class SlotCard(CardWidget):
     reroll_requested = pyqtSignal(str)
 
-    def __init__(self, slot: Slot, assignment: SlotAssignment, parent=None):
+    def __init__(self, slot: Slot, assignment: SlotAssignment, parent=None, index: int | None = None):
         super().__init__(parent)
         self._slot_id = slot.id
 
         root = QVBoxLayout(self)
         header = QHBoxLayout()
-        self.title_label = StrongBodyLabel(slot.label, self)
+        title = f"{index}. {slot.label}" if index is not None else slot.label
+        self.title_label = StrongBodyLabel(title, self)
         self.count_label = BodyLabel(f"{len(assignment.picks)} 条", self)
         self.reroll_button = PushButton("重新抽", self, FluentIcon.SYNC)
         self.reroll_button.clicked.connect(lambda: self.reroll_requested.emit(self._slot_id))

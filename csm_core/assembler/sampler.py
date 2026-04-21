@@ -102,13 +102,19 @@ def sample_slot(
         if not candidates:
             raise EmptyPoolError(f"slot '{slot.id}': brand pool empty")
         n = _resolve_pick_count(slot.pick_notes, slot.id, user_config, rng)
-        chosen = rng.sample(candidates, min(n, len(candidates)))
+        actual = min(n, len(candidates))
+        chosen = rng.sample(candidates, actual)
+        capped = actual < n
         return [
             PickedVariant(
                 note_id=f"{m}-brand",
                 variant_index=0,
                 text=f"{registry.brand_of(m)} {m}",
-                meta={"brand": registry.brand_of(m), "model": m},
+                meta={
+                    "brand": registry.brand_of(m),
+                    "model": m,
+                    **({"capped": True, "requested": n, "available": actual} if capped else {}),
+                },
             )
             for m in chosen
         ]

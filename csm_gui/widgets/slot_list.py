@@ -18,6 +18,9 @@ class SlotList(ScrollArea):
         self._layout.addStretch(1)
         self.setWidget(self._inner)
         self.setWidgetResizable(True)
+        self.setStyleSheet("QScrollArea{background: transparent; border: none;}")
+        self._inner.setStyleSheet("background: transparent;")
+        self.viewport().setStyleSheet("background: transparent;")
 
     def load(self, template: Template, plan: AssemblyPlan) -> None:
         # Clear all cards, preserving the trailing stretch
@@ -28,10 +31,12 @@ class SlotList(ScrollArea):
                 w.setParent(None)
                 w.deleteLater()
         slot_map = {s.id: s for s in template.slots}
+        idx = 0
         for assignment in plan.slots:
             slot = slot_map.get(assignment.slot_id)
             if slot is None:
                 continue
-            card = SlotCard(slot=slot, assignment=assignment, parent=self._inner)
+            idx += 1
+            card = SlotCard(slot=slot, assignment=assignment, parent=self._inner, index=idx)
             card.reroll_requested.connect(self.reroll_requested.emit)
             self._layout.insertWidget(self._layout.count() - 1, card)
