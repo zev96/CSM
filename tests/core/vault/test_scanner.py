@@ -5,15 +5,15 @@ from csm_core.vault.scanner import scan_vault, VaultIndex
 def test_scan_vault_returns_index(mini_vault_path: Path):
     index = scan_vault(mini_vault_path)
     assert isinstance(index, VaultIndex)
-    assert len(index.notes) == 14
+    assert len(index.notes) == 31
 
 
 def test_index_groups_by_module(mini_vault_path: Path):
     index = scan_vault(mini_vault_path)
     intro_notes = index.by_module("引言模块")
-    assert len(intro_notes) == 2
+    assert len(intro_notes) == 6
     keypoint_notes = index.by_module("科普模块/挑选攻略")
-    assert len(keypoint_notes) == 3
+    assert len(keypoint_notes) == 6
 
 
 def test_index_filter_by_frontmatter(mini_vault_path: Path):

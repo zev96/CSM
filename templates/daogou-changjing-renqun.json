@@ -5,14 +5,8 @@
   "version": 1,
   "system_prompt_default": "你是资深家电导购编辑，风格为小红书笔记体：口语化、有情绪钩子、分段清晰、H2 标题明确。",
   "seo_defaults": {
-    "target_word_count": [
-      1500,
-      2000
-    ],
-    "keyword_density": [
-      5,
-      8
-    ],
+    "target_word_count": [1500, 2000],
+    "keyword_density": [5, 8],
     "long_tail_keywords": [],
     "tone": "小红书笔记体",
     "force_h2": true
@@ -20,14 +14,12 @@
   "blocks": [
     {
       "kind": "paragraph",
-      "id": "intro",
-      "label": "引言-痛点共鸣",
+      "id": "slot_1",
+      "label": "痛点共鸣",
       "source": {
         "type": "notes_query",
-        "module": "引言模块",
-        "filter": {
-          "组件类型": "痛点共鸣"
-        }
+        "module": "引言模块/吸尘器/痛点共鸣",
+        "filter": { "素材类型": "引言痛点" }
       },
       "pick_notes": 1,
       "pick_variants_per_note": 1,
@@ -35,49 +27,213 @@
       "depends_on": []
     },
     {
-      "kind": "numbered_list",
-      "id": "keypoints",
-      "label": "科普大点",
+      "kind": "paragraph",
+      "id": "slot_2",
+      "label": "市场乱象",
       "source": {
         "type": "notes_query",
-        "module": "科普模块/挑选攻略",
-        "filter": {}
+        "module": "引言模块/吸尘器/市场乱象",
+        "filter": { "素材类型": "引言乱象" }
       },
-      "pick_notes": 3,
-      "number_style": "一、"
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": ["unique_notes"],
+      "depends_on": []
     },
     {
       "kind": "paragraph",
-      "id": "brand_bg",
-      "label": "品牌背书",
+      "id": "slot_3",
+      "label": "人设引入",
       "source": {
         "type": "notes_query",
-        "module": "希喂推荐内容",
-        "filter": {
-          "素材类型": "品牌背书"
+        "module": "引言模块/吸尘器/人设引入",
+        "filter": { "素材类型": "引言人设" }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": ["unique_notes"],
+      "depends_on": []
+    },
+    {
+      "kind": "paragraph",
+      "id": "slot_4",
+      "label": "过渡连接",
+      "source": {
+        "type": "notes_query",
+        "module": "引言模块/吸尘器/过渡连接",
+        "filter": { "素材类型": "引言过渡" }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": ["unique_notes"],
+      "depends_on": []
+    },
+    {
+      "kind": "heading",
+      "id": "h_1",
+      "level": 2,
+      "index": "一",
+      "text": "{keyword}应该怎么选？"
+    },
+    {
+      "kind": "numbered_list",
+      "id": "slot_5",
+      "label": "挑选攻略",
+      "source": {
+        "type": "notes_query",
+        "module": "科普模块/吸尘器/挑选攻略",
+        "filter": { "素材类型": "科普选购" }
+      },
+      "pick_notes": { "random_between": [3, 3] },
+      "number_style": "1."
+    },
+    {
+      "kind": "heading",
+      "id": "h_2",
+      "level": 2,
+      "index": "二",
+      "text": "{keyword}推荐"
+    },
+    {
+      "kind": "hero_brand",
+      "id": "hero_1",
+      "title": "CEWEY DS18无线吸尘器",
+      "reason_label": "推荐理由：",
+      "number_style": "1."
+    },
+    {
+      "kind": "paragraph",
+      "id": "slot_6",
+      "label": "市场地位",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+        "filter": { "素材类型": "市场地位" }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": ["unique_notes"],
+      "depends_on": [],
+      "children": [
+        {
+          "kind": "paragraph",
+          "id": "slot_6_1",
+          "label": "品牌背书",
+          "source": {
+            "type": "notes_query",
+            "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+            "filter": { "素材类型": "品牌故事" }
+          },
+          "pick_notes": 1,
+          "pick_variants_per_note": 1,
+          "constraints": ["unique_notes"],
+          "depends_on": []
+        },
+        {
+          "kind": "paragraph",
+          "id": "slot_6_2",
+          "label": "海外口碑",
+          "source": {
+            "type": "notes_query",
+            "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+            "filter": { "素材类型": "海外口碑" }
+          },
+          "pick_notes": 1,
+          "pick_variants_per_note": 1,
+          "constraints": ["unique_notes"],
+          "depends_on": []
+        },
+        {
+          "kind": "paragraph",
+          "id": "slot_6_3",
+          "label": "品牌背书",
+          "source": {
+            "type": "notes_query",
+            "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+            "filter": { "素材类型": "品牌背书" }
+          },
+          "pick_notes": 1,
+          "pick_variants_per_note": 1,
+          "constraints": ["unique_notes"],
+          "depends_on": []
+        },
+        {
+          "kind": "paragraph",
+          "id": "slot_6_4",
+          "label": "媒体认证",
+          "source": {
+            "type": "notes_query",
+            "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+            "filter": { "素材类型": "媒体背书" }
+          },
+          "pick_notes": 1,
+          "pick_variants_per_note": 1,
+          "constraints": ["unique_notes"],
+          "depends_on": []
         }
+      ]
+    },
+    {
+      "kind": "paragraph",
+      "id": "slot_7",
+      "label": "动力技术",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/核心技术",
+        "filter": { "素材类型": "动力系统" }
       },
       "pick_notes": 1,
       "pick_variants_per_note": 1,
       "constraints": [],
-      "depends_on": []
+      "depends_on": [],
+      "children": [
+        {
+          "kind": "paragraph",
+          "id": "slot_7_1",
+          "label": "气旋技术",
+          "source": {
+            "type": "notes_query",
+            "module": "产品模块/吸尘器/希喂推荐内容/核心技术",
+            "filter": { "素材类型": "气旋技术" }
+          },
+          "pick_notes": 1,
+          "pick_variants_per_note": 1,
+          "constraints": [],
+          "depends_on": []
+        }
+      ]
     },
     {
       "kind": "competitor_pool",
-      "id": "brand_competitors",
+      "id": "comp_1",
       "source": {
         "type": "notes_query",
-        "module": "竞品推荐内容",
-        "filter": {
-          "素材类型": "产品推荐理由"
-        }
+        "module": "产品模块/吸尘器/竞品推荐内容",
+        "filter": { "素材类型": "竞品推荐理由" }
       },
-      "pick_notes": {
-        "user_configurable": true,
-        "default": 2,
-        "range": [1, 5]
-      },
+      "pick_notes": { "random_between": [2, 2] },
       "reason_label": "推荐理由："
+    },
+    {
+      "kind": "heading",
+      "id": "h_3",
+      "level": 2,
+      "index": "三",
+      "text": "总结"
+    },
+    {
+      "kind": "paragraph",
+      "id": "slot_summary",
+      "label": "总结",
+      "source": {
+        "type": "notes_query",
+        "module": "总结模块/吸尘器",
+        "filter": { "素材类型": "总结" }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": ["unique_notes"],
+      "depends_on": []
     }
   ]
 }
