@@ -19,9 +19,50 @@ def test_strip_backlinks_removes_return_and_related_block():
     assert "刷头缠毛很多" in out
 
 
+def test_strip_backlinks_removes_bold_label_style():
+    # Real vault notes use **返回上层**: / **返回主页**: instead of ← 返回
+    body = (
+        "① 很多无线吸尘器尘杯小到没吸几下就满了。\n"
+        "\n"
+        "**返回上层**: [[引言模块总索引|返回引言模块索引]]\n"
+        "**返回主页**: 关联数据库\n"
+    )
+    out = _strip_backlinks(body)
+    assert "返回上层" not in out
+    assert "返回主页" not in out
+    assert "关联数据库" not in out
+    assert "引言模块总索引" not in out
+    assert "吸尘器尘杯小" in out
+
+
+def test_strip_backlinks_removes_naked_label_style():
+    body = (
+        "正文段落。\n"
+        "返回上层: [[索引]]\n"
+        "返回主页: 主页\n"
+    )
+    out = _strip_backlinks(body)
+    assert "返回上层" not in out
+    assert "返回主页" not in out
+    assert out.strip() == "正文段落。"
+
+
 def test_strip_backlinks_noop_when_absent():
     body = "纯正文，无返链块。\n① 一些变体。"
     assert _strip_backlinks(body) == body
+
+
+def test_parse_note_handles_utf8_bom(tmp_path: Path):
+    # Notes saved by some editors (e.g. Typora on Windows) start with a
+    # UTF-8 BOM. The parser must strip it so frontmatter is still recognised.
+    p = tmp_path / "bom.md"
+    p.write_bytes(
+        "\ufeff---\n产品: 吸尘器\n素材类型: 竞品推荐理由\n---\n① 正文\n".encode("utf-8")
+    )
+    note = parse_note(p)
+    assert note.frontmatter.get("产品") == "吸尘器"
+    assert note.frontmatter.get("素材类型") == "竞品推荐理由"
+    assert note.variants and "正文" in note.variants[0]
 
 
 def test_parse_note_excludes_backlink_block(tmp_path: Path):
@@ -38,6 +79,95 @@ def test_parse_note_excludes_backlink_block(tmp_path: Path):
     assert "相关笔记" not in note.raw_body
     assert "← 返回" not in note.raw_body
     assert all("相关笔记" not in v for v in note.variants)
+
+
+def test_parse_note_strips_stray_hr_between_variants(tmp_path: Path):
+    # Real vault notes sometimes place a ``---`` horizontal rule between the
+    # last variant and the backlink tail. It must not leak into variant text.
+    p = tmp_path / "hr.md"
+    p.write_text(
+        "---\n产品: 吸尘器\n素材类型: 竞品推荐理由\n---\n"
+        "① 第一条卖点。\n"
+        "② 第二条卖点。\n"
+        "\n---\n"
+        "**返回上层**: [[索引]]\n",
+        encoding="utf-8",
+    )
+    note = parse_note(p)
+    assert len(note.variants) == 2
+    assert all("---" not in v for v in note.variants)
+
+
+def test_parse_note_strips_markdown_headings_in_variant(tmp_path: Path):
+    # ``###`` subheadings inside a variant body should be demoted to plain text
+    # (marker stripped, heading text kept) so drafts stay as flat prose.
+    p = tmp_path / "hd.md"
+    p.write_text(
+        "---\n产品: 吸尘器\n素材类型: 竞品推荐理由\n---\n"
+        "① 前置说明。\n### 产品优势\n这里是优势描述。\n",
+        encoding="utf-8",
+    )
+    note = parse_note(p)
+    assert len(note.variants) == 1
+    v = note.variants[0]
+    assert "###" not in v
+    assert "产品优势" in v
+    assert "优势描述" in v
+
+
+def test_parse_note_splits_heading_wrapped_variant_markers(tmp_path: Path):
+    # Real 挑选攻略 notes wrap each variant marker in an ATX heading, e.g.
+    # ``### ① 噪音控制水平``. Prior to this test the splitter only looked at
+    # the raw character after ``lstrip`` — ``#`` — and collapsed every
+    # numbered section into a single variant, which then leaked through as
+    # one multi-section pick regardless of ``pick_variants_per_note=1``.
+    p = tmp_path / "hdmark.md"
+    p.write_text(
+        "---\n产品: 吸尘器\n素材类型: 科普选购\n---\n"
+        "### ① 噪音控制水平\n"
+        "噪音基本上吸尘器很难避免的。\n"
+        "\n"
+        "### ② 选择噪音低能接受的\n"
+        "噪音是吸尘器使用体验的重要参数。\n",
+        encoding="utf-8",
+    )
+    note = parse_note(p)
+    assert len(note.variants) == 2
+    assert note.variants[0].startswith("噪音控制水平")
+    assert note.variants[1].startswith("选择噪音低能接受的")
+    # Crucially, neither variant leaks content from the other.
+    assert "选择噪音低能接受的" not in note.variants[0]
+    assert "噪音控制水平" not in note.variants[1]
+
+
+def test_parse_note_strips_indented_variant_markers(tmp_path: Path):
+    # Variant markers can appear indented in some notes; the leading marker
+    # must still be stripped so ``② ...`` doesn't leak into the draft.
+    p = tmp_path / "idt.md"
+    p.write_text(
+        "---\n产品: 吸尘器\n素材类型: 竞品推荐理由\n---\n"
+        "  ① 第一条。\n"
+        "  ② 第二条。\n",
+        encoding="utf-8",
+    )
+    note = parse_note(p)
+    assert len(note.variants) == 2
+    assert all(not v.lstrip().startswith(("①", "②", "③")) for v in note.variants)
+
+
+def test_parse_note_strips_markdown_bold(tmp_path: Path):
+    # ``**强调**`` inline bold markers must be peeled off so variants render as
+    # plain prose in the assembled draft.
+    p = tmp_path / "bold.md"
+    p.write_text(
+        "---\n产品: 吸尘器\n素材类型: 竞品推荐理由\n---\n"
+        "① **我们选购时一定要看**尘杯容量大小。\n",
+        encoding="utf-8",
+    )
+    note = parse_note(p)
+    assert "**" not in note.variants[0]
+    assert "我们选购时一定要看" in note.variants[0]
+    assert "尘杯容量大小" in note.variants[0]
 
 
 def test_parse_note_extracts_frontmatter(mini_vault_path: Path):
