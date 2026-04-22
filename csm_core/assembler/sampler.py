@@ -70,19 +70,23 @@ def sample_slot(
         pool = index.query(module=src.module, filters=src.filter)
         if not pool:
             raise EmptyPoolError(f"slot '{slot.id}': empty pool in module '{src.module}'")
-        n = _resolve_pick_count(slot.pick_notes, slot.id, user_config, rng)
+        requested = _resolve_pick_count(slot.pick_notes, slot.id, user_config, rng)
         if "unique_notes" in slot.constraints:
-            n = min(n, len(pool))
-            chosen = rng.sample(pool, n)
+            actual = min(requested, len(pool))
+            chosen = rng.sample(pool, actual)
         else:
-            chosen = [rng.choice(pool) for _ in range(n)]
+            actual = requested
+            chosen = [rng.choice(pool) for _ in range(requested)]
+        capped = "unique_notes" in slot.constraints and actual < requested
         picks: list[PickedVariant] = []
         for note in chosen:
             for _ in range(slot.pick_variants_per_note):
                 vi, text = _pick_variant(note, rng)
+                meta = _meta_for_note(note)
+                if capped:
+                    meta.update({"capped": True, "requested": requested, "available": actual})
                 picks.append(PickedVariant(
-                    note_id=note.id, variant_index=vi, text=text,
-                    meta=_meta_for_note(note),
+                    note_id=note.id, variant_index=vi, text=text, meta=meta,
                 ))
         return picks
 
