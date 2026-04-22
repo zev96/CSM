@@ -87,3 +87,8 @@ class HomePage(QWidget):
     def set_busy(self, busy: bool) -> None:
         self.single_panel.set_busy(busy)
         self.batch_panel.set_busy(busy)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.single_panel.form.refresh_templates()
+        self.batch_panel.form.refresh_templates()

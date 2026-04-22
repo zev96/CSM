@@ -42,6 +42,10 @@ class ArticleController(QObject):
         self._vault_cache: tuple[Path, float, object, object] | None = None
         self._generate_worker = None
         self._polish_worker = None
+        # Last payload accepted by ``request_generate`` — stored so
+        # ``rerun_all`` can re-submit with a fresh seed without making the
+        # UI round-trip back to the home page.
+        self._last_payload: dict | None = None
 
     # --- public API (stubs filled in by later tasks) ---
 
@@ -66,13 +70,34 @@ class ArticleController(QObject):
             out_dir=Path(self._config.out_dir),
             llm_client=client,
             seed=self._config.last_seed,
+            # Two-phase flow: only assemble the draft here. The user reviews
+            # / edits, then triggers ``polish`` to spend the LLM call.
+            draft_only=True,
         )
         self._generate_worker = GenerateWorker(req, self)
         self._generate_worker.finished.connect(self._on_generate_finished)
         self._generate_worker.failed.connect(self._on_generate_failed)
         self._generate_worker.start()
+        self._last_payload = dict(payload)
         self.busy_changed.emit(True)
         return True
+
+    def rerun_all(self) -> bool:
+        """Re-submit the last generate request with a freshly rolled seed.
+
+        Used by the 重新随机 button on the article workspace. Returns False
+        if there is nothing to re-run (no prior generate) or if a worker is
+        still running.
+        """
+        if self._last_payload is None:
+            return False
+        if self._generate_worker is not None and self._generate_worker.isRunning():
+            return False
+        import random
+        # Roll a new seed so the sampler picks differently. Store it on config
+        # so downstream code that reads ``last_seed`` sees a consistent value.
+        self._config.last_seed = random.randint(1, 99999)
+        return self.request_generate(self._last_payload)
 
     def _on_generate_finished(self, result) -> None:
         from csm_core.template.loader import load_template
@@ -113,7 +138,12 @@ class ArticleController(QObject):
         self._current_result.plan = new_plan
         self.reroll_completed.emit(new_plan)
 
-    def polish(self, provider: str, skill_path: Path | None) -> None:
+    def polish(
+        self,
+        provider: str,
+        skill_path: Path | None,
+        draft_override: str | None = None,
+    ) -> None:
         if self._current_result is None or self._current_template is None:
             return
         if self._polish_worker is not None and self._polish_worker.isRunning():
@@ -129,7 +159,9 @@ class ArticleController(QObject):
 
         template = self._current_template
         plan = self._current_result.plan
-        draft = compose_draft(plan)
+        # Prefer the user-edited draft (from the editable 初稿 tab) over a
+        # freshly re-composed one — otherwise manual tweaks are lost.
+        draft = draft_override if draft_override is not None else compose_draft(plan)
         system, user = build_prompt(PromptInputs(
             template_system_prompt=template.system_prompt_default,
             user_skill_prompt=skill_text,
@@ -160,6 +192,10 @@ class ArticleController(QObject):
         if not self._config.out_dir:
             self.export_failed.emit("OutputDirectoryMissing: 请先在设置页配置输出目录")
             return
+        if not (self._current_result.final_text or "").strip():
+            # Draft-only flow: nothing to export until 润色 has produced 成文.
+            self.export_failed.emit("NotPolished: 请先点击「润色」生成成文再导出")
+            return
         out_dir = Path(self._config.out_dir)
         try:
             paths = export_article(
@@ -173,6 +209,22 @@ class ArticleController(QObject):
             self.export_failed.emit(f"{type(exc).__name__}: {exc}")
             return
         self.exported.emit(paths)
+
+    def clear(self) -> bool:
+        """Drop the current article state (plan, template, last payload).
+
+        Returns False if a worker is still running — the caller should wait
+        for it to finish before clearing, otherwise the late ``generated`` /
+        ``polished`` signal would repopulate state the user asked to wipe.
+        """
+        if self.is_busy():
+            return False
+        self._current_result = None
+        self._current_template = None
+        self._last_template_path = None
+        self._last_payload = None
+        self._reroll_counter = 0
+        return True
 
     def is_busy(self) -> bool:
         gen_busy = self._generate_worker is not None and self._generate_worker.isRunning()

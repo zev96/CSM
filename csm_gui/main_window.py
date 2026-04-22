@@ -6,6 +6,7 @@ from .config import AppConfig, load_config, save_config as _save_config
 from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
+from .pages.template_manager_page import TemplateManagerPage
 from .controllers.article_controller import ArticleController
 from .controllers.batch_controller import BatchController
 from .pages.batch_result_page import BatchResultPage
@@ -37,7 +38,7 @@ class MainWindow(FluentWindow):
         self.article_controller.plan_warnings.connect(self._show_plan_warnings_list)
         self.article_controller.reroll_completed.connect(self._on_reroll_completed)
         self.article_controller.polished.connect(self._on_polished)
-        self.article_controller.polish_failed.connect(self._on_generate_failed)
+        self.article_controller.polish_failed.connect(self._on_polish_failed)
         self.article_controller.exported.connect(self._on_exported)
         self.article_controller.export_failed.connect(self._on_export_failed)
 
@@ -69,14 +70,26 @@ class MainWindow(FluentWindow):
         self.article.reroll_slot_requested.connect(self._on_reroll_slot)
         self.article.controls.polish_requested.connect(self._on_polish)
         self.article.controls.export_requested.connect(self._on_export)
+        self.article.controls.rerun_all_requested.connect(self._on_rerun_all)
+        self.article.controls.clear_all_requested.connect(self._on_clear_all)
+        # Modal spinner shown while polish runs. Owned by the window so we
+        # can dismiss it from any of the polish completion / failure slots.
+        self._polish_busy_dialog = None
+        self.template_manager = TemplateManagerPage(config=self.config, parent=self)
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
         self.addSubInterface(self.home, FluentIcon.HOME, "首页")
         self.addSubInterface(self.article, FluentIcon.DOCUMENT, "文章")
+        self.addSubInterface(self.template_manager, FluentIcon.LIBRARY, "模板")
         self.addSubInterface(
             self.settings, FluentIcon.SETTING, "设置",
             position=NavigationItemPosition.BOTTOM,
         )
+
+        # ``self.stackedWidget.addWidget(self.batch_result_page)`` above made
+        # that page index 0, so FluentWindow would land there on startup.
+        # Force the home page to be the initial view.
+        self.switchTo(self.home)
 
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
@@ -86,6 +99,7 @@ class MainWindow(FluentWindow):
         self.save_config()
         self.home.apply_config(new_cfg)
         self.article.apply_config(new_cfg)
+        self.template_manager.apply_config(new_cfg)
         self.batch_controller.apply_config(new_cfg)
 
     def _on_request_generate(self, payload: dict) -> None:
@@ -125,12 +139,10 @@ class MainWindow(FluentWindow):
         )
 
     def _on_reroll_slot(self, slot_id: str) -> None:
-        self.article_controller.reroll_slot(
-            slot_id,
-            user_config={
-                "brand_competitors": int(self.article.controls.brand_count_input.value())
-            },
-        )
+        # Brand-count is no longer exposed in the article workspace UI —
+        # slot pick counts fall back to the template default. Callers that
+        # need a non-default count should configure it upstream.
+        self.article_controller.reroll_slot(slot_id, user_config={})
 
     def _on_reroll_completed(self, new_plan) -> None:
         from csm_core.assembler.render import compose_draft
@@ -140,10 +152,64 @@ class MainWindow(FluentWindow):
             compose_draft(new_plan),
         )
 
-    def _on_polish(self, provider: str, skill_path) -> None:
-        self.article_controller.polish(provider, skill_path)
+    def _on_polish_failed(self, msg: str) -> None:
+        self._dismiss_polish_busy()
+        self._on_generate_failed(msg)
+
+    def _on_clear_all(self) -> None:
+        ok = self.article_controller.clear()
+        if not ok:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning(
+                "无法清空", "请等待当前任务完成",
+                parent=self, position=InfoBarPosition.TOP,
+            )
+            return
+        self.article.clear()
+
+    def _on_rerun_all(self) -> None:
+        ok = self.article_controller.rerun_all()
+        if not ok:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning(
+                "无法重新随机", "请先生成一篇文章，或等待当前任务完成",
+                parent=self, position=InfoBarPosition.TOP,
+            )
+
+    def _on_polish(self, skill_path) -> None:
+        # Provider is read from config (the workspace no longer has a picker).
+        # Pass the current (possibly user-edited) draft text so manual
+        # tweaks made in the 初稿 tab are what the LLM polishes.
+        self._show_polish_busy()
+        self.article_controller.polish(
+            self.config.default_provider, skill_path,
+            draft_override=self.article.markdown_view.get_draft_text(),
+        )
+
+    def _show_polish_busy(self) -> None:
+        from .widgets.busy_dialog import BusyDialog
+        if self._polish_busy_dialog is not None:
+            return
+        dlg = BusyDialog(
+            title="正在润色",
+            message="AI 正在打磨成文，请稍候…",
+            parent=self,
+        )
+        self._polish_busy_dialog = dlg
+        dlg.show()
+
+    def _dismiss_polish_busy(self) -> None:
+        dlg = self._polish_busy_dialog
+        if dlg is None:
+            return
+        self._polish_busy_dialog = None
+        dlg.dismiss()
+        dlg.deleteLater()
 
     def _on_polished(self, text: str) -> None:
+        self._dismiss_polish_busy()
+        # ``set_polished`` auto-flips the pivot to 成文, fulfilling the
+        # "polish done → jump to result tab" behaviour.
         self.article.markdown_view.set_polished(text)
 
     def _on_export(self) -> None:
@@ -168,6 +234,12 @@ class MainWindow(FluentWindow):
         if first_line.startswith("OutputDirectoryMissing"):
             InfoBar.error(
                 "缺少输出目录", "请先在设置页配置输出目录",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        if first_line.startswith("NotPolished"):
+            InfoBar.warning(
+                "尚未润色", "请先点击「润色」生成成文再导出",
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return

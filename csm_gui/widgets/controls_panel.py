@@ -1,17 +1,17 @@
-"""Right-hand action/settings panel for ArticlePage.
+"""Bottom action bar for ArticlePage.
 
-Provides seed, brand-count, provider and skill controls plus action buttons
-(rerun / polish / export). All user interactions are surfaced as Qt signals
-so MainWindow can wire them up to pipeline workers.
+A horizontal strip pinned below the markdown preview. Exposes the polish skill
+picker and three action buttons (重新随机 / 润色 / 导出). Seed, brand-count and
+provider controls were removed: seed comes from config, brand-count falls back
+to the template default, and the provider is whatever ``AppConfig.default_provider``
+says — the article workspace is not the place to override those ad-hoc.
 """
 from __future__ import annotations
 from pathlib import Path
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from PyQt6.QtWidgets import QWidget, QHBoxLayout
 from qfluentwidgets import (
-    SubtitleLabel,
     BodyLabel,
-    SpinBox,
     ComboBox,
     PushButton,
     PrimaryPushButton,
@@ -21,62 +21,47 @@ from qfluentwidgets import (
 
 class ControlsPanel(QWidget):
     # Signal payloads:
-    #   rerun_all_requested(seed: int, user_config: dict[str, int])
-    #   polish_requested(provider: str, skill_path: Path | None)
+    #   rerun_all_requested() — re-randomize every slot with a fresh seed
+    #   polish_requested(skill_path: Path | None)
     #   export_requested()
-    rerun_all_requested = pyqtSignal(int, dict)
-    polish_requested = pyqtSignal(str, object)
+    #   clear_all_requested() — reset the workspace to its initial empty state
+    rerun_all_requested = pyqtSignal()
+    polish_requested = pyqtSignal(object)
     export_requested = pyqtSignal()
+    clear_all_requested = pyqtSignal()
 
-    def __init__(self, skill_dir: Path | None, provider_default: str, parent=None):
+    def __init__(self, skill_dir: Path | None, provider_default: str = "", parent=None):
+        # ``provider_default`` is accepted for backwards compatibility with
+        # callers that still pass it, but ignored — the provider is read from
+        # AppConfig when the polish request is dispatched.
         super().__init__(parent)
         self.setObjectName("ControlsPanel")
         self._skill_dir = Path(skill_dir) if skill_dir else None
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(12, 8, 12, 8)
         root.setSpacing(8)
 
-        root.addWidget(SubtitleLabel("控制", self))
-
-        root.addWidget(BodyLabel("随机种子", self))
-        self.seed_input = SpinBox(self)
-        self.seed_input.setRange(0, 99999)
-        self.seed_input.setValue(0)
-        root.addWidget(self.seed_input)
-
-        root.addWidget(BodyLabel("品牌竞品数量", self))
-        self.brand_count_input = SpinBox(self)
-        self.brand_count_input.setRange(1, 9)
-        self.brand_count_input.setValue(2)
-        root.addWidget(self.brand_count_input)
-
-        root.addWidget(BodyLabel("模型提供商", self))
-        self.provider_combo = ComboBox(self)
-        self.provider_combo.addItems(["mock", "anthropic", "deepseek"])
-        idx = self.provider_combo.findText(provider_default)
-        if idx >= 0:
-            self.provider_combo.setCurrentIndex(idx)
-        root.addWidget(self.provider_combo)
-
-        root.addWidget(BodyLabel("润色风格 (skill)", self))
+        root.addWidget(BodyLabel("润色风格", self))
         self.skill_combo = ComboBox(self)
+        self.skill_combo.setMinimumWidth(200)
         self._populate_skills()
         root.addWidget(self.skill_combo)
 
         root.addStretch(1)
 
-        self.rerun_all_button = PushButton(FluentIcon.SYNC, "重跑全部", self)
+        self.clear_all_button = PushButton(FluentIcon.DELETE, "清空全部", self)
+        self.rerun_all_button = PushButton(FluentIcon.SYNC, "重新随机", self)
         self.polish_button = PrimaryPushButton(FluentIcon.EDIT, "润色", self)
         self.export_button = PushButton(FluentIcon.SAVE, "导出", self)
 
-        btns = QHBoxLayout()
-        btns.addWidget(self.rerun_all_button)
-        btns.addWidget(self.polish_button)
-        btns.addWidget(self.export_button)
-        root.addLayout(btns)
+        root.addWidget(self.clear_all_button)
+        root.addWidget(self.rerun_all_button)
+        root.addWidget(self.polish_button)
+        root.addWidget(self.export_button)
 
-        self.rerun_all_button.clicked.connect(self._emit_rerun)
+        self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
+        self.rerun_all_button.clicked.connect(self.rerun_all_requested.emit)
         self.polish_button.clicked.connect(self._emit_polish)
         self.export_button.clicked.connect(self.export_requested.emit)
 
@@ -87,10 +72,12 @@ class ControlsPanel(QWidget):
         self._populate_skills()
 
     def set_provider_default(self, name: str) -> None:
-        """Select `name` in the provider combo if present; no-op otherwise."""
-        idx = self.provider_combo.findText(name)
-        if idx >= 0:
-            self.provider_combo.setCurrentIndex(idx)
+        """Deprecated no-op — provider is read from AppConfig at polish time.
+
+        Kept so that ``ArticlePage.apply_config`` can call through without
+        caring about which widgets still surface a provider picker.
+        """
+        return
 
     def _populate_skills(self) -> None:
         self.skill_combo.addItem("无")
@@ -99,17 +86,11 @@ class ControlsPanel(QWidget):
             for name in stems:
                 self.skill_combo.addItem(name)
 
-    def _emit_rerun(self) -> None:
-        seed = int(self.seed_input.value())
-        user_config = {"brand_competitors": int(self.brand_count_input.value())}
-        self.rerun_all_requested.emit(seed, user_config)
-
     def _emit_polish(self) -> None:
-        provider = self.provider_combo.currentText()
         name = self.skill_combo.currentText()
         skill_path: Path | None
         if name and name != "无" and self._skill_dir:
             skill_path = self._skill_dir / f"{name}.md"
         else:
             skill_path = None
-        self.polish_requested.emit(provider, skill_path)
+        self.polish_requested.emit(skill_path)

@@ -10,15 +10,17 @@ class MarkdownView(CardWidget):
         self._stack = QStackedWidget(self)
         self._pivot = Pivot(self)
 
+        # Draft tab is user-editable: the two-phase flow lets the user tweak
+        # the assembled draft before it's handed to the LLM for polishing.
         self.draft_edit = TextEdit(self)
-        self.draft_edit.setReadOnly(True)
+        self.draft_edit.setReadOnly(False)
         self.polished_edit = TextEdit(self)
         self.polished_edit.setReadOnly(True)
 
         self._stack.addWidget(self.draft_edit)
         self._stack.addWidget(self.polished_edit)
 
-        self._pivot.addItem(routeKey="draft", text="毛坯")
+        self._pivot.addItem(routeKey="draft", text="初稿")
         self._pivot.addItem(routeKey="polished", text="成文")
         self._pivot.currentItemChanged.connect(self._on_tab)
         self._pivot.setCurrentItem("draft")
@@ -31,7 +33,13 @@ class MarkdownView(CardWidget):
         self._stack.setCurrentIndex(0 if key == "draft" else 1)
 
     def set_draft(self, md: str):
-        self.draft_edit.setMarkdown(md)
+        # Use setPlainText (not setMarkdown) so what the user sees and edits
+        # is the exact draft text — including the explicit module headers —
+        # and the same bytes flow through to ``get_draft_text`` -> polish.
+        self.draft_edit.setPlainText(md)
+
+    def get_draft_text(self) -> str:
+        return self.draft_edit.toPlainText()
 
     def set_polished(self, md: str):
         self.polished_edit.setMarkdown(md)

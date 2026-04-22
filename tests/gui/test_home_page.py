@@ -2,9 +2,14 @@ from csm_gui.config import AppConfig
 from csm_gui.pages.home_page import HomePage
 
 
-def test_home_page_emits_request_generate(qtbot, tmp_path):
+def _seed_template(tmp_path):
     tpl = tmp_path / "t.json"
-    tpl.write_text("{}", encoding="utf-8")
+    tpl.write_text('{"id":"t","name":"t","slots":[]}', encoding="utf-8")
+    return tpl
+
+
+def test_home_page_emits_request_generate(qtbot, tmp_path):
+    tpl = _seed_template(tmp_path)
     cfg = AppConfig(
         vault_root=str(tmp_path),
         out_dir=str(tmp_path),
@@ -19,6 +24,7 @@ def test_home_page_emits_request_generate(qtbot, tmp_path):
     payload = sig.args[0]
     assert payload["keyword"] == "宠物吸尘器推荐"
     assert payload["template_path"] == str(tpl)
+    # Vault / provider are now injected from AppConfig, not form inputs.
     assert payload["vault_root"] == str(tmp_path)
     assert payload["provider"] == "anthropic"
 
@@ -32,12 +38,11 @@ def test_home_page_disables_generate_when_required_missing(qtbot):
 
 
 def test_home_page_apply_config_reflects_new_values(qtbot, tmp_path):
-    tpl_old = tmp_path / "old.json"
-    tpl_old.write_text("{}", encoding="utf-8")
+    tpl_old = _seed_template(tmp_path)
     tpl_new = tmp_path / "new.json"
-    tpl_new.write_text("{}", encoding="utf-8")
+    tpl_new.write_text('{"id":"n","name":"n","slots":[]}', encoding="utf-8")
     cfg_old = AppConfig(
-        vault_root=str(tmp_path / "old"),
+        vault_root=str(tmp_path),
         default_template=str(tpl_old),
         default_provider="mock",
     )
@@ -45,34 +50,37 @@ def test_home_page_apply_config_reflects_new_values(qtbot, tmp_path):
     qtbot.addWidget(page)
 
     cfg_new = AppConfig(
-        vault_root=str(tmp_path / "new"),
+        vault_root=str(tmp_path),
         default_template=str(tpl_new),
         default_provider="deepseek",
     )
     page.apply_config(cfg_new)
-    assert page.single_panel.form.template_input.text() == str(tpl_new)
-    assert page.single_panel.form.vault_input.text() == str(tmp_path / "new")
-    assert page.single_panel.form.provider_combo.currentText() == "deepseek"
+    p = page.single_panel.form.payload()
+    assert p["template_path"] == str(tpl_new)
+    assert p["vault_root"] == str(tmp_path)
+    assert p["provider"] == "deepseek"
 
 
 def test_home_page_apply_config_clears_when_config_cleared(qtbot, tmp_path):
-    tpl = tmp_path / "t.json"
-    tpl.write_text("{}", encoding="utf-8")
+    tpl = _seed_template(tmp_path)
     cfg_full = AppConfig(vault_root=str(tmp_path), default_template=str(tpl))
     page = HomePage(config=cfg_full)
     qtbot.addWidget(page)
 
     # Settings cleared the fields
     page.apply_config(AppConfig())
-    assert page.single_panel.form.template_input.text() == ""
-    assert page.single_panel.form.vault_input.text() == ""
+    p = page.single_panel.form.payload()
+    assert p["template_path"] == ""
+    assert p["vault_root"] == ""
 
 
 def test_home_page_emits_request_batch(qtbot, tmp_path):
-    from csm_gui.pages.home_page import HomePage
-    from csm_gui.config import AppConfig
-    cfg = AppConfig(default_template=str(tmp_path / "t.json"),
-                    vault_root=str(tmp_path), default_provider="mock")
+    tpl = _seed_template(tmp_path)
+    cfg = AppConfig(
+        default_template=str(tpl),
+        vault_root=str(tmp_path),
+        default_provider="mock",
+    )
     home = HomePage(cfg)
     qtbot.addWidget(home)
     home.batch_panel.keyword_edit.setPlainText("kw1")
@@ -83,8 +91,6 @@ def test_home_page_emits_request_batch(qtbot, tmp_path):
 
 
 def test_home_page_has_two_tabs(qtbot):
-    from csm_gui.pages.home_page import HomePage
-    from csm_gui.config import AppConfig
     home = HomePage(AppConfig(default_provider="mock"))
     qtbot.addWidget(home)
     assert home.stack.count() == 2

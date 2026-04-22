@@ -246,11 +246,25 @@ def test_export_emits_export_failed_on_missing_out_dir(qtbot, tmp_path):
     c._current_result = GenerateResult(
         markdown_path="", assembly_json_path="",
         plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
-        final_text="",
+        # Non-empty so the NotPolished guard (draft-only flow) doesn't fire
+        # before we reach the filesystem — this test is about missing dir.
+        final_text="# polished",
     )
     with qtbot.waitSignal(c.export_failed, timeout=500) as sig:
         c.export()
     assert "FileNotFoundError" in sig.args[0]
+
+
+def test_export_emits_export_failed_when_not_polished(qtbot, tmp_path):
+    c = ArticleController(AppConfig(out_dir=str(tmp_path)))
+    c._current_result = GenerateResult(
+        markdown_path="", assembly_json_path="",
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        final_text="",
+    )
+    with qtbot.waitSignal(c.export_failed, timeout=500) as sig:
+        c.export()
+    assert sig.args[0].startswith("NotPolished")
 
 
 def test_export_emits_export_failed_when_out_dir_not_configured(qtbot, tmp_path):

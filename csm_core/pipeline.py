@@ -27,6 +27,10 @@ class GenerateRequest:
     user_skill_prompt: str | None = None
     seed: int = 0
     user_config: dict[str, int] | None = None
+    # When True, the pipeline stops after ``compose_draft`` — no LLM call,
+    # no export. Used by the two-phase UI flow: first assemble a draft the
+    # user can review/edit, then run ``polish`` separately to produce 成文.
+    draft_only: bool = False
 
 
 @dataclass
@@ -61,6 +65,18 @@ def generate(req: GenerateRequest, on_stage: Callable[[str], None] | None = None
 
     _emit("组装 prompt")
     draft = compose_draft(plan)
+
+    if req.draft_only:
+        # Two-phase UI flow: stop here so the user can review / edit the draft
+        # before the LLM is spent on polishing it. ``final_text`` is blank and
+        # nothing is written to disk.
+        return GenerateResult(
+            markdown_path="",
+            assembly_json_path="",
+            plan=plan,
+            final_text="",
+        )
+
     system, user = build_prompt(PromptInputs(
         template_system_prompt=template.system_prompt_default,
         user_skill_prompt=req.user_skill_prompt,
