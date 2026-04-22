@@ -1,0 +1,278 @@
+"""Left-side template list panel — directory picker + template list + new/delete.
+
+Matches the existing project layout conventions:
+- outer QWidget with transparent background
+- CardWidget for each logical section
+- StrongBodyLabel for card titles, BodyLabel for labels
+- PrimaryPushButton(icon, text, parent) for primary actions
+- Soft-delete: files moved to  <dir>/.trash/  instead of os.remove
+"""
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog
+from qfluentwidgets import (
+    SubtitleLabel, StrongBodyLabel, BodyLabel,
+    LineEdit, PrimaryPushButton, PushButton, FluentIcon,
+    ListWidget, CardWidget, MessageBoxBase, MessageBox,
+    InfoBar, InfoBarPosition, ScrollArea,
+)
+
+from csm_core.template.loader import list_templates, save_template
+from csm_core.template.schema import Template, SEODefaults, Slot, NotesQuerySource
+
+
+# ---------------------------------------------------------------------------
+# Internal dialog: create a new template skeleton
+# ---------------------------------------------------------------------------
+
+class _NewTemplateDialog(MessageBoxBase):
+    """Simple three-field dialog for new template creation."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.widget.setMinimumWidth(400)
+        self.titleLabel = SubtitleLabel("新建模板", self)
+        self.viewLayout.addWidget(self.titleLabel)
+
+        self.viewLayout.addWidget(BodyLabel("模板 ID（文件名，字母/数字/下划线/连字符）"))
+        self.id_input = LineEdit(self)
+        self.id_input.setPlaceholderText("如：daogou-changjing")
+        self.viewLayout.addWidget(self.id_input)
+
+        self.viewLayout.addWidget(BodyLabel("模板名称"))
+        self.name_input = LineEdit(self)
+        self.name_input.setPlaceholderText("如：导购文-场景人群型")
+        self.viewLayout.addWidget(self.name_input)
+
+        self.viewLayout.addWidget(BodyLabel("产品类别"))
+        self.product_input = LineEdit(self)
+        self.product_input.setPlaceholderText("如：吸尘器")
+        self.viewLayout.addWidget(self.product_input)
+
+        self.yesButton.setText("创建")
+        self.cancelButton.setText("取消")
+
+    def validate(self) -> bool:  # MessageBoxBase hook
+        for name, field in [
+            ("模板 ID", self.id_input),
+            ("模板名称", self.name_input),
+            ("产品类别", self.product_input),
+        ]:
+            if not field.text().strip():
+                InfoBar.error(
+                    "验证失败", f"{name} 不能为空",
+                    parent=self, position=InfoBarPosition.TOP,
+                )
+                return False
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Main panel
+# ---------------------------------------------------------------------------
+
+class TemplateListPanel(QWidget):
+    """Left-side panel: directory selector + template list + new/delete buttons.
+
+    Signals
+    -------
+    template_selected(Path):
+        Emitted when the user clicks a template in the list.
+    template_dir_changed(Path):
+        Emitted when the scanned directory changes.
+    """
+
+    template_selected = pyqtSignal(Path)
+    template_dir_changed = pyqtSignal(Path)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dir: Path | None = None
+        # maps list-row → Path
+        self._paths: list[Path] = []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── 目录选择卡片 ──────────────────────────────────────────────────
+        dir_card = CardWidget(self)
+        dir_lay = QVBoxLayout(dir_card)
+        dir_lay.setContentsMargins(16, 12, 16, 12)
+        dir_lay.setSpacing(6)
+        dir_lay.addWidget(StrongBodyLabel("模板目录"))
+        dir_row = QHBoxLayout()
+        self.dir_input = LineEdit(dir_card)
+        self.dir_input.setPlaceholderText("选择模板目录 …")
+        self.dir_input.setReadOnly(True)
+        dir_row.addWidget(self.dir_input, 1)
+        self.browse_btn = PushButton("浏览", dir_card, FluentIcon.FOLDER)
+        self.browse_btn.clicked.connect(self._pick_dir)
+        dir_row.addWidget(self.browse_btn)
+        dir_lay.addLayout(dir_row)
+        root.addWidget(dir_card)
+
+        # ── 模板列表 ──────────────────────────────────────────────────────
+        list_card = CardWidget(self)
+        list_lay = QVBoxLayout(list_card)
+        list_lay.setContentsMargins(12, 8, 12, 8)
+        list_lay.setSpacing(6)
+        list_lay.addWidget(BodyLabel("模板列表"))
+        self.list_widget = ListWidget(list_card)
+        self.list_widget.itemClicked.connect(self._on_item_clicked)
+        list_lay.addWidget(self.list_widget, 1)
+        root.addWidget(list_card, 1)
+
+        # ── 操作按钮 ──────────────────────────────────────────────────────
+        btn_card = CardWidget(self)
+        btn_lay = QHBoxLayout(btn_card)
+        btn_lay.setContentsMargins(12, 8, 12, 8)
+        btn_lay.setSpacing(8)
+        self.new_btn = PrimaryPushButton(FluentIcon.ADD, "新建模板", btn_card)
+        self.new_btn.clicked.connect(self._on_new)
+        btn_lay.addWidget(self.new_btn)
+        self.delete_btn = PushButton(FluentIcon.DELETE, "删除模板", btn_card)
+        self.delete_btn.clicked.connect(self._on_delete)
+        self.delete_btn.setEnabled(False)
+        btn_lay.addWidget(self.delete_btn)
+        root.addWidget(btn_card)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def set_directory(self, path: Path) -> None:
+        """Set the templates directory and scan it."""
+        self._dir = Path(path)
+        self.dir_input.setText(str(self._dir))
+        self.refresh()
+        self.template_dir_changed.emit(self._dir)
+
+    def refresh(self) -> None:
+        """Re-scan the current directory and rebuild the list."""
+        self.list_widget.clear()
+        self._paths = []
+        self.delete_btn.setEnabled(False)
+        if self._dir is None:
+            return
+        for name, p in list_templates(self._dir):
+            self.list_widget.addItem(name)
+            self._paths.append(p)
+
+    def select_by_path(self, path: Path) -> None:
+        """Programmatically select the row matching *path*."""
+        try:
+            idx = self._paths.index(path)
+            self.list_widget.setCurrentRow(idx)
+            self.delete_btn.setEnabled(True)
+        except ValueError:
+            pass
+
+    def current_path(self) -> Path | None:
+        """Return the path of the currently selected template, or None."""
+        row = self.list_widget.currentRow()
+        if 0 <= row < len(self._paths):
+            return self._paths[row]
+        return None
+
+    # ------------------------------------------------------------------
+    # Private slots
+    # ------------------------------------------------------------------
+
+    def _pick_dir(self) -> None:
+        p = QFileDialog.getExistingDirectory(self, "选择模板目录")
+        if p:
+            self.set_directory(Path(p))
+
+    def _on_item_clicked(self) -> None:
+        path = self.current_path()
+        if path:
+            self.delete_btn.setEnabled(True)
+            self.template_selected.emit(path)
+
+    def _on_new(self) -> None:
+        if self._dir is None:
+            InfoBar.warning(
+                "未选择目录", "请先选择模板目录，再新建模板",
+                parent=self.window(), position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+
+        dlg = _NewTemplateDialog(self)
+        if not dlg.exec():
+            return
+
+        tpl_id = dlg.id_input.text().strip()
+        tpl_name = dlg.name_input.text().strip()
+        tpl_product = dlg.product_input.text().strip()
+
+        # unique file name
+        target = self._dir / f"{tpl_id}.json"
+        suffix = 1
+        while target.exists():
+            target = self._dir / f"{tpl_id}-{suffix}.json"
+            suffix += 1
+        actual_id = target.stem
+
+        skeleton = Template(
+            id=actual_id,
+            name=tpl_name,
+            product=tpl_product,
+            version=1,
+            system_prompt_default="",
+            seo_defaults=SEODefaults(),
+            slots=[
+                Slot(
+                    id="intro",
+                    label="引言",
+                    source=NotesQuerySource(module="引言模块", filter={}),
+                )
+            ],
+            render_order=["intro"],
+        )
+        save_template(skeleton, target)
+
+        self.refresh()
+        # select the new template
+        self.select_by_path(target)
+        self.template_selected.emit(target)
+        InfoBar.success(
+            "创建成功", f"模板「{tpl_name}」已创建",
+            parent=self.window(), position=InfoBarPosition.TOP, duration=3000,
+        )
+
+    def _on_delete(self) -> None:
+        path = self.current_path()
+        if path is None:
+            return
+        name = self.list_widget.currentItem().text() if self.list_widget.currentItem() else path.name
+
+        dlg = MessageBox(
+            "删除模板",
+            f"确认删除「{name}」？\n删除后文件将移入 .trash/ 目录，可手动恢复。",
+            self,
+        )
+        dlg.yesButton.setText("删除")
+        dlg.cancelButton.setText("取消")
+        if not dlg.exec():
+            return
+
+        trash = path.parent / ".trash"
+        trash.mkdir(exist_ok=True)
+        dest = trash / path.name
+        # handle name collision in trash
+        n = 1
+        while dest.exists():
+            dest = trash / f"{path.stem}-{n}{path.suffix}"
+            n += 1
+        shutil.move(str(path), str(dest))
+
+        self.refresh()
+        InfoBar.success(
+            "模板已删除", f"「{name}」已移入 .trash/",
+            parent=self.window(), position=InfoBarPosition.TOP, duration=3000,
+        )
