@@ -35,12 +35,8 @@ def test_list_frameworks_sorted_by_name(tmp_path):
     assert [name for name, _ in out] == ["Apple", "Zebra"]
 
 
-def test_list_frameworks_skips_hidden_and_trash(tmp_path):
-    (tmp_path / ".trash").mkdir()
-    _write(tmp_path / ".trash" / "x.json", {"id": "x", "name": "Hidden",
-                                             "variables": [],
-                                             "blocks": [{"kind": "paragraph", "slot": "s"}]})
-    _write(tmp_path / ".hidden.json", {"id": "h", "name": "Hidden2",
+def test_list_frameworks_skips_hidden_files(tmp_path):
+    _write(tmp_path / ".hidden.json", {"id": "h", "name": "Hidden",
                                         "variables": [],
                                         "blocks": [{"kind": "paragraph", "slot": "s"}]})
     _write(tmp_path / "ok.json", {"id": "ok", "name": "OK",

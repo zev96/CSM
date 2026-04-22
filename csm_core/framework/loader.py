@@ -18,13 +18,18 @@ def save_framework(framework: Framework, path: Path) -> None:
 
 
 def list_frameworks(directory: Path) -> list[tuple[str, Path]]:
-    """Return [(display_name, path), ...] sorted by display name."""
+    """Scan *directory* for *.json frameworks, return [(display_name, path), ...].
+
+    Display name falls back to filename stem when the file cannot be parsed.
+    Hidden files (names starting with '.') are skipped. Results are sorted
+    by display name for stable UI rendering.
+    """
     d = Path(directory)
     if not d.is_dir():
         return []
     out: list[tuple[str, Path]] = []
     for p in d.glob("*.json"):
-        if p.name.startswith(".") or ".trash" in p.parts:
+        if p.name.startswith("."):
             continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
