@@ -4,36 +4,37 @@ import re
 from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field, model_validator
 
+NonEmptyStr = Annotated[str, Field(min_length=1)]
 
 _VAR_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 
 class ParagraphBlock(BaseModel):
     kind: Literal["paragraph"] = "paragraph"
-    slot: str = Field(min_length=1)
+    slot: NonEmptyStr
 
 
 class HeadingBlock(BaseModel):
     kind: Literal["heading"] = "heading"
     level: Literal[1, 2, 3] = 2
     index: str = ""
-    text: str = Field(min_length=1)
+    text: NonEmptyStr
 
 
 class NumberedListBlock(BaseModel):
     kind: Literal["numbered_list"] = "numbered_list"
-    slot: str = Field(min_length=1)
+    slot: NonEmptyStr
 
 
 class BrandReasonListBlock(BaseModel):
     kind: Literal["brand_reason_list"] = "brand_reason_list"
-    slots: list[str] = Field(min_length=1)
+    slots: list[NonEmptyStr] = Field(min_length=1)
     reason_label: str = "推荐理由："
 
 
 class LiteralBlock(BaseModel):
     kind: Literal["literal"] = "literal"
-    text: str = Field(min_length=1)
+    text: NonEmptyStr
 
 
 Block = Annotated[
@@ -43,8 +44,8 @@ Block = Annotated[
 
 
 class Framework(BaseModel):
-    id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
+    id: NonEmptyStr
+    name: NonEmptyStr
     description: str = ""
     variables: list[str] = Field(default_factory=list)
     blocks: list[Block] = Field(min_length=1)

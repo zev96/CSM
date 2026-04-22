@@ -66,3 +66,8 @@ def test_framework_allows_declared_variable_in_heading_and_literal():
 def test_heading_level_must_be_1_2_or_3():
     with pytest.raises(ValidationError):
         HeadingBlock(kind="heading", level=5, text="x")
+
+
+def test_brand_reason_list_rejects_empty_string_slot():
+    with pytest.raises(ValidationError):
+        BrandReasonListBlock(kind="brand_reason_list", slots=["s1", "", "s2"])
