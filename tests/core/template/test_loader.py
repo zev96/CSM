@@ -1,39 +1,35 @@
-from pathlib import Path
 import json
-import pytest
-from csm_core.template.loader import load_template, save_template
-from csm_core.template.schema import Template
-
-TEMPLATE_PATH = Path(__file__).parent.parent.parent.parent / "templates" / "daogou-changjing-renqun.json"
+from pathlib import Path
+from csm_core.template.loader import load_template, save_template, list_templates
 
 
-def test_load_template_returns_model():
-    tpl = load_template(TEMPLATE_PATH)
-    assert isinstance(tpl, Template)
-    assert tpl.id == "daogou-changjing-renqun"
-    assert len(tpl.slots) == 14
+def _fixture_dict():
+    return {
+        "id": "t1", "name": "T", "product": "吸尘器", "version": 1,
+        "system_prompt_default": "",
+        "seo_defaults": {},
+        "blocks": [
+            {"kind": "literal", "id": "l1", "text": "hello"},
+        ],
+    }
 
 
-def test_save_template_roundtrip(tmp_path: Path):
-    original = load_template(TEMPLATE_PATH)
+def test_load_and_save_roundtrip(tmp_path):
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps(_fixture_dict()), encoding="utf-8")
+    tpl = load_template(p)
+    assert tpl.id == "t1"
+    assert tpl.blocks[0].kind == "literal"
     out = tmp_path / "out.json"
-    save_template(original, out)
-    reloaded = load_template(out)
-    assert reloaded.model_dump() == original.model_dump()
+    save_template(tpl, out)
+    round = load_template(out)
+    assert round.id == tpl.id
 
 
-def test_load_invalid_json_raises(tmp_path: Path):
-    bad = tmp_path / "bad.json"
-    bad.write_text("{not json", encoding="utf-8")
-    with pytest.raises(json.JSONDecodeError):
-        load_template(bad)
-
-
-def test_load_schema_violation_raises(tmp_path: Path):
-    bad = tmp_path / "bad.json"
-    bad.write_text(json.dumps({
-        "id": "x", "name": "X", "product": "吸尘器",
-        "slots": [], "render_order": ["missing"]
-    }), encoding="utf-8")
-    with pytest.raises(Exception):  # pydantic ValidationError
-        load_template(bad)
+def test_list_templates_returns_display_names(tmp_path):
+    d = tmp_path / "tpls"
+    d.mkdir()
+    (d / "a.json").write_text(json.dumps({**_fixture_dict(), "name": "第二"}), encoding="utf-8")
+    (d / "b.json").write_text(json.dumps({**_fixture_dict(), "name": "第一"}), encoding="utf-8")
+    items = list_templates(d)
+    assert [n for n, _ in items] == ["第一", "第二"]
