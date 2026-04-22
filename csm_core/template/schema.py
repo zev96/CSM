@@ -1,9 +1,10 @@
-"""Pydantic models for template DSL."""
+"""Pydantic models for the unified block-based template DSL."""
 from __future__ import annotations
-from typing import Any, Literal, Union
+from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, Field, model_validator
 
 
+# ── Sources ───────────────────────────────────────────────
 class NotesQuerySource(BaseModel):
     type: Literal["notes_query"] = "notes_query"
     module: str
@@ -22,14 +23,15 @@ class BrandPoolSource(BaseModel):
 
 
 class TestResultsAlignedSource(BaseModel):
-    __test__ = False  # prevent pytest from collecting this as a test class
+    __test__ = False
     type: Literal["test_results_aligned"] = "test_results_aligned"
     follow_slot: str
     module: str
 
 
-SourceT = Union[
-    NotesQuerySource, BrandFixedSource, BrandPoolSource, TestResultsAlignedSource
+SourceT = Annotated[
+    Union[NotesQuerySource, BrandFixedSource, BrandPoolSource, TestResultsAlignedSource],
+    Field(discriminator="type"),
 ]
 
 
@@ -49,18 +51,72 @@ class PickCountSpec(BaseModel):
 
 
 PickNotes = Union[int, PickCountSpec]
+NumberStyle = Literal["1.", "一、", "none"]
 
 
-class Slot(BaseModel):
+# ── Block types ───────────────────────────────────────────────────────
+class ParagraphBlock(BaseModel):
+    kind: Literal["paragraph"] = "paragraph"
     id: str
-    label: str
-    source: SourceT = Field(discriminator="type")
+    label: str = ""
+    source: SourceT
     pick_notes: PickNotes = 1
     pick_variants_per_note: int = 1
     constraints: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
+    children: list["ParagraphBlock"] = Field(default_factory=list)
 
 
+class HeadingBlock(BaseModel):
+    kind: Literal["heading"] = "heading"
+    id: str
+    level: Literal[1, 2, 3] = 2
+    index: str = ""
+    text: str = Field(min_length=1)
+
+
+class NumberedListBlock(BaseModel):
+    kind: Literal["numbered_list"] = "numbered_list"
+    id: str
+    label: str = ""
+    source: SourceT
+    pick_notes: PickNotes = 3
+    number_style: NumberStyle = "1."
+    item_separator: str = "\n\n"
+
+
+class HeroBrandBlock(BaseModel):
+    kind: Literal["hero_brand"] = "hero_brand"
+    id: str
+    title: str = Field(min_length=1)
+    reason_label: str = "推荐理由："
+    number_style: NumberStyle = "1."
+
+
+class CompetitorPoolBlock(BaseModel):
+    kind: Literal["competitor_pool"] = "competitor_pool"
+    id: str
+    source: SourceT
+    pick_notes: PickNotes = 2
+    reason_label: str = "推荐理由："
+
+
+class LiteralBlock(BaseModel):
+    kind: Literal["literal"] = "literal"
+    id: str
+    text: str = Field(min_length=1)
+
+
+Block = Annotated[
+    Union[
+        ParagraphBlock, HeadingBlock, NumberedListBlock,
+        HeroBrandBlock, CompetitorPoolBlock, LiteralBlock,
+    ],
+    Field(discriminator="kind"),
+]
+
+
+# ── Template ──────────────────────────────────────────────────────────
 class SEODefaults(BaseModel):
     target_word_count: list[int] = Field(default_factory=lambda: [1500, 2000])
     keyword_density: list[int] = Field(default_factory=lambda: [5, 8])
@@ -76,42 +132,41 @@ class Template(BaseModel):
     version: int = 1
     system_prompt_default: str = ""
     seo_defaults: SEODefaults = Field(default_factory=SEODefaults)
-    slots: list[Slot]
-    render_order: list[str]
-    default_framework: str | None = None
+    blocks: list[Block] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _validate_structure(self):
-        slot_ids = {s.id for s in self.slots}
+        ids: set[str] = set()
 
-        if set(self.render_order) != slot_ids:
-            raise ValueError(
-                f"render_order {self.render_order} must match slot ids {sorted(slot_ids)}"
-            )
+        def walk(items: list) -> None:
+            for b in items:
+                if b.id in ids:
+                    raise ValueError(f"duplicate block id '{b.id}'")
+                ids.add(b.id)
+                if isinstance(b, ParagraphBlock):
+                    walk(b.children)
 
-        for s in self.slots:
-            for dep in s.depends_on:
-                if dep not in slot_ids:
-                    raise ValueError(
-                        f"slot '{s.id}' depends_on '{dep}' which does not exist"
-                    )
+        walk(self.blocks)
 
-        # Kahn's topo sort for cycle detection
-        in_degree = {s.id: 0 for s in self.slots}
-        graph: dict[str, list[str]] = {s.id: [] for s in self.slots}
-        for s in self.slots:
-            for dep in s.depends_on:
-                graph[dep].append(s.id)
-                in_degree[s.id] += 1
-        queue = [sid for sid, d in in_degree.items() if d == 0]
-        visited = 0
-        while queue:
-            node = queue.pop()
-            visited += 1
-            for nxt in graph[node]:
-                in_degree[nxt] -= 1
-                if in_degree[nxt] == 0:
-                    queue.append(nxt)
-        if visited != len(self.slots):
-            raise ValueError("depends_on graph contains a cycle")
+        def paragraph_ids(items: list) -> set[str]:
+            out: set[str] = set()
+            for b in items:
+                if isinstance(b, ParagraphBlock):
+                    out.add(b.id)
+                    out |= paragraph_ids(b.children)
+            return out
+
+        known = paragraph_ids(self.blocks)
+
+        def check_deps(items: list) -> None:
+            for b in items:
+                if isinstance(b, ParagraphBlock):
+                    for dep in b.depends_on:
+                        if dep not in known:
+                            raise ValueError(
+                                f"block '{b.id}' depends_on unknown id '{dep}'"
+                            )
+                    check_deps(b.children)
+
+        check_deps(self.blocks)
         return self
