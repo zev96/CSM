@@ -78,6 +78,7 @@ class Template(BaseModel):
     seo_defaults: SEODefaults = Field(default_factory=SEODefaults)
     slots: list[Slot]
     render_order: list[str]
+    default_framework: str | None = None
 
     @model_validator(mode="after")
     def _validate_structure(self):

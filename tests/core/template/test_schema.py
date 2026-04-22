@@ -102,3 +102,30 @@ def test_test_results_aligned_source():
         module="测试项目模块/品牌产品测试结果",
     )
     assert s.type == "test_results_aligned"
+
+
+def test_template_default_framework_optional():
+    t = Template(
+        id="t", name="n", product="p",
+        slots=[{
+            "id": "s1", "label": "l",
+            "source": {"type": "notes_query", "module": "m"},
+        }],
+        render_order=["s1"],
+    )
+    assert t.default_framework is None
+
+
+def test_template_default_framework_roundtrip():
+    t = Template(
+        id="t", name="n", product="p",
+        slots=[{
+            "id": "s1", "label": "l",
+            "source": {"type": "notes_query", "module": "m"},
+        }],
+        render_order=["s1"],
+        default_framework="daogou-frame-v1",
+    )
+    assert t.default_framework == "daogou-frame-v1"
+    dumped = t.model_dump()
+    assert dumped["default_framework"] == "daogou-frame-v1"
