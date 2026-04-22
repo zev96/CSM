@@ -11,7 +11,7 @@ def test_load_template_returns_model():
     tpl = load_template(TEMPLATE_PATH)
     assert isinstance(tpl, Template)
     assert tpl.id == "daogou-changjing-renqun"
-    assert len(tpl.slots) == 4
+    assert len(tpl.slots) == 14
 
 
 def test_save_template_roundtrip(tmp_path: Path):
