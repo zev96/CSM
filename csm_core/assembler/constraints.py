@@ -1,44 +1,42 @@
-"""Orchestrate sampling over a template DAG (topological order)."""
+"""Orchestrate block-level sampling.
+
+For paragraph blocks with depends_on, the dependency graph is
+respected (topological order over paragraph ids). Non-paragraph
+blocks run in declaration order and never participate in the
+dependency graph.
+"""
 from __future__ import annotations
 from ..vault.scanner import VaultIndex
 from ..vault.brand_registry import BrandRegistry
-from ..template.schema import Template, TestResultsAlignedSource
-from .plan import AssemblyPlan, SlotAssignment
-from .sampler import sample_slot
+from ..template.schema import (
+    Template, ParagraphBlock, TestResultsAlignedSource,
+)
+from .plan import AssemblyPlan, BlockResult
+from .sampler import sample_block
 
 
-def _topo_order(template: Template) -> list[str]:
-    """Return slot ids in topological order (deps first)."""
-    in_deg = {s.id: 0 for s in template.slots}
-    graph: dict[str, list[str]] = {s.id: [] for s in template.slots}
-    for s in template.slots:
-        for dep in s.depends_on:
-            graph[dep].append(s.id)
-            in_deg[s.id] += 1
-    queue = [sid for sid, d in in_deg.items() if d == 0]
-    order: list[str] = []
-    while queue:
-        node = queue.pop(0)
-        order.append(node)
-        for nxt in graph[node]:
-            in_deg[nxt] -= 1
-            if in_deg[nxt] == 0:
-                queue.append(nxt)
-    return order
+def _collect_paragraph_ids(blocks) -> list[str]:
+    out: list[str] = []
+    def walk(items):
+        for b in items:
+            if isinstance(b, ParagraphBlock):
+                out.append(b.id)
+                walk(b.children)
+    walk(blocks)
+    return out
 
 
 def _resolve_aligned_models(
-    slot_id: str,
-    source: TestResultsAlignedSource,
-    assignments: dict[str, SlotAssignment],
+    block_id: str, source: TestResultsAlignedSource,
+    results_by_id: dict[str, BlockResult],
 ) -> list[str]:
     follow_ids = source.follow_slot.split("+")
     models: list[str] = []
     for fid in follow_ids:
-        slot_a = assignments.get(fid)
-        if not slot_a:
+        r = results_by_id.get(fid)
+        if not r:
             continue
-        for p in slot_a.picks:
+        for p in r.picks:
             m = p.meta.get("model")
             if m and m not in models:
                 models.append(m)
@@ -46,47 +44,49 @@ def _resolve_aligned_models(
 
 
 def assemble_plan(
-    *,
-    keyword: str,
-    template: Template,
-    index: VaultIndex,
-    registry: BrandRegistry,
-    seed: int,
-    user_config: dict[str, int],
+    *, keyword: str, template: Template,
+    index: VaultIndex, registry: BrandRegistry,
+    seed: int, user_config: dict[str, int],
 ) -> AssemblyPlan:
-    order = _topo_order(template)
-    slot_map = {s.id: s for s in template.slots}
-    assignments: dict[str, SlotAssignment] = {}
+    results_by_id: dict[str, BlockResult] = {}
     warnings: list[str] = []
 
-    for slot_id in order:
-        slot = slot_map[slot_id]
-        aligned: list[str] | None = None
-        if isinstance(slot.source, TestResultsAlignedSource):
-            aligned = _resolve_aligned_models(slot.id, slot.source, assignments)
-        picks = sample_slot(
-            slot, index, registry, seed=seed, user_config=user_config,
+    def sample_paragraph_tree(p: ParagraphBlock) -> BlockResult:
+        aligned = None
+        if isinstance(p.source, TestResultsAlignedSource):
+            aligned = _resolve_aligned_models(p.id, p.source, results_by_id)
+        r = sample_block(
+            p, index, registry, seed=seed, user_config=user_config,
             aligned_models=aligned,
         )
-        missing = [p for p in picks if p.meta.get("missing")]
+        missing = [pk for pk in r.picks if pk.meta.get("missing")]
         if missing:
             warnings.append(
-                f"slot '{slot.id}': {len(missing)} 测试数据缺失 ({[p.note_id for p in missing]})"
+                f"block '{p.id}': {len(missing)} 测试数据缺失 "
+                f"({[pk.note_id for pk in missing]})"
             )
-        note_text = ""
-        capped = next((p for p in picks if p.meta.get("capped")), None)
+        capped = next((pk for pk in r.picks if pk.meta.get("capped")), None)
         if capped is not None:
             note_text = (
-                f"请求 {capped.meta['requested']} 条，池内仅 {capped.meta['available']} 条可用"
+                f"请求 {capped.meta['requested']} 条，"
+                f"池内仅 {capped.meta['available']} 条可用"
             )
-            warnings.append(f"slot '{slot.id}': {note_text}")
-        assignments[slot_id] = SlotAssignment(slot_id=slot_id, picks=picks, note=note_text)
+            r.note = note_text
+            warnings.append(f"block '{p.id}': {note_text}")
+        results_by_id[p.id] = r
+        r.children = [sample_paragraph_tree(c) for c in p.children]
+        return r
 
-    rendered_slots = [assignments[sid] for sid in template.render_order]
+    top: list[BlockResult] = []
+    for b in template.blocks:
+        if isinstance(b, ParagraphBlock):
+            top.append(sample_paragraph_tree(b))
+        else:
+            r = sample_block(b, index, registry, seed=seed, user_config=user_config)
+            results_by_id[b.id] = r
+            top.append(r)
+
     return AssemblyPlan(
-        keyword=keyword,
-        template_id=template.id,
-        seed=seed,
-        slots=rendered_slots,
-        warnings=warnings,
+        keyword=keyword, template_id=template.id, seed=seed,
+        results=top, warnings=warnings,
     )
