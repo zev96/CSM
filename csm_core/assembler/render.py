@@ -1,6 +1,9 @@
 """Public rendering helpers for AssemblyPlan."""
 from __future__ import annotations
 from .plan import AssemblyPlan
+from ..framework.renderer import render_with_framework
+from ..framework.schema import Framework
+from ..framework.trace import FrameworkTrace
 
 
 def compose_draft(plan: AssemblyPlan) -> str:
@@ -15,3 +18,17 @@ def compose_draft(plan: AssemblyPlan) -> str:
             continue
         parts.append("\n\n".join(p.text for p in slot.picks))
     return "\n\n".join(parts)
+
+
+def compose_draft_framed(
+    plan: AssemblyPlan,
+    framework: Framework,
+    variables: dict[str, str],
+    trace: FrameworkTrace | None = None,
+) -> str:
+    """Render an AssemblyPlan through a framework.
+
+    Thin re-export so callers outside the framework package don't have to
+    import from csm_core.framework.renderer directly.
+    """
+    return render_with_framework(plan, framework, variables, trace=trace)
