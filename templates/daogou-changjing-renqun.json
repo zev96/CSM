@@ -3,6 +3,7 @@
   "name": "导购文-科普导购文",
   "product": "吸尘器",
   "version": 1,
+  "default_framework": "daogou-frame-v1",
   "system_prompt_default": "你是资深家电导购编辑，风格为小红书笔记体：口语化、有情绪钩子、分段清晰、H2 标题明确。",
   "seo_defaults": {
     "target_word_count": [
@@ -234,6 +235,23 @@
         "unique_notes"
       ],
       "depends_on": []
+    },
+    {
+      "id": "slot_summary",
+      "label": "总结",
+      "source": {
+        "type": "notes_query",
+        "module": "营销资料库/总结模块/吸尘器",
+        "filter": {
+          "素材类型": "总结"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": []
     }
   ],
   "render_order": [
@@ -249,6 +267,7 @@
     "slot_6_4",
     "slot_7",
     "slot_7_1",
-    "slot_8"
+    "slot_8",
+    "slot_summary"
   ]
 }
