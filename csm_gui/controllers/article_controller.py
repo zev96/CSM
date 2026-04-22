@@ -73,6 +73,8 @@ class ArticleController(QObject):
             # Two-phase flow: only assemble the draft here. The user reviews
             # / edits, then triggers ``polish`` to spend the LLM call.
             draft_only=True,
+            framework_id=payload.get("framework_id"),
+            frameworks_dir=Path("frameworks"),
         )
         self._generate_worker = GenerateWorker(req, self)
         self._generate_worker.finished.connect(self._on_generate_finished)

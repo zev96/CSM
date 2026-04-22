@@ -277,3 +277,39 @@ def test_export_emits_export_failed_when_out_dir_not_configured(qtbot, tmp_path)
     with qtbot.waitSignal(c.export_failed, timeout=500) as sig:
         c.export()
     assert sig.args[0].startswith("OutputDirectoryMissing:")
+
+
+def test_article_controller_forwards_framework_id(qtbot, monkeypatch, tmp_path):
+    captured = {}
+
+    class _FakeWorker:
+        def __init__(self, req, parent=None):
+            captured["req"] = req
+            self.finished = _FakeSig()
+            self.failed = _FakeSig()
+            self.stage_changed = _FakeSig()
+        def isRunning(self):
+            return False
+        def start(self):
+            pass
+        def request_cancel(self):
+            pass
+
+    monkeypatch.setattr(
+        "csm_gui.controllers.article_controller.GenerateWorker",
+        _FakeWorker,
+    )
+    monkeypatch.setattr(
+        "csm_gui.controllers.article_controller.build_client",
+        lambda cfg, p: object(),
+    )
+    cfg = AppConfig(out_dir=str(tmp_path))
+    ctrl = ArticleController(cfg)
+    ctrl.request_generate({
+        "keyword": "K",
+        "template_path": str(tmp_path / "t.json"),
+        "vault_root": str(tmp_path),
+        "provider": "mock",
+        "framework_id": "daogou-frame-v1",
+    })
+    assert captured["req"].framework_id == "daogou-frame-v1"
