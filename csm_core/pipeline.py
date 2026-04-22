@@ -8,7 +8,8 @@ from .vault.brand_registry import build_brand_registry
 from .template.loader import load_template
 from .assembler.constraints import assemble_plan
 from .assembler.plan import AssemblyPlan
-from .assembler.render import compose_draft
+from .assembler.render import compose_draft, compose_draft_framed
+from .framework.loader import load_framework, list_frameworks
 from .llm.client import LLMClient
 from .llm.prompts import build_prompt, PromptInputs
 from .export.markdown import export_article
@@ -31,6 +32,10 @@ class GenerateRequest:
     # no export. Used by the two-phase UI flow: first assemble a draft the
     # user can review/edit, then run ``polish`` separately to produce 成文.
     draft_only: bool = False
+    # Framework resolution:
+    #   req.framework_id → template.default_framework → None (fall back to compose_draft)
+    framework_id: str | None = None
+    frameworks_dir: Path | None = None
 
 
 @dataclass
@@ -39,6 +44,25 @@ class GenerateResult:
     assembly_json_path: str
     plan: AssemblyPlan
     final_text: str
+
+
+def _compose_draft_with_framework(
+    plan: AssemblyPlan, template, req: "GenerateRequest",
+) -> str:
+    fw_id = req.framework_id or template.default_framework
+    if not fw_id:
+        return compose_draft(plan)
+
+    fw_dir = req.frameworks_dir
+    if fw_dir is None:
+        return compose_draft(plan)
+
+    for _name, path in list_frameworks(fw_dir):
+        if path.stem == fw_id:
+            fw = load_framework(path)
+            return compose_draft_framed(plan, fw, {"keyword": req.keyword})
+    # id referenced but not found: fall back (don't fail the pipeline)
+    return compose_draft(plan)
 
 
 def generate(req: GenerateRequest, on_stage: Callable[[str], None] | None = None) -> GenerateResult:
@@ -64,7 +88,7 @@ def generate(req: GenerateRequest, on_stage: Callable[[str], None] | None = None
     )
 
     _emit("组装 prompt")
-    draft = compose_draft(plan)
+    draft = _compose_draft_with_framework(plan, template, req)
 
     if req.draft_only:
         # Two-phase UI flow: stop here so the user can review / edit the draft
