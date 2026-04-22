@@ -46,13 +46,23 @@ def _paragraph_text(r: BlockResult) -> str:
     return "\n\n".join(parts)
 
 
+def _prefix_join(i: int, style: str, text: str) -> str:
+    """Join a formatted index with text, handling style-specific spacing.
+
+    Chinese-style indices (e.g. "一、") include the separator character;
+    Arabic "1." style needs an explicit space. Returns empty-style text unchanged.
+    """
+    pfx = _format_index(i, style)
+    if not pfx:
+        return text
+    glue = "" if style == "一、" else " "
+    return f"{pfx}{glue}{text}"
+
+
 def _numbered_list_text(r: BlockResult) -> str:
     style = r.meta.get("number_style", "1.")
     sep = r.meta.get("item_separator", "\n\n")
-    # Chinese-style indices (e.g. "一、") include the separator character;
-    # Arabic "1." style needs an explicit space after the dot.
-    glue = "" if style == "一、" else " "
-    items = [f"{_format_index(i + 1, style)}{glue}{p.text}".strip()
+    items = [_prefix_join(i + 1, style, p.text).strip()
              for i, p in enumerate(r.picks)]
     return sep.join(items)
 
@@ -135,9 +145,9 @@ def _render_hero_region(
     hero_title = _substitute(hero.text, variables)
     body = "\n\n".join(p for p in body_parts if p)
     if body:
-        hero_chunk = f"{_format_index(1, style)} {hero_title}\n{reason_label}\n{body}"
+        hero_chunk = f"{_prefix_join(1, style, hero_title)}\n{reason_label}\n{body}"
     else:
-        hero_chunk = f"{_format_index(1, style)} {hero_title}\n{reason_label}".rstrip()
+        hero_chunk = f"{_prefix_join(1, style, hero_title)}\n{reason_label}".rstrip()
 
     if pool_result is None:
         return hero_chunk, j
@@ -154,5 +164,5 @@ def _render_competitor_pool(
     for k, p in enumerate(r.picks):
         n = start_index + k
         title = p.meta.get("title") or p.note_id
-        items.append(f"{_format_index(n, style)} {title}\n{label}{p.text}")
+        items.append(f"{_prefix_join(n, style, title)}\n{label}{p.text}")
     return "\n\n".join(items)

@@ -124,3 +124,16 @@ def test_paragraph_empty_picks_skipped():
                     picks=[PickedVariant(note_id="a", variant_index=0, text="X")]),
     )
     assert compose_draft(p) == "X"
+
+
+def test_chinese_style_hero_and_pool_no_extra_space():
+    """Hero and competitor pool with Chinese style should have no space after prefix."""
+    p = _plan(
+        BlockResult(block_id="h", kind="hero_brand", text="CEWEY",
+                    meta={"number_style": "一、", "reason_label": "推荐理由："}),
+        BlockResult(block_id="cp", kind="competitor_pool",
+                    picks=[PickedVariant(note_id="n1", variant_index=0, text="理由",
+                                         meta={"title": "戴森"})],
+                    meta={"reason_label": "推荐理由："}),
+    )
+    assert compose_draft(p) == "一、CEWEY\n推荐理由：\n\n二、戴森\n推荐理由：理由"
