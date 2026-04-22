@@ -69,4 +69,58 @@ def test_generation_form_payload(qtbot, tmp_path):
         "template_path": str(tpl),
         "vault_root": str(tmp_path),
         "provider": "mock",
+        "framework_id": "",
     }
+
+
+def test_generation_form_exposes_framework_combo(qtbot, tmp_path, monkeypatch):
+    from csm_gui.widgets.generation_form import GenerationForm
+    from csm_gui.config import AppConfig
+
+    (tmp_path / "frameworks").mkdir()
+    (tmp_path / "frameworks" / "fx.json").write_text(
+        '{"id":"fx","name":"FX","variables":[],'
+        '"blocks":[{"kind":"paragraph","slot":"s"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    cfg = AppConfig()
+    form = GenerationForm(cfg)
+    qtbot.addWidget(form)
+
+    assert form.framework_combo.count() >= 2
+    assert form.framework_combo.itemData(0) == ""
+    assert any(form.framework_combo.itemText(i) == "FX"
+               for i in range(form.framework_combo.count()))
+
+
+def test_generation_form_payload_includes_framework_id(qtbot, tmp_path, monkeypatch):
+    from csm_gui.widgets.generation_form import GenerationForm
+    from csm_gui.config import AppConfig
+
+    (tmp_path / "frameworks").mkdir()
+    (tmp_path / "frameworks" / "fx.json").write_text(
+        '{"id":"fx","name":"FX","variables":[],'
+        '"blocks":[{"kind":"paragraph","slot":"s"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    form = GenerationForm(AppConfig())
+    qtbot.addWidget(form)
+    idx = next(i for i in range(form.framework_combo.count())
+               if form.framework_combo.itemText(i) == "FX")
+    form.framework_combo.setCurrentIndex(idx)
+
+    assert form.payload()["framework_id"] == "fx"
+
+
+def test_generation_form_payload_blank_framework_is_empty_string(qtbot, tmp_path, monkeypatch):
+    from csm_gui.widgets.generation_form import GenerationForm
+    from csm_gui.config import AppConfig
+    monkeypatch.chdir(tmp_path)
+    form = GenerationForm(AppConfig())
+    qtbot.addWidget(form)
+    form.framework_combo.setCurrentIndex(0)
+    assert form.payload()["framework_id"] == ""
