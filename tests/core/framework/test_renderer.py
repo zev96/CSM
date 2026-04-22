@@ -89,3 +89,29 @@ def test_blocks_joined_with_blank_lines():
         ParagraphBlock(kind="paragraph", slot="s1"),
     ])
     assert render_with_framework(plan, fw, {}) == "## H\n\na"
+
+
+def test_numbered_list_renders_with_1based_index():
+    plan = _plan([SlotAssignment(slot_id="s1",
+                                  picks=[_pick("aa"), _pick("bb"), _pick("cc")])])
+    fw = Framework(id="f", name="n", variables=[],
+                   blocks=[NumberedListBlock(kind="numbered_list", slot="s1")])
+    assert render_with_framework(plan, fw, {}) == "1. aa\n2. bb\n3. cc"
+
+
+def test_numbered_list_empty_slot_skipped_and_traced():
+    plan = _plan([SlotAssignment(slot_id="s1", picks=[])])
+    fw = Framework(id="f", name="n", variables=[],
+                   blocks=[NumberedListBlock(kind="numbered_list", slot="s1")])
+    t = FrameworkTrace()
+    assert render_with_framework(plan, fw, {}, trace=t) == ""
+    assert t.entries == [
+        {"event": "skipped_empty_slot", "slot_id": "s1", "block_index": 0}
+    ]
+
+
+def test_numbered_list_single_item():
+    plan = _plan([SlotAssignment(slot_id="s1", picks=[_pick("only"),])])
+    fw = Framework(id="f", name="n", variables=[],
+                   blocks=[NumberedListBlock(kind="numbered_list", slot="s1")])
+    assert render_with_framework(plan, fw, {}) == "1. only"

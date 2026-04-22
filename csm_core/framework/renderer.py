@@ -89,5 +89,13 @@ def _render_block(
             return None
         return "\n\n".join(p.text for p in slot.picks)
 
-    # NumberedListBlock / BrandReasonListBlock → handled in later tasks
+    if isinstance(b, NumberedListBlock):
+        slot = by_id[b.slot]
+        if not slot.picks:
+            if trace is not None:
+                trace.skipped_empty_slot(b.slot, index)
+            return None
+        return "\n".join(f"{i + 1}. {p.text}" for i, p in enumerate(slot.picks))
+
+    # BrandReasonListBlock → next task
     raise NotImplementedError(f"block kind {type(b).__name__}")
