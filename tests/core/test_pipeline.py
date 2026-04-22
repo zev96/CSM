@@ -22,21 +22,3 @@ def test_generate_runs_end_to_end(mini_vault_path: Path, tmp_path: Path):
     assert "# 洗稿后文章" in Path(result.markdown_path).read_text(encoding="utf-8")
     assert len(client.calls) == 1
     assert "SEO" in client.calls[0]["system"]
-
-
-def test_generate_request_accepts_framework_id_override(tmp_path):
-    from csm_core.pipeline import GenerateRequest
-    req = GenerateRequest(
-        keyword="k", vault_root=tmp_path, template_path=tmp_path / "t.json",
-        out_dir=tmp_path, llm_client=None, framework_id="fx",
-    )
-    assert req.framework_id == "fx"
-
-
-def test_generate_request_accepts_frameworks_dir(tmp_path):
-    from csm_core.pipeline import GenerateRequest
-    req = GenerateRequest(
-        keyword="k", vault_root=tmp_path, template_path=tmp_path / "t.json",
-        out_dir=tmp_path, llm_client=None, frameworks_dir=tmp_path,
-    )
-    assert req.frameworks_dir == tmp_path

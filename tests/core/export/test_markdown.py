@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from csm_core.assembler.plan import AssemblyPlan, SlotAssignment, PickedVariant
+from csm_core.assembler.plan import AssemblyPlan, BlockResult, PickedVariant
 from csm_core.export.markdown import export_article
 
 
@@ -9,8 +9,9 @@ def _sample_plan() -> AssemblyPlan:
         keyword="宠物吸尘器推荐",
         template_id="daogou-changjing-renqun",
         seed=42,
-        slots=[SlotAssignment(
-            slot_id="intro",
+        results=[BlockResult(
+            block_id="intro",
+            kind="paragraph",
             picks=[PickedVariant(note_id="n", variant_index=0, text="引言内容")],
         )],
     )
