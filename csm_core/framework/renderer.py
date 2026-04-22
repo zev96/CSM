@@ -97,5 +97,34 @@ def _render_block(
             return None
         return "\n".join(f"{i + 1}. {p.text}" for i, p in enumerate(slot.picks))
 
-    # BrandReasonListBlock → next task
+    if isinstance(b, BrandReasonListBlock):
+        keyword = variables.get("keyword", "")
+        items: list[str] = []
+        n = 0
+        any_picks = False
+        for sid in b.slots:
+            slot = by_id[sid]
+            if not slot.picks:
+                if trace is not None:
+                    trace.skipped_empty_slot(sid, index)
+                continue
+            any_picks = True
+            for p_idx, p in enumerate(slot.picks):
+                n += 1
+                brand = p.meta.get("brand")
+                model = p.meta.get("model")
+                missing = [k for k, v in (("brand", brand), ("model", model)) if not v]
+                if missing:
+                    if trace is not None:
+                        trace.missing_meta(index, p_idx, missing)
+                    items.append(f"{n}.{p.text}")
+                else:
+                    header = f"{n}.{brand} {model}"
+                    if keyword:
+                        header += f" {keyword}"
+                    items.append(f"{header}\n{b.reason_label}\n{p.text}")
+        if not any_picks:
+            return None
+        return "\n\n".join(items)
+
     raise NotImplementedError(f"block kind {type(b).__name__}")

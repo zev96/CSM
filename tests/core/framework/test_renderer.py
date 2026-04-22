@@ -115,3 +115,82 @@ def test_numbered_list_single_item():
     fw = Framework(id="f", name="n", variables=[],
                    blocks=[NumberedListBlock(kind="numbered_list", slot="s1")])
     assert render_with_framework(plan, fw, {}) == "1. only"
+
+
+def test_brand_reason_list_continuous_numbering_across_slots():
+    plan = _plan([
+        SlotAssignment(slot_id="s_a", picks=[
+            _pick("reason-a1", brand="B1", model="M1"),
+            _pick("reason-a2", brand="B2", model="M2"),
+        ]),
+        SlotAssignment(slot_id="s_b", picks=[
+            _pick("reason-b1", brand="B3", model="M3"),
+        ]),
+    ])
+    fw = Framework(id="f", name="n", variables=["keyword"],
+                   blocks=[BrandReasonListBlock(kind="brand_reason_list",
+                                                 slots=["s_a", "s_b"])])
+    out = render_with_framework(plan, fw, {"keyword": "吸尘器"})
+    expected = (
+        "1.B1 M1 吸尘器\n推荐理由：\nreason-a1\n\n"
+        "2.B2 M2 吸尘器\n推荐理由：\nreason-a2\n\n"
+        "3.B3 M3 吸尘器\n推荐理由：\nreason-b1"
+    )
+    assert out == expected
+
+
+def test_brand_reason_list_custom_reason_label():
+    plan = _plan([SlotAssignment(slot_id="s", picks=[
+        _pick("why", brand="B", model="M"),
+    ])])
+    fw = Framework(id="f", name="n", variables=["keyword"],
+                   blocks=[BrandReasonListBlock(
+                       kind="brand_reason_list", slots=["s"],
+                       reason_label="核心卖点：",
+                   )])
+    out = render_with_framework(plan, fw, {"keyword": "K"})
+    assert out == "1.B M K\n核心卖点：\nwhy"
+
+
+def test_brand_reason_list_empty_sub_slot_continues_numbering():
+    plan = _plan([
+        SlotAssignment(slot_id="empty_slot", picks=[]),
+        SlotAssignment(slot_id="s", picks=[
+            _pick("w", brand="B", model="M"),
+        ]),
+    ])
+    fw = Framework(id="f", name="n", variables=["keyword"],
+                   blocks=[BrandReasonListBlock(kind="brand_reason_list",
+                                                 slots=["empty_slot", "s"])])
+    out = render_with_framework(plan, fw, {"keyword": "K"})
+    assert out == "1.B M K\n推荐理由：\nw"
+
+
+def test_brand_reason_list_all_empty_skipped_and_traced():
+    plan = _plan([
+        SlotAssignment(slot_id="a", picks=[]),
+        SlotAssignment(slot_id="b", picks=[]),
+    ])
+    fw = Framework(id="f", name="n", variables=["keyword"],
+                   blocks=[BrandReasonListBlock(kind="brand_reason_list",
+                                                 slots=["a", "b"])])
+    t = FrameworkTrace()
+    out = render_with_framework(plan, fw, {"keyword": "K"}, trace=t)
+    assert out == ""
+    skipped = [e for e in t.entries if e["event"] == "skipped_empty_slot"]
+    assert len(skipped) == 2
+
+
+def test_brand_reason_list_missing_meta_falls_back_and_traces():
+    plan = _plan([SlotAssignment(slot_id="s", picks=[
+        _pick("w"),  # no brand / model
+    ])])
+    fw = Framework(id="f", name="n", variables=["keyword"],
+                   blocks=[BrandReasonListBlock(kind="brand_reason_list",
+                                                 slots=["s"])])
+    t = FrameworkTrace()
+    out = render_with_framework(plan, fw, {"keyword": "K"}, trace=t)
+    assert out == "1.w"
+    missing = [e for e in t.entries if e["event"] == "missing_meta"]
+    assert len(missing) == 1
+    assert set(missing[0]["missing_keys"]) == {"brand", "model"}
