@@ -81,6 +81,7 @@ class ArticlePage(QWidget):
         self.markdown_view.set_draft(draft)
         self.markdown_view.set_polished(final_text)
         self.pick_list_panel.load_plan(plan, template)
+        self.controls.set_preferred_skill(getattr(template, "default_skill_id", None))
 
     def update_plan(self, template, plan, draft: str) -> None:
         """Refresh draft after resampling (polished text unchanged)."""

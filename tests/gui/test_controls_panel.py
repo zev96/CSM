@@ -66,3 +66,30 @@ def test_set_provider_default_is_noop(qtbot):
     qtbot.addWidget(p)
     p.set_provider_default("deepseek")
     p.set_provider_default("bogus")
+
+
+import pytest
+from pathlib import Path
+
+
+def test_preselect_sets_combo(qtbot, tmp_path):
+    (tmp_path / "alpha.md").write_text("A", encoding="utf-8")
+    (tmp_path / "beta.md").write_text("B", encoding="utf-8")
+    panel = ControlsPanel(skill_dir=tmp_path, preferred_skill="beta")
+    qtbot.addWidget(panel)
+    assert panel.skill_combo.currentText() == "beta"
+
+
+def test_preselect_unknown_falls_back_to_wu(qtbot, tmp_path):
+    (tmp_path / "alpha.md").write_text("A", encoding="utf-8")
+    panel = ControlsPanel(skill_dir=tmp_path, preferred_skill="nonexistent")
+    qtbot.addWidget(panel)
+    assert panel.skill_combo.currentText() == "无"
+
+
+def test_set_preferred_skill_after_construction(qtbot, tmp_path):
+    (tmp_path / "x.md").write_text("x", encoding="utf-8")
+    panel = ControlsPanel(skill_dir=tmp_path)
+    qtbot.addWidget(panel)
+    panel.set_preferred_skill("x")
+    assert panel.skill_combo.currentText() == "x"

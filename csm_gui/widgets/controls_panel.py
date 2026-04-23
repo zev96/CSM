@@ -30,7 +30,13 @@ class ControlsPanel(QWidget):
     export_requested = pyqtSignal()
     clear_all_requested = pyqtSignal()
 
-    def __init__(self, skill_dir: Path | None, provider_default: str = "", parent=None):
+    def __init__(
+        self,
+        skill_dir: Path | None,
+        provider_default: str = "",
+        preferred_skill: str | None = None,
+        parent=None,
+    ):
         # ``provider_default`` is accepted for backwards compatibility with
         # callers that still pass it, but ignored — the provider is read from
         # AppConfig when the polish request is dispatched.
@@ -46,6 +52,8 @@ class ControlsPanel(QWidget):
         self.skill_combo = ComboBox(self)
         self.skill_combo.setMinimumWidth(200)
         self._populate_skills()
+        if preferred_skill:
+            self.set_preferred_skill(preferred_skill)
         root.addWidget(self.skill_combo)
 
         root.addStretch(1)
@@ -65,11 +73,25 @@ class ControlsPanel(QWidget):
         self.polish_button.clicked.connect(self._emit_polish)
         self.export_button.clicked.connect(self.export_requested.emit)
 
-    def set_skill_dir(self, skill_dir: Path | None) -> None:
+    def set_skill_dir(self, skill_dir: Path | None, preferred_skill: str | None = None) -> None:
         """Repoint at a new skill directory and rebuild the combo."""
         self._skill_dir = Path(skill_dir) if skill_dir else None
         self.skill_combo.clear()
         self._populate_skills()
+        if preferred_skill:
+            self.set_preferred_skill(preferred_skill)
+
+    def set_preferred_skill(self, name: str | None) -> None:
+        """Select the combo entry matching `name` (skill stem). Silently
+        falls back to '无' if the name isn't in the current combo."""
+        if not name:
+            self.skill_combo.setCurrentIndex(0)
+            return
+        for i in range(self.skill_combo.count()):
+            if self.skill_combo.itemText(i) == name:
+                self.skill_combo.setCurrentIndex(i)
+                return
+        self.skill_combo.setCurrentIndex(0)
 
     def set_provider_default(self, name: str) -> None:
         """Deprecated no-op — provider is read from AppConfig at polish time.
