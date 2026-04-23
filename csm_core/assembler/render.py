@@ -144,10 +144,12 @@ def _render_hero_region(
 
     hero_title = _substitute(hero.text, variables)
     body = "\n\n".join(p for p in body_parts if p)
+    # Blank line between title and 推荐理由 so markdown renders them as
+    # separate paragraphs (single \n would collapse into one line).
     if body:
-        hero_chunk = f"{_prefix_join(1, style, hero_title)}\n{reason_label}\n{body}"
+        hero_chunk = f"{_prefix_join(1, style, hero_title)}\n\n{reason_label}\n{body}"
     else:
-        hero_chunk = f"{_prefix_join(1, style, hero_title)}\n{reason_label}".rstrip()
+        hero_chunk = f"{_prefix_join(1, style, hero_title)}\n\n{reason_label}".rstrip()
 
     if pool_result is None:
         return hero_chunk, j
@@ -164,5 +166,6 @@ def _render_competitor_pool(
     for k, p in enumerate(r.picks):
         n = start_index + k
         title = p.meta.get("title") or p.note_id
-        items.append(f"{_prefix_join(n, style, title)}\n{label}{p.text}")
+        # Blank line so markdown keeps title and 推荐理由 on separate lines.
+        items.append(f"{_prefix_join(n, style, title)}\n\n{label}{p.text}")
     return "\n\n".join(items)

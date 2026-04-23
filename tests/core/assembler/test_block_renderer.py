@@ -46,7 +46,7 @@ def test_hero_brand_without_pool_renders_standalone():
                     picks=[PickedVariant(note_id="b", variant_index=0, text="理由 B")]),
     )
     assert compose_draft(p) == (
-        "1. CEWEY DS18\n推荐理由：\n理由 A\n\n理由 B"
+        "1. CEWEY DS18\n\n推荐理由：\n理由 A\n\n理由 B"
     )
 
 
@@ -67,9 +67,9 @@ def test_hero_brand_closed_by_competitor_pool_continuous_numbering():
     )
     out = compose_draft(p)
     assert out == (
-        "1. CEWEY DS18\n推荐理由：\n品牌背书\n\n"
-        "2. 戴森V8\n推荐理由：理由A\n\n"
-        "3. 小狗T12\n推荐理由：理由B"
+        "1. CEWEY DS18\n\n推荐理由：\n品牌背书\n\n"
+        "2. 戴森V8\n\n推荐理由：理由A\n\n"
+        "3. 小狗T12\n\n推荐理由：理由B"
     )
 
 
@@ -84,7 +84,7 @@ def test_competitor_pool_standalone_starts_from_one():
         ],
         meta={"reason_label": "推荐理由："},
     ))
-    assert compose_draft(p) == "1. A\n推荐理由：r1\n\n2. B\n推荐理由：r2"
+    assert compose_draft(p) == "1. A\n\n推荐理由：r1\n\n2. B\n\n推荐理由：r2"
 
 
 def test_chinese_number_style():
@@ -113,7 +113,7 @@ def test_paragraph_children_flatten_into_region():
         ),
     )
     assert compose_draft(p) == (
-        "1. CEWEY\n推荐理由：\n主段\n\n子变体"
+        "1. CEWEY\n\n推荐理由：\n主段\n\n子变体"
     )
 
 
@@ -136,4 +136,4 @@ def test_chinese_style_hero_and_pool_no_extra_space():
                                          meta={"title": "戴森"})],
                     meta={"reason_label": "推荐理由："}),
     )
-    assert compose_draft(p) == "一、CEWEY\n推荐理由：\n\n二、戴森\n推荐理由：理由"
+    assert compose_draft(p) == "一、CEWEY\n\n推荐理由：\n\n二、戴森\n\n推荐理由：理由"
