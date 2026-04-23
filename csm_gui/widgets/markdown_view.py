@@ -181,12 +181,13 @@ def _apply_typography(edit) -> None:
 
         text_list = block.textList()
         if text_list is not None:
-            # Align list items with regular paragraphs. Zero indent on
-            # both the block and the list format keeps the "1." / "•"
-            # markers visible but flush with the paragraph left edge.
-            lfmt = text_list.format()
-            lfmt.setIndent(0)
-            text_list.setFormat(lfmt)
+            # Flatten the block-level indent so list content sits near the
+            # paragraph left edge, but leave ``QTextListFormat.indent`` at
+            # its default (≥ 1). Setting the list-format indent to 0 makes
+            # Qt draw the "1." / "•" marker at a negative x-offset, which
+            # clips it outside the viewport — list numbers silently
+            # disappear. Keeping the list indent preserves the marker
+            # while the block indent flatten keeps items left-aligned.
             bfmt.setIndent(0)
             bfmt.setLeftMargin(0)
             bfmt.setTextIndent(0)
