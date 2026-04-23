@@ -159,7 +159,7 @@ def test_runner_loads_default_skill_from_template(tmp_path, monkeypatch):
     # Patch load_template so the template reports default_skill_id="polish"
     def patched_load(path):
         t = original_load(path)
-        object.__setattr__(t, "default_skill_id", "polish")
+        t.default_skill_id = "polish"
         return t
 
     monkeypatch.setattr(runner_mod, "load_template", patched_load)

@@ -12,5 +12,6 @@ config/settings.json
 config/vault_index.cache.json
 output/
 templates/.trash/
+*.bak
 .vscode/
 .idea/

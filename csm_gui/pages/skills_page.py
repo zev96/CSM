@@ -44,8 +44,6 @@ class SkillsPage(QWidget):
     def _on_skill_selected(self, path: Path) -> None:
         if self.editor_panel.is_dirty():
             decision = self._resolve_dirty()
-            if decision == "cancel":
-                return
             if decision == "save":
                 if not self.editor_panel.save():
                     return
@@ -55,7 +53,7 @@ class SkillsPage(QWidget):
         self.list_panel.refresh()
 
     def _resolve_dirty(self) -> str:
-        """Prompt on unsaved changes. Returns one of: 'save', 'discard', 'cancel'.
+        """Prompt on unsaved changes. Returns 'save' or 'discard'.
         Override in tests via monkeypatch."""
         dlg = MessageBox(
             "未保存的更改",
