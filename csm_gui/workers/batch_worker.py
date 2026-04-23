@@ -19,6 +19,7 @@ class BatchWorker(QThread):
         out_dir: Path,
         llm_client: LLMClient,
         seed: int,
+        skill_dir: Path | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -28,6 +29,7 @@ class BatchWorker(QThread):
         self._out_dir = Path(out_dir)
         self._llm_client = llm_client
         self._seed = seed
+        self._skill_dir = skill_dir
         self._cancel_flag = False
 
     def request_cancel(self) -> None:
@@ -54,5 +56,6 @@ class BatchWorker(QThread):
             on_item_started=self._emit_item_started,
             on_item_finished=self._emit_item_finished,
             should_cancel=lambda: self._cancel_flag,
+            skill_dir=self._skill_dir,
         )
         self.batch_finished.emit(report)

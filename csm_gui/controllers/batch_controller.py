@@ -66,6 +66,7 @@ class BatchController(QObject):
             out_dir=batch_dir,
             llm_client=client,
             seed=int(payload.get("seed", self._config.last_seed)),
+            skill_dir=Path(self._config.skill_dir) if self._config.skill_dir else None,
             parent=self,
         )
         self._worker.item_started.connect(self._on_item_started)

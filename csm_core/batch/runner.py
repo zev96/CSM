@@ -38,6 +38,7 @@ def run_batch(
     on_item_started: Callable[[int, str], None] = lambda i, kw: None,
     on_item_finished: Callable[[BatchItem], None] = lambda item: None,
     should_cancel: Callable[[], bool] = lambda: False,
+    skill_dir: Path | None = None,
 ) -> BatchReport:
     cleaned = _dedup_keywords(keywords)
     batch_id = out_dir.name
@@ -58,6 +59,14 @@ def run_batch(
     registry = build_brand_registry(vault_root)
     template = load_template(template_path)
 
+    # Resolve default skill once per batch. Missing file → empty system prompt
+    # (same behavior as pre-migration when a template lacked system_prompt_default).
+    user_skill_prompt: str | None = None
+    if template.default_skill_id and skill_dir is not None:
+        skill_path = Path(skill_dir) / f"{template.default_skill_id}.md"
+        if skill_path.is_file():
+            user_skill_prompt = skill_path.read_text(encoding="utf-8")
+
     for i, keyword in enumerate(cleaned, start=1):
         if should_cancel():
             break
@@ -71,9 +80,7 @@ def run_batch(
             )
             draft = compose_draft(plan)
             system, user = build_prompt(PromptInputs(
-                template_system_prompt=template.system_prompt_default,
-                user_skill_prompt=None,
-                seo=template.seo_defaults,
+                user_skill_prompt=user_skill_prompt,
                 keyword=keyword,
                 draft=draft,
             ))

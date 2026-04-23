@@ -135,6 +135,55 @@ def test_run_batch_writes_incremental_report(tmp_path):
     assert snapshots == [1, 2]
 
 
+def test_runner_loads_default_skill_from_template(tmp_path, monkeypatch):
+    """When template.default_skill_id is set and skill_dir contains <id>.md,
+    the runner reads it and passes its content as system prompt."""
+    skill_dir = tmp_path / "skills"
+    skill_dir.mkdir()
+    (skill_dir / "polish.md").write_text("SKILL BODY", encoding="utf-8")
+
+    captured = {}
+
+    class FakeLLM:
+        def complete(self, system, user):
+            captured["system"] = system
+            return "final"
+
+    template_path, vault_root = _setup_vault_and_template(tmp_path)
+    batch_dir = tmp_path / "batch-skill"
+    batch_dir.mkdir()
+
+    import csm_core.batch.runner as runner_mod
+    original_load = runner_mod.load_template
+
+    # Patch load_template so the template reports default_skill_id="polish"
+    def patched_load(path):
+        t = original_load(path)
+        object.__setattr__(t, "default_skill_id", "polish")
+        return t
+
+    monkeypatch.setattr(runner_mod, "load_template", patched_load)
+    # Stub out assembler/render/export so the test is not coupled to vault contents
+    monkeypatch.setattr(runner_mod, "assemble_plan", lambda **kw: object())
+    monkeypatch.setattr(runner_mod, "compose_draft", lambda plan: "DRAFT")
+    monkeypatch.setattr(
+        runner_mod, "export_article",
+        lambda **kw: {"markdown": "x.md", "assembly_json": "x.json"},
+    )
+
+    run_batch(
+        keywords=["kw1"],
+        template_path=template_path,
+        vault_root=vault_root,
+        out_dir=batch_dir,
+        llm_client=FakeLLM(),
+        seed=0,
+        skill_dir=skill_dir,
+    )
+
+    assert captured.get("system") == "SKILL BODY"
+
+
 def test_run_batch_vault_scanned_once(tmp_path, monkeypatch):
     template_path, vault_root = _setup_vault_and_template(tmp_path)
     batch_dir = tmp_path / "batch-test"
