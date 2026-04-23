@@ -35,6 +35,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["csm_core*", "csm_gui*"]
 
+[tool.setuptools.package-data]
+# Ship the bundled OPPO Sans TTF with the csm_gui package so installs
+# (including wheel / editable-install / pyinstaller) pick it up.
+csm_gui = ["assets/fonts/*.ttf"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
