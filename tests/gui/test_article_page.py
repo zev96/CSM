@@ -46,3 +46,21 @@ def test_markdown_view_sets_draft_and_polished(qtbot):
     assert "Polished" in view.polished_edit.toPlainText()
     # set_polished switches the pivot — a silent regression here is easy to miss
     assert view._pivot.currentRouteKey() == "polished"
+
+
+def test_article_page_load_result_populates_pick_list(qtbot):
+    from csm_gui.pages.article_page import ArticlePage
+    from csm_core.assembler.plan import AssemblyPlan, BlockResult, PickedVariant
+
+    page = ArticlePage()
+    qtbot.addWidget(page)
+    plan = AssemblyPlan(
+        keyword="kw", template_id="t", seed=1,
+        results=[BlockResult(
+            block_id="nl", kind="numbered_list",
+            picks=[PickedVariant(note_id="n1", variant_index=0, text="hi")],
+            meta={"number_style": "1.", "item_separator": "\n\n"},
+        )],
+    )
+    page.load_result(template=None, plan=plan, draft="draft", final_text="")
+    assert page.pick_list_panel.row_count() == 1

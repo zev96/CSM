@@ -1,6 +1,6 @@
 """Article workspace — two-column layout.
 
-Left: placeholder panel (reserved for future block summary view).
+Left: pick-list panel (per-pick reroll buttons).
 Right-top: markdown preview (large).
 Right-bottom: action bar (compact) — polish-skill + 重新随机/润色/导出 buttons.
 """
@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
 from ..widgets.markdown_view import MarkdownView
 from ..widgets.controls_panel import ControlsPanel
+from ..widgets.pick_list_panel import PickListPanel
 
 
 class ArticlePage(QWidget):
@@ -21,9 +22,10 @@ class ArticlePage(QWidget):
         # Outer horizontal splitter: left placeholder | right column
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
-        self._left_placeholder = QWidget(self.splitter)
-        self._left_placeholder.setMinimumWidth(260)
-        self.slot_panel = self._left_placeholder
+        self.pick_list_panel = PickListPanel(self.splitter)
+        self.pick_list_panel.setMinimumWidth(260)
+        # Back-compat alias (existing tests and callers reference ``slot_panel``).
+        self.slot_panel = self.pick_list_panel
 
         # Right column: vertical splitter with markdown preview on top and a
         # compact action bar pinned below. Using a splitter (not a fixed
@@ -53,7 +55,7 @@ class ArticlePage(QWidget):
         self.right_splitter.setCollapsible(1, False)
         self.right_splitter.setSizes([680, 64])
 
-        self.splitter.addWidget(self._left_placeholder)
+        self.splitter.addWidget(self.pick_list_panel)
         self.splitter.addWidget(self.right_splitter)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
@@ -69,15 +71,21 @@ class ArticlePage(QWidget):
         # After set_polished() the view auto-jumped to 成文; flip back to 初稿
         # so a fresh generate lands on the draft tab.
         self.markdown_view._pivot.setCurrentItem("draft")
+        from csm_core.assembler.plan import AssemblyPlan
+        self.pick_list_panel.load_plan(
+            AssemblyPlan(keyword="", template_id="", seed=0, results=[])
+        )
 
     def load_result(self, template, plan, draft: str, final_text: str) -> None:
         """Render a generated article. All inputs are plain data."""
         self.markdown_view.set_draft(draft)
         self.markdown_view.set_polished(final_text)
+        self.pick_list_panel.load_plan(plan)
 
     def update_plan(self, template, plan, draft: str) -> None:
         """Refresh draft after resampling (polished text unchanged)."""
         self.markdown_view.set_draft(draft)
+        self.pick_list_panel.load_plan(plan)
 
     def apply_config(self, cfg):
         self.controls.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)

@@ -40,6 +40,8 @@ class MainWindow(FluentWindow):
         self.article_controller.polish_failed.connect(self._on_polish_failed)
         self.article_controller.exported.connect(self._on_exported)
         self.article_controller.export_failed.connect(self._on_export_failed)
+        self.article_controller.reroll_completed.connect(self._on_reroll_completed)
+        self.article_controller.reroll_failed.connect(self._on_reroll_failed)
 
         self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
@@ -70,6 +72,7 @@ class MainWindow(FluentWindow):
         self.article.controls.export_requested.connect(self._on_export)
         self.article.controls.rerun_all_requested.connect(self._on_rerun_all)
         self.article.controls.clear_all_requested.connect(self._on_clear_all)
+        self.article.pick_list_panel.reroll_requested.connect(self._on_reroll_requested)
         # Modal spinner shown while polish runs. Owned by the window so we
         # can dismiss it from any of the polish completion / failure slots.
         self._polish_busy_dialog = None
@@ -159,6 +162,29 @@ class MainWindow(FluentWindow):
                 "无法重新随机", "请先生成一篇文章，或等待当前任务完成",
                 parent=self, position=InfoBarPosition.TOP,
             )
+
+    def _on_reroll_requested(self, block_id: str, pick_index: int) -> None:
+        self.article.pick_list_panel.set_busy(True)
+        ok = self.article_controller.reroll_pick(block_id, pick_index)
+        if not ok:
+            # Controller refused (no article / busy / missing vault handled via signal).
+            self.article.pick_list_panel.set_busy(False)
+
+    def _on_reroll_completed(self, new_plan) -> None:
+        from csm_core.assembler.render import compose_draft
+        draft = compose_draft(new_plan)
+        self.article.update_plan(
+            self.article_controller.current_template, new_plan, draft,
+        )
+        self.article.pick_list_panel.set_busy(False)
+
+    def _on_reroll_failed(self, msg: str) -> None:
+        self.article.pick_list_panel.set_busy(False)
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.warning(
+            title="重抽失败", content=msg, parent=self,
+            position=InfoBarPosition.TOP, duration=4000,
+        )
 
     def _on_polish(self, skill_path) -> None:
         # Provider is read from config (the workspace no longer has a picker).
