@@ -48,9 +48,66 @@ from csm_core.template.schema import (
     NotesQuerySource, PickCountSpec,
 )
 
-# Reuse vault-scanning helpers from slot_editor_dialog
-from .slot_editor_dialog import _scan_vault_dirs, _scan_frontmatter
 from .cascade_picker import CascadePickerButton
+
+_SKIP_DIRS = {
+    ".obsidian", ".trash", ".git", "__pycache__",
+    ".venv", "node_modules", ".system_generated",
+}
+
+
+def _scan_vault_dirs(vault_root: Path) -> list[str]:
+    """Return sorted relative paths of leaf subdirs that directly contain .md files."""
+    candidates: list[str] = []
+    try:
+        for p in sorted(vault_root.rglob("*")):
+            if not p.is_dir():
+                continue
+            try:
+                rel_parts = p.relative_to(vault_root).parts
+            except ValueError:
+                continue
+            if any(part.startswith(".") or part in _SKIP_DIRS for part in rel_parts):
+                continue
+            if not any(c.suffix == ".md" for c in p.iterdir() if c.is_file()):
+                continue
+            candidates.append("/".join(rel_parts))
+            if len(candidates) >= 300:
+                break
+    except Exception:
+        pass
+    cset = set(candidates)
+    return sorted(
+        d for d in candidates
+        if not any(other.startswith(d + "/") for other in cset)
+    )
+
+
+def _scan_frontmatter(md_dir: Path) -> dict[str, list[str]]:
+    """Return ``{key: sorted_unique_values}`` from YAML frontmatter of .md files."""
+    seen: dict[str, set[str]] = {}
+    try:
+        for md in sorted(md_dir.glob("*.md"))[:200]:
+            try:
+                text = md.read_text(encoding="utf-8", errors="ignore")
+                in_fm = started = False
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped == "---":
+                        if not started:
+                            started = in_fm = True
+                            continue
+                        break
+                    if in_fm and ":" in stripped and not stripped.startswith("#"):
+                        k, _, v = stripped.partition(":")
+                        k, v = k.strip(), v.strip()
+                        if k and v:
+                            seen.setdefault(k, set()).add(v)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return {k: sorted(vs) for k, vs in sorted(seen.items())}
 
 _MAX_DEPTH = 3   # 1 = root only, 2 = root+child, 3 = root+child+grandchild
 

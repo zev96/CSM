@@ -1,7 +1,7 @@
 """ArticleController — owns article-workflow state off of MainWindow.
 
 Contract (see docs/superpowers/specs/2026-04-20-plan-c-refactor-and-batch-design.md):
-- Owns current_result, template, reroll counter, vault cache, workers.
+- Owns current_result, template, vault cache, workers.
 - Emits signals; never calls InfoBar or switchTo directly.
 - Never imports widget classes.
 """
@@ -13,7 +13,6 @@ from csm_core.template.schema import Template
 from ..config import AppConfig
 from csm_core.pipeline import GenerateRequest
 from ..workers.generate_worker import GenerateWorker
-from ..workers.reroll import reroll_slot
 from ..workers.polish_worker import PolishWorker
 from ..llm_factory import build_client
 from csm_core.llm.prompts import build_prompt, PromptInputs
@@ -24,7 +23,6 @@ from csm_core.export.markdown import export_article
 class ArticleController(QObject):
     generated = pyqtSignal(object)           # GenerateResult
     generate_failed = pyqtSignal(str)
-    reroll_completed = pyqtSignal(object)    # AssemblyPlan
     polished = pyqtSignal(str)
     polish_failed = pyqtSignal(str)
     exported = pyqtSignal(dict)              # {"markdown": path, "assembly_json": path}
@@ -38,7 +36,6 @@ class ArticleController(QObject):
         self._current_result: GenerateResult | None = None
         self._current_template: Template | None = None
         self._last_template_path: Path | None = None
-        self._reroll_counter: int = 0
         self._vault_cache: tuple[Path, float, object, object] | None = None
         self._generate_worker = None
         self._polish_worker = None
@@ -109,7 +106,6 @@ class ArticleController(QObject):
             return
         self._current_result = result
         self._current_template = template
-        self._reroll_counter = 0
         self.generated.emit(result)
         if getattr(result.plan, "warnings", None):
             self.plan_warnings.emit(list(result.plan.warnings))
@@ -118,25 +114,6 @@ class ArticleController(QObject):
     def _on_generate_failed(self, msg: str) -> None:
         self.generate_failed.emit(msg)
         self.busy_changed.emit(False)
-
-    def reroll_slot(self, slot_id: str, user_config: dict) -> None:
-        if self._current_result is None or self._current_template is None:
-            return
-        if not self._config.vault_root:
-            return
-        index, registry = self._get_vault(Path(self._config.vault_root))
-        self._reroll_counter += 1
-        new_plan = reroll_slot(
-            slot_id=slot_id,
-            template=self._current_template,
-            index=index,
-            registry=registry,
-            current_plan=self._current_result.plan,
-            counter=self._reroll_counter,
-            user_config=user_config,
-        )
-        self._current_result.plan = new_plan
-        self.reroll_completed.emit(new_plan)
 
     def polish(
         self,
@@ -223,7 +200,6 @@ class ArticleController(QObject):
         self._current_template = None
         self._last_template_path = None
         self._last_payload = None
-        self._reroll_counter = 0
         return True
 
     def is_busy(self) -> bool:

@@ -14,7 +14,7 @@ def test_controller_signals_exist():
     cfg = AppConfig()
     c = ArticleController(cfg)
     for name in [
-        "generated", "generate_failed", "reroll_completed",
+        "generated", "generate_failed",
         "polished", "polish_failed", "exported", "export_failed",
         "plan_warnings", "busy_changed",
     ]:
@@ -101,7 +101,7 @@ def test_generate_finished_template_load_failure_emits_generate_failed(qtbot, tm
 
     fake_result = GenerateResult(
         markdown_path="", assembly_json_path="",
-        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0),
         final_text="",
     )
     with qtbot.waitSignal(c.generate_failed, timeout=500) as sig:
@@ -141,41 +141,6 @@ def test_get_vault_invalidates_on_mtime_change(qtbot, tmp_path):
     assert idx1 is not idx2
 
 
-def test_reroll_slot_no_op_when_no_current_result(qtbot, tmp_path):
-    c = ArticleController(AppConfig(vault_root=str(tmp_path)))
-    with qtbot.assertNotEmitted(c.reroll_completed):
-        c.reroll_slot("some_slot", {"brand_competitors": 2})
-    assert c._reroll_counter == 0
-
-
-def test_reroll_slot_emits_reroll_completed_on_success(qtbot, tmp_path, monkeypatch):
-    (tmp_path / "brands.json").write_text('{"brands":[]}', encoding="utf-8")
-    c = ArticleController(AppConfig(vault_root=str(tmp_path)))
-
-    fake_plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
-    c._current_result = GenerateResult(
-        markdown_path="", assembly_json_path="",
-        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
-        final_text="",
-    )
-    c._current_template = object()
-    monkeypatch.setattr(
-        c, "_get_vault",
-        lambda root: (object(), object()),
-    )
-
-    monkeypatch.setattr(
-        "csm_gui.controllers.article_controller.reroll_slot",
-        lambda **kwargs: fake_plan,
-    )
-
-    with qtbot.waitSignal(c.reroll_completed, timeout=500) as sig:
-        c.reroll_slot("slot_a", {"brand_competitors": 2})
-    assert sig.args[0] is fake_plan
-    assert c._current_result.plan is fake_plan
-    assert c._reroll_counter == 1
-
-
 def test_polish_no_op_without_current_result(qtbot, tmp_path):
     c = ArticleController(AppConfig(out_dir=str(tmp_path)))
     with qtbot.assertNotEmitted(c.busy_changed):
@@ -187,7 +152,7 @@ def test_polish_rejected_when_busy(qtbot, tmp_path):
     c = ArticleController(AppConfig(out_dir=str(tmp_path)))
     c._current_result = GenerateResult(
         markdown_path="", assembly_json_path="",
-        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0),
         final_text="",
     )
     c._current_template = _MockTemplate()
@@ -222,11 +187,11 @@ def test_export_no_op_without_result(qtbot, tmp_path):
 
 
 def test_export_emits_exported_on_success(qtbot, tmp_path):
-    from csm_core.assembler.plan import SlotAssignment, PickedVariant
+    from csm_core.assembler.plan import BlockResult, PickedVariant
     c = ArticleController(AppConfig(out_dir=str(tmp_path)))
     plan = AssemblyPlan(
         keyword="kw", template_id="t", seed=0,
-        slots=[SlotAssignment(slot_id="s", picks=[
+        results=[BlockResult(block_id="s", kind="paragraph", picks=[
             PickedVariant(note_id="n", variant_index=0, text="hi"),
         ])],
     )
@@ -245,7 +210,7 @@ def test_export_emits_export_failed_on_missing_out_dir(qtbot, tmp_path):
     c = ArticleController(AppConfig(out_dir=str(tmp_path / "does_not_exist")))
     c._current_result = GenerateResult(
         markdown_path="", assembly_json_path="",
-        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0),
         # Non-empty so the NotPolished guard (draft-only flow) doesn't fire
         # before we reach the filesystem — this test is about missing dir.
         final_text="# polished",
@@ -259,7 +224,7 @@ def test_export_emits_export_failed_when_not_polished(qtbot, tmp_path):
     c = ArticleController(AppConfig(out_dir=str(tmp_path)))
     c._current_result = GenerateResult(
         markdown_path="", assembly_json_path="",
-        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0),
         final_text="",
     )
     with qtbot.waitSignal(c.export_failed, timeout=500) as sig:
@@ -271,7 +236,7 @@ def test_export_emits_export_failed_when_out_dir_not_configured(qtbot, tmp_path)
     c = ArticleController(AppConfig(out_dir=""))
     c._current_result = GenerateResult(
         markdown_path="", assembly_json_path="",
-        plan=AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[]),
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0),
         final_text="",
     )
     with qtbot.waitSignal(c.export_failed, timeout=500) as sig:

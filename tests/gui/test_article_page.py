@@ -7,7 +7,8 @@ def test_article_page_has_three_panels(qtbot):
     assert page.slot_panel is not None
     assert page.preview_panel is not None
     assert page.controls_panel is not None
-    assert page.splitter.count() == 3
+    # splitter has 2 widgets: left placeholder + right_splitter
+    assert page.splitter.count() == 2
 
 
 def test_article_page_clear_empties_markdown(qtbot):
@@ -21,13 +22,15 @@ def test_article_page_clear_empties_markdown(qtbot):
 
 
 def test_article_page_load_result_renders_inputs(qtbot):
-    from csm_core.template.schema import Template
+    from csm_core.template.schema import Template, LiteralBlock
     from csm_core.assembler.plan import AssemblyPlan
 
     page = ArticlePage()
     qtbot.addWidget(page)
-    template = Template(id="t", name="t", product="p", slots=[], render_order=[])
-    plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
+    template = Template(id="t", name="t", product="p", blocks=[
+        LiteralBlock(id="x", text="x"),
+    ])
+    plan = AssemblyPlan(keyword="k", template_id="t", seed=0)
     page.load_result(template, plan, "draft-text", "polished-text")
     assert "draft-text" in page.markdown_view.draft_edit.toPlainText()
     assert "polished-text" in page.markdown_view.polished_edit.toPlainText()

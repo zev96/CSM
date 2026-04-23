@@ -1,13 +1,12 @@
 from csm_gui.main_window import MainWindow
 
 
-def test_main_window_has_three_nav_items(qtbot, tmp_path):
+def test_main_window_has_nav_items(qtbot, tmp_path):
     win = MainWindow(config_dir=tmp_path)
     qtbot.addWidget(win)
 
-    assert win.stackedWidget.count() == 4
     names = {win.stackedWidget.widget(i).objectName() for i in range(win.stackedWidget.count())}
-    assert names == {"HomePage", "ArticlePage", "SettingsPage", "BatchResultPage"}
+    assert {"HomePage", "ArticlePage", "SettingsPage", "BatchResultPage", "TemplateManagerPage"}.issubset(names)
 
 
 def test_main_window_loads_config(qtbot, tmp_path):
@@ -23,7 +22,7 @@ def test_main_window_loads_config(qtbot, tmp_path):
 def test_export_action_writes_files(qtbot, tmp_path):
     from pathlib import Path
     from csm_core.pipeline import GenerateResult
-    from csm_core.assembler.plan import AssemblyPlan, SlotAssignment, PickedVariant
+    from csm_core.assembler.plan import AssemblyPlan, BlockResult, PickedVariant
     from csm_core.template.loader import load_template
     from csm_gui.config import AppConfig, save_config
 
@@ -35,7 +34,7 @@ def test_export_action_writes_files(qtbot, tmp_path):
 
     plan = AssemblyPlan(
         keyword="测试关键词", template_id="t", seed=0,
-        slots=[SlotAssignment(slot_id="s", picks=[
+        results=[BlockResult(block_id="s", kind="paragraph", picks=[
             PickedVariant(note_id="n", variant_index=0, text="hello"),
         ])],
     )
@@ -106,7 +105,7 @@ def test_show_plan_warnings_emits_when_present(qtbot, tmp_path, monkeypatch):
 
     monkeypatch.setattr("qfluentwidgets.InfoBar.warning", staticmethod(fake_warning))
     plan = AssemblyPlan(
-        keyword="k", template_id="t", seed=0, slots=[],
+        keyword="k", template_id="t", seed=0,
         warnings=["缺数据: slot_a", "缺数据: slot_b"],
     )
     win._show_plan_warnings_list(plan.warnings)
@@ -126,7 +125,7 @@ def test_show_plan_warnings_silent_when_empty(qtbot, tmp_path, monkeypatch):
         "qfluentwidgets.InfoBar.warning",
         staticmethod(lambda *a, **kw: shown.append(1)),
     )
-    plan = AssemblyPlan(keyword="k", template_id="t", seed=0, slots=[])
+    plan = AssemblyPlan(keyword="k", template_id="t", seed=0)
     win._show_plan_warnings_list([])
     assert shown == []
 

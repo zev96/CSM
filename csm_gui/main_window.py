@@ -36,7 +36,6 @@ class MainWindow(FluentWindow):
         self.article_controller.generated.connect(self._on_generated)
         self.article_controller.generate_failed.connect(self._on_generate_failed)
         self.article_controller.plan_warnings.connect(self._show_plan_warnings_list)
-        self.article_controller.reroll_completed.connect(self._on_reroll_completed)
         self.article_controller.polished.connect(self._on_polished)
         self.article_controller.polish_failed.connect(self._on_polish_failed)
         self.article_controller.exported.connect(self._on_exported)
@@ -67,7 +66,6 @@ class MainWindow(FluentWindow):
             default_provider=self.config.default_provider,
             parent=self,
         )
-        self.article.reroll_slot_requested.connect(self._on_reroll_slot)
         self.article.controls.polish_requested.connect(self._on_polish)
         self.article.controls.export_requested.connect(self._on_export)
         self.article.controls.rerun_all_requested.connect(self._on_rerun_all)
@@ -136,20 +134,6 @@ class MainWindow(FluentWindow):
             parent=self,
             position=InfoBarPosition.TOP,
             duration=6000,
-        )
-
-    def _on_reroll_slot(self, slot_id: str) -> None:
-        # Brand-count is no longer exposed in the article workspace UI —
-        # slot pick counts fall back to the template default. Callers that
-        # need a non-default count should configure it upstream.
-        self.article_controller.reroll_slot(slot_id, user_config={})
-
-    def _on_reroll_completed(self, new_plan) -> None:
-        from csm_core.assembler.render import compose_draft
-        self.article.update_plan(
-            self.article_controller.current_template,
-            new_plan,
-            compose_draft(new_plan),
         )
 
     def _on_polish_failed(self, msg: str) -> None:
