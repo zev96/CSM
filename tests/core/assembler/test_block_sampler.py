@@ -122,3 +122,38 @@ def test_competitor_pool_stem_strips_leading_jingpin_prefix(tmp_path):
     )
     br = sample_block(blk, idx, reg, seed=0, user_config={})
     assert br.picks[0].meta["title"] == "米家3基站版"
+
+
+def test_competitor_pool_strips_jingpin_prefix_from_model_frontmatter(tmp_path):
+    """The strip must apply to frontmatter 型号 too, not just note stem.
+
+    When a note author types ``型号: 竞品-戴森V8`` the prefix still leaks into
+    ``meta['model']`` and must be cleaned before becoming the title.
+    """
+    _write(
+        tmp_path, "竞品/某note.md",
+        {"产品": "吸尘器", "型号": "竞品-戴森V8"}, "理由。",
+    )
+    idx = scan_vault(tmp_path)
+    reg = build_brand_registry(tmp_path)
+    blk = CompetitorPoolBlock(
+        id="cp", source=NotesQuerySource(module="竞品"),
+        pick_notes=1,
+    )
+    br = sample_block(blk, idx, reg, seed=0, user_config={})
+    assert br.picks[0].meta["title"] == "戴森V8"
+
+
+def test_competitor_pool_strips_jingpin_prefix_with_various_separators(tmp_path):
+    """Prefix can be followed by full-width dash, slash, space, or nothing."""
+    from csm_core.assembler.sampler import _clean_competitor_title
+    assert _clean_competitor_title("竞品-戴森") == "戴森"
+    assert _clean_competitor_title("竞品－戴森") == "戴森"      # full-width hyphen
+    assert _clean_competitor_title("竞品–戴森") == "戴森"       # en dash
+    assert _clean_competitor_title("竞品—戴森") == "戴森"       # em dash
+    assert _clean_competitor_title("竞品/戴森") == "戴森"
+    assert _clean_competitor_title("竞品／戴森") == "戴森"      # full-width slash
+    assert _clean_competitor_title("竞品 戴森") == "戴森"
+    assert _clean_competitor_title("竞品戴森") == "戴森"         # no separator
+    assert _clean_competitor_title("竞品: 戴森") == "戴森"
+    assert _clean_competitor_title("戴森V8") == "戴森V8"         # no prefix → unchanged

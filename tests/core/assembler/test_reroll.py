@@ -140,6 +140,36 @@ def test_reroll_competitor_pool_sets_title_meta():
     assert picks[1].note_id == "n2"
 
 
+def test_reroll_competitor_pool_strips_jingpin_prefix():
+    """Reroll of a competitor pick must strip the 竞品- prefix from title,
+    mirroring the initial sample. Otherwise a rerolled pick would reintroduce
+    the category prefix that fresh samples don't have."""
+    notes = [
+        _note("n1", ["r1"], frontmatter={"型号": "X1"}),
+        _note("n2", ["r2"], frontmatter={"型号": "X2"}),
+        _note("竞品-戴森V8", ["r3"], frontmatter={"产品": "吸尘器"}),
+    ]
+    idx = _index_from(notes)
+    block = CompetitorPoolBlock(
+        id="cp", source=NotesQuerySource(module="m"), pick_notes=2,
+    )
+    tpl = _tpl_with(block)
+    plan = _plan_with(BlockResult(
+        block_id="cp", kind="competitor_pool",
+        picks=[
+            PickedVariant(note_id="n1", variant_index=0, text="r1",
+                          meta={"model": "X1", "title": "X1"}),
+            PickedVariant(note_id="n2", variant_index=0, text="r2",
+                          meta={"model": "X2", "title": "X2"}),
+        ],
+        meta={"reason_label": "推荐理由："},
+    ))
+    new_plan = reroll_pick(plan, "cp", 0, tpl, idx, rng=random.Random(2))
+    new_pick = new_plan.get_result("cp").picks[0]
+    assert new_pick.note_id == "竞品-戴森V8"
+    assert new_pick.meta["title"] == "戴森V8"  # prefix stripped
+
+
 def test_reroll_paragraph_leaves_children_untouched():
     notes_parent = [_note("p1", ["P1"]), _note("p2", ["P2"])]
     idx = _index_from(notes_parent)

@@ -1,7 +1,24 @@
 """Block-level sampling (dispatch by kind)."""
 from __future__ import annotations
 import random
+import re
 from typing import Any
+
+# ``竞品`` is the Chinese category word (≈ "competitor"). Notes are often
+# filed under a folder or named with a ``竞品`` prefix followed by some
+# separator — hyphen, en/em dash, slash, whitespace, or nothing — before
+# the real brand/model. Strip it so the rendered title is clean.
+_COMPETITOR_PREFIX_RE = re.compile(r"^竞品[\s\-\u2010-\u2015\uFF0D\u3000/／_:：]*")
+
+
+def _clean_competitor_title(raw: str) -> str:
+    """Strip the ``竞品`` category prefix from a competitor title.
+
+    Handles various separator styles: ASCII hyphen (``竞品-戴森``), full-width
+    hyphen (``竞品－戴森``), en/em dash (``竞品–戴森``), slash (``竞品/戴森``),
+    whitespace (``竞品 戴森``), or no separator (``竞品戴森``).
+    """
+    return _COMPETITOR_PREFIX_RE.sub("", raw).strip()
 from ..vault.scanner import VaultIndex
 from ..vault.brand_registry import BrandRegistry
 from ..vault.note_parser import ParsedNote
@@ -142,11 +159,7 @@ def sample_block(
         for p in picks:
             meta = dict(p.meta)
             raw_title = meta.get("model") or p.note_id
-            # Strip the "竞品-" category prefix that comes from folder-based
-            # note_id when frontmatter lacks an explicit model field.
-            if raw_title.startswith("竞品-"):
-                raw_title = raw_title[len("竞品-"):]
-            meta["title"] = raw_title
+            meta["title"] = _clean_competitor_title(raw_title)
             enriched.append(p.model_copy(update={"meta": meta}))
         return BlockResult(
             block_id=block.id, kind="competitor_pool", picks=enriched,

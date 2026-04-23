@@ -136,9 +136,12 @@ def _build_pick(
     for key, attr in (("品牌", "brand"), ("型号", "model")):
         if key in note.frontmatter:
             meta[attr] = note.frontmatter[key]
-    # competitor_pool enriches meta['title']: mirror sampler.py behaviour.
+    # competitor_pool enriches meta['title']: mirror sampler.py behaviour,
+    # including the 竞品-prefix strip so rerolled competitors match fresh
+    # samples.
     if isinstance(block, CompetitorPoolBlock):
-        meta["title"] = meta.get("model") or note.id
+        from .sampler import _clean_competitor_title
+        meta["title"] = _clean_competitor_title(meta.get("model") or note.id)
     return PickedVariant(
         note_id=note.id, variant_index=variant_index, text=text, meta=meta,
     )
