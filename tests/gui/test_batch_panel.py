@@ -13,7 +13,9 @@ def test_batch_panel_keyword_count(qtbot):
 
 
 def test_batch_panel_start_disabled_when_empty(qtbot, tmp_path):
-    cfg = AppConfig(default_template=str(tmp_path / "t.json"),
+    tpl = tmp_path / "t.json"
+    tpl.write_text("{}", encoding="utf-8")
+    cfg = AppConfig(default_template=str(tpl),
                     vault_root=str(tmp_path), default_provider="mock")
     p = BatchPanel(cfg)
     qtbot.addWidget(p)
@@ -57,7 +59,9 @@ def test_batch_panel_import_csv_first_column(qtbot, tmp_path, monkeypatch):
 
 
 def test_batch_panel_emits_request_batch(qtbot, tmp_path):
-    cfg = AppConfig(default_template=str(tmp_path / "t.json"),
+    tpl = tmp_path / "t.json"
+    tpl.write_text("{}", encoding="utf-8")
+    cfg = AppConfig(default_template=str(tpl),
                     vault_root=str(tmp_path), default_provider="mock")
     p = BatchPanel(cfg)
     qtbot.addWidget(p)
@@ -67,5 +71,5 @@ def test_batch_panel_emits_request_batch(qtbot, tmp_path):
         p.start_button.click()
     payload = sig.args[0]
     assert payload["keywords"] == ["kw1", "kw2"]
-    assert payload["template_path"] == str(tmp_path / "t.json")
+    assert payload["template_path"] == str(tpl)
     assert payload["provider"] == "mock"
