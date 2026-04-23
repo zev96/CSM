@@ -240,3 +240,85 @@ def test_depends_section_search_box_filters_candidates(qtbot):
     visible = [cb for cb in w.checkboxes_for_test() if cb.isVisible()]
     assert len(visible) == 1
     assert "标签5" in visible[0].text()
+
+
+from csm_gui.widgets.block_advanced_dialog import BlockAdvancedDialog
+
+
+def test_dialog_accept_writes_all_sections_back(qtbot):
+    from PyQt6.QtWidgets import QWidget
+    node = _BlockNode(
+        kind="paragraph", label="test",
+        filter_cond={}, pick_notes=1, pick_variants=1, unique_notes=False,
+    )
+    other = _BlockNode(kind="paragraph", label="other")
+    all_blocks = [("block_1", "test", node), ("block_2", "other", other)]
+    parent_w = QWidget()
+    parent_w.resize(800, 600)
+    qtbot.addWidget(parent_w)
+    dlg = BlockAdvancedDialog(
+        node=node, all_blocks=all_blocks, vault_root=None, parent=parent_w,
+    )
+    qtbot.addWidget(dlg)
+    dlg._filter_section._on_add_row()
+    row = dlg._filter_section.rows_for_test()[0]
+    row["key_edit"].setText("素材类型")
+    row["value_edit"].setText("引言痛点")
+    dlg._sample_section._min_spin.setValue(2)
+    dlg._sample_section._range_checkbox.setChecked(True)
+    dlg._sample_section._max_spin.setValue(5)
+    dlg._sample_section._variants_spin.setValue(2)
+    dlg._sample_section._unique_checkbox.setChecked(True)
+    dlg._depends_section.checkboxes_for_test()[0].setChecked(True)
+
+    dlg.accept()
+
+    assert node.filter_cond == {"素材类型": "引言痛点"}
+    assert node.pick_notes == {"random_between": [2, 5]}
+    assert node.pick_variants == 2
+    assert node.unique_notes is True
+    assert node.depends_on == ["block_2"]
+
+
+def test_dialog_reject_leaves_node_unchanged(qtbot):
+    from PyQt6.QtWidgets import QWidget
+    node = _BlockNode(
+        kind="paragraph",
+        filter_cond={"key": "val"},
+        pick_notes=2, pick_variants=1, unique_notes=False,
+        depends_on=["block_9"],
+    )
+    all_blocks = [("block_1", "self", node)]
+    parent_w = QWidget()
+    parent_w.resize(800, 600)
+    qtbot.addWidget(parent_w)
+    dlg = BlockAdvancedDialog(
+        node=node, all_blocks=all_blocks, vault_root=None, parent=parent_w,
+    )
+    qtbot.addWidget(dlg)
+    dlg._filter_section._on_add_row()
+    dlg._filter_section.rows_for_test()[-1]["key_edit"].setText("新键")
+    dlg._sample_section._min_spin.setValue(9)
+    dlg._sample_section._unique_checkbox.setChecked(True)
+
+    dlg.reject()
+
+    assert node.filter_cond == {"key": "val"}
+    assert node.pick_notes == 2
+    assert node.pick_variants == 1
+    assert node.unique_notes is False
+    assert node.depends_on == ["block_9"]
+
+
+def test_dialog_title_shows_block_identity(qtbot):
+    from PyQt6.QtWidgets import QWidget
+    node = _BlockNode(kind="paragraph", label="我的段落")
+    parent_w = QWidget()
+    parent_w.resize(800, 600)
+    qtbot.addWidget(parent_w)
+    dlg = BlockAdvancedDialog(
+        node=node, all_blocks=[("block_1", "我的段落", node)],
+        vault_root=None, parent=parent_w,
+    )
+    qtbot.addWidget(dlg)
+    assert "我的段落" in dlg.titleLabel.text()

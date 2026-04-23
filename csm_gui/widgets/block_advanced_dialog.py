@@ -342,3 +342,63 @@ class _DependsSection(QWidget):
                 cb.setVisible(True)
             else:
                 cb.setVisible(needle in cb.text().lower())
+
+
+# ── Main dialog ───────────────────────────────────────────────────────────────
+
+class BlockAdvancedDialog(MessageBoxBase):
+    """Paragraph block advanced-config dialog.
+
+    Reads ``node`` on construction and writes back to the **same instance**
+    when the user confirms. Cancelling leaves the node untouched.
+    """
+
+    def __init__(
+        self,
+        *,
+        node,
+        all_blocks: list[tuple[str, str, Any]],
+        vault_root=None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._node = node
+        self.widget.setMinimumWidth(560)
+        self.widget.setMinimumHeight(520)
+
+        fm_candidates: dict[str, list[str]] = {}
+        if vault_root is not None and getattr(node, "module", ""):
+            try:
+                from pathlib import Path
+                from .slot_tree_widget import _scan_frontmatter
+                mod_dir = Path(vault_root) / node.module
+                if mod_dir.exists():
+                    fm_candidates = _scan_frontmatter(mod_dir)
+            except Exception:
+                fm_candidates = {}
+
+        label_hint = node.label or getattr(node, "block_id", "") or "段落"
+        self.titleLabel = SubtitleLabel(f"段落高级设置 — {label_hint}", self)
+        self.viewLayout.addWidget(self.titleLabel)
+
+        self.viewLayout.addWidget(StrongBodyLabel("筛选"))
+        self._filter_section = _FilterSection(node, fm_candidates, parent=self)
+        self.viewLayout.addWidget(self._filter_section)
+
+        self.viewLayout.addWidget(StrongBodyLabel("采样"))
+        self._sample_section = _SampleSection(node, parent=self)
+        self.viewLayout.addWidget(self._sample_section)
+
+        self.viewLayout.addWidget(StrongBodyLabel("依赖"))
+        self._depends_section = _DependsSection(node, all_blocks, parent_widget=self)
+        self.viewLayout.addWidget(self._depends_section, 1)
+
+        self.yesButton.setText("确定")
+        self.cancelButton.setText("取消")
+
+    def accept(self) -> None:  # type: ignore[override]
+        """Write every section back to the node, then close."""
+        self._filter_section.save_to_node()
+        self._sample_section.save_to_node()
+        self._depends_section.save_to_node()
+        super().accept()
