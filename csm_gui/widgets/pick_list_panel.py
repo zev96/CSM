@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Iterator
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QScrollArea, QFrame, QSizePolicy, QWidget,
+    QVBoxLayout, QHBoxLayout, QFrame, QSizePolicy, QWidget,
 )
 from qfluentwidgets import (
     BodyLabel, CaptionLabel, ToolButton, FluentIcon, CardWidget,
+    SingleDirectionScrollArea,
 )
 from csm_core.assembler.plan import AssemblyPlan, BlockResult
 
@@ -102,10 +103,18 @@ class PickListPanel(CardWidget):
         root.setContentsMargins(8, 8, 8, 8)
         root.addWidget(BodyLabel("采样结果（点击重抽单条）", self))
 
-        self._scroll = QScrollArea(self)
+        # SingleDirectionScrollArea gives the thin Fluent scrollbar that
+        # matches the rest of the app — plain QScrollArea paints the
+        # chunky native Qt scrollbar on the right edge.
+        self._scroll = SingleDirectionScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        # Transparent viewport + stylesheet so the CardWidget surface
+        # shows through instead of a flat white rectangle.
+        self._scroll.setStyleSheet(
+            "SingleDirectionScrollArea, QScrollArea { background: transparent; border: none; }"
+        )
+        self._scroll.viewport().setStyleSheet("background: transparent;")
         self._container = QWidget(self._scroll)
         self._container.setStyleSheet("background: transparent;")
         self._container.setSizePolicy(
