@@ -824,6 +824,28 @@ class SlotTreeWidget(QWidget):
         self._rebuild()
         self.slots_changed.emit()
 
+    def _collect_all_blocks(self) -> list[tuple[str, str, "_BlockNode"]]:
+        """Recursively flatten all block nodes.
+
+        Returns ``[(block_id, label, node_ref)]`` in tree (DFS) order. The
+        block_id is computed the same way ``get_blocks`` does (``block_1``,
+        ``block_1_2``, …), so UI can reference blocks by the id they'll
+        have once the template saves. ``label`` falls back to ``block_id``
+        for blocks without a label (e.g. heading / literal).
+        """
+        out: list[tuple[str, str, "_BlockNode"]] = []
+
+        def walk(nodes: list["_BlockNode"], parent_bid: str) -> None:
+            for i, n in enumerate(nodes):
+                bid = f"{parent_bid}_{i + 1}" if parent_bid else f"block_{i + 1}"
+                label = n.label or getattr(n, "text", "") or bid
+                out.append((bid, label, n))
+                if n.kind == "paragraph" and n.children:
+                    walk(n.children, bid)
+
+        walk(self._roots, "")
+        return out
+
     # ── Backward-compat aliases ───────────────────────────────────────────────
 
     def load_slots(self, slots) -> None:  # type: ignore[override]
