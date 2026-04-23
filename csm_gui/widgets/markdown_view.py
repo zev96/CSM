@@ -1,5 +1,6 @@
 """Two-tab markdown preview: draft + polished."""
 from __future__ import annotations
+import re
 from PyQt6.QtGui import (
     QTextFrameFormat, QTextBlockFormat, QTextCharFormat, QTextListFormat,
     QTextCursor, QFont,
@@ -11,6 +12,10 @@ from PyQt6.QtGui import (
 _BODY_PT = 12
 _HEADING_PT = 15
 _LINE_HEIGHT_PCT = 150
+# Extra breathing room inside the white document card. Combined with
+# ``QTextDocument.setDocumentMargin`` below this gives the text a
+# comfortable margin on all four sides.
+_DOC_MARGIN_PX = 12
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QStackedWidget, QFrame, QWidget
 from qfluentwidgets import (
     Pivot, TextEdit, CardWidget, TransparentPushButton, TransparentToolButton,
@@ -25,9 +30,31 @@ _MD_STYLESHEET = """
 TextEdit {
     border: none;
     background: white;
-    padding: 14px 18px;
+    padding: 28px 32px;
 }
 """
+
+
+# Matches an ordered-list marker at the start of a line: one-or-more
+# digits, a dot, a space. ``compose_draft`` emits these as *literal
+# prefixes* ("1. CEWEY DS18…") — they are not meant to be parsed as
+# markdown ordered lists. Without escaping, ``setMarkdown`` turns them
+# into ``QTextList`` items whose markers sit at a fixed indent that
+# can't be flattened to the paragraph left edge. Escaping the dot
+# (``1\. ``) tells markdown "this is literal text", so the paragraph
+# renders flush-left like any other paragraph.
+_ORDERED_LIST_PREFIX_RE = re.compile(r"(?m)^(\d+)\. ")
+
+
+def _escape_ordered_list_prefixes(md: str) -> str:
+    """Prevent ``setMarkdown`` from materialising leading "N. " as a list.
+
+    The renderer already bakes the index into the text (see
+    ``csm_core.assembler.render._prefix_join``). Treating those as
+    list markers only hurts alignment — they should display as
+    ordinary paragraph text.
+    """
+    return _ORDERED_LIST_PREFIX_RE.sub(r"\1\\. ", md)
 
 
 class _DraftToolbar(QWidget):
@@ -231,7 +258,7 @@ class MarkdownView(CardWidget):
             edit.setStyleSheet(_MD_STYLESHEET)
             # Give the document itself a breathing margin so the text
             # doesn't hug the left edge of the viewport.
-            edit.document().setDocumentMargin(6)
+            edit.document().setDocumentMargin(_DOC_MARGIN_PX)
             _strip_block_borders(edit)
             _apply_typography(edit)
 
@@ -260,7 +287,7 @@ class MarkdownView(CardWidget):
         # Render markdown for display; Qt keeps an internal rich-text
         # document that's editable, and ``toMarkdown`` reproduces the
         # markdown source on demand.
-        self.draft_edit.setMarkdown(md)
+        self.draft_edit.setMarkdown(_escape_ordered_list_prefixes(md))
         _strip_block_borders(self.draft_edit)
         _apply_typography(self.draft_edit)
 
@@ -271,7 +298,7 @@ class MarkdownView(CardWidget):
         # Only auto-switch to the 成文 tab when there's actual polished
         # content to show — otherwise a fresh generate that preloads an
         # empty polished string would leave the user on a blank tab.
-        self.polished_edit.setMarkdown(md)
+        self.polished_edit.setMarkdown(_escape_ordered_list_prefixes(md))
         _strip_block_borders(self.polished_edit)
         _apply_typography(self.polished_edit)
         if md.strip():
