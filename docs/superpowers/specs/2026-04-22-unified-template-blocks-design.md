@@ -1,7 +1,7 @@
 # 统一模板块模型（移除框架层）
 
 **Date:** 2026-04-22
-**Status:** Approved, awaiting implementation plan
+**Status:** Implemented
 
 ## 背景与动机
 
