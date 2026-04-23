@@ -75,3 +75,80 @@ def test_filter_section_remove_row(qtbot):
     w._remove_row(0)
     assert len(w.rows_for_test()) == 1
     assert w.rows_for_test()[0]["key"] == "b"
+
+
+from csm_gui.widgets.block_advanced_dialog import _SampleSection
+
+
+def test_sample_section_loads_int_pick(qtbot):
+    node = _para_node(pick_notes=3, pick_variants=1, unique_notes=False)
+    w = _SampleSection(node, parent=None)
+    qtbot.addWidget(w)
+    assert w._min_spin.value() == 3
+    assert w._range_checkbox.isChecked() is False
+    assert w._max_spin.isVisible() is False
+    assert w._variants_spin.value() == 1
+    assert w._unique_checkbox.isChecked() is False
+
+
+def test_sample_section_loads_random_between(qtbot):
+    node = _para_node(
+        pick_notes={"random_between": [2, 5]},
+        pick_variants=2,
+        unique_notes=True,
+    )
+    w = _SampleSection(node, parent=None)
+    qtbot.addWidget(w)
+    assert w._min_spin.value() == 2
+    assert w._range_checkbox.isChecked() is True
+    assert w._max_spin.isVisible() is True
+    assert w._max_spin.value() == 5
+    assert w._variants_spin.value() == 2
+    assert w._unique_checkbox.isChecked() is True
+
+
+def test_sample_section_save_int_when_range_disabled(qtbot):
+    node = _para_node(pick_notes=1, pick_variants=1, unique_notes=False)
+    w = _SampleSection(node, parent=None)
+    qtbot.addWidget(w)
+    w._min_spin.setValue(4)
+    w._variants_spin.setValue(2)
+    w._unique_checkbox.setChecked(True)
+    w.save_to_node()
+    assert node.pick_notes == 4
+    assert node.pick_variants == 2
+    assert node.unique_notes is True
+
+
+def test_sample_section_save_dict_when_range_enabled(qtbot):
+    node = _para_node(pick_notes=1, pick_variants=1, unique_notes=False)
+    w = _SampleSection(node, parent=None)
+    qtbot.addWidget(w)
+    w._min_spin.setValue(2)
+    w._range_checkbox.setChecked(True)
+    w._max_spin.setValue(5)
+    w.save_to_node()
+    assert node.pick_notes == {"random_between": [2, 5]}
+
+
+def test_sample_section_save_int_when_range_min_equals_max(qtbot):
+    node = _para_node(pick_notes=1, pick_variants=1, unique_notes=False)
+    w = _SampleSection(node, parent=None)
+    qtbot.addWidget(w)
+    w._min_spin.setValue(3)
+    w._range_checkbox.setChecked(True)
+    w._max_spin.setValue(3)
+    w.save_to_node()
+    assert node.pick_notes == 3
+
+
+def test_sample_section_toggle_range_shows_and_hides_max(qtbot):
+    node = _para_node(pick_notes=2, pick_variants=1, unique_notes=False)
+    w = _SampleSection(node, parent=None)
+    qtbot.addWidget(w)
+    w.show()
+    assert w._max_spin.isVisible() is False
+    w._range_checkbox.setChecked(True)
+    assert w._max_spin.isVisible() is True
+    w._range_checkbox.setChecked(False)
+    assert w._max_spin.isVisible() is False

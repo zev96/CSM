@@ -164,3 +164,95 @@ class _FilterSection(QWidget):
             if r["row_widget"] is row_widget:
                 self._remove_row(i)
                 return
+
+
+# ── Sample section ────────────────────────────────────────────────────────────
+
+class _SampleSection(QWidget):
+    """Edit pick_notes / pick_variants_per_note / unique_notes."""
+
+    def __init__(self, node, parent=None):
+        super().__init__(parent)
+        self._node = node
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
+
+        # Row 1: pick_notes
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+        row1.addWidget(BodyLabel("取笔记数："))
+        self._min_spin = SpinBox(self)
+        self._min_spin.setRange(1, 20)
+        self._min_spin.setMaximumWidth(80)
+        row1.addWidget(self._min_spin)
+
+        self._range_checkbox = CheckBox("启用随机区间", self)
+        self._range_checkbox.toggled.connect(self._on_range_toggled)
+        row1.addWidget(self._range_checkbox)
+
+        self._max_label = BodyLabel("最多：", self)
+        row1.addWidget(self._max_label)
+        self._max_spin = SpinBox(self)
+        self._max_spin.setRange(1, 20)
+        self._max_spin.setMaximumWidth(80)
+        row1.addWidget(self._max_spin)
+        row1.addStretch(1)
+        outer.addLayout(row1)
+
+        # Row 2: pick_variants
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.addWidget(BodyLabel("每条笔记取变体数："))
+        self._variants_spin = SpinBox(self)
+        self._variants_spin.setRange(1, 9)
+        self._variants_spin.setMaximumWidth(80)
+        row2.addWidget(self._variants_spin)
+        row2.addStretch(1)
+        outer.addLayout(row2)
+
+        # Row 3: unique_notes
+        self._unique_checkbox = CheckBox("整篇不重复笔记（unique_notes）", self)
+        self._unique_checkbox.setToolTip(
+            "父段落与子段落不重复同一笔记（unique_notes）"
+        )
+        outer.addWidget(self._unique_checkbox)
+
+        self._load_from_node()
+        # Show self so child isVisible() reflects setVisible() calls correctly
+        # even before the caller explicitly shows the widget.
+        self.show()
+
+    def save_to_node(self) -> None:
+        if self._range_checkbox.isChecked() and self._max_spin.value() > self._min_spin.value():
+            self._node.pick_notes = {
+                "random_between": [self._min_spin.value(), self._max_spin.value()],
+            }
+        else:
+            self._node.pick_notes = self._min_spin.value()
+        self._node.pick_variants = self._variants_spin.value()
+        self._node.unique_notes = self._unique_checkbox.isChecked()
+
+    def _load_from_node(self) -> None:
+        pick = self._node.pick_notes
+        if isinstance(pick, dict) and "random_between" in pick:
+            rb = pick["random_between"] or [1, 1]
+            mn = rb[0] if len(rb) >= 1 else 1
+            mx = rb[1] if len(rb) >= 2 else mn
+            self._min_spin.setValue(int(mn))
+            self._max_spin.setValue(int(mx))
+            self._range_checkbox.setChecked(True)
+        else:
+            mn = int(pick) if isinstance(pick, int) else 1
+            self._min_spin.setValue(mn)
+            self._max_spin.setValue(max(mn + 1, 2))
+            self._range_checkbox.setChecked(False)
+        self._on_range_toggled(self._range_checkbox.isChecked())
+
+        self._variants_spin.setValue(int(getattr(self._node, "pick_variants", 1) or 1))
+        self._unique_checkbox.setChecked(bool(getattr(self._node, "unique_notes", False)))
+
+    def _on_range_toggled(self, checked: bool) -> None:
+        self._max_label.setVisible(checked)
+        self._max_spin.setVisible(checked)
