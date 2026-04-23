@@ -47,6 +47,34 @@ def test_strip_backlinks_removes_naked_label_style():
     assert out.strip() == "正文段落。"
 
 
+def test_strip_backlinks_removes_inline_related_notes():
+    # Vault style where 相关笔记 is followed by inline wiki-link tail
+    # instead of being a standalone header. Previous regex anchored
+    # on end-of-line so the whole line leaked into the draft.
+    body = (
+        "① 实测持续输出 220AW 吸力。\n"
+        "\n"
+        "相关笔记: [[友望大橘-产品参数|产品参数]] | "
+        "[[友望大橘-测试结果|实测结果]]\n"
+    )
+    out = _strip_backlinks(body)
+    assert "相关笔记" not in out
+    assert "友望大橘-产品参数" not in out
+    assert "实测结果" not in out
+    assert "220AW" in out
+
+
+def test_strip_backlinks_removes_bold_related_notes():
+    body = (
+        "① 正文。\n"
+        "**相关笔记**: [[友望大橘-产品参数|产品参数]]\n"
+    )
+    out = _strip_backlinks(body)
+    assert "相关笔记" not in out
+    assert "友望大橘" not in out
+    assert out.strip() == "① 正文。"
+
+
 def test_strip_backlinks_noop_when_absent():
     body = "纯正文，无返链块。\n① 一些变体。"
     assert _strip_backlinks(body) == body

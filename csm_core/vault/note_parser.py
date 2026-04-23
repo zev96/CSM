@@ -35,14 +35,18 @@ _HR_LINE_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 _HEADING_PREFIX_RE = re.compile(r"^\s*#{1,6}\s+")
 # Any of these on a line marks the start of the vault's navigation/backlink
 # tail. Supported styles:
-#   ← 返回: [[索引]]                        (arrow style)
-#   **返回上层**: [[引言模块总索引|…]]        (bold label)
-#   **返回主页**: 关联数据库                  (bold label)
-#   返回上层: …   /   返回主页: …             (naked label)
-#   相关笔记                                   (section header that follows)
+#   ← 返回: [[索引]]                          (arrow style)
+#   **返回上层**: [[引言模块总索引|…]]         (bold label)
+#   **返回主页**: 关联数据库                    (bold label)
+#   返回上层: …   /   返回主页: …               (naked label)
+#   相关笔记                                     (section header)
+#   相关笔记: [[xxx|xxx]] | [[yyy|yyy]]         (inline label w/ wiki links)
+#   **相关笔记**: [[xxx|xxx]]                    (bold inline label)
 _BACKLINK_LINE_RE = re.compile(
-    r"(?:←\s*返回|\*\*返回(?:上层|主页)\*\*\s*[:：]|"
-    r"^\s*返回(?:上层|主页)\s*[:：]|^\s*相关笔记\s*$)"
+    r"(?:←\s*返回"
+    r"|\*\*返回(?:上层|主页)\*\*\s*[:：]"
+    r"|^\s*返回(?:上层|主页)\s*[:：]"
+    r"|^\s*(?:\*\*)?相关笔记(?:\*\*)?(?:\s*[:：].*)?\s*$)"
 )
 
 
