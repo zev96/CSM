@@ -2,8 +2,15 @@
 from __future__ import annotations
 from PyQt6.QtGui import (
     QTextFrameFormat, QTextBlockFormat, QTextCharFormat, QTextListFormat,
-    QFont,
+    QTextCursor, QFont,
 )
+
+# Typography — Chinese print-size conventions. 小四 ≈ 12pt, 小三 ≈ 15pt.
+# Line height is expressed as a percentage of the font's natural line
+# height (ProportionalHeight type), so 150 == 1.5×.
+_BODY_PT = 12
+_HEADING_PT = 15
+_LINE_HEIGHT_PCT = 150
 from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QStackedWidget, QFrame, QWidget
 from qfluentwidgets import (
     Pivot, TextEdit, CardWidget, TransparentPushButton, TransparentToolButton,
@@ -149,6 +156,59 @@ def _strip_block_borders(edit) -> None:
     doc.rootFrame().setFrameFormat(fmt)
 
 
+def _apply_typography(edit) -> None:
+    """Apply 小四 body / 小三 heading sizes + 1.5× line spacing to every block.
+
+    ``setMarkdown`` bakes its own font sizes (Qt's defaults: 24/18/14 for
+    H1/H2/H3, plus whatever the widget's base font is for prose) and no
+    line-height at all. Walk every block after markdown parse and:
+
+    * force body paragraphs to 小四 (12pt), headings to 小三 (15pt)
+    * set a 1.5× proportional line height so paragraphs breathe
+    * flatten list indentation so numbered / bulleted items sit at the
+      same left edge as regular paragraphs (the markers render inline
+      via the list format — they aren't lost, just un-indented)
+    """
+    doc = edit.document()
+    line_type = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
+
+    block = doc.firstBlock()
+    while block.isValid():
+        cursor = QTextCursor(block)
+
+        bfmt = block.blockFormat()
+        bfmt.setLineHeight(_LINE_HEIGHT_PCT, line_type)
+
+        text_list = block.textList()
+        if text_list is not None:
+            # Align list items with regular paragraphs. Zero indent on
+            # both the block and the list format keeps the "1." / "•"
+            # markers visible but flush with the paragraph left edge.
+            lfmt = text_list.format()
+            lfmt.setIndent(0)
+            text_list.setFormat(lfmt)
+            bfmt.setIndent(0)
+            bfmt.setLeftMargin(0)
+            bfmt.setTextIndent(0)
+
+        cursor.setBlockFormat(bfmt)
+
+        # Size override: keep existing bold/italic runs (mergeCharFormat
+        # with only pointSize set doesn't touch weight/italic).
+        size_fmt = QTextCharFormat()
+        size_fmt.setFontPointSize(
+            _HEADING_PT if bfmt.headingLevel() > 0 else _BODY_PT,
+        )
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.EndOfBlock,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.mergeCharFormat(size_fmt)
+
+        block = block.next()
+
+
 class MarkdownView(CardWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -172,6 +232,7 @@ class MarkdownView(CardWidget):
             # doesn't hug the left edge of the viewport.
             edit.document().setDocumentMargin(6)
             _strip_block_borders(edit)
+            _apply_typography(edit)
 
         self._stack.addWidget(self.draft_edit)
         self._stack.addWidget(self.polished_edit)
@@ -200,6 +261,7 @@ class MarkdownView(CardWidget):
         # markdown source on demand.
         self.draft_edit.setMarkdown(md)
         _strip_block_borders(self.draft_edit)
+        _apply_typography(self.draft_edit)
 
     def get_draft_text(self) -> str:
         return self.draft_edit.toMarkdown()
@@ -210,6 +272,7 @@ class MarkdownView(CardWidget):
         # empty polished string would leave the user on a blank tab.
         self.polished_edit.setMarkdown(md)
         _strip_block_borders(self.polished_edit)
+        _apply_typography(self.polished_edit)
         if md.strip():
             self._pivot.setCurrentItem("polished")
         else:
