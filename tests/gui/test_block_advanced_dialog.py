@@ -305,6 +305,44 @@ def test_dialog_reject_leaves_node_unchanged(qtbot):
     assert node.depends_on == ["block_9"]
 
 
+def test_dialog_hides_paragraph_only_fields_for_numbered_list(qtbot):
+    from PyQt6.QtWidgets import QWidget
+    node = _BlockNode(
+        kind="numbered_list", label="列表",
+        filter_cond={}, pick_notes=3,
+    )
+    parent_w = QWidget()
+    parent_w.resize(800, 600)
+    qtbot.addWidget(parent_w)
+    dlg = BlockAdvancedDialog(
+        node=node, all_blocks=[("block_1", "列表", node)],
+        vault_root=None, parent=parent_w,
+    )
+    qtbot.addWidget(dlg)
+    dlg.show()
+    assert dlg._sample_section._para_only_box.isHidden() is True
+    assert dlg._depends_section.isHidden() is True
+
+
+def test_dialog_shows_paragraph_only_fields_for_paragraph(qtbot):
+    from PyQt6.QtWidgets import QWidget
+    node = _BlockNode(
+        kind="paragraph", label="段落",
+        filter_cond={}, pick_notes=1, pick_variants=1, unique_notes=False,
+    )
+    parent_w = QWidget()
+    parent_w.resize(800, 600)
+    qtbot.addWidget(parent_w)
+    dlg = BlockAdvancedDialog(
+        node=node, all_blocks=[("block_1", "段落", node)],
+        vault_root=None, parent=parent_w,
+    )
+    qtbot.addWidget(dlg)
+    dlg.show()
+    assert dlg._sample_section._para_only_box.isHidden() is False
+    assert dlg._depends_section.isHidden() is False
+
+
 def test_dialog_title_shows_block_identity(qtbot):
     from PyQt6.QtWidgets import QWidget
     node = _BlockNode(kind="paragraph", label="我的段落")

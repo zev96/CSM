@@ -330,20 +330,6 @@ def _make_source_row(parent: QWidget) -> tuple[QWidget, CascadePickerButton, Lin
     return w, picker, label_edit
 
 
-def _make_pick_row(parent: QWidget, default_val: int = 1) -> tuple[QWidget, SpinBox]:
-    w = QWidget(parent)
-    lay = QHBoxLayout(w)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(4)
-    lay.addWidget(BodyLabel("取笔记数："))
-    spin = SpinBox(w)
-    spin.setRange(1, 20)
-    spin.setValue(default_val)
-    spin.setMaximumWidth(80)
-    lay.addWidget(spin)
-    lay.addStretch(1)
-    return w, spin
-
 
 class _ParagraphPage(QWidget):
     changed = pyqtSignal()
@@ -436,35 +422,31 @@ class _NumberedListPage(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
-        src_w, self._picker, self._label_edit = _make_source_row(self)
+        src_w = QWidget(self)
+        src_lay = QHBoxLayout(src_w)
+        src_lay.setContentsMargins(0, 0, 0, 0)
+        src_lay.setSpacing(6)
+        src_lay.addWidget(BodyLabel("目录："))
+        self._picker = CascadePickerButton(src_w)
+        self._picker.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._picker.setup(vault_dirs, node.module)
         self._picker.path_selected.connect(self._on_module)
+        src_lay.addWidget(self._picker, 2)
+        src_lay.addWidget(BodyLabel("名称："))
+        self._label_edit = LineEdit(src_w)
+        self._label_edit.setPlaceholderText("段落名称")
+        self._label_edit.setMaximumWidth(160)
         self._label_edit.setText(node.label or "")
         self._label_edit.editingFinished.connect(self._on_label)
-        lay.addWidget(src_w)
-
-        row2 = QHBoxLayout()
-        pick_w, self._pick_spin = _make_pick_row(self, self._int_pick(node.pick_notes))
-        self._pick_spin.valueChanged.connect(self._on_pick)
-        row2.addWidget(pick_w)
-
-        row2.addWidget(BodyLabel("编号样式："))
-        self._style_combo = ComboBox(self)
+        src_lay.addWidget(self._label_edit, 1)
+        src_lay.addWidget(BodyLabel("编号样式："))
+        self._style_combo = ComboBox(src_w)
         self._style_combo.addItems(NUMBER_STYLE_OPTIONS)
         idx = NUMBER_STYLE_OPTIONS.index(node.number_style) if node.number_style in NUMBER_STYLE_OPTIONS else 0
         self._style_combo.setCurrentIndex(idx)
         self._style_combo.currentIndexChanged.connect(self._on_style)
-        row2.addWidget(self._style_combo)
-        row2.addStretch(1)
-        lay.addLayout(row2)
-
-    def _int_pick(self, p: Any) -> int:
-        if isinstance(p, int):
-            return p
-        if isinstance(p, dict) and "random_between" in p:
-            rb = p["random_between"] or []
-            return rb[0] if rb else 1
-        return 3
+        src_lay.addWidget(self._style_combo)
+        lay.addWidget(src_w)
 
     def _on_module(self, path: str) -> None:
         self._node.module = path
@@ -472,10 +454,6 @@ class _NumberedListPage(QWidget):
 
     def _on_label(self) -> None:
         self._node.label = self._label_edit.text().strip()
-        self.changed.emit()
-
-    def _on_pick(self, v: int) -> None:
-        self._node.pick_notes = v
         self.changed.emit()
 
     def _on_style(self, idx: int) -> None:
@@ -541,41 +519,27 @@ class _CompetitorPoolPage(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
-        src_w, self._picker, self._label_edit = _make_source_row(self)
-        # Hide label edit (not used for competitor_pool)
-        self._label_edit.setVisible(False)
+        src_w = QWidget(self)
+        src_lay = QHBoxLayout(src_w)
+        src_lay.setContentsMargins(0, 0, 0, 0)
+        src_lay.setSpacing(6)
+        src_lay.addWidget(BodyLabel("目录："))
+        self._picker = CascadePickerButton(src_w)
+        self._picker.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._picker.setup(vault_dirs, node.module)
         self._picker.path_selected.connect(self._on_module)
-        lay.addWidget(src_w)
-
-        row2 = QHBoxLayout()
-        pick_w, self._pick_spin = _make_pick_row(self, self._int_pick(node.pick_notes))
-        self._pick_spin.valueChanged.connect(self._on_pick)
-        row2.addWidget(pick_w)
-
-        row2.addWidget(BodyLabel("理由标签："))
-        self._reason_edit = LineEdit(self)
+        src_lay.addWidget(self._picker, 2)
+        src_lay.addWidget(BodyLabel("理由标签："))
+        self._reason_edit = LineEdit(src_w)
         self._reason_edit.setText(node.reason_label)
         self._reason_edit.setMaximumWidth(140)
         self._reason_edit.editingFinished.connect(self._on_reason)
-        row2.addWidget(self._reason_edit)
-        row2.addStretch(1)
-        lay.addLayout(row2)
-
-    def _int_pick(self, p: Any) -> int:
-        if isinstance(p, int):
-            return p
-        if isinstance(p, dict) and "random_between" in p:
-            rb = p["random_between"] or []
-            return rb[0] if rb else 2
-        return 2
+        src_lay.addWidget(self._reason_edit)
+        src_lay.addStretch(1)
+        lay.addWidget(src_w)
 
     def _on_module(self, path: str) -> None:
         self._node.module = path
-        self.changed.emit()
-
-    def _on_pick(self, v: int) -> None:
-        self._node.pick_notes = v
         self.changed.emit()
 
     def _on_reason(self) -> None:
@@ -698,7 +662,7 @@ class _BlockRow(CardWidget):
         self._gear_btn.setFixedSize(28, 28)
         self._gear_btn.setToolTip("高级配置（筛选 / 采样 / 依赖）")
         self._gear_btn.clicked.connect(lambda: self.gear_requested.emit())
-        self._gear_btn.setVisible(node.kind == "paragraph")
+        self._gear_btn.setVisible(node.kind in {"paragraph", "numbered_list", "competitor_pool"})
         outer.addWidget(self._gear_btn)
 
         self._add_child_btn = TransparentToolButton(FluentIcon.ADD, self)
@@ -725,8 +689,9 @@ class _BlockRow(CardWidget):
         self._node.kind = new_kind
         self._stack.setCurrentIndex(idx)
         is_para = new_kind == "paragraph"
+        is_gearable = new_kind in {"paragraph", "numbered_list", "competitor_pool"}
         self._expand_btn.setVisible(is_para)
-        self._gear_btn.setVisible(is_para)
+        self._gear_btn.setVisible(is_gearable)
         self._add_child_btn.setVisible(is_para)
         self._update_expand_icon()
         self.data_changed.emit()

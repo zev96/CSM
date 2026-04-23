@@ -100,6 +100,22 @@ def test_gear_opens_dialog_and_writes_back_on_accept(qtbot, monkeypatch):
     assert root_node.unique_notes is True
 
 
+def test_numbered_list_row_shows_gear_not_add_child(qtbot):
+    w = _make_widget_with_root(qtbot, kind="numbered_list")
+    w.show()
+    row = w._all_rows_for_test()[0]
+    assert row._gear_btn.isVisible() is True
+    assert row._add_child_btn.isVisible() is False
+
+
+def test_competitor_pool_row_shows_gear_not_add_child(qtbot):
+    w = _make_widget_with_root(qtbot, kind="competitor_pool")
+    w.show()
+    row = w._all_rows_for_test()[0]
+    assert row._gear_btn.isVisible() is True
+    assert row._add_child_btn.isVisible() is False
+
+
 def test_gear_cancel_leaves_node_untouched(qtbot, monkeypatch):
     w = _make_widget_with_root(qtbot, kind="paragraph")
     w._roots[0].pick_notes = 3

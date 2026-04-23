@@ -16,6 +16,7 @@ from qfluentwidgets import (
     BodyLabel, StrongBodyLabel, CaptionLabel,
     LineEdit, SpinBox, CheckBox, ToolButton, PushButton,
     EditableComboBox, FluentIcon, MessageBoxBase, SubtitleLabel,
+    DropDownPushButton,
 )
 
 if TYPE_CHECKING:
@@ -194,23 +195,29 @@ class _SampleSection(QWidget):
         row1.addStretch(1)
         outer.addLayout(row1)
 
-        # Row 2: pick_variants
+        # Rows 2 + 3: paragraph-only fields (wrapped so they can be hidden)
+        self._para_only_box = QWidget(self)
+        po_lay = QVBoxLayout(self._para_only_box)
+        po_lay.setContentsMargins(0, 0, 0, 0)
+        po_lay.setSpacing(6)
+
         row2 = QHBoxLayout()
         row2.setSpacing(6)
         row2.addWidget(BodyLabel("子素材随机数量："))
-        self._variants_spin = SpinBox(self)
+        self._variants_spin = SpinBox(self._para_only_box)
         self._variants_spin.setRange(1, 9)
         self._variants_spin.setFixedWidth(110)
         row2.addWidget(self._variants_spin)
         row2.addStretch(1)
-        outer.addLayout(row2)
+        po_lay.addLayout(row2)
 
-        # Row 3: unique_notes
-        self._unique_checkbox = CheckBox("不重复素材", self)
+        self._unique_checkbox = CheckBox("不重复素材", self._para_only_box)
         self._unique_checkbox.setToolTip(
             "父段落与子段落不重复同一素材"
         )
-        outer.addWidget(self._unique_checkbox)
+        po_lay.addWidget(self._unique_checkbox)
+
+        outer.addWidget(self._para_only_box)
 
         self._load_from_node()
 
@@ -246,6 +253,9 @@ class _SampleSection(QWidget):
     def _on_range_toggled(self, checked: bool) -> None:
         self._max_label.setVisible(checked)
         self._max_spin.setVisible(checked)
+
+    def set_paragraph_only_fields_visible(self, visible: bool) -> None:
+        self._para_only_box.setVisible(visible)
 
 
 # ── Depends section ───────────────────────────────────────────────────────────
@@ -283,7 +293,7 @@ class _DependsSection(QWidget):
         if len(self._candidates) <= _SEARCH_THRESHOLD:
             self._search_edit.hide()
 
-        self._dropdown_btn = PushButton(FluentIcon.ARROW_DOWN, self._button_text(), self)
+        self._dropdown_btn = DropDownPushButton(self._button_text(), self)
         self._dropdown_btn.clicked.connect(self._open_menu)
         outer.addWidget(self._dropdown_btn)
 
@@ -396,9 +406,16 @@ class BlockAdvancedDialog(MessageBoxBase):
         self._sample_section = _SampleSection(node, parent=self)
         self.viewLayout.addWidget(self._sample_section)
 
-        self.viewLayout.addWidget(StrongBodyLabel("链接"))
+        self._depends_header_label = StrongBodyLabel("链接")
+        self.viewLayout.addWidget(self._depends_header_label)
         self._depends_section = _DependsSection(node, all_blocks, parent_widget=self)
         self.viewLayout.addWidget(self._depends_section, 1)
+
+        is_para = (node.kind == "paragraph")
+        self._sample_section.set_paragraph_only_fields_visible(is_para)
+        if not is_para:
+            self._depends_header_label.hide()
+            self._depends_section.hide()
 
         self.yesButton.setText("确定")
         self.cancelButton.setText("取消")
