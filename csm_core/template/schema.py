@@ -1,7 +1,7 @@
 """Pydantic models for the unified block-based template DSL."""
 from __future__ import annotations
 from typing import Annotated, Any, Literal, Union
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ── Sources ───────────────────────────────────────────────
@@ -117,21 +117,16 @@ Block = Annotated[
 
 
 # ── Template ──────────────────────────────────────────────────────────
-class SEODefaults(BaseModel):
-    target_word_count: list[int] = Field(default_factory=lambda: [1500, 2000])
-    keyword_density: list[int] = Field(default_factory=lambda: [5, 8])
-    long_tail_keywords: list[str] = Field(default_factory=list)
-    tone: str = "小红书笔记体"
-    force_h2: bool = True
-
-
 class Template(BaseModel):
+    # extra='ignore' tolerates legacy JSONs that still carry
+    # version/system_prompt_default/seo_defaults after migration; new saves
+    # won't emit those fields because they're not declared here.
+    model_config = ConfigDict(extra="ignore")
+
     id: str
     name: str
     product: str
-    version: int = 1
-    system_prompt_default: str = ""
-    seo_defaults: SEODefaults = Field(default_factory=SEODefaults)
+    default_skill_id: str | None = None
     blocks: list[Block] = Field(min_length=1)
 
     @model_validator(mode="after")
