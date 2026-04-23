@@ -220,9 +220,6 @@ class _SampleSection(QWidget):
         outer.addWidget(self._unique_checkbox)
 
         self._load_from_node()
-        # Show self so child isVisible() reflects setVisible() calls correctly
-        # even before the caller explicitly shows the widget.
-        self.show()
 
     def save_to_node(self) -> None:
         if self._range_checkbox.isChecked() and self._max_spin.value() > self._min_spin.value():

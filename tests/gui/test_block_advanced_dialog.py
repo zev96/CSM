@@ -84,6 +84,7 @@ def test_sample_section_loads_int_pick(qtbot):
     node = _para_node(pick_notes=3, pick_variants=1, unique_notes=False)
     w = _SampleSection(node, parent=None)
     qtbot.addWidget(w)
+    w.show()
     assert w._min_spin.value() == 3
     assert w._range_checkbox.isChecked() is False
     assert w._max_spin.isVisible() is False
@@ -99,6 +100,7 @@ def test_sample_section_loads_random_between(qtbot):
     )
     w = _SampleSection(node, parent=None)
     qtbot.addWidget(w)
+    w.show()
     assert w._min_spin.value() == 2
     assert w._range_checkbox.isChecked() is True
     assert w._max_spin.isVisible() is True
