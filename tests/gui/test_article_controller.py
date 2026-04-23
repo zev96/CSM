@@ -244,3 +244,62 @@ def test_export_emits_export_failed_when_out_dir_not_configured(qtbot, tmp_path)
     assert sig.args[0].startswith("OutputDirectoryMissing:")
 
 
+def test_article_controller_reroll_pick_emits_reroll_completed(qtbot, tmp_path, monkeypatch):
+    """Smoke test: reroll_pick dispatches worker and forwards finished signal."""
+    from pathlib import Path
+    from csm_gui.config import AppConfig
+    from csm_gui.controllers.article_controller import ArticleController
+    from csm_core.assembler.plan import AssemblyPlan, BlockResult, PickedVariant
+    from csm_core.pipeline import GenerateResult
+    from csm_core.template.schema import (
+        Template, SEODefaults, NumberedListBlock, NotesQuerySource,
+    )
+    from csm_core.vault.scanner import VaultIndex
+
+    cfg = AppConfig(out_dir=str(tmp_path), vault_root=str(tmp_path),
+                    default_provider="mock")
+    c = ArticleController(cfg)
+
+    block = NumberedListBlock(id="nl", source=NotesQuerySource(module="m"), pick_notes=1)
+    tpl = Template(
+        id="t", name="T", product="x", version=1,
+        system_prompt_default="", seo_defaults=SEODefaults(),
+        blocks=[block],
+    )
+    plan = AssemblyPlan(
+        keyword="kw", template_id="t", seed=1,
+        results=[BlockResult(
+            block_id="nl", kind="numbered_list",
+            picks=[PickedVariant(note_id="n1", variant_index=0, text="old")],
+            meta={"number_style": "1.", "item_separator": "\n\n"},
+        )],
+    )
+    c._current_result = GenerateResult(
+        markdown_path="", assembly_json_path="", plan=plan, final_text="",
+    )
+    c._current_template = tpl
+
+    new_plan = plan.model_copy(update={
+        "results": [BlockResult(
+            block_id="nl", kind="numbered_list",
+            picks=[PickedVariant(note_id="n1", variant_index=1, text="new")],
+            meta={"number_style": "1.", "item_separator": "\n\n"},
+        )],
+    })
+    monkeypatch.setattr(
+        "csm_gui.workers.reroll.reroll_pick",
+        lambda *a, **kw: new_plan,
+    )
+    stub_idx = VaultIndex(root=Path(tmp_path))
+    monkeypatch.setattr(
+        "csm_gui.controllers.article_controller.ArticleController._get_vault",
+        lambda self, root: (stub_idx, None),
+    )
+
+    with qtbot.waitSignal(c.reroll_completed, timeout=2000) as sig:
+        c.reroll_pick("nl", 0)
+
+    emitted = sig.args[0]
+    assert emitted.get_result("nl").picks[0].text == "new"
+    assert c._current_result.plan.get_result("nl").picks[0].text == "new"
+

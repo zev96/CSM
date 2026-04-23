@@ -29,6 +29,8 @@ class ArticleController(QObject):
     export_failed = pyqtSignal(str)
     plan_warnings = pyqtSignal(list)         # list[str]
     busy_changed = pyqtSignal(bool)
+    reroll_completed = pyqtSignal(object)    # AssemblyPlan
+    reroll_failed = pyqtSignal(str)
 
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -39,6 +41,7 @@ class ArticleController(QObject):
         self._vault_cache: tuple[Path, float, object, object] | None = None
         self._generate_worker = None
         self._polish_worker = None
+        self._reroll_worker = None
         # Last payload accepted by ``request_generate`` — stored so
         # ``rerun_all`` can re-submit with a fresh seed without making the
         # UI round-trip back to the home page.
@@ -95,6 +98,54 @@ class ArticleController(QObject):
         # so downstream code that reads ``last_seed`` sees a consistent value.
         self._config.last_seed = random.randint(1, 99999)
         return self.request_generate(self._last_payload)
+
+    def reroll_pick(self, block_id: str, pick_index: int) -> bool:
+        """Reroll a single pick in the current plan.
+
+        Returns False if no current article / worker busy — the caller should
+        avoid firing again in that state. On success the new plan is emitted
+        via ``reroll_completed`` and stored on the controller. On failure
+        ``reroll_failed`` is emitted with a human-readable message.
+        """
+        if self._current_result is None or self._current_template is None:
+            return False
+        if self._reroll_worker is not None and self._reroll_worker.isRunning():
+            return False
+        if self._config.vault_root is None:
+            self.reroll_failed.emit("VaultRootMissing: 请先在设置页配置资料库目录")
+            return False
+
+        vault_root = Path(self._config.vault_root)
+        try:
+            index, _registry = self._get_vault(vault_root)
+        except Exception as exc:  # noqa: BLE001 — boundary, surface to UI
+            self.reroll_failed.emit(f"{type(exc).__name__}: {exc}")
+            return False
+
+        from ..workers.reroll import RerollWorker
+        self._reroll_worker = RerollWorker(
+            plan=self._current_result.plan,
+            block_id=block_id,
+            pick_index=pick_index,
+            template=self._current_template,
+            vault_index=index,
+            parent=self,
+        )
+        self._reroll_worker.finished.connect(self._on_reroll_finished)
+        self._reroll_worker.failed.connect(self._on_reroll_failed)
+        self._reroll_worker.start()
+        self.busy_changed.emit(True)
+        return True
+
+    def _on_reroll_finished(self, new_plan) -> None:
+        if self._current_result is not None:
+            self._current_result.plan = new_plan
+        self.reroll_completed.emit(new_plan)
+        self.busy_changed.emit(False)
+
+    def _on_reroll_failed(self, msg: str) -> None:
+        self.reroll_failed.emit(msg)
+        self.busy_changed.emit(False)
 
     def _on_generate_finished(self, result) -> None:
         from csm_core.template.loader import load_template
@@ -205,7 +256,8 @@ class ArticleController(QObject):
     def is_busy(self) -> bool:
         gen_busy = self._generate_worker is not None and self._generate_worker.isRunning()
         polish_busy = self._polish_worker is not None and self._polish_worker.isRunning()
-        return gen_busy or polish_busy
+        reroll_busy = self._reroll_worker is not None and self._reroll_worker.isRunning()
+        return gen_busy or polish_busy or reroll_busy
 
     # --- internals ---
 
