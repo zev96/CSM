@@ -7,6 +7,7 @@ from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
 from .pages.template_manager_page import TemplateManagerPage
+from .pages.skills_page import SkillsPage
 from .controllers.article_controller import ArticleController
 from .controllers.batch_controller import BatchController
 from .pages.batch_result_page import BatchResultPage
@@ -77,11 +78,13 @@ class MainWindow(FluentWindow):
         # can dismiss it from any of the polish completion / failure slots.
         self._polish_busy_dialog = None
         self.template_manager = TemplateManagerPage(config=self.config, parent=self)
+        self.skills = SkillsPage(config=self.config, parent=self)
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
         self.addSubInterface(self.home, FluentIcon.HOME, "首页")
         self.addSubInterface(self.article, FluentIcon.DOCUMENT, "文章")
         self.addSubInterface(self.template_manager, FluentIcon.LIBRARY, "模板")
+        self.addSubInterface(self.skills, FluentIcon.DICTIONARY, "Skills")
         self.addSubInterface(
             self.settings, FluentIcon.SETTING, "设置",
             position=NavigationItemPosition.BOTTOM,
@@ -101,6 +104,7 @@ class MainWindow(FluentWindow):
         self.home.apply_config(new_cfg)
         self.article.apply_config(new_cfg)
         self.template_manager.apply_config(new_cfg)
+        self.skills.apply_config(new_cfg)
         self.batch_controller.apply_config(new_cfg)
 
     def _on_request_generate(self, payload: dict) -> None:
