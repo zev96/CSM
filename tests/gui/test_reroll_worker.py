@@ -5,7 +5,7 @@ from pathlib import Path
 from csm_core.assembler.plan import AssemblyPlan, BlockResult, PickedVariant
 from csm_core.assembler.reroll import NoCandidatesError
 from csm_core.template.schema import (
-    Template, SEODefaults, NumberedListBlock, NotesQuerySource,
+    Template, NumberedListBlock, NotesQuerySource,
 )
 from csm_core.vault.scanner import VaultIndex
 from csm_core.vault.note_parser import ParsedNote
@@ -29,8 +29,7 @@ def _idx(notes):
 
 def _tpl(block):
     return Template(
-        id="t", name="T", product="x", version=1,
-        system_prompt_default="", seo_defaults=SEODefaults(),
+        id="t", name="T", product="x",
         blocks=[block],
     )
 

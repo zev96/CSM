@@ -252,7 +252,7 @@ def test_article_controller_reroll_pick_emits_reroll_completed(qtbot, tmp_path, 
     from csm_core.assembler.plan import AssemblyPlan, BlockResult, PickedVariant
     from csm_core.pipeline import GenerateResult
     from csm_core.template.schema import (
-        Template, SEODefaults, NumberedListBlock, NotesQuerySource,
+        Template, NumberedListBlock, NotesQuerySource,
     )
     from csm_core.vault.scanner import VaultIndex
 
@@ -262,8 +262,7 @@ def test_article_controller_reroll_pick_emits_reroll_completed(qtbot, tmp_path, 
 
     block = NumberedListBlock(id="nl", source=NotesQuerySource(module="m"), pick_notes=1)
     tpl = Template(
-        id="t", name="T", product="x", version=1,
-        system_prompt_default="", seo_defaults=SEODefaults(),
+        id="t", name="T", product="x",
         blocks=[block],
     )
     plan = AssemblyPlan(

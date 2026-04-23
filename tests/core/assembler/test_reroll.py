@@ -6,7 +6,7 @@ import pytest
 from csm_core.assembler.plan import AssemblyPlan, BlockResult, PickedVariant
 from csm_core.assembler.reroll import reroll_pick, NoCandidatesError
 from csm_core.template.schema import (
-    Template, SEODefaults, ParagraphBlock, NumberedListBlock,
+    Template, ParagraphBlock, NumberedListBlock,
     CompetitorPoolBlock, NotesQuerySource,
 )
 from csm_core.vault.note_parser import ParsedNote
@@ -33,8 +33,7 @@ def _index_from(notes: list[ParsedNote]) -> VaultIndex:
 
 def _tpl_with(block) -> Template:
     return Template(
-        id="t", name="T", product="吸尘器", version=1,
-        system_prompt_default="", seo_defaults=SEODefaults(),
+        id="t", name="T", product="吸尘器",
         blocks=[block],
     )
 
