@@ -1,5 +1,4 @@
-from pydantic import ValidationError
-from csm_core.template.schema import Template, LiteralBlock
+from csm_core.template.schema import Template
 
 
 def _minimal_template_dict(**overrides) -> dict:
@@ -29,9 +28,10 @@ def test_template_silently_ignores_legacy_fields():
         seo_defaults={"target_word_count": [500, 800], "tone": "冷静"},
     )
     tpl = Template.model_validate(legacy)
-    assert not hasattr(tpl, "version")
-    assert not hasattr(tpl, "system_prompt_default")
-    assert not hasattr(tpl, "seo_defaults")
+    dumped = tpl.model_dump()
+    assert "version" not in dumped
+    assert "system_prompt_default" not in dumped
+    assert "seo_defaults" not in dumped
 
 
 def test_template_accepts_default_skill_id():
