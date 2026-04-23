@@ -69,6 +69,7 @@ class TemplateManagerPage(QWidget):
         # 同步资料库根目录到编辑器（用于「浏览资料库」按钮）
         vault_root = Path(cfg.vault_root) if cfg.vault_root else None
         self.editor_panel.set_vault_root(vault_root)
+        self.editor_panel.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)
 
         if cfg.default_template:
             tpl_path = Path(cfg.default_template)

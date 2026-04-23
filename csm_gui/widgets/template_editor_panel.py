@@ -1,7 +1,7 @@
 """Right-side template editor panel — three-tab Pivot for editing a template.
 
 Tabs:
-  1. 基础设置 — name / product / version / system_prompt / SEO defaults
+  1. 基础设置 — name / product / default skill
   2. Slots    — ordered list with edit/up/down/delete + add-slot button
   3. JSON预览 — read-only live JSON + validate button
 
@@ -21,10 +21,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
 )
 
 try:
@@ -33,22 +33,16 @@ except ImportError:  # pragma: no cover
     from qfluentwidgets import BodyLabel as CaptionLabel  # type: ignore[assignment]
 
 from qfluentwidgets import (
-    TitleLabel, SubtitleLabel, StrongBodyLabel, BodyLabel,
-    LineEdit, SpinBox, TextEdit, PlainTextEdit, ComboBox,
-    PrimaryPushButton, PushButton, TransparentToolButton, FluentIcon,
+    StrongBodyLabel, BodyLabel,
+    LineEdit, PlainTextEdit, ComboBox,
+    PrimaryPushButton, PushButton, FluentIcon,
     ScrollArea, CardWidget, Pivot,
     InfoBar, InfoBarPosition, MessageBox,
 )
 
-from csm_core.template.schema import Template, SEODefaults
+from csm_core.template.schema import Template
 from csm_core.template.loader import load_template, save_template
 from .slot_tree_widget import SlotTreeWidget
-
-try:
-    from qfluentwidgets import SwitchButton
-    _HAS_SWITCH = True
-except ImportError:  # pragma: no cover
-    _HAS_SWITCH = False
 
 
 # (old _SlotRow and _SlotsPage replaced by SlotTreeWidget from slot_tree_widget.py)
@@ -75,6 +69,7 @@ class TemplateEditorPanel(QWidget):
         self._template_id: str = ""
         self._dirty = False
         self._vault_root: Path | None = None
+        self._skill_dir: Path | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -141,106 +136,29 @@ class TemplateEditorPanel(QWidget):
         lay.setContentsMargins(24, 24, 24, 24)
         lay.setSpacing(12)
 
-        # ── 基础设置 ──────────────────────────────────────────────────────
         basic_card = CardWidget(inner)
         basic_lay = QVBoxLayout(basic_card)
         basic_lay.setContentsMargins(16, 12, 16, 12)
         basic_lay.setSpacing(6)
         basic_lay.addWidget(StrongBodyLabel("基础设置"))
+
         basic_lay.addWidget(BodyLabel("名称"))
         self.name_input = LineEdit(basic_card)
         self.name_input.textChanged.connect(self._mark_dirty)
         basic_lay.addWidget(self.name_input)
+
         basic_lay.addWidget(BodyLabel("产品"))
         self.product_input = LineEdit(basic_card)
         self.product_input.textChanged.connect(self._mark_dirty)
         basic_lay.addWidget(self.product_input)
-        basic_lay.addWidget(BodyLabel("版本"))
-        self.version_spin = SpinBox(basic_card)
-        self.version_spin.setRange(1, 99)
-        self.version_spin.valueChanged.connect(self._mark_dirty)
-        basic_lay.addWidget(self.version_spin)
+
+        basic_lay.addWidget(BodyLabel("默认 Skill"))
+        self.default_skill_combo = ComboBox(basic_card)
+        self.default_skill_combo.addItem("（无）")
+        self.default_skill_combo.currentIndexChanged.connect(self._mark_dirty)
+        basic_lay.addWidget(self.default_skill_combo)
+
         lay.addWidget(basic_card)
-
-        # ── 系统提示词 ────────────────────────────────────────────────────
-        prompt_card = CardWidget(inner)
-        prompt_lay = QVBoxLayout(prompt_card)
-        prompt_lay.setContentsMargins(16, 12, 16, 12)
-        prompt_lay.setSpacing(6)
-        prompt_lay.addWidget(StrongBodyLabel("系统提示词"))
-        self.prompt_edit = TextEdit(prompt_card)
-        self.prompt_edit.setMinimumHeight(100)
-        self.prompt_edit.textChanged.connect(self._mark_dirty)
-        prompt_lay.addWidget(self.prompt_edit)
-        lay.addWidget(prompt_card)
-
-        # ── SEO 默认参数 ──────────────────────────────────────────────────
-        seo_card = CardWidget(inner)
-        seo_lay = QVBoxLayout(seo_card)
-        seo_lay.setContentsMargins(16, 12, 16, 12)
-        seo_lay.setSpacing(6)
-        seo_lay.addWidget(StrongBodyLabel("SEO 默认参数"))
-
-        wc_row = QHBoxLayout()
-        wc_row.addWidget(BodyLabel("目标字数："))
-        self.wc_min_spin = SpinBox(seo_card)
-        self.wc_min_spin.setRange(100, 10000)
-        self.wc_min_spin.setValue(1500)
-        self.wc_min_spin.valueChanged.connect(self._mark_dirty)
-        wc_row.addWidget(self.wc_min_spin)
-        wc_row.addWidget(BodyLabel(" ~ "))
-        self.wc_max_spin = SpinBox(seo_card)
-        self.wc_max_spin.setRange(100, 10000)
-        self.wc_max_spin.setValue(2000)
-        self.wc_max_spin.valueChanged.connect(self._mark_dirty)
-        wc_row.addWidget(self.wc_max_spin)
-        wc_row.addStretch(1)
-        seo_lay.addLayout(wc_row)
-
-        kd_row = QHBoxLayout()
-        kd_row.addWidget(BodyLabel("关键词密度(%)："))
-        self.kd_min_spin = SpinBox(seo_card)
-        self.kd_min_spin.setRange(1, 20)
-        self.kd_min_spin.setValue(5)
-        self.kd_min_spin.valueChanged.connect(self._mark_dirty)
-        kd_row.addWidget(self.kd_min_spin)
-        kd_row.addWidget(BodyLabel(" ~ "))
-        self.kd_max_spin = SpinBox(seo_card)
-        self.kd_max_spin.setRange(1, 20)
-        self.kd_max_spin.setValue(8)
-        self.kd_max_spin.valueChanged.connect(self._mark_dirty)
-        kd_row.addWidget(self.kd_max_spin)
-        kd_row.addStretch(1)
-        seo_lay.addLayout(kd_row)
-
-        seo_lay.addWidget(BodyLabel("语气风格"))
-        self.tone_input = LineEdit(seo_card)
-        self.tone_input.textChanged.connect(self._mark_dirty)
-        seo_lay.addWidget(self.tone_input)
-
-        h2_row = QHBoxLayout()
-        h2_row.addWidget(BodyLabel("强制 H2："))
-        if _HAS_SWITCH:
-            self.force_h2_switch = SwitchButton(seo_card)
-            self.force_h2_switch.setChecked(True)
-            self.force_h2_switch.checkedChanged.connect(self._mark_dirty)
-            h2_row.addWidget(self.force_h2_switch)
-        else:
-            from PyQt6.QtWidgets import QCheckBox
-            self.force_h2_switch = QCheckBox("开启", seo_card)  # type: ignore[assignment]
-            self.force_h2_switch.setChecked(True)
-            self.force_h2_switch.toggled.connect(self._mark_dirty)
-            h2_row.addWidget(self.force_h2_switch)
-        h2_row.addStretch(1)
-        seo_lay.addLayout(h2_row)
-
-        seo_lay.addWidget(BodyLabel("长尾关键词（逗号分隔）"))
-        self.long_tail_input = LineEdit(seo_card)
-        self.long_tail_input.setPlaceholderText("如：家用吸尘器推荐,宠物吸尘器对比")
-        self.long_tail_input.textChanged.connect(self._mark_dirty)
-        seo_lay.addWidget(self.long_tail_input)
-
-        lay.addWidget(seo_card)
         lay.addStretch(1)
         return page
 
@@ -296,23 +214,19 @@ class TemplateEditorPanel(QWidget):
         self._current_path = path
         self._template_id = tpl.id
 
-        # basic info
         self.name_input.setText(tpl.name)
         self.product_input.setText(tpl.product)
-        self.version_spin.setValue(tpl.version)
-        self.prompt_edit.setPlainText(tpl.system_prompt_default or "")
 
-        # SEO
-        seo = tpl.seo_defaults
-        if seo.target_word_count and len(seo.target_word_count) == 2:
-            self.wc_min_spin.setValue(seo.target_word_count[0])
-            self.wc_max_spin.setValue(seo.target_word_count[1])
-        if seo.keyword_density and len(seo.keyword_density) == 2:
-            self.kd_min_spin.setValue(seo.keyword_density[0])
-            self.kd_max_spin.setValue(seo.keyword_density[1])
-        self.tone_input.setText(seo.tone or "")
-        self.force_h2_switch.setChecked(bool(seo.force_h2))
-        self.long_tail_input.setText(",".join(seo.long_tail_keywords or []))
+        self.default_skill_combo.blockSignals(True)
+        try:
+            target = tpl.default_skill_id or ""
+            idx = 0
+            for i in range(self.default_skill_combo.count()):
+                if self.default_skill_combo.itemText(i) == target:
+                    idx = i; break
+            self.default_skill_combo.setCurrentIndex(idx)
+        finally:
+            self.default_skill_combo.blockSignals(False)
 
         # blocks
         self.slots_page.load_blocks(tpl.blocks)
@@ -351,6 +265,19 @@ class TemplateEditorPanel(QWidget):
         self._vault_root = path
         self.slots_page.set_vault_root(path)
 
+    def set_skill_dir(self, skill_dir: Path | None) -> None:
+        """Rebuild the default-skill combo from the given directory."""
+        self._skill_dir = Path(skill_dir) if skill_dir else None
+        self.default_skill_combo.blockSignals(True)
+        try:
+            self.default_skill_combo.clear()
+            self.default_skill_combo.addItem("（无）")
+            if self._skill_dir and self._skill_dir.is_dir():
+                for p in sorted(self._skill_dir.glob("*.md")):
+                    self.default_skill_combo.addItem(p.stem)
+        finally:
+            self.default_skill_combo.blockSignals(False)
+
     def _mark_dirty(self, *_) -> None:
         if not self._dirty:
             self._dirty = True
@@ -358,26 +285,14 @@ class TemplateEditorPanel(QWidget):
         self._refresh_json_preview()
 
     def _build_template_dict(self) -> dict:
-        long_tail = [
-            k.strip()
-            for k in self.long_tail_input.text().split(",")
-            if k.strip()
-        ]
         blocks = self.slots_page.get_blocks()
-
+        skill_text = self.default_skill_combo.currentText()
+        default_skill_id = None if skill_text == "（无）" else skill_text
         return {
             "id": self._template_id,
             "name": self.name_input.text().strip(),
             "product": self.product_input.text().strip(),
-            "version": self.version_spin.value(),
-            "system_prompt_default": self.prompt_edit.toPlainText().strip(),
-            "seo_defaults": {
-                "target_word_count": [self.wc_min_spin.value(), self.wc_max_spin.value()],
-                "keyword_density":   [self.kd_min_spin.value(), self.kd_max_spin.value()],
-                "tone":              self.tone_input.text().strip(),
-                "force_h2":          self.force_h2_switch.isChecked(),
-                "long_tail_keywords": long_tail,
-            },
+            "default_skill_id": default_skill_id,
             "blocks": [b.model_dump() for b in blocks],
         }
 
