@@ -81,7 +81,6 @@ class SkillListPanel(QWidget):
         list_lay = QVBoxLayout(list_card)
         list_lay.setContentsMargins(12, 8, 12, 8)
         list_lay.setSpacing(6)
-        list_lay.addWidget(BodyLabel("Skill 列表"))
         self.list_widget = ListWidget(list_card)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
         list_lay.addWidget(self.list_widget, 1)

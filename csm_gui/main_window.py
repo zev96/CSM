@@ -31,7 +31,12 @@ class MainWindow(FluentWindow):
         self.config: AppConfig = load_config(self._config_path)
         self._current_result = None
         self.resize(1280, 820)
-        self.setWindowTitle("CSM — Content SEO Maker")
+        # Intentionally leave window title empty and hide the title-bar
+        # icon / title label — the FluentWindow's left nav carries the
+        # app's identity so the top-bar chrome stays quiet.
+        self.setWindowTitle("")
+        self.titleBar.iconLabel.hide()
+        self.titleBar.titleLabel.hide()
 
         self.article_controller = ArticleController(self.config, parent=self)
         self.article_controller.generated.connect(self._on_generated)

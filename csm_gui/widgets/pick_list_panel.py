@@ -117,7 +117,6 @@ class PickListPanel(CardWidget):
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
-        root.addWidget(BodyLabel("采样结果（点击重抽单条）", self))
 
         # SingleDirectionScrollArea gives the thin Fluent scrollbar that
         # matches the rest of the app — plain QScrollArea paints the

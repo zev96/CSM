@@ -23,6 +23,9 @@ class GenerationForm(QWidget):
         self._config: AppConfig = config
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        # Matches _SingleArticlePanel — keeps label→input gap consistent
+        # across the two forms the user sees side-by-side on the home page.
+        root.setSpacing(14)
 
         root.addWidget(BodyLabel("模板"))
         self.template_combo = ComboBox(self)

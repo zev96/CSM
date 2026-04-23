@@ -2,7 +2,7 @@
 from __future__ import annotations
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QStackedWidget
-from qfluentwidgets import SubtitleLabel, BodyLabel, LineEdit, PrimaryPushButton, FluentIcon, Pivot
+from qfluentwidgets import BodyLabel, LineEdit, PrimaryPushButton, FluentIcon, Pivot
 from ..config import AppConfig
 from ..widgets.generation_form import GenerationForm
 
@@ -13,6 +13,9 @@ class _SingleArticlePanel(QWidget):
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
+        # Give label→input pairs more breathing room than Qt's default (~6px),
+        # so the form feels composed rather than cramped.
+        root.setSpacing(14)
         root.addWidget(BodyLabel("关键词"))
         self.keyword_input = LineEdit(self)
         self.keyword_input.setPlaceholderText("例：宠物家庭吸尘器推荐")
@@ -56,7 +59,6 @@ class HomePage(QWidget):
         self._config = config
 
         root = QVBoxLayout(self)
-        root.addWidget(SubtitleLabel("生成"))
 
         self.pivot = Pivot(self)
         self.stack = QStackedWidget(self)
