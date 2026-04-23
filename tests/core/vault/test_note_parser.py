@@ -140,6 +140,32 @@ def test_parse_note_splits_heading_wrapped_variant_markers(tmp_path: Path):
     assert "噪音控制水平" not in note.variants[1]
 
 
+def test_parse_note_splits_variants_past_nine(tmp_path: Path):
+    """Regression: notes with ⑩+ must split correctly.
+
+    The parser's original regex only covered ①–⑨, so variant 9 absorbed
+    ⑩⑪⑫… into its body — producing a multi-section pick instead of the
+    intended single-variant text.
+    """
+    p = tmp_path / "longlist.md"
+    body = "".join(f"{chr(0x245F + i)} 第 {i} 条卖点。\n" for i in range(1, 13))
+    p.write_text(
+        "---\n产品: 吸尘器\n素材类型: 竞品推荐理由\n---\n" + body,
+        encoding="utf-8",
+    )
+    note = parse_note(p)
+    assert len(note.variants) == 12
+    # Crucially, variant 9 must not leak ⑩⑪⑫ content into it.
+    assert "⑩" not in note.variants[8]
+    assert "⑪" not in note.variants[8]
+    assert "第 9 条" in note.variants[8]
+    assert "第 10 条" in note.variants[9]
+    assert "第 12 条" in note.variants[11]
+    # None of the markers should survive on their owning variant either.
+    for v in note.variants:
+        assert not v.lstrip().startswith(tuple(chr(c) for c in range(0x2460, 0x2474)))
+
+
 def test_parse_note_strips_indented_variant_markers(tmp_path: Path):
     # Variant markers can appear indented in some notes; the leading marker
     # must still be stripped so ``② ...`` doesn't leak into the draft.

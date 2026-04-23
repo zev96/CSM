@@ -6,17 +6,22 @@ from typing import Any
 import re
 import frontmatter
 
-VARIANT_MARKERS = ("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨")
+# Circled numbers ①–⑳ (U+2460–U+2473). Notes in the vault occasionally run
+# past 9 variants (挑选攻略-style lists with 10+ bullets), so the regex must
+# cover ⑩⑪⑫…⑳ too — otherwise variant 9 absorbs everything from ⑩ onward
+# into its body. 20 variants is plenty for any realistic note.
+VARIANT_MARKERS = tuple(chr(c) for c in range(0x2460, 0x2474))
+_CIRCLED_CLASS = "[\u2460-\u2473]"
 # Match a variant marker at the start of a line, tolerating leading whitespace
 # and an optional ATX heading prefix (``### ① ...``) so heading-wrapped
 # markers are stripped along with bare ones.
 _VARIANT_RE = re.compile(
-    r"^\s*(?:#{1,6}\s+)?[①②③④⑤⑥⑦⑧⑨]\s*", re.MULTILINE,
+    rf"^\s*(?:#{{1,6}}\s+)?{_CIRCLED_CLASS}\s*", re.MULTILINE,
 )
 # Same pattern without the trailing ``\s*`` — used to *detect* a variant-start
 # line (independent of splitting), so ``_split_variants`` recognises e.g.
 # ``### ① 噪音控制水平`` as a variant boundary.
-_VARIANT_START_RE = re.compile(r"^\s*(?:#{1,6}\s+)?[①②③④⑤⑥⑦⑧⑨]")
+_VARIANT_START_RE = re.compile(rf"^\s*(?:#{{1,6}}\s+)?{_CIRCLED_CLASS}")
 # Inline bold (``**text**``). Kept conservative: no newlines, non-greedy, at
 # least one inner char. The inner text survives; the ``**`` markers are peeled
 # off so drafts render as plain prose.
