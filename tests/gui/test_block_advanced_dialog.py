@@ -174,8 +174,7 @@ def test_depends_section_excludes_self_and_descendants(qtbot):
     ]
     w = _DependsSection(parent, all_blocks, parent_widget=None)
     qtbot.addWidget(w)
-    labels = [c.text() for c in w.checkboxes_for_test()]
-    assert labels == ["block_2 — 兄弟"]
+    assert w.candidates_for_test() == [("block_2", "兄弟")]
 
 
 def test_depends_section_checks_existing_depends_on(qtbot):
@@ -190,9 +189,8 @@ def test_depends_section_checks_existing_depends_on(qtbot):
     ]
     w = _DependsSection(self_node, all_blocks, parent_widget=None)
     qtbot.addWidget(w)
-    boxes = w.checkboxes_for_test()
-    assert boxes[0].isChecked() is True    # block_2
-    assert boxes[1].isChecked() is False   # block_3
+    assert "block_2" in w.checked_for_test()
+    assert "block_3" not in w.checked_for_test()
 
 
 def test_depends_section_save_preserves_order(qtbot):
@@ -208,9 +206,8 @@ def test_depends_section_save_preserves_order(qtbot):
     ]
     w = _DependsSection(self_node, all_blocks, parent_widget=None)
     qtbot.addWidget(w)
-    boxes = w.checkboxes_for_test()
-    boxes[0].setChecked(True)   # block_2
-    boxes[2].setChecked(True)   # block_4
+    w.set_checked_for_test("block_2", True)
+    w.set_checked_for_test("block_4", True)
     w.save_to_node()
     assert self_node.depends_on == ["block_2", "block_4"]
 
@@ -237,9 +234,7 @@ def test_depends_section_search_box_filters_candidates(qtbot):
     w.show()
     assert w._search_edit.isHidden() is False
     w._search_edit.setText("5")
-    visible = [cb for cb in w.checkboxes_for_test() if cb.isVisible()]
-    assert len(visible) == 1
-    assert "标签5" in visible[0].text()
+    assert w._filtered_candidates() == [("block_5", "标签5")]
 
 
 from csm_gui.widgets.block_advanced_dialog import BlockAdvancedDialog
@@ -269,7 +264,7 @@ def test_dialog_accept_writes_all_sections_back(qtbot):
     dlg._sample_section._max_spin.setValue(5)
     dlg._sample_section._variants_spin.setValue(2)
     dlg._sample_section._unique_checkbox.setChecked(True)
-    dlg._depends_section.checkboxes_for_test()[0].setChecked(True)
+    dlg._depends_section.set_checked_for_test("block_2", True)
 
     dlg.accept()
 

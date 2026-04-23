@@ -1,7 +1,7 @@
 """Advanced-config dialog for paragraph blocks.
 
 Opens from the ⚙ button on a paragraph row in the slot tree. Bundles the
-three logical field groups (筛选 / 采样 / 依赖) into one ``MessageBoxBase``
+three logical field groups (筛选 / 取值 / 链接) into one ``MessageBoxBase``
 subclass. Each section is an independent widget that reads and writes the
 same ``_BlockNode`` instance directly — the dialog itself just plumbs them.
 """
@@ -10,7 +10,7 @@ from typing import Any, TYPE_CHECKING
 
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout,
 )
 from qfluentwidgets import (
     BodyLabel, StrongBodyLabel, CaptionLabel,
@@ -62,20 +62,13 @@ class _FilterSection(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
 
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        header.addWidget(CaptionLabel("键"), 2)
-        header.addWidget(CaptionLabel("值（多值用英文逗号分隔）"), 5)
-        header.addWidget(CaptionLabel(""), 0)
-        outer.addLayout(header)
-
         self._rows_host = QWidget(self)
         self._rows_lay = QVBoxLayout(self._rows_host)
         self._rows_lay.setContentsMargins(0, 0, 0, 0)
         self._rows_lay.setSpacing(4)
         outer.addWidget(self._rows_host)
 
-        add_btn = PushButton(FluentIcon.ADD, "添加键", self)
+        add_btn = PushButton(FluentIcon.ADD, "添加", self)
         add_btn.clicked.connect(self._on_add_row)
         add_row = QHBoxLayout()
         add_row.addWidget(add_btn)
@@ -182,10 +175,10 @@ class _SampleSection(QWidget):
         # Row 1: pick_notes
         row1 = QHBoxLayout()
         row1.setSpacing(6)
-        row1.addWidget(BodyLabel("取笔记数："))
+        row1.addWidget(BodyLabel("素材数量："))
         self._min_spin = SpinBox(self)
         self._min_spin.setRange(1, 20)
-        self._min_spin.setMaximumWidth(80)
+        self._min_spin.setFixedWidth(110)
         row1.addWidget(self._min_spin)
 
         self._range_checkbox = CheckBox("启用随机区间", self)
@@ -196,7 +189,7 @@ class _SampleSection(QWidget):
         row1.addWidget(self._max_label)
         self._max_spin = SpinBox(self)
         self._max_spin.setRange(1, 20)
-        self._max_spin.setMaximumWidth(80)
+        self._max_spin.setFixedWidth(110)
         row1.addWidget(self._max_spin)
         row1.addStretch(1)
         outer.addLayout(row1)
@@ -204,18 +197,18 @@ class _SampleSection(QWidget):
         # Row 2: pick_variants
         row2 = QHBoxLayout()
         row2.setSpacing(6)
-        row2.addWidget(BodyLabel("每条笔记取变体数："))
+        row2.addWidget(BodyLabel("子素材随机数量："))
         self._variants_spin = SpinBox(self)
         self._variants_spin.setRange(1, 9)
-        self._variants_spin.setMaximumWidth(80)
+        self._variants_spin.setFixedWidth(110)
         row2.addWidget(self._variants_spin)
         row2.addStretch(1)
         outer.addLayout(row2)
 
         # Row 3: unique_notes
-        self._unique_checkbox = CheckBox("整篇不重复笔记（unique_notes）", self)
+        self._unique_checkbox = CheckBox("不重复素材", self)
         self._unique_checkbox.setToolTip(
-            "父段落与子段落不重复同一笔记（unique_notes）"
+            "父段落与子段落不重复同一素材"
         )
         outer.addWidget(self._unique_checkbox)
 
@@ -261,7 +254,7 @@ _SEARCH_THRESHOLD = 10
 
 
 class _DependsSection(QWidget):
-    """Multi-select list of block_ids the current node depends on."""
+    """Dropdown multi-select for block depends_on links."""
 
     def __init__(
         self,
@@ -271,62 +264,74 @@ class _DependsSection(QWidget):
     ):
         super().__init__(parent_widget)
         self._node = node
-        self._checkboxes: list[CheckBox] = []
-        self._block_ids_ordered: list[str] = []
+        self._candidates: list[tuple[str, str]] = []  # [(bid, label)]
+        self._checked: set[str] = set(node.depends_on or [])
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
 
         excluded = self._collect_excluded(node)
-        # Identity-based filter: _BlockNode is a dataclass, so __eq__ would
-        # field-compare, potentially matching unrelated blocks with the same
-        # defaults. Use id() for strict identity.
-        candidates = [
+        self._candidates = [
             (bid, label) for (bid, label, ref) in all_blocks
             if id(ref) not in excluded
         ]
 
         self._search_edit = LineEdit(self)
-        self._search_edit.setPlaceholderText("搜索 block_id 或标签…")
-        self._search_edit.textChanged.connect(self._on_search)
+        self._search_edit.setPlaceholderText("搜索名称…")
         outer.addWidget(self._search_edit)
-        if len(candidates) <= _SEARCH_THRESHOLD:
+        if len(self._candidates) <= _SEARCH_THRESHOLD:
             self._search_edit.hide()
 
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        host = QWidget(scroll)
-        host_lay = QVBoxLayout(host)
-        host_lay.setContentsMargins(0, 0, 0, 0)
-        host_lay.setSpacing(2)
+        self._dropdown_btn = PushButton(FluentIcon.ARROW_DOWN, self._button_text(), self)
+        self._dropdown_btn.clicked.connect(self._open_menu)
+        outer.addWidget(self._dropdown_btn)
 
-        existing = set(node.depends_on or [])
-        for bid, label in candidates:
-            cb = CheckBox(f"{bid} — {label}", host)
-            cb.setChecked(bid in existing)
-            host_lay.addWidget(cb)
-            self._checkboxes.append(cb)
-            self._block_ids_ordered.append(bid)
-        host_lay.addStretch(1)
+    def _button_text(self) -> str:
+        if not self._checked:
+            return "未链接"
+        ordered = [lbl for bid, lbl in self._candidates if bid in self._checked]
+        joined = "、".join(ordered)
+        return joined if len(joined) <= 40 else joined[:38] + "…"
 
-        scroll.setWidget(host)
-        outer.addWidget(scroll, 1)
+    def _filtered_candidates(self) -> list[tuple[str, str]]:
+        """Return candidates filtered by the current search text."""
+        needle = self._search_edit.text().strip().lower()
+        if not needle:
+            return list(self._candidates)
+        return [(bid, lbl) for bid, lbl in self._candidates if needle in lbl.lower()]
+
+    def _open_menu(self) -> None:
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self._dropdown_btn)
+        for bid, label in self._filtered_candidates():
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(bid in self._checked)
+            act.triggered.connect(
+                lambda checked, _bid=bid: self._toggle(_bid, checked)
+            )
+        if menu.isEmpty():
+            act = menu.addAction("（无匹配）")
+            act.setEnabled(False)
+        menu.exec(self._dropdown_btn.mapToGlobal(
+            self._dropdown_btn.rect().bottomLeft()
+        ))
+
+    def _toggle(self, bid: str, checked: bool) -> None:
+        if checked:
+            self._checked.add(bid)
+        else:
+            self._checked.discard(bid)
+        self._dropdown_btn.setText(self._button_text())
 
     def save_to_node(self) -> None:
-        selected = [
-            bid for bid, cb in zip(self._block_ids_ordered, self._checkboxes)
-            if cb.isChecked()
-        ]
-        self._node.depends_on = selected
-
-    def checkboxes_for_test(self) -> list[CheckBox]:
-        return list(self._checkboxes)
+        ordered = [bid for bid, _lbl in self._candidates if bid in self._checked]
+        self._node.depends_on = ordered
 
     @staticmethod
     def _collect_excluded(self_node) -> set[int]:
-        excluded: set[int] = {id(self_node)}
+        excluded = {id(self_node)}
         def walk(n):
             excluded.add(id(n))
             for c in getattr(n, "children", []) or []:
@@ -335,13 +340,15 @@ class _DependsSection(QWidget):
             walk(c)
         return excluded
 
-    def _on_search(self, text: str) -> None:
-        needle = text.strip().lower()
-        for cb in self._checkboxes:
-            if not needle:
-                cb.setVisible(True)
-            else:
-                cb.setVisible(needle in cb.text().lower())
+    # Test helpers
+    def candidates_for_test(self) -> list[tuple[str, str]]:
+        return list(self._candidates)
+
+    def checked_for_test(self) -> set[str]:
+        return set(self._checked)
+
+    def set_checked_for_test(self, bid: str, checked: bool) -> None:
+        self._toggle(bid, checked)
 
 
 # ── Main dialog ───────────────────────────────────────────────────────────────
@@ -385,11 +392,11 @@ class BlockAdvancedDialog(MessageBoxBase):
         self._filter_section = _FilterSection(node, fm_candidates, parent=self)
         self.viewLayout.addWidget(self._filter_section)
 
-        self.viewLayout.addWidget(StrongBodyLabel("采样"))
+        self.viewLayout.addWidget(StrongBodyLabel("取值"))
         self._sample_section = _SampleSection(node, parent=self)
         self.viewLayout.addWidget(self._sample_section)
 
-        self.viewLayout.addWidget(StrongBodyLabel("依赖"))
+        self.viewLayout.addWidget(StrongBodyLabel("链接"))
         self._depends_section = _DependsSection(node, all_blocks, parent_widget=self)
         self.viewLayout.addWidget(self._depends_section, 1)
 

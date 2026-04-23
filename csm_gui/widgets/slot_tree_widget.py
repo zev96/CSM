@@ -124,7 +124,7 @@ BLOCK_KIND_LABELS = {
     "paragraph":       "段落",
     "heading":         "标题",
     "numbered_list":   "编号列表",
-    "hero_brand":      "Hero 品牌",
+    "hero_brand":      "主推品",
     "competitor_pool": "竞品池",
     "literal":         "固定文本",
 }
@@ -362,18 +362,6 @@ class _ParagraphPage(QWidget):
         self._label_edit.editingFinished.connect(self._on_label)
         lay.addWidget(src_w)
 
-        pick_w, self._pick_spin = _make_pick_row(self, self._int_pick(node.pick_notes))
-        self._pick_spin.valueChanged.connect(self._on_pick)
-        lay.addWidget(pick_w)
-
-    def _int_pick(self, p: Any) -> int:
-        if isinstance(p, int):
-            return p
-        if isinstance(p, dict) and "random_between" in p:
-            rb = p["random_between"] or []
-            return rb[0] if rb else 1
-        return 1
-
     def _on_module(self, path: str) -> None:
         old_basename = Path(self._node.module).name if self._node.module else ""
         self._node.module = path
@@ -387,10 +375,6 @@ class _ParagraphPage(QWidget):
         if new != self._node.label:
             self._node.label = new
             self.changed.emit()
-
-    def _on_pick(self, v: int) -> None:
-        self._node.pick_notes = v
-        self.changed.emit()
 
     def refresh(self, vault_dirs: list[str]) -> None:
         self._picker.setup(vault_dirs, self._node.module)
