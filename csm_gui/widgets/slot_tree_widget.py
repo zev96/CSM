@@ -635,6 +635,8 @@ class _BlockRow(CardWidget):
     move_down      = pyqtSignal()
     delete_req     = pyqtSignal()
     data_changed   = pyqtSignal()
+    gear_requested      = pyqtSignal()
+    add_child_requested = pyqtSignal()
 
     _INDENT_PX = 28
 
@@ -708,6 +710,20 @@ class _BlockRow(CardWidget):
         outer.addWidget(self._stack, 1)
 
         # ── Action buttons ────────────────────────────────────────────────
+        self._gear_btn = TransparentToolButton(FluentIcon.SETTING, self)
+        self._gear_btn.setFixedSize(28, 28)
+        self._gear_btn.setToolTip("高级配置（筛选 / 采样 / 依赖）")
+        self._gear_btn.clicked.connect(lambda: self.gear_requested.emit())
+        self._gear_btn.setVisible(node.kind == "paragraph")
+        outer.addWidget(self._gear_btn)
+
+        self._add_child_btn = TransparentToolButton(FluentIcon.ADD, self)
+        self._add_child_btn.setFixedSize(28, 28)
+        self._add_child_btn.setToolTip("添加子段落")
+        self._add_child_btn.clicked.connect(lambda: self.add_child_requested.emit())
+        self._add_child_btn.setVisible(node.kind == "paragraph")
+        outer.addWidget(self._add_child_btn)
+
         for icon, sig in [
             (FluentIcon.DOWN,   self.move_down),
             (FluentIcon.UP,     self.move_up),
@@ -724,8 +740,10 @@ class _BlockRow(CardWidget):
         new_kind = BLOCK_KINDS[idx]
         self._node.kind = new_kind
         self._stack.setCurrentIndex(idx)
-        # Show/hide expand button based on kind
-        self._expand_btn.setVisible(new_kind == "paragraph")
+        is_para = new_kind == "paragraph"
+        self._expand_btn.setVisible(is_para)
+        self._gear_btn.setVisible(is_para)
+        self._add_child_btn.setVisible(is_para)
         self._update_expand_icon()
         self.data_changed.emit()
 
@@ -824,6 +842,18 @@ class SlotTreeWidget(QWidget):
         self._rebuild()
         self.slots_changed.emit()
 
+    def _all_rows_for_test(self) -> list["_BlockRow"]:
+        """Test helper: flat list of every visible ``_BlockRow``."""
+        rows: list[_BlockRow] = []
+        for i in range(self._lo.count()):
+            item = self._lo.itemAt(i)
+            if item is None:
+                continue
+            w = item.widget()
+            if isinstance(w, _BlockRow):
+                rows.append(w)
+        return rows
+
     def _collect_all_blocks(self) -> list[tuple[str, str, "_BlockNode"]]:
         """Recursively flatten all block nodes.
 
@@ -894,6 +924,8 @@ class SlotTreeWidget(QWidget):
                 lambda _nl=nodes, _i=i: self._delete_node(_nl, _i)
             )
             row.data_changed.connect(self.slots_changed)
+            row.gear_requested.connect(lambda _n=node: self._open_gear_dialog(_n))
+            row.add_child_requested.connect(lambda _n=node: self._add_child(_n))
 
             self._lo.insertWidget(self._lo.count() - 1, row)
 
@@ -933,6 +965,19 @@ class SlotTreeWidget(QWidget):
     def _rebuild_and_emit(self) -> None:
         self._rebuild()
         self.slots_changed.emit()
+
+    def _open_gear_dialog(self, node: "_BlockNode") -> None:
+        from .block_advanced_dialog import BlockAdvancedDialog
+        all_blocks = self._collect_all_blocks()
+        dlg = BlockAdvancedDialog(
+            node=node,
+            all_blocks=all_blocks,
+            vault_root=getattr(self, "_vault_root", None),
+            parent=self,
+        )
+        if dlg.exec():
+            self._rebuild()
+            self.slots_changed.emit()
 
     def _add_child(self, parent: _BlockNode) -> None:
         """Add a child paragraph block to a paragraph parent."""
