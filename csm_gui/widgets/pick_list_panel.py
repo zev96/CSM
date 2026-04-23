@@ -69,18 +69,34 @@ def _build_label_map(template) -> dict[str, str]:
     return result
 
 
+_ROW_QSS = """
+#pickRow {
+    background: white;
+    border: none;
+    border-radius: 6px;
+}
+"""
+
+
 class _PickRow(QFrame):
     def __init__(self, block_id: str, pick_index: int, preview: str,
                  display_label: str, parent=None):
         super().__init__(parent)
         self.block_id = block_id
         self.pick_index = pick_index
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        # Use an object name so the stylesheet only targets the row frame
+        # and not nested QFrame descendants (e.g. the button's own frame).
+        self.setObjectName("pickRow")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet(_ROW_QSS)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 4)
+        # Wider breathing room than the previous 8/4 — content no longer
+        # touches the rounded-corner edge.
+        lay.setContentsMargins(14, 10, 10, 10)
+        lay.setSpacing(10)
 
         label_col = QVBoxLayout()
-        label_col.setSpacing(2)
+        label_col.setSpacing(4)
         self.title = CaptionLabel(f"{display_label}[{pick_index}]", self)
         self.body = BodyLabel(preview, self)
         self.body.setWordWrap(True)

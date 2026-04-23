@@ -11,14 +11,14 @@ from qfluentwidgets import (
 )
 
 
-# Strip the chrome that ``QTextEdit`` paints by default so the widget blends
-# into the surrounding Fluent card: no widget frame, no per-block frame
-# border (Qt 6's setMarkdown adds a root QTextFrame with a border), and a
-# transparent viewport so the CardWidget colour shows through.
+# The editor sits inside a white rounded container so the text has a
+# document-like surface against the page's tinted background. Padding
+# keeps the text away from the edges.
 _MD_STYLESHEET = """
 TextEdit {
     border: none;
-    background: transparent;
+    background: white;
+    padding: 14px 18px;
 }
 """
 
@@ -168,6 +168,9 @@ class MarkdownView(CardWidget):
         for edit in (self.draft_edit, self.polished_edit):
             edit.setFrameShape(QFrame.Shape.NoFrame)
             edit.setStyleSheet(_MD_STYLESHEET)
+            # Give the document itself a breathing margin so the text
+            # doesn't hug the left edge of the viewport.
+            edit.document().setDocumentMargin(6)
             _strip_block_borders(edit)
 
         self._stack.addWidget(self.draft_edit)
