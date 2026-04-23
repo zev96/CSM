@@ -16,7 +16,7 @@ from qfluentwidgets import (
     BodyLabel, StrongBodyLabel, CaptionLabel,
     LineEdit, SpinBox, CheckBox, ToolButton, PushButton,
     EditableComboBox, FluentIcon, MessageBoxBase, SubtitleLabel,
-    DropDownPushButton,
+    DropDownPushButton, RoundMenu, Action,
 )
 
 if TYPE_CHECKING:
@@ -312,18 +312,24 @@ class _DependsSection(QWidget):
         return [(bid, lbl) for bid, lbl in self._candidates if needle in lbl.lower()]
 
     def _open_menu(self) -> None:
-        from PyQt6.QtWidgets import QMenu
-        menu = QMenu(self._dropdown_btn)
-        for bid, label in self._filtered_candidates():
-            act = menu.addAction(label)
-            act.setCheckable(True)
-            act.setChecked(bid in self._checked)
-            act.triggered.connect(
-                lambda checked, _bid=bid: self._toggle(_bid, checked)
-            )
-        if menu.isEmpty():
-            act = menu.addAction("（无匹配）")
+        # RoundMenu matches the Fluent styling of the rest of the app;
+        # plain QMenu rendered with the native Qt look that stood out
+        # against the ComboBox / DropDownPushButton popups.
+        menu = RoundMenu(parent=self._dropdown_btn)
+        filtered = self._filtered_candidates()
+        if not filtered:
+            act = Action("（无匹配）")
             act.setEnabled(False)
+            menu.addAction(act)
+        else:
+            for bid, label in filtered:
+                act = Action(label, self)
+                act.setCheckable(True)
+                act.setChecked(bid in self._checked)
+                act.triggered.connect(
+                    lambda checked, _bid=bid: self._toggle(_bid, checked)
+                )
+                menu.addAction(act)
         menu.exec(self._dropdown_btn.mapToGlobal(
             self._dropdown_btn.rect().bottomLeft()
         ))

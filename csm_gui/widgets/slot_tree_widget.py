@@ -601,7 +601,10 @@ class _BlockRow(CardWidget):
         self._vault_dirs = vault_dirs
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(16 + level * self._INDENT_PX, 8, 12, 8)
+        # Tighter vertical padding (4 instead of 8) so each row is less
+        # chunky — the labels / fields are short and the extra whitespace
+        # was making the list feel over-inflated.
+        outer.setContentsMargins(16 + level * self._INDENT_PX, 4, 12, 4)
         outer.setSpacing(6)
 
         # Position (e.g. "1", "2-1") is tracked internally for move / delete
@@ -759,7 +762,7 @@ class SlotTreeWidget(QWidget):
 
         self._lo = QVBoxLayout(self._inner)
         self._lo.setContentsMargins(0, 4, 0, 8)
-        self._lo.setSpacing(8)
+        self._lo.setSpacing(4)
         self._lo.addStretch(1)  # trailing stretch — always last
 
         outer.addWidget(self._scroll, 1)
