@@ -80,12 +80,12 @@ class ArticlePage(QWidget):
         """Render a generated article. All inputs are plain data."""
         self.markdown_view.set_draft(draft)
         self.markdown_view.set_polished(final_text)
-        self.pick_list_panel.load_plan(plan)
+        self.pick_list_panel.load_plan(plan, template)
 
     def update_plan(self, template, plan, draft: str) -> None:
         """Refresh draft after resampling (polished text unchanged)."""
         self.markdown_view.set_draft(draft)
-        self.pick_list_panel.load_plan(plan)
+        self.pick_list_panel.load_plan(plan, template)
 
     def apply_config(self, cfg):
         self.controls.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)

@@ -10,10 +10,17 @@ class MarkdownView(CardWidget):
         self._stack = QStackedWidget(self)
         self._pivot = Pivot(self)
 
-        # Draft tab is user-editable: the two-phase flow lets the user tweak
-        # the assembled draft before it's handed to the LLM for polishing.
+        # Draft tab renders markdown for display (H1/H2 styled, lists, etc.)
+        # so structural symbols like ``##`` aren't shown verbatim. The raw
+        # source is preserved in ``_draft_source`` and returned by
+        # ``get_draft_text()`` so the polish stage still sees the exact
+        # markdown bytes. The widget is read-only because ``toPlainText()``
+        # on a setMarkdown'd TextEdit strips the ``##`` tokens — in-place
+        # editing wouldn't round-trip cleanly. Users can re-roll or
+        # regenerate instead.
         self.draft_edit = TextEdit(self)
-        self.draft_edit.setReadOnly(False)
+        self.draft_edit.setReadOnly(True)
+        self._draft_source = ""
         self.polished_edit = TextEdit(self)
         self.polished_edit.setReadOnly(True)
 
@@ -33,13 +40,13 @@ class MarkdownView(CardWidget):
         self._stack.setCurrentIndex(0 if key == "draft" else 1)
 
     def set_draft(self, md: str):
-        # Use setPlainText (not setMarkdown) so what the user sees and edits
-        # is the exact draft text — including the explicit module headers —
-        # and the same bytes flow through to ``get_draft_text`` -> polish.
-        self.draft_edit.setPlainText(md)
+        # Render markdown for display but stash the original source so the
+        # polish stage sees the exact bytes (with ``##`` intact).
+        self._draft_source = md
+        self.draft_edit.setMarkdown(md)
 
     def get_draft_text(self) -> str:
-        return self.draft_edit.toPlainText()
+        return self._draft_source
 
     def set_polished(self, md: str):
         self.polished_edit.setMarkdown(md)

@@ -17,7 +17,7 @@ def test_article_page_clear_empties_markdown(qtbot):
     page.markdown_view.set_draft("something")
     page.markdown_view.set_polished("something else")
     page.clear()
-    assert page.markdown_view.draft_edit.toPlainText() == ""
+    assert page.markdown_view.get_draft_text() == ""
     assert page.markdown_view.polished_edit.toPlainText() == ""
 
 
@@ -32,7 +32,7 @@ def test_article_page_load_result_renders_inputs(qtbot):
     ])
     plan = AssemblyPlan(keyword="k", template_id="t", seed=0)
     page.load_result(template, plan, "draft-text", "polished-text")
-    assert "draft-text" in page.markdown_view.draft_edit.toPlainText()
+    assert "draft-text" in page.markdown_view.get_draft_text()
     assert "polished-text" in page.markdown_view.polished_edit.toPlainText()
 
 
@@ -42,6 +42,8 @@ def test_markdown_view_sets_draft_and_polished(qtbot):
     qtbot.addWidget(view)
     view.set_draft("# Draft\n\ncontent")
     view.set_polished("# Polished\n\nbetter content")
+    # Draft renders markdown; source is kept for polish round-trip.
+    assert view.get_draft_text() == "# Draft\n\ncontent"
     assert "Draft" in view.draft_edit.toPlainText()
     assert "Polished" in view.polished_edit.toPlainText()
     # set_polished switches the pivot — a silent regression here is easy to miss

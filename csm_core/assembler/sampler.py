@@ -141,8 +141,12 @@ def sample_block(
         enriched: list[PickedVariant] = []
         for p in picks:
             meta = dict(p.meta)
-            title = meta.get("model") or p.note_id
-            meta["title"] = title
+            raw_title = meta.get("model") or p.note_id
+            # Strip the "竞品-" category prefix that comes from folder-based
+            # note_id when frontmatter lacks an explicit model field.
+            if raw_title.startswith("竞品-"):
+                raw_title = raw_title[len("竞品-"):]
+            meta["title"] = raw_title
             enriched.append(p.model_copy(update={"meta": meta}))
         return BlockResult(
             block_id=block.id, kind="competitor_pool", picks=enriched,

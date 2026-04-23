@@ -107,3 +107,18 @@ def test_competitor_pool_no_type_key_falls_back_to_stem(tmp_path):
     )
     br = sample_block(blk, idx, reg, seed=0, user_config={})
     assert br.picks[0].meta["title"] == "无型号的竞品"
+
+
+def test_competitor_pool_stem_strips_leading_jingpin_prefix(tmp_path):
+    # Vault convention: note stems like "竞品-米家3基站版" include the category
+    # prefix. When there's no explicit 型号 frontmatter the renderer should
+    # show the title without the "竞品-" prefix.
+    _write(tmp_path, "竞品/竞品-米家3基站版.md", {"产品": "吸尘器"}, "整篇理由。")
+    idx = scan_vault(tmp_path)
+    reg = build_brand_registry(tmp_path)
+    blk = CompetitorPoolBlock(
+        id="cp", source=NotesQuerySource(module="竞品"),
+        pick_notes=1,
+    )
+    br = sample_block(blk, idx, reg, seed=0, user_config={})
+    assert br.picks[0].meta["title"] == "米家3基站版"

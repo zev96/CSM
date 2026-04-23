@@ -66,3 +66,30 @@ def test_pick_list_panel_load_plan_replaces_previous_rows(qtbot):
     empty = AssemblyPlan(keyword="kw", template_id="t", seed=1, results=[])
     panel.load_plan(empty)
     assert panel.row_count() == 0
+
+
+def test_pick_list_panel_shows_block_label_when_template_provided(qtbot):
+    from csm_core.template.schema import (
+        Template, NumberedListBlock, NotesQuerySource,
+    )
+    panel = PickListPanel()
+    qtbot.addWidget(panel)
+    template = Template(
+        id="t", name="t", product="p",
+        blocks=[NumberedListBlock(
+            id="nl", label="选购建议",
+            source=NotesQuerySource(module="m"),
+            pick_notes=1,
+        )],
+    )
+    plan = AssemblyPlan(
+        keyword="k", template_id="t", seed=0,
+        results=[BlockResult(
+            block_id="nl", kind="numbered_list",
+            picks=[PickedVariant(note_id="n", variant_index=0, text="x")],
+            meta={"number_style": "1.", "item_separator": "\n\n"},
+        )],
+    )
+    panel.load_plan(plan, template)
+    assert "选购建议" in panel._rows[0].title.text()
+    assert panel._rows[0].title.text() == "选购建议[0]"
