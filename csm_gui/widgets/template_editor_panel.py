@@ -266,8 +266,16 @@ class TemplateEditorPanel(QWidget):
         self.slots_page.set_vault_root(path)
 
     def set_skill_dir(self, skill_dir: Path | None) -> None:
-        """Rebuild the default-skill combo from the given directory."""
+        """Rebuild the default-skill combo from the given directory.
+
+        Preserves the currently selected skill across the rebuild when
+        the file is still present on disk — users invoke this via
+        ``showEvent`` whenever the page is re-shown, so skills created
+        or renamed from the Skills page surface here without an app
+        restart. A missing skill falls back to "（无）".
+        """
         self._skill_dir = Path(skill_dir) if skill_dir else None
+        previous = self.default_skill_combo.currentText()
         self.default_skill_combo.blockSignals(True)
         try:
             self.default_skill_combo.clear()
@@ -275,6 +283,10 @@ class TemplateEditorPanel(QWidget):
             if self._skill_dir and self._skill_dir.is_dir():
                 for p in sorted(self._skill_dir.glob("*.md")):
                     self.default_skill_combo.addItem(p.stem)
+            if previous and previous != "（无）":
+                restored = self.default_skill_combo.findText(previous)
+                if restored >= 0:
+                    self.default_skill_combo.setCurrentIndex(restored)
         finally:
             self.default_skill_combo.blockSignals(False)
 

@@ -74,3 +74,44 @@ def test_info_tab_has_default_skill_combo(qtbot, tmp_path):
     items = [panel.default_skill_combo.itemText(i)
              for i in range(panel.default_skill_combo.count())]
     assert items == ["（无）", "alpha", "beta"]
+
+
+def test_set_skill_dir_preserves_current_selection(qtbot, tmp_path):
+    """Rescanning the skill directory after the user added a new skill
+    in the Skills page must not wipe the currently selected default
+    skill. Previously set_skill_dir rebuilt the combo and left the
+    first item ("（无）") selected, silently flipping the template's
+    default_skill_id."""
+    from csm_gui.widgets.template_editor_panel import TemplateEditorPanel
+    skill_dir = tmp_path / "s"; skill_dir.mkdir()
+    (skill_dir / "alpha.md").write_text("a", encoding="utf-8")
+    (skill_dir / "beta.md").write_text("b", encoding="utf-8")
+    panel = TemplateEditorPanel()
+    qtbot.addWidget(panel)
+    panel.set_skill_dir(skill_dir)
+    # Simulate the user selecting beta
+    idx = panel.default_skill_combo.findText("beta")
+    panel.default_skill_combo.setCurrentIndex(idx)
+    # New skill appears (as if the Skills page just created it)
+    (skill_dir / "gamma.md").write_text("g", encoding="utf-8")
+    panel.set_skill_dir(skill_dir)
+    items = [panel.default_skill_combo.itemText(i)
+             for i in range(panel.default_skill_combo.count())]
+    assert items == ["（无）", "alpha", "beta", "gamma"]
+    assert panel.default_skill_combo.currentText() == "beta"
+
+
+def test_set_skill_dir_drops_selection_when_skill_deleted(qtbot, tmp_path):
+    """If the previously selected skill no longer exists on disk
+    (renamed / deleted in the Skills page), fall back to '（无）'."""
+    from csm_gui.widgets.template_editor_panel import TemplateEditorPanel
+    skill_dir = tmp_path / "s"; skill_dir.mkdir()
+    (skill_dir / "alpha.md").write_text("a", encoding="utf-8")
+    panel = TemplateEditorPanel()
+    qtbot.addWidget(panel)
+    panel.set_skill_dir(skill_dir)
+    idx = panel.default_skill_combo.findText("alpha")
+    panel.default_skill_combo.setCurrentIndex(idx)
+    (skill_dir / "alpha.md").unlink()
+    panel.set_skill_dir(skill_dir)
+    assert panel.default_skill_combo.currentText() == "（无）"

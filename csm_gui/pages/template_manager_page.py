@@ -30,6 +30,9 @@ class TemplateManagerPage(QWidget):
         super().__init__(parent)
         self.setObjectName("TemplateManagerPage")
         self.setStyleSheet("#TemplateManagerPage {background: transparent;}")
+        # Cached skill_dir so ``showEvent`` can re-scan it every time
+        # the page is brought to front (without needing a config round-trip).
+        self._skill_dir: Path | None = None
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self.list_panel = TemplateListPanel(splitter)
@@ -69,7 +72,8 @@ class TemplateManagerPage(QWidget):
         # 同步资料库根目录到编辑器（用于「浏览资料库」按钮）
         vault_root = Path(cfg.vault_root) if cfg.vault_root else None
         self.editor_panel.set_vault_root(vault_root)
-        self.editor_panel.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)
+        self._skill_dir = Path(cfg.skill_dir) if cfg.skill_dir else None
+        self.editor_panel.set_skill_dir(self._skill_dir)
 
         if cfg.default_template:
             tpl_path = Path(cfg.default_template)
@@ -81,6 +85,16 @@ class TemplateManagerPage(QWidget):
                     self.list_panel.select_by_path(tpl_path)
                     # Load without triggering dirty-state dialog
                     self.editor_panel.load_template(tpl_path)
+
+    def showEvent(self, event) -> None:
+        """Re-scan the skill directory every time the page is shown.
+
+        The Skills page lets users add / rename / delete ``.md`` files
+        out of band; without this rescan the template editor's
+        "默认 Skill" combo stayed stale until the app restarted.
+        """
+        super().showEvent(event)
+        self.editor_panel.set_skill_dir(self._skill_dir)
 
     def _on_template_selected(self, path: Path) -> None:
         """Handle list-panel selection; guard against unsaved changes."""
