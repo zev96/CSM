@@ -1,6 +1,7 @@
 """QThread wrapper around csm_core.assembler.reroll.reroll_pick."""
 from __future__ import annotations
 import random
+import traceback
 from PyQt6.QtCore import QThread, pyqtSignal
 from csm_core.assembler.plan import AssemblyPlan
 from csm_core.assembler.reroll import reroll_pick, NoCandidatesError
@@ -41,6 +42,8 @@ class RerollWorker(QThread):
             self.failed.emit(str(exc))
             return
         except Exception as exc:  # noqa: BLE001 — boundary, surface to UI
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            self.failed.emit(
+                f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+            )
             return
         self.finished.emit(new_plan)
