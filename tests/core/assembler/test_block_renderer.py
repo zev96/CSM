@@ -45,8 +45,9 @@ def test_hero_brand_without_pool_renders_standalone():
         BlockResult(block_id="p2", kind="paragraph",
                     picks=[PickedVariant(note_id="b", variant_index=0, text="理由 B")]),
     )
+    # Hero title auto-appends plan.keyword ("k").
     assert compose_draft(p) == (
-        "1. CEWEY DS18\n\n推荐理由：\n理由 A\n\n理由 B"
+        "1. CEWEY DS18k\n\n推荐理由：\n理由 A\n\n理由 B"
     )
 
 
@@ -66,10 +67,11 @@ def test_hero_brand_closed_by_competitor_pool_continuous_numbering():
                     meta={"reason_label": "推荐理由："}),
     )
     out = compose_draft(p)
+    # Both hero and competitor titles auto-append plan.keyword ("k").
     assert out == (
-        "1. CEWEY DS18\n\n推荐理由：\n品牌背书\n\n"
-        "2. 戴森V8\n\n推荐理由：理由A\n\n"
-        "3. 小狗T12\n\n推荐理由：理由B"
+        "1. CEWEY DS18k\n\n推荐理由：\n品牌背书\n\n"
+        "2. 戴森V8k\n\n推荐理由：理由A\n\n"
+        "3. 小狗T12k\n\n推荐理由：理由B"
     )
 
 
@@ -84,7 +86,7 @@ def test_competitor_pool_standalone_starts_from_one():
         ],
         meta={"reason_label": "推荐理由："},
     ))
-    assert compose_draft(p) == "1. A\n\n推荐理由：r1\n\n2. B\n\n推荐理由：r2"
+    assert compose_draft(p) == "1. Ak\n\n推荐理由：r1\n\n2. Bk\n\n推荐理由：r2"
 
 
 def test_chinese_number_style():
@@ -113,7 +115,7 @@ def test_paragraph_children_flatten_into_region():
         ),
     )
     assert compose_draft(p) == (
-        "1. CEWEY\n\n推荐理由：\n主段\n\n子变体"
+        "1. CEWEYk\n\n推荐理由：\n主段\n\n子变体"
     )
 
 
@@ -136,4 +138,33 @@ def test_chinese_style_hero_and_pool_no_extra_space():
                                          meta={"title": "戴森"})],
                     meta={"reason_label": "推荐理由："}),
     )
-    assert compose_draft(p) == "一、CEWEY\n\n推荐理由：\n\n二、戴森\n\n推荐理由：理由"
+    assert compose_draft(p) == "一、CEWEYk\n\n推荐理由：\n\n二、戴森k\n\n推荐理由：理由"
+
+
+def test_keyword_not_duplicated_when_title_already_ends_with_it():
+    """Legacy templates that hard-code the keyword in the hero title
+    shouldn't end up with '吸尘器吸尘器' after the auto-append rule."""
+    p = _plan(
+        BlockResult(block_id="h", kind="hero_brand", text="CEWEY DS18无线吸尘器",
+                    meta={"number_style": "1.", "reason_label": "推荐理由："}),
+    )
+    p.keyword = "无线吸尘器"
+    out = compose_draft(p)
+    assert "CEWEY DS18无线吸尘器" in out
+    assert "吸尘器吸尘器" not in out
+
+
+def test_competitor_pool_inherits_hero_reason_label():
+    """Competitor pool following hero uses hero's reason_label, not its
+    own meta."""
+    p = _plan(
+        BlockResult(block_id="h", kind="hero_brand", text="CEWEY",
+                    meta={"number_style": "1.", "reason_label": "HERO_LABEL"}),
+        BlockResult(block_id="cp", kind="competitor_pool",
+                    picks=[PickedVariant(note_id="n1", variant_index=0,
+                                         text="理由", meta={"title": "戴森"})],
+                    meta={"reason_label": "POOL_LABEL"}),
+    )
+    out = compose_draft(p)
+    assert "HERO_LABEL" in out
+    assert "POOL_LABEL" not in out

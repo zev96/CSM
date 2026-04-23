@@ -529,21 +529,15 @@ class _CompetitorPoolPage(QWidget):
         self._picker.setup(vault_dirs, node.module)
         self._picker.path_selected.connect(self._on_module)
         src_lay.addWidget(self._picker, 2)
-        src_lay.addWidget(BodyLabel("理由标签："))
-        self._reason_edit = LineEdit(src_w)
-        self._reason_edit.setText(node.reason_label)
-        self._reason_edit.setMaximumWidth(140)
-        self._reason_edit.editingFinished.connect(self._on_reason)
-        src_lay.addWidget(self._reason_edit)
         src_lay.addStretch(1)
         lay.addWidget(src_w)
+        # 理由标签 is no longer exposed for competitor_pool — the renderer
+        # inherits it from the preceding hero_brand. The node keeps its
+        # reason_label field for backward compatibility with existing
+        # template JSON (defaults to "推荐理由：").
 
     def _on_module(self, path: str) -> None:
         self._node.module = path
-        self.changed.emit()
-
-    def _on_reason(self) -> None:
-        self._node.reason_label = self._reason_edit.text().strip()
         self.changed.emit()
 
     def refresh(self, vault_dirs: list[str]) -> None:

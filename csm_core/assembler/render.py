@@ -35,6 +35,22 @@ def _substitute(text: str, variables: dict[str, str]) -> str:
     return _VAR_RE.sub(repl, text)
 
 
+def _append_keyword(title: str, keyword: str) -> str:
+    """Append the product keyword to a brand/model title for display.
+
+    Users write titles like "CEWEY DS18" or "米家3基站版" — the keyword
+    ("无线吸尘器") is tacked on at render time so the template doesn't have
+    to duplicate it. If the title already ends with the keyword (legacy
+    templates or notes that include it), skip appending to avoid
+    duplication.
+    """
+    if not keyword:
+        return title
+    if title.endswith(keyword):
+        return title
+    return f"{title}{keyword}"
+
+
 def _paragraph_text(r: BlockResult) -> str:
     """Flatten a paragraph result (including children) into a single text block."""
     parts = [p.text for p in r.picks]
@@ -88,7 +104,9 @@ def compose_draft(plan: AssemblyPlan) -> str:
                 parts.append(chunk)
             continue
         if r.kind == "competitor_pool":
-            parts.append(_render_competitor_pool(r, start_index=1))
+            parts.append(_render_competitor_pool(
+                r, start_index=1, keyword=plan.keyword,
+            ))
             i += 1
             continue
         chunk = _render_standalone(r, variables)
@@ -142,7 +160,8 @@ def _render_hero_region(
             body_parts.append(_render_standalone(nxt, variables))
         j += 1
 
-    hero_title = _substitute(hero.text, variables)
+    keyword = variables.get("keyword", "")
+    hero_title = _append_keyword(_substitute(hero.text, variables), keyword)
     body = "\n\n".join(p for p in body_parts if p)
     # Blank line between title and 推荐理由 so markdown renders them as
     # separate paragraphs (single \n would collapse into one line).
@@ -154,18 +173,29 @@ def _render_hero_region(
     if pool_result is None:
         return hero_chunk, j
 
-    pool_chunk = _render_competitor_pool(pool_result, start_index=2, style=style)
+    # competitor_pool inherits the preceding hero's reason_label (and style)
+    # so the user doesn't have to configure it twice.
+    pool_chunk = _render_competitor_pool(
+        pool_result, start_index=2, style=style,
+        reason_label=reason_label, keyword=keyword,
+    )
     return f"{hero_chunk}\n\n{pool_chunk}", j + 1
 
 
 def _render_competitor_pool(
     r: BlockResult, *, start_index: int, style: str = "1.",
+    reason_label: str | None = None, keyword: str = "",
 ) -> str:
-    label = r.meta.get("reason_label", "推荐理由：")
+    # When rendered as part of a hero region, the caller passes the hero's
+    # reason_label; standalone pools fall back to the pool's own meta.
+    label = reason_label if reason_label is not None else r.meta.get(
+        "reason_label", "推荐理由：",
+    )
     items: list[str] = []
     for k, p in enumerate(r.picks):
         n = start_index + k
         title = p.meta.get("title") or p.note_id
+        title = _append_keyword(title, keyword)
         # Blank line so markdown keeps title and 推荐理由 on separate lines.
         items.append(f"{_prefix_join(n, style, title)}\n\n{label}{p.text}")
     return "\n\n".join(items)
