@@ -40,7 +40,7 @@ from qfluentwidgets import (
     InfoBar, InfoBarPosition, MessageBox,
 )
 
-from csm_core.template.schema import Template, Slot, SEODefaults
+from csm_core.template.schema import Template, SEODefaults
 from csm_core.template.loader import load_template, save_template
 from .slot_tree_widget import SlotTreeWidget
 
@@ -314,8 +314,8 @@ class TemplateEditorPanel(QWidget):
         self.force_h2_switch.setChecked(bool(seo.force_h2))
         self.long_tail_input.setText(",".join(seo.long_tail_keywords or []))
 
-        # slots
-        self.slots_page.load_slots(tpl.slots)
+        # blocks
+        self.slots_page.load_blocks(tpl.blocks)
 
         self._dirty = False
         self.dirty_label.setVisible(False)
@@ -363,12 +363,7 @@ class TemplateEditorPanel(QWidget):
             for k in self.long_tail_input.text().split(",")
             if k.strip()
         ]
-        # Tree returns a flat depth-first list (parent then its children as
-        # siblings, each with a positional ID like ``slot_6_1``). This keeps
-        # the Slot schema flat and lets the assembler sample sub-variants
-        # as independent slots — each produces its own pick in the draft,
-        # which matches what users expect when they add a 子变体.
-        flat_slots = self.slots_page.get_slots()
+        blocks = self.slots_page.get_blocks()
 
         return {
             "id": self._template_id,
@@ -383,8 +378,7 @@ class TemplateEditorPanel(QWidget):
                 "force_h2":          self.force_h2_switch.isChecked(),
                 "long_tail_keywords": long_tail,
             },
-            "slots": [s.model_dump() for s in flat_slots],
-            "render_order": [s.id for s in flat_slots],
+            "blocks": [b.model_dump() for b in blocks],
         }
 
     def _refresh_json_preview(self) -> None:
@@ -449,5 +443,5 @@ class TemplateEditorPanel(QWidget):
         return True
 
     def _on_add_slot(self) -> None:
-        """Append a new empty top-level slot to the tree."""
-        self.slots_page.add_root_slot()
+        """Append a new empty top-level block to the tree."""
+        self.slots_page.add_root_block()

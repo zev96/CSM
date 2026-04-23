@@ -22,7 +22,7 @@ from qfluentwidgets import (
 )
 
 from csm_core.template.loader import list_templates, save_template
-from csm_core.template.schema import Template, SEODefaults, Slot, NotesQuerySource
+from csm_core.template.schema import Template, SEODefaults, LiteralBlock
 
 
 # ---------------------------------------------------------------------------
@@ -225,14 +225,9 @@ class TemplateListPanel(QWidget):
             version=1,
             system_prompt_default="",
             seo_defaults=SEODefaults(),
-            slots=[
-                Slot(
-                    id="intro",
-                    label="引言",
-                    source=NotesQuerySource(module="引言模块", filter={}),
-                )
+            blocks=[
+                LiteralBlock(id="intro", text="引言"),
             ],
-            render_order=["intro"],
         )
         save_template(skeleton, target)
 

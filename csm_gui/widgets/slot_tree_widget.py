@@ -1,27 +1,24 @@
-"""Hierarchical slot tree widget for the CSM template editor.
+"""Hierarchical block tree widget for the CSM template editor.
 
-Tree layout (up to 3 levels):
-    1   ▶  [资料库目录 ComboBox ────────]  ≡  ↓  ↑  🗑
-      1-1 ▶  [资料库目录 ComboBox ──────]  ≡  ↓  ↑  🗑
-        1-1-1 ▶  [资料库目录 ComboBox ──]  ≡  ↓  ↑  🗑
-    2   ▶  [资料库目录 ComboBox ────────]  ≡  ↓  ↑  🗑
+Supports all 6 block kinds: paragraph, heading, numbered_list,
+hero_brand, competitor_pool, literal.
 
-Key design decisions:
-- Slot IDs are auto-generated from position on save: slot_1, slot_1_1, slot_1_1_2 …
-- Source type is always 'notes_query'; directory ComboBox sets the module path.
-- Detailed config (filter, pick_notes, depends_on) via ≡ context menu → small dialogs.
-- depends_on stores positional IDs (slot_1_1); regenerated on rebuild.
+Each row has:
+  [pos] [kind ComboBox] [QStackedWidget with per-kind fields] [↓] [↑] [🗑]
+
+Only paragraph blocks keep the children tree / expand chevron.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from PyQt6.QtCore import pyqtSignal, QTimer, Qt
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
+    QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QSizePolicy,
 )
 
 try:
@@ -31,12 +28,12 @@ except ImportError:
 
 from qfluentwidgets import (
     BodyLabel, StrongBodyLabel, SubtitleLabel,
-    LineEdit, SpinBox, ComboBox,
+    LineEdit, SpinBox, ComboBox, TextEdit,
     CardWidget, ScrollArea,
     TransparentToolButton, FluentIcon,
     InfoBar, InfoBarPosition,
     RoundMenu, Action,
-    MessageBoxBase, SubtitleLabel,
+    MessageBoxBase,
 )
 
 try:
@@ -44,7 +41,12 @@ try:
 except ImportError:
     from PyQt6.QtWidgets import QCheckBox as CheckBox  # type: ignore
 
-from csm_core.template.schema import Slot, NotesQuerySource, PickCountSpec
+from csm_core.template.schema import (
+    Block,
+    ParagraphBlock, HeadingBlock, NumberedListBlock,
+    HeroBrandBlock, CompetitorPoolBlock, LiteralBlock,
+    NotesQuerySource, PickCountSpec,
+)
 
 # Reuse vault-scanning helpers from slot_editor_dialog
 from .slot_editor_dialog import _scan_vault_dirs, _scan_frontmatter
@@ -52,381 +54,536 @@ from .cascade_picker import CascadePickerButton
 
 _MAX_DEPTH = 3   # 1 = root only, 2 = root+child, 3 = root+child+grandchild
 
+BLOCK_KINDS = [
+    "paragraph",
+    "heading",
+    "numbered_list",
+    "hero_brand",
+    "competitor_pool",
+    "literal",
+]
+
+BLOCK_KIND_LABELS = {
+    "paragraph":       "段落",
+    "heading":         "标题",
+    "numbered_list":   "编号列表",
+    "hero_brand":      "Hero 品牌",
+    "competitor_pool": "竞品池",
+    "literal":         "固定文本",
+}
+
+NUMBER_STYLE_OPTIONS = ["1.", "一、", "none"]
+
+
 # ── Internal tree node ────────────────────────────────────────────────────────
 
 @dataclass
-class _TreeNode:
-    """Pure-Python in-memory slot node (no Qt widgets)."""
-    label: str = ""
-    module: str = ""                              # vault relative path
+class _BlockNode:
+    """Pure-Python in-memory block node (no Qt widgets)."""
+    kind: str = "paragraph"
+    block_id: str = ""
+
+    # --- paragraph / numbered_list / competitor_pool fields ---
+    module: str = ""
     filter_cond: dict = field(default_factory=dict)
-    pick_notes: object = 1                        # int | dict
+    pick_notes: object = 1          # int | dict
+    # paragraph-only
+    label: str = ""
     pick_variants: int = 1
     unique_notes: bool = False
-    depends_on: list[str] = field(default_factory=list)  # positional IDs
-    children: list["_TreeNode"] = field(default_factory=list)
+    depends_on: list[str] = field(default_factory=list)
+    children: list["_BlockNode"] = field(default_factory=list)
     expanded: bool = False
 
-    @classmethod
-    def from_slot(cls, s: Slot) -> "_TreeNode":
-        module = getattr(s.source, "module", "")
-        filt: dict = {}
-        if hasattr(s.source, "filter") and isinstance(s.source.filter, dict):
-            filt = s.source.filter
-        pick = s.pick_notes
-        if hasattr(pick, "model_dump"):
-            pick = pick.model_dump()
-        unique = "unique_notes" in (s.constraints or [])
-        raw_children = getattr(s, "children", None) or []
-        return cls(
-            label=s.label,
-            module=module,
-            filter_cond=filt,
-            pick_notes=pick,
-            pick_variants=s.pick_variants_per_note,
-            unique_notes=unique,
-            depends_on=list(s.depends_on or []),
-            children=[cls.from_slot(c) for c in raw_children],
-            expanded=bool(raw_children),
-        )
+    # --- heading fields ---
+    level: int = 2
+    index: str = ""
+    text: str = ""
 
-    def to_slot(self, sid: str) -> Slot:
-        """Serialize *this node only* — children are emitted separately by
-        ``SlotTreeWidget.get_slots`` as siblings in the flat list. Keeping
-        ``Slot`` schema flat (no nesting) means the assembler and render
-        code don't need to know about the UI tree at all: each sub-variant
-        becomes an independent slot that the sampler handles on its own,
-        which is exactly what users expect when they add a 子变体.
-        """
-        source = NotesQuerySource(module=self.module, filter=self.filter_cond)
-        if isinstance(self.pick_notes, int):
-            pick: object = self.pick_notes
+    # --- numbered_list-only ---
+    number_style: str = "1."
+
+    # --- hero_brand fields ---
+    title: str = ""
+    reason_label: str = "推荐理由："
+
+    # --- literal field ---
+    literal_text: str = ""
+
+    @classmethod
+    def from_block(cls, b: Block) -> "_BlockNode":
+        n = cls(kind=b.kind, block_id=b.id)
+        if isinstance(b, ParagraphBlock):
+            src = b.source
+            n.module = getattr(src, "module", "")
+            if hasattr(src, "filter") and isinstance(src.filter, dict):
+                n.filter_cond = src.filter
+            pick = b.pick_notes
+            if hasattr(pick, "model_dump"):
+                pick = pick.model_dump()
+            n.pick_notes = pick
+            n.label = b.label
+            n.pick_variants = b.pick_variants_per_note
+            n.unique_notes = "unique_notes" in (b.constraints or [])
+            n.depends_on = list(b.depends_on or [])
+            n.children = [cls.from_block(c) for c in (b.children or [])]
+            n.expanded = bool(b.children)
+        elif isinstance(b, HeadingBlock):
+            n.level = b.level
+            n.index = b.index
+            n.text = b.text
+        elif isinstance(b, NumberedListBlock):
+            src = b.source
+            n.module = getattr(src, "module", "")
+            if hasattr(src, "filter") and isinstance(src.filter, dict):
+                n.filter_cond = src.filter
+            pick = b.pick_notes
+            if hasattr(pick, "model_dump"):
+                pick = pick.model_dump()
+            n.pick_notes = pick
+            n.label = b.label
+            n.number_style = b.number_style
+        elif isinstance(b, HeroBrandBlock):
+            n.title = b.title
+            n.reason_label = b.reason_label
+            n.number_style = b.number_style
+        elif isinstance(b, CompetitorPoolBlock):
+            src = b.source
+            n.module = getattr(src, "module", "")
+            if hasattr(src, "filter") and isinstance(src.filter, dict):
+                n.filter_cond = src.filter
+            pick = b.pick_notes
+            if hasattr(pick, "model_dump"):
+                pick = pick.model_dump()
+            n.pick_notes = pick
+            n.reason_label = b.reason_label
+        elif isinstance(b, LiteralBlock):
+            n.literal_text = b.text
+        return n
+
+    def to_block(self, bid: str) -> Block:
+        """Serialize this node to a Block pydantic object."""
+        if self.kind == "paragraph":
+            source = NotesQuerySource(module=self.module, filter=self.filter_cond)
+            pick: Any = self._resolve_pick(self.pick_notes)
+            constraints = ["unique_notes"] if self.unique_notes else []
+            # Children become nested ParagraphBlock children
+            children_blocks = []
+            for j, child in enumerate(self.children):
+                cb = child.to_block(f"{bid}_{j + 1}")
+                if isinstance(cb, ParagraphBlock):
+                    children_blocks.append(cb)
+            return ParagraphBlock(
+                id=bid,
+                label=self.label or bid,
+                source=source,
+                pick_notes=pick,
+                pick_variants_per_note=self.pick_variants,
+                constraints=constraints,
+                depends_on=self.depends_on,
+                children=children_blocks,
+            )
+        elif self.kind == "heading":
+            return HeadingBlock(
+                id=bid,
+                level=self.level,
+                index=self.index,
+                text=self.text or "标题",
+            )
+        elif self.kind == "numbered_list":
+            source = NotesQuerySource(module=self.module, filter=self.filter_cond)
+            pick = self._resolve_pick(self.pick_notes)
+            return NumberedListBlock(
+                id=bid,
+                label=self.label or bid,
+                source=source,
+                pick_notes=pick,
+                number_style=self.number_style,
+            )
+        elif self.kind == "hero_brand":
+            return HeroBrandBlock(
+                id=bid,
+                title=self.title or "品牌",
+                reason_label=self.reason_label or "推荐理由：",
+                number_style=self.number_style,
+            )
+        elif self.kind == "competitor_pool":
+            source = NotesQuerySource(module=self.module, filter=self.filter_cond)
+            pick = self._resolve_pick(self.pick_notes)
+            return CompetitorPoolBlock(
+                id=bid,
+                source=source,
+                pick_notes=pick,
+                reason_label=self.reason_label or "推荐理由：",
+            )
+        elif self.kind == "literal":
+            return LiteralBlock(
+                id=bid,
+                text=self.literal_text or "文本",
+            )
         else:
-            pick = PickCountSpec.model_validate(self.pick_notes)
-        constraints = ["unique_notes"] if self.unique_notes else []
-        return Slot(
-            id=sid,
-            label=self.label or sid,
-            source=source,
-            pick_notes=pick,
-            pick_variants_per_note=self.pick_variants,
-            constraints=constraints,
-            depends_on=self.depends_on,
-        )
+            raise ValueError(f"Unknown block kind: {self.kind!r}")
+
+    @staticmethod
+    def _resolve_pick(pick_notes: Any) -> Any:
+        if isinstance(pick_notes, int):
+            return pick_notes
+        elif isinstance(pick_notes, dict):
+            return PickCountSpec.model_validate(pick_notes)
+        return pick_notes
 
 
 def _pos_from_indices(*indices: int) -> str:
-    """(0, 1, 2) → '1-2-3'  (1-based display)"""
     return "-".join(str(i + 1) for i in indices)
 
 
 def _id_from_pos(pos: str) -> str:
-    """'1-2-3' → 'slot_1_2_3'"""
-    return "slot_" + pos.replace("-", "_")
+    return "block_" + pos.replace("-", "_")
 
 
 def _all_pos_nodes(
-    nodes: list[_TreeNode], parent: str = ""
-) -> list[tuple[str, _TreeNode]]:
-    """Return [(pos, node), ...] depth-first for ALL nodes."""
-    result: list[tuple[str, _TreeNode]] = []
+    nodes: list[_BlockNode], parent: str = ""
+) -> list[tuple[str, _BlockNode]]:
+    result: list[tuple[str, _BlockNode]] = []
     for i, n in enumerate(nodes):
         pos = f"{parent}-{i + 1}" if parent else str(i + 1)
         result.append((pos, n))
-        result.extend(_all_pos_nodes(n.children, pos))
+        if n.kind == "paragraph":
+            result.extend(_all_pos_nodes(n.children, pos))
     return result
 
 
-# ── Config dialogs (opened from ≡ menu) ──────────────────────────────────────
+# ── Per-kind field pages ──────────────────────────────────────────────────────
 
-class _FilterDialog(MessageBoxBase):
-    """Configure a slot's filter condition."""
+def _make_source_row(parent: QWidget) -> tuple[QWidget, CascadePickerButton, LineEdit]:
+    """Returns (container, picker, label_edit)."""
+    w = QWidget(parent)
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(6)
+    lay.addWidget(BodyLabel("目录："))
+    picker = CascadePickerButton(w)
+    picker.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    lay.addWidget(picker, 2)
+    lay.addWidget(BodyLabel("名称："))
+    label_edit = LineEdit(w)
+    label_edit.setPlaceholderText("段落名称")
+    label_edit.setMaximumWidth(160)
+    lay.addWidget(label_edit, 1)
+    return w, picker, label_edit
 
-    def __init__(self, node: _TreeNode, vault_root: Path | None, parent=None):
+
+def _make_pick_row(parent: QWidget, default_val: int = 1) -> tuple[QWidget, SpinBox]:
+    w = QWidget(parent)
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(4)
+    lay.addWidget(BodyLabel("取笔记数："))
+    spin = SpinBox(w)
+    spin.setRange(1, 20)
+    spin.setValue(default_val)
+    spin.setMaximumWidth(80)
+    lay.addWidget(spin)
+    lay.addStretch(1)
+    return w, spin
+
+
+class _ParagraphPage(QWidget):
+    changed = pyqtSignal()
+
+    def __init__(self, node: _BlockNode, vault_dirs: list[str], parent=None):
         super().__init__(parent)
-        self._vault_root = vault_root
-        self._fm: dict[str, list[str]] = {}
+        self._node = node
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
 
-        self.titleLabel = SubtitleLabel("配置筛选条件", self)
-        self.viewLayout.addWidget(self.titleLabel)
+        src_w, self._picker, self._label_edit = _make_source_row(self)
+        self._picker.setup(vault_dirs, node.module)
+        self._picker.path_selected.connect(self._on_module)
+        self._label_edit.setText(node.label or "")
+        self._label_edit.editingFinished.connect(self._on_label)
+        lay.addWidget(src_w)
 
-        w = QWidget()
-        lay = QVBoxLayout(w)
+        pick_w, self._pick_spin = _make_pick_row(self, self._int_pick(node.pick_notes))
+        self._pick_spin.valueChanged.connect(self._on_pick)
+        lay.addWidget(pick_w)
+
+    def _int_pick(self, p: Any) -> int:
+        if isinstance(p, int):
+            return p
+        if isinstance(p, dict) and "random_between" in p:
+            rb = p["random_between"] or []
+            return rb[0] if rb else 1
+        return 1
+
+    def _on_module(self, path: str) -> None:
+        old_basename = Path(self._node.module).name if self._node.module else ""
+        self._node.module = path
+        if not self._node.label or self._node.label == old_basename:
+            self._node.label = Path(path).name
+            self._label_edit.setText(self._node.label)
+        self.changed.emit()
+
+    def _on_label(self) -> None:
+        new = self._label_edit.text().strip()
+        if new != self._node.label:
+            self._node.label = new
+            self.changed.emit()
+
+    def _on_pick(self, v: int) -> None:
+        self._node.pick_notes = v
+        self.changed.emit()
+
+    def refresh(self, vault_dirs: list[str]) -> None:
+        self._picker.setup(vault_dirs, self._node.module)
+
+
+class _HeadingPage(QWidget):
+    changed = pyqtSignal()
+
+    def __init__(self, node: _BlockNode, parent=None):
+        super().__init__(parent)
+        self._node = node
+        lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        lay.addWidget(BodyLabel("筛选条件（填写资料库笔记 frontmatter 属性，留空则不筛选）"))
-        self.filter_edit = LineEdit(w)
-        self.filter_edit.setPlaceholderText('如：{"组件类型":"痛点共鸣"}')
-        if node.filter_cond:
-            self.filter_edit.setText(json.dumps(node.filter_cond, ensure_ascii=False))
-        lay.addWidget(self.filter_edit)
+        lay.addWidget(BodyLabel("级别："))
+        self._level_spin = SpinBox(self)
+        self._level_spin.setRange(1, 3)
+        self._level_spin.setValue(node.level)
+        self._level_spin.setMaximumWidth(70)
+        self._level_spin.valueChanged.connect(self._on_level)
+        lay.addWidget(self._level_spin)
 
-        hint_row = QHBoxLayout()
-        hint_row.addWidget(BodyLabel("快捷填入（从资料库笔记属性中选择）"))
-        hint_row.addStretch(1)
-        self._refresh_hint = CaptionLabel("", w)
-        hint_row.addWidget(self._refresh_hint)
-        lay.addLayout(hint_row)
+        lay.addWidget(BodyLabel("序号："))
+        self._index_edit = LineEdit(self)
+        self._index_edit.setPlaceholderText("如：一")
+        self._index_edit.setText(node.index)
+        self._index_edit.setMaximumWidth(80)
+        self._index_edit.editingFinished.connect(self._on_index)
+        lay.addWidget(self._index_edit)
 
-        hr = QHBoxLayout()
-        self._key_combo = ComboBox(w)
-        hr.addWidget(self._key_combo, 1)
-        hr.addWidget(CaptionLabel(" = "))
-        self._val_combo = ComboBox(w)
-        hr.addWidget(self._val_combo, 1)
-        apply_btn = TransparentToolButton(FluentIcon.ACCEPT_MEDIUM, w)
-        apply_btn.setToolTip("写入筛选条件")
-        apply_btn.clicked.connect(self._apply_quick)
-        hr.addWidget(apply_btn)
-        clear_btn = TransparentToolButton(FluentIcon.DELETE, w)
-        clear_btn.setToolTip("清空")
-        clear_btn.clicked.connect(lambda: self.filter_edit.clear())
-        hr.addWidget(clear_btn)
-        lay.addLayout(hr)
+        lay.addWidget(BodyLabel("文本："))
+        self._text_edit = LineEdit(self)
+        self._text_edit.setPlaceholderText("标题文本")
+        self._text_edit.setText(node.text)
+        self._text_edit.editingFinished.connect(self._on_text)
+        lay.addWidget(self._text_edit, 1)
 
-        self.viewLayout.addWidget(w)
-        self.yesButton.setText("确定")
-        self.cancelButton.setText("取消")
+    def _on_level(self, v: int) -> None:
+        self._node.level = v
+        self.changed.emit()
 
-        self._key_combo.currentIndexChanged.connect(self._on_key_changed)
-        self._load_frontmatter(vault_root, node.module)
+    def _on_index(self) -> None:
+        self._node.index = self._index_edit.text().strip()
+        self.changed.emit()
 
-    def _load_frontmatter(self, vault_root: Path | None, module: str) -> None:
-        """Scan vault/module for frontmatter keys and populate key combo."""
-        self._fm = {}
-        self._key_combo.clear()
-        self._val_combo.clear()
-
-        if not vault_root or not module:
-            self._refresh_hint.setText("（未设置资料库路径或模块）")
-            return
-
-        md_dir = vault_root / module
-        if not md_dir.is_dir():
-            self._refresh_hint.setText(f"（目录不存在: {module}）")
-            return
-
-        self._fm = _scan_frontmatter(md_dir)
-        if not self._fm:
-            self._refresh_hint.setText("（该目录暂无 frontmatter 属性）")
-            return
-
-        self._refresh_hint.setText("")
-        self._key_combo.addItems(list(self._fm.keys()))
-        # qfluentwidgets ComboBox 在 addItems 后不一定触发 currentIndexChanged
-        # 需要显式填充 val combo
-        if self._key_combo.count() > 0:
-            first_key = self._key_combo.itemText(0)
-            self._val_combo.addItems(self._fm.get(first_key, []))
-
-    def _on_key_changed(self, _: int) -> None:
-        key = self._key_combo.currentText()
-        self._val_combo.clear()
-        if key in self._fm:
-            self._val_combo.addItems(self._fm[key])
-
-    def _apply_quick(self) -> None:
-        k = self._key_combo.currentText().strip()
-        v = self._val_combo.currentText().strip()
-        if k and v:
-            self.filter_edit.setText(json.dumps({k: v}, ensure_ascii=False))
-
-    def get_filter(self) -> dict:
-        raw = self.filter_edit.text().strip()
-        try:
-            return json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            return {}
+    def _on_text(self) -> None:
+        self._node.text = self._text_edit.text().strip()
+        self.changed.emit()
 
 
-class _PickDialog(MessageBoxBase):
-    """Configure pick_notes, pick_variants_per_note, unique_notes."""
+class _NumberedListPage(QWidget):
+    changed = pyqtSignal()
 
-    def __init__(self, node: _TreeNode, parent=None):
+    def __init__(self, node: _BlockNode, vault_dirs: list[str], parent=None):
         super().__init__(parent)
-        self.titleLabel = SubtitleLabel("配置随机方式", self)
-        self.viewLayout.addWidget(self.titleLabel)
+        self._node = node
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
 
-        w = QWidget()
-        lay = QVBoxLayout(w)
+        src_w, self._picker, self._label_edit = _make_source_row(self)
+        self._picker.setup(vault_dirs, node.module)
+        self._picker.path_selected.connect(self._on_module)
+        self._label_edit.setText(node.label or "")
+        self._label_edit.editingFinished.connect(self._on_label)
+        lay.addWidget(src_w)
+
+        row2 = QHBoxLayout()
+        pick_w, self._pick_spin = _make_pick_row(self, self._int_pick(node.pick_notes))
+        self._pick_spin.valueChanged.connect(self._on_pick)
+        row2.addWidget(pick_w)
+
+        row2.addWidget(BodyLabel("编号样式："))
+        self._style_combo = ComboBox(self)
+        self._style_combo.addItems(NUMBER_STYLE_OPTIONS)
+        idx = NUMBER_STYLE_OPTIONS.index(node.number_style) if node.number_style in NUMBER_STYLE_OPTIONS else 0
+        self._style_combo.setCurrentIndex(idx)
+        self._style_combo.currentIndexChanged.connect(self._on_style)
+        row2.addWidget(self._style_combo)
+        row2.addStretch(1)
+        lay.addLayout(row2)
+
+    def _int_pick(self, p: Any) -> int:
+        if isinstance(p, int):
+            return p
+        if isinstance(p, dict) and "random_between" in p:
+            rb = p["random_between"] or []
+            return rb[0] if rb else 1
+        return 3
+
+    def _on_module(self, path: str) -> None:
+        self._node.module = path
+        self.changed.emit()
+
+    def _on_label(self) -> None:
+        self._node.label = self._label_edit.text().strip()
+        self.changed.emit()
+
+    def _on_pick(self, v: int) -> None:
+        self._node.pick_notes = v
+        self.changed.emit()
+
+    def _on_style(self, idx: int) -> None:
+        self._node.number_style = NUMBER_STYLE_OPTIONS[idx]
+        self.changed.emit()
+
+    def refresh(self, vault_dirs: list[str]) -> None:
+        self._picker.setup(vault_dirs, self._node.module)
+
+
+class _HeroBrandPage(QWidget):
+    changed = pyqtSignal()
+
+    def __init__(self, node: _BlockNode, parent=None):
+        super().__init__(parent)
+        self._node = node
+        lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        lay.addWidget(BodyLabel("采样模式"))
-        self.mode_combo = ComboBox(w)
-        self.mode_combo.addItems(["固定随机数量", "随机数量范围", "用户可配置"])
-        lay.addWidget(self.mode_combo)
+        lay.addWidget(BodyLabel("品牌标题："))
+        self._title_edit = LineEdit(self)
+        self._title_edit.setPlaceholderText("品牌名称")
+        self._title_edit.setText(node.title)
+        self._title_edit.editingFinished.connect(self._on_title)
+        lay.addWidget(self._title_edit, 1)
 
-        self.stack = QStackedWidget(w)
+        lay.addWidget(BodyLabel("理由标签："))
+        self._reason_edit = LineEdit(self)
+        self._reason_edit.setText(node.reason_label)
+        self._reason_edit.setMaximumWidth(140)
+        self._reason_edit.editingFinished.connect(self._on_reason)
+        lay.addWidget(self._reason_edit)
 
-        # Fixed
-        fw = QWidget()
-        fl = QHBoxLayout(fw)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.addWidget(BodyLabel("数量："))
-        self.fixed_spin = SpinBox(fw)
-        self.fixed_spin.setRange(1, 20)
-        self.fixed_spin.setValue(1)
-        fl.addWidget(self.fixed_spin)
-        fl.addStretch(1)
-        self.stack.addWidget(fw)
+        lay.addWidget(BodyLabel("编号："))
+        self._style_combo = ComboBox(self)
+        self._style_combo.addItems(NUMBER_STYLE_OPTIONS)
+        idx = NUMBER_STYLE_OPTIONS.index(node.number_style) if node.number_style in NUMBER_STYLE_OPTIONS else 0
+        self._style_combo.setCurrentIndex(idx)
+        self._style_combo.currentIndexChanged.connect(self._on_style)
+        lay.addWidget(self._style_combo)
 
-        # Random
-        rw = QWidget()
-        rl = QHBoxLayout(rw)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.addWidget(BodyLabel("最小："))
-        self.rnd_min = SpinBox(rw)
-        self.rnd_min.setRange(1, 20)
-        self.rnd_min.setValue(1)
-        rl.addWidget(self.rnd_min)
-        rl.addWidget(BodyLabel("  最大："))
-        self.rnd_max = SpinBox(rw)
-        self.rnd_max.setRange(1, 20)
-        self.rnd_max.setValue(3)
-        rl.addWidget(self.rnd_max)
-        rl.addStretch(1)
-        self.stack.addWidget(rw)
+    def _on_title(self) -> None:
+        self._node.title = self._title_edit.text().strip()
+        self.changed.emit()
 
-        # User-configurable
-        uw = QWidget()
-        ul = QHBoxLayout(uw)
-        ul.setContentsMargins(0, 0, 0, 0)
-        ul.addWidget(BodyLabel("默认："))
-        self.uc_default = SpinBox(uw)
-        self.uc_default.setRange(1, 20)
-        self.uc_default.setValue(2)
-        ul.addWidget(self.uc_default)
-        ul.addWidget(BodyLabel("  范围："))
-        self.uc_min = SpinBox(uw)
-        self.uc_min.setRange(1, 20)
-        self.uc_min.setValue(1)
-        ul.addWidget(self.uc_min)
-        ul.addWidget(BodyLabel(" ~ "))
-        self.uc_max = SpinBox(uw)
-        self.uc_max.setRange(1, 20)
-        self.uc_max.setValue(5)
-        ul.addWidget(self.uc_max)
-        ul.addStretch(1)
-        self.stack.addWidget(uw)
+    def _on_reason(self) -> None:
+        self._node.reason_label = self._reason_edit.text().strip()
+        self.changed.emit()
 
-        lay.addWidget(self.stack)
-        self.mode_combo.currentIndexChanged.connect(self.stack.setCurrentIndex)
-
-        lay.addWidget(BodyLabel("每篇笔记的变体数量"))
-        self.variants_spin = SpinBox(w)
-        self.variants_spin.setRange(1, 10)
-        self.variants_spin.setValue(1)
-        lay.addWidget(self.variants_spin)
-
-        self.unique_cb = CheckBox("相同笔记不重复抽取", w)
-        lay.addWidget(self.unique_cb)
-
-        self.viewLayout.addWidget(w)
-        self.yesButton.setText("确定")
-        self.cancelButton.setText("取消")
-        self._fill(node)
-
-    def _fill(self, node: _TreeNode) -> None:
-        pick = node.pick_notes
-        if isinstance(pick, int):
-            self.mode_combo.setCurrentIndex(0)
-            self.stack.setCurrentIndex(0)
-            self.fixed_spin.setValue(pick)
-        elif isinstance(pick, dict):
-            if "random_between" in pick:
-                self.mode_combo.setCurrentIndex(1)
-                self.stack.setCurrentIndex(1)
-                rb = pick["random_between"] or []
-                self.rnd_min.setValue(rb[0] if len(rb) > 0 else 1)
-                self.rnd_max.setValue(rb[1] if len(rb) > 1 else 3)
-            elif pick.get("user_configurable"):
-                self.mode_combo.setCurrentIndex(2)
-                self.stack.setCurrentIndex(2)
-                self.uc_default.setValue(pick.get("default", 2))
-                r = pick.get("range") or []
-                self.uc_min.setValue(r[0] if len(r) > 0 else 1)
-                self.uc_max.setValue(r[1] if len(r) > 1 else 5)
-        self.variants_spin.setValue(node.pick_variants)
-        self.unique_cb.setChecked(node.unique_notes)
-
-    def get_pick_notes(self) -> object:
-        mode = self.mode_combo.currentIndex()
-        if mode == 0:
-            return self.fixed_spin.value()
-        elif mode == 1:
-            return {"random_between": [self.rnd_min.value(), self.rnd_max.value()]}
-        else:
-            return {
-                "user_configurable": True,
-                "default": self.uc_default.value(),
-                "range": [self.uc_min.value(), self.uc_max.value()],
-            }
-
-    def get_variants(self) -> int:
-        return self.variants_spin.value()
-
-    def get_unique(self) -> bool:
-        return self.unique_cb.isChecked()
+    def _on_style(self, idx: int) -> None:
+        self._node.number_style = NUMBER_STYLE_OPTIONS[idx]
+        self.changed.emit()
 
 
-class _DependsDialog(MessageBoxBase):
-    """Select which slots this slot depends on."""
+class _CompetitorPoolPage(QWidget):
+    changed = pyqtSignal()
 
-    def __init__(
-        self,
-        current_deps: list[str],
-        all_items: list[tuple[str, str, str]],  # (slot_id, pos, label)
-        parent=None,
-    ):
+    def __init__(self, node: _BlockNode, vault_dirs: list[str], parent=None):
         super().__init__(parent)
-        self.titleLabel = SubtitleLabel("设置跟随模块", self)
-        self.viewLayout.addWidget(self.titleLabel)
-
-        w = QWidget()
-        lay = QVBoxLayout(w)
+        self._node = node
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        lay.addWidget(BodyLabel("勾选需要跟随模块"))
+        lay.setSpacing(4)
 
-        self._checkboxes: list[tuple[str, CheckBox]] = []
-        if all_items:
-            for sid, pos, label in all_items:
-                text = f"{pos}  {label}" if label else pos
-                cb = CheckBox(text, w)
-                cb.setChecked(sid in current_deps)
-                lay.addWidget(cb)
-                self._checkboxes.append((sid, cb))
-        else:
-            lay.addWidget(CaptionLabel("暂无其他模块可跟随"))
+        src_w, self._picker, self._label_edit = _make_source_row(self)
+        # Hide label edit (not used for competitor_pool)
+        self._label_edit.setVisible(False)
+        self._picker.setup(vault_dirs, node.module)
+        self._picker.path_selected.connect(self._on_module)
+        lay.addWidget(src_w)
 
-        self.viewLayout.addWidget(w)
-        self.yesButton.setText("确定")
-        self.cancelButton.setText("取消")
+        row2 = QHBoxLayout()
+        pick_w, self._pick_spin = _make_pick_row(self, self._int_pick(node.pick_notes))
+        self._pick_spin.valueChanged.connect(self._on_pick)
+        row2.addWidget(pick_w)
 
-    def get_depends_on(self) -> list[str]:
-        return [sid for sid, cb in self._checkboxes if cb.isChecked()]
+        row2.addWidget(BodyLabel("理由标签："))
+        self._reason_edit = LineEdit(self)
+        self._reason_edit.setText(node.reason_label)
+        self._reason_edit.setMaximumWidth(140)
+        self._reason_edit.editingFinished.connect(self._on_reason)
+        row2.addWidget(self._reason_edit)
+        row2.addStretch(1)
+        lay.addLayout(row2)
+
+    def _int_pick(self, p: Any) -> int:
+        if isinstance(p, int):
+            return p
+        if isinstance(p, dict) and "random_between" in p:
+            rb = p["random_between"] or []
+            return rb[0] if rb else 2
+        return 2
+
+    def _on_module(self, path: str) -> None:
+        self._node.module = path
+        self.changed.emit()
+
+    def _on_pick(self, v: int) -> None:
+        self._node.pick_notes = v
+        self.changed.emit()
+
+    def _on_reason(self) -> None:
+        self._node.reason_label = self._reason_edit.text().strip()
+        self.changed.emit()
+
+    def refresh(self, vault_dirs: list[str]) -> None:
+        self._picker.setup(vault_dirs, self._node.module)
 
 
-# ── Slot row widget ───────────────────────────────────────────────────────────
+class _LiteralPage(QWidget):
+    changed = pyqtSignal()
 
-class _SlotNodeRow(CardWidget):
-    """One visual row:  [pos] [▶/▼] [ComboBox ─────────] [≡] [↓] [↑] [🗑]"""
+    def __init__(self, node: _BlockNode, parent=None):
+        super().__init__(parent)
+        self._node = node
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+
+        self._text_edit = TextEdit(self)
+        self._text_edit.setPlaceholderText("输入固定文本内容…")
+        self._text_edit.setPlainText(node.literal_text)
+        self._text_edit.setMinimumHeight(60)
+        self._text_edit.setMaximumHeight(120)
+        self._text_edit.textChanged.connect(self._on_text)
+        lay.addWidget(self._text_edit)
+
+    def _on_text(self) -> None:
+        self._node.literal_text = self._text_edit.toPlainText()
+        self.changed.emit()
+
+
+# ── Block row widget ──────────────────────────────────────────────────────────
+
+class _BlockRow(CardWidget):
+    """One visual row with kind selector + stacked per-kind field page."""
 
     expand_toggled = pyqtSignal()
     move_up        = pyqtSignal()
     move_down      = pyqtSignal()
     delete_req     = pyqtSignal()
-    module_changed = pyqtSignal(str)
-    label_changed  = pyqtSignal()
-    menu_req       = pyqtSignal()
+    data_changed   = pyqtSignal()
 
-    _INDENT_PX = 28  # pixels per nesting level
+    _INDENT_PX = 28
 
     def __init__(
         self,
-        node: _TreeNode,
+        node: _BlockNode,
         position: str,
         level: int,
         vault_dirs: list[str],
@@ -436,45 +593,65 @@ class _SlotNodeRow(CardWidget):
         self._node = node
         self._vault_dirs = vault_dirs
 
-        h = QHBoxLayout(self)
-        h.setContentsMargins(16 + level * self._INDENT_PX, 10, 12, 10)
-        h.setSpacing(8)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(16 + level * self._INDENT_PX, 8, 12, 8)
+        outer.setSpacing(6)
 
         # ── Position label ────────────────────────────────────────────────
         pos_lbl = SubtitleLabel(position)
         pos_lbl.setFixedWidth(max(32, 14 * len(position)))
         pos_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        h.addWidget(pos_lbl)
+        outer.addWidget(pos_lbl)
 
-        # ── Expand / collapse ─────────────────────────────────────────────
+        # ── Expand chevron (paragraph only) ──────────────────────────────
         self._expand_btn = TransparentToolButton(FluentIcon.CHEVRON_RIGHT, self)
         self._expand_btn.setFixedSize(26, 26)
         self._expand_btn.clicked.connect(self.expand_toggled)
-        h.addWidget(self._expand_btn)
+        self._expand_btn.setVisible(node.kind == "paragraph")
+        outer.addWidget(self._expand_btn)
 
-        # ── Cascading module picker ───────────────────────────────────────
-        self._picker = CascadePickerButton(self)
-        self._picker.setup(vault_dirs, node.module)
-        self._picker.path_selected.connect(self._on_module_selected)
-        h.addWidget(self._picker)
+        # ── Kind selector ─────────────────────────────────────────────────
+        self._kind_combo = ComboBox(self)
+        for k in BLOCK_KINDS:
+            self._kind_combo.addItem(BLOCK_KIND_LABELS[k])
+        curr_idx = BLOCK_KINDS.index(node.kind) if node.kind in BLOCK_KINDS else 0
+        self._kind_combo.setCurrentIndex(curr_idx)
+        self._kind_combo.setMaximumWidth(110)
+        self._kind_combo.currentIndexChanged.connect(self._on_kind_changed)
+        outer.addWidget(self._kind_combo)
 
-        # ── Display-name editor ───────────────────────────────────────────
-        # Users can type a custom paragraph name here; this label is what the
-        # article page shows next to the slot card (instead of the raw
-        # ``slot_6_1`` ID) and what downstream exports use. Falls back to the
-        # module basename if left blank.
-        self._label_edit = LineEdit(self)
-        self._label_edit.setPlaceholderText("段落名称（可选）")
-        self._label_edit.setText(node.label or "")
-        self._label_edit.setMaximumWidth(180)
-        self._label_edit.editingFinished.connect(self._on_label_edited)
-        h.addWidget(self._label_edit)
+        # ── Stacked per-kind pages ────────────────────────────────────────
+        self._stack = QStackedWidget(self)
 
-        h.addStretch(1)
+        self._para_page = _ParagraphPage(node, vault_dirs, self._stack)
+        self._para_page.changed.connect(self.data_changed)
+        self._stack.addWidget(self._para_page)  # index 0 = paragraph
+
+        self._heading_page = _HeadingPage(node, self._stack)
+        self._heading_page.changed.connect(self.data_changed)
+        self._stack.addWidget(self._heading_page)  # index 1 = heading
+
+        self._numlist_page = _NumberedListPage(node, vault_dirs, self._stack)
+        self._numlist_page.changed.connect(self.data_changed)
+        self._stack.addWidget(self._numlist_page)  # index 2 = numbered_list
+
+        self._hero_page = _HeroBrandPage(node, self._stack)
+        self._hero_page.changed.connect(self.data_changed)
+        self._stack.addWidget(self._hero_page)  # index 3 = hero_brand
+
+        self._comp_page = _CompetitorPoolPage(node, vault_dirs, self._stack)
+        self._comp_page.changed.connect(self.data_changed)
+        self._stack.addWidget(self._comp_page)  # index 4 = competitor_pool
+
+        self._literal_page = _LiteralPage(node, self._stack)
+        self._literal_page.changed.connect(self.data_changed)
+        self._stack.addWidget(self._literal_page)  # index 5 = literal
+
+        self._stack.setCurrentIndex(curr_idx)
+        outer.addWidget(self._stack, 1)
 
         # ── Action buttons ────────────────────────────────────────────────
         for icon, sig in [
-            (FluentIcon.MORE,   self.menu_req),
             (FluentIcon.DOWN,   self.move_down),
             (FluentIcon.UP,     self.move_up),
             (FluentIcon.DELETE, self.delete_req),
@@ -482,28 +659,23 @@ class _SlotNodeRow(CardWidget):
             btn = TransparentToolButton(icon, self)
             btn.setFixedSize(28, 28)
             btn.clicked.connect(sig)
-            h.addWidget(btn)
+            outer.addWidget(btn)
 
         self._update_expand_icon()
 
-    def _on_module_selected(self, path: str) -> None:
-        old_basename = Path(self._node.module).name if self._node.module else ""
-        self._node.module = path
-        # Auto-fill the label with the new directory basename *only* when the
-        # user hasn't customised it — either blank or still equal to the
-        # previous directory's basename (meaning it was auto-filled before).
-        if not self._node.label or self._node.label == old_basename:
-            self._node.label = Path(path).name
-            self._label_edit.setText(self._node.label)
-        self.module_changed.emit(path)
-
-    def _on_label_edited(self) -> None:
-        new_label = self._label_edit.text().strip()
-        if new_label != self._node.label:
-            self._node.label = new_label
-            self.label_changed.emit()
+    def _on_kind_changed(self, idx: int) -> None:
+        new_kind = BLOCK_KINDS[idx]
+        self._node.kind = new_kind
+        self._stack.setCurrentIndex(idx)
+        # Show/hide expand button based on kind
+        self._expand_btn.setVisible(new_kind == "paragraph")
+        self._update_expand_icon()
+        self.data_changed.emit()
 
     def _update_expand_icon(self) -> None:
+        if self._node.kind != "paragraph":
+            self._expand_btn.setVisible(False)
+            return
         has_children = bool(self._node.children)
         self._expand_btn.setVisible(has_children)
         if has_children and self._node.expanded:
@@ -514,20 +686,31 @@ class _SlotNodeRow(CardWidget):
     def refresh_icon(self) -> None:
         self._update_expand_icon()
 
+    def refresh_vault(self, vault_dirs: list[str]) -> None:
+        self._vault_dirs = vault_dirs
+        self._para_page.refresh(vault_dirs)
+        self._numlist_page.refresh(vault_dirs)
+        self._comp_page.refresh(vault_dirs)
+
 
 # ── Main tree widget ──────────────────────────────────────────────────────────
 
 class SlotTreeWidget(QWidget):
-    """Hierarchical slot list (up to _MAX_DEPTH levels).
+    """Hierarchical block list supporting all 6 block kinds.
 
-    Public API mirrors the old _SlotsPage:
-        load_slots(slots)  — populate from list[Slot]
-        get_slots()        — return list[Slot] (top-level, children nested inside)
-        set_vault_root(p)  — update vault path
-        add_root_slot()    — append new empty top-level slot
+    Public API:
+        load_blocks(blocks)          — populate from list[Block]
+        get_blocks() -> list[Block]  — return validated pydantic Block objects
+        set_vault_root(p)            — update vault path
+        add_root_block(kind)         — append new empty top-level block
+
+    Backward-compat aliases (deprecated):
+        load_slots(slots)   → load_blocks(blocks)
+        get_slots()         → get_blocks()
+        add_root_slot()     → add_root_block()
 
     Signal:
-        slots_changed      — emitted on any structural or data change
+        slots_changed       — emitted on any structural or data change
     """
 
     slots_changed = pyqtSignal()
@@ -536,7 +719,7 @@ class SlotTreeWidget(QWidget):
         super().__init__(parent)
         self._vault_root: Path | None = vault_root
         self._vault_dirs: list[str] = _scan_vault_dirs(vault_root) if vault_root else []
-        self._roots: list[_TreeNode] = []
+        self._roots: list[_BlockNode] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -565,65 +748,48 @@ class SlotTreeWidget(QWidget):
         self._vault_dirs = _scan_vault_dirs(path) if path else []
         self._rebuild()
 
-    def load_slots(self, slots: list[Slot]) -> None:
-        """Rebuild the tree from a flat slot list.
-
-        Sub-variants are persisted as siblings with positional IDs
-        (``slot_6``, ``slot_6_1``, ``slot_6_2`` …). The parent-child
-        relationship is recovered from the ID suffix: ``slot_6_1``'s parent
-        is whichever slot has id ``slot_6``. Slots must appear in
-        depth-first order (parent before its descendants) — which is how
-        ``get_slots`` writes them — so a single pass is enough.
-        """
-        self._roots = []
-        nodes_by_id: dict[str, _TreeNode] = {}
-        for s in slots:
-            node = _TreeNode.from_slot(s)
-            nodes_by_id[s.id] = node
-            parts = s.id.split("_")
-            if len(parts) <= 2:
-                # "slot_6" — top level
-                self._roots.append(node)
-                continue
-            parent_id = "_".join(parts[:-1])
-            parent = nodes_by_id.get(parent_id)
-            if parent is None:
-                # Orphaned child (malformed template): promote to root so
-                # the user can still see and fix it rather than losing it.
-                self._roots.append(node)
-            else:
-                parent.children.append(node)
-                parent.expanded = True
+    def load_blocks(self, blocks: list[Block]) -> None:
+        """Rebuild the tree from a list of Block objects."""
+        self._roots = [_BlockNode.from_block(b) for b in blocks]
         self._rebuild()
 
-    def get_slots(self) -> list[Slot]:
-        """Return a *flat* depth-first list of Slots with positional IDs.
-
-        Each _TreeNode (parent or child) becomes its own Slot. The assembler
-        samples them independently, so a parent with N children produces
-        1 + N picks in the draft — the user sees the parent's content
-        followed by each sub-variant's content, in order.
-        """
-        out: list[Slot] = []
-
-        def walk(node: _TreeNode, sid: str) -> None:
-            out.append(node.to_slot(sid))
-            for j, child in enumerate(node.children):
-                walk(child, f"{sid}_{j + 1}")
-
+    def get_blocks(self) -> list[Block]:
+        """Return a list of validated pydantic Block objects."""
+        out: list[Block] = []
         for i, n in enumerate(self._roots):
-            walk(n, f"slot_{i + 1}")
+            bid = f"block_{i + 1}"
+            out.append(n.to_block(bid))
         return out
 
-    def add_root_slot(self) -> None:
-        self._roots.append(_TreeNode())
+    def add_root_block(self, kind: str = "paragraph") -> None:
+        node = _BlockNode(kind=kind)
+        self._roots.append(node)
         self._rebuild()
         self.slots_changed.emit()
+
+    # ── Backward-compat aliases ───────────────────────────────────────────────
+
+    def load_slots(self, slots) -> None:  # type: ignore[override]
+        """Deprecated: use load_blocks()."""
+        # slots could be old Slot objects or new Block objects
+        # Try new block API first
+        try:
+            from csm_core.template.schema import Block as _Block
+            self.load_blocks(slots)
+        except Exception:
+            pass
+
+    def get_slots(self):
+        """Deprecated: use get_blocks()."""
+        return self.get_blocks()
+
+    def add_root_slot(self) -> None:
+        """Deprecated: use add_root_block()."""
+        self.add_root_block()
 
     # ── Internal rebuild ──────────────────────────────────────────────────────
 
     def _rebuild(self) -> None:
-        # Remove all rows (keep trailing stretch at index lo.count()-1)
         while self._lo.count() > 1:
             item = self._lo.takeAt(0)
             if (w := item.widget()):
@@ -632,13 +798,12 @@ class SlotTreeWidget(QWidget):
         self._render_nodes(self._roots, parent_pos="", level=0)
 
     def _render_nodes(
-        self, nodes: list[_TreeNode], parent_pos: str, level: int
+        self, nodes: list[_BlockNode], parent_pos: str, level: int
     ) -> None:
         for i, node in enumerate(nodes):
             pos = f"{parent_pos}-{i + 1}" if parent_pos else str(i + 1)
-            row = _SlotNodeRow(node, pos, level, self._vault_dirs, self._inner)
+            row = _BlockRow(node, pos, level, self._vault_dirs, self._inner)
 
-            # Connect row signals (use default-arg capture to avoid closure issues)
             row.expand_toggled.connect(lambda _n=node: self._on_toggle(_n))
             row.move_up.connect(
                 lambda _nl=nodes, _i=i: self._move_node(_nl, _i, -1)
@@ -649,48 +814,38 @@ class SlotTreeWidget(QWidget):
             row.delete_req.connect(
                 lambda _nl=nodes, _i=i: self._delete_node(_nl, _i)
             )
-            row.module_changed.connect(
-                lambda _path, _rebuild=True: (
-                    self._rebuild(), self.slots_changed.emit()
-                )
-            )
-            row.label_changed.connect(self.slots_changed.emit)
-            row.menu_req.connect(
-                lambda _n=node, _row=row, _lv=level: self._show_menu(_n, _row, _lv)
-            )
+            row.data_changed.connect(self.slots_changed)
 
             self._lo.insertWidget(self._lo.count() - 1, row)
 
-            # Recursively render children if expanded
-            if node.expanded and node.children:
+            # Recursively render children if expanded (paragraph only)
+            if node.kind == "paragraph" and node.expanded and node.children:
                 self._render_nodes(node.children, pos, level + 1)
 
     # ── Node operations ───────────────────────────────────────────────────────
 
-    def _on_toggle(self, node: _TreeNode) -> None:
+    def _on_toggle(self, node: _BlockNode) -> None:
         node.expanded = not node.expanded
         self._rebuild()
 
-    def _move_node(self, siblings: list[_TreeNode], idx: int, delta: int) -> None:
+    def _move_node(self, siblings: list[_BlockNode], idx: int, delta: int) -> None:
         tgt = idx + delta
         if 0 <= tgt < len(siblings):
             siblings[idx], siblings[tgt] = siblings[tgt], siblings[idx]
             self._rebuild()
             self.slots_changed.emit()
 
-    def _delete_node(self, siblings: list[_TreeNode], idx: int) -> None:
+    def _delete_node(self, siblings: list[_BlockNode], idx: int) -> None:
         siblings.pop(idx)
-        # Defer rebuild so we exit the row's signal call stack before
-        # the row widget itself is destroyed by _rebuild().
         QTimer.singleShot(0, self._rebuild_and_emit)
 
-    def _delete_by_ref(self, target: _TreeNode) -> None:
-        def _remove(nodes: list[_TreeNode]) -> bool:
+    def _delete_by_ref(self, target: _BlockNode) -> None:
+        def _remove(nodes: list[_BlockNode]) -> bool:
             for i, n in enumerate(nodes):
                 if n is target:
                     nodes.pop(i)
                     return True
-                if _remove(n.children):
+                if n.kind == "paragraph" and _remove(n.children):
                     return True
             return False
         _remove(self._roots)
@@ -700,16 +855,12 @@ class SlotTreeWidget(QWidget):
         self._rebuild()
         self.slots_changed.emit()
 
-    def _add_child(self, parent: _TreeNode) -> None:
-        # Seed the new child with the parent's module / filter / pick
-        # configuration. Users almost always want a sub-variant to sample
-        # from the same folder (otherwise they'd add a top-level slot);
-        # starting blank forced them to re-pick the folder every time.
-        # Default label = "<parent label> - 变体N" so the article page shows
-        # something meaningful instead of the raw ``slot_x_y`` ID.
+    def _add_child(self, parent: _BlockNode) -> None:
+        """Add a child paragraph block to a paragraph parent."""
         base_label = parent.label or Path(parent.module).name or "段落"
         child_label = f"{base_label} - 变体{len(parent.children) + 1}"
-        child = _TreeNode(
+        child = _BlockNode(
+            kind="paragraph",
             label=child_label,
             module=parent.module,
             filter_cond=dict(parent.filter_cond),
@@ -725,67 +876,3 @@ class SlotTreeWidget(QWidget):
         parent.expanded = True
         self._rebuild()
         self.slots_changed.emit()
-
-    # ── ≡ Context menu ────────────────────────────────────────────────────────
-
-    def _show_menu(self, node: _TreeNode, row: _SlotNodeRow, level: int) -> None:
-        menu = RoundMenu(parent=row)
-
-        # Add child variant (only if not at max depth)
-        if level < _MAX_DEPTH - 1:
-            act_add = Action(FluentIcon.ADD, "添加子变体")
-            act_add.triggered.connect(lambda: self._add_child(node))
-            menu.addAction(act_add)
-            menu.addSeparator()
-
-        # Configuration actions
-        act_filter = Action(FluentIcon.FILTER, "配置筛选条件…")
-        act_filter.triggered.connect(
-            lambda: self._configure_filter(node, row)
-        )
-        menu.addAction(act_filter)
-
-        act_pick = Action(FluentIcon.SETTING, "配置随机方式…")
-        act_pick.triggered.connect(lambda: self._configure_pick(node, row))
-        menu.addAction(act_pick)
-
-        act_dep = Action(FluentIcon.LINK, "设置跟随模块…")
-        act_dep.triggered.connect(lambda: self._configure_depends(node, row))
-        menu.addAction(act_dep)
-
-        menu.addSeparator()
-
-        act_del = Action(FluentIcon.DELETE, "删除此模块")
-        act_del.triggered.connect(lambda: self._delete_by_ref(node))
-        menu.addAction(act_del)
-
-        menu.exec(QCursor.pos())
-
-    # ── Dialog launchers ──────────────────────────────────────────────────────
-
-    def _configure_filter(self, node: _TreeNode, row: _SlotNodeRow) -> None:
-        dlg = _FilterDialog(node, self._vault_root, parent=self.window())
-        if dlg.exec():
-            node.filter_cond = dlg.get_filter()
-            self.slots_changed.emit()
-
-    def _configure_pick(self, node: _TreeNode, row: _SlotNodeRow) -> None:
-        dlg = _PickDialog(node, parent=self.window())
-        if dlg.exec():
-            node.pick_notes = dlg.get_pick_notes()
-            node.pick_variants = dlg.get_variants()
-            node.unique_notes = dlg.get_unique()
-            self.slots_changed.emit()
-
-    def _configure_depends(self, node: _TreeNode, row: _SlotNodeRow) -> None:
-        # Build all-positions list (excluding self)
-        all_items: list[tuple[str, str, str]] = []
-        for pos, n in _all_pos_nodes(self._roots):
-            if n is not node:
-                sid = _id_from_pos(pos)
-                all_items.append((sid, pos, n.label))
-
-        dlg = _DependsDialog(node.depends_on, all_items, parent=self.window())
-        if dlg.exec():
-            node.depends_on = dlg.get_depends_on()
-            self.slots_changed.emit()
