@@ -253,3 +253,92 @@ class _SampleSection(QWidget):
     def _on_range_toggled(self, checked: bool) -> None:
         self._max_label.setVisible(checked)
         self._max_spin.setVisible(checked)
+
+
+# ── Depends section ───────────────────────────────────────────────────────────
+
+_SEARCH_THRESHOLD = 10
+
+
+class _DependsSection(QWidget):
+    """Multi-select list of block_ids the current node depends on."""
+
+    def __init__(
+        self,
+        node,
+        all_blocks: list[tuple[str, str, Any]],
+        parent_widget=None,
+    ):
+        super().__init__(parent_widget)
+        self._node = node
+        self._checkboxes: list[CheckBox] = []
+        self._block_ids_ordered: list[str] = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
+
+        excluded = self._collect_excluded(node)
+        # Identity-based filter: _BlockNode is a dataclass, so __eq__ would
+        # field-compare, potentially matching unrelated blocks with the same
+        # defaults. Use id() for strict identity.
+        candidates = [
+            (bid, label) for (bid, label, ref) in all_blocks
+            if id(ref) not in excluded
+        ]
+
+        self._search_edit = LineEdit(self)
+        self._search_edit.setPlaceholderText("搜索 block_id 或标签…")
+        self._search_edit.textChanged.connect(self._on_search)
+        outer.addWidget(self._search_edit)
+        if len(candidates) <= _SEARCH_THRESHOLD:
+            self._search_edit.hide()
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        host = QWidget(scroll)
+        host_lay = QVBoxLayout(host)
+        host_lay.setContentsMargins(0, 0, 0, 0)
+        host_lay.setSpacing(2)
+
+        existing = set(node.depends_on or [])
+        for bid, label in candidates:
+            cb = CheckBox(f"{bid} — {label}", host)
+            cb.setChecked(bid in existing)
+            host_lay.addWidget(cb)
+            self._checkboxes.append(cb)
+            self._block_ids_ordered.append(bid)
+        host_lay.addStretch(1)
+
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
+
+    def save_to_node(self) -> None:
+        selected = [
+            bid for bid, cb in zip(self._block_ids_ordered, self._checkboxes)
+            if cb.isChecked()
+        ]
+        self._node.depends_on = selected
+
+    def checkboxes_for_test(self) -> list[CheckBox]:
+        return list(self._checkboxes)
+
+    @staticmethod
+    def _collect_excluded(self_node) -> set[int]:
+        excluded: set[int] = {id(self_node)}
+        def walk(n):
+            excluded.add(id(n))
+            for c in getattr(n, "children", []) or []:
+                walk(c)
+        for c in getattr(self_node, "children", []) or []:
+            walk(c)
+        return excluded
+
+    def _on_search(self, text: str) -> None:
+        needle = text.strip().lower()
+        for cb in self._checkboxes:
+            if not needle:
+                cb.setVisible(True)
+            else:
+                cb.setVisible(needle in cb.text().lower())

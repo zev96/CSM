@@ -154,3 +154,89 @@ def test_sample_section_toggle_range_shows_and_hides_max(qtbot):
     assert w._max_spin.isVisible() is True
     w._range_checkbox.setChecked(False)
     assert w._max_spin.isVisible() is False
+
+
+from csm_gui.widgets.block_advanced_dialog import _DependsSection
+
+
+def test_depends_section_excludes_self_and_descendants(qtbot):
+    parent = _BlockNode(kind="paragraph", label="父")
+    child_a = _BlockNode(kind="paragraph", label="子A")
+    grand = _BlockNode(kind="paragraph", label="孙")
+    child_a.children = [grand]
+    parent.children = [child_a]
+    sibling = _BlockNode(kind="paragraph", label="兄弟")
+    all_blocks = [
+        ("block_1", "父", parent),
+        ("block_1_1", "子A", child_a),
+        ("block_1_1_1", "孙", grand),
+        ("block_2", "兄弟", sibling),
+    ]
+    w = _DependsSection(parent, all_blocks, parent_widget=None)
+    qtbot.addWidget(w)
+    labels = [c.text() for c in w.checkboxes_for_test()]
+    assert labels == ["block_2 — 兄弟"]
+
+
+def test_depends_section_checks_existing_depends_on(qtbot):
+    self_node = _BlockNode(kind="paragraph", label="我")
+    self_node.depends_on = ["block_2"]
+    other_a = _BlockNode(kind="paragraph", label="A")
+    other_b = _BlockNode(kind="paragraph", label="B")
+    all_blocks = [
+        ("block_1", "我", self_node),
+        ("block_2", "A", other_a),
+        ("block_3", "B", other_b),
+    ]
+    w = _DependsSection(self_node, all_blocks, parent_widget=None)
+    qtbot.addWidget(w)
+    boxes = w.checkboxes_for_test()
+    assert boxes[0].isChecked() is True    # block_2
+    assert boxes[1].isChecked() is False   # block_3
+
+
+def test_depends_section_save_preserves_order(qtbot):
+    self_node = _BlockNode(kind="paragraph")
+    a = _BlockNode(kind="paragraph")
+    b = _BlockNode(kind="paragraph")
+    c = _BlockNode(kind="paragraph")
+    all_blocks = [
+        ("block_1", "self", self_node),
+        ("block_2", "A", a),
+        ("block_3", "B", b),
+        ("block_4", "C", c),
+    ]
+    w = _DependsSection(self_node, all_blocks, parent_widget=None)
+    qtbot.addWidget(w)
+    boxes = w.checkboxes_for_test()
+    boxes[0].setChecked(True)   # block_2
+    boxes[2].setChecked(True)   # block_4
+    w.save_to_node()
+    assert self_node.depends_on == ["block_2", "block_4"]
+
+
+def test_depends_section_search_box_hidden_when_few_candidates(qtbot):
+    self_node = _BlockNode(kind="paragraph")
+    all_blocks = [
+        ("block_1", "self", self_node),
+        ("block_2", "A", _BlockNode(kind="paragraph")),
+    ]
+    w = _DependsSection(self_node, all_blocks, parent_widget=None)
+    qtbot.addWidget(w)
+    w.show()
+    assert w._search_edit.isHidden() is True
+
+
+def test_depends_section_search_box_filters_candidates(qtbot):
+    self_node = _BlockNode(kind="paragraph")
+    all_blocks = [("block_1", "self", self_node)]
+    for i in range(2, 13):
+        all_blocks.append((f"block_{i}", f"标签{i}", _BlockNode(kind="paragraph")))
+    w = _DependsSection(self_node, all_blocks, parent_widget=None)
+    qtbot.addWidget(w)
+    w.show()
+    assert w._search_edit.isHidden() is False
+    w._search_edit.setText("5")
+    visible = [cb for cb in w.checkboxes_for_test() if cb.isVisible()]
+    assert len(visible) == 1
+    assert "标签5" in visible[0].text()
