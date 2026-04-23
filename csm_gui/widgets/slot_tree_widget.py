@@ -132,6 +132,18 @@ BLOCK_KIND_LABELS = {
 NUMBER_STYLE_OPTIONS = ["1.", "一、", "none"]
 
 
+# Inline field label: smaller caption + 50% opacity, no trailing colon.
+# Used instead of BodyLabel("XX：") for form-row labels so the fields stand
+# out more than their descriptors.
+_INLINE_LABEL_QSS = "CaptionLabel { color: rgba(0, 0, 0, 0.5); }"
+
+
+def _inline_label(text: str, parent: QWidget | None = None) -> CaptionLabel:
+    lbl = CaptionLabel(text, parent)
+    lbl.setStyleSheet(_INLINE_LABEL_QSS)
+    return lbl
+
+
 # ── Internal tree node ────────────────────────────────────────────────────────
 
 @dataclass
@@ -318,11 +330,11 @@ def _make_source_row(parent: QWidget) -> tuple[QWidget, CascadePickerButton, Lin
     lay = QHBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(6)
-    lay.addWidget(BodyLabel("目录："))
+    lay.addWidget(_inline_label("目录", w))
     picker = CascadePickerButton(w)
     picker.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     lay.addWidget(picker, 2)
-    lay.addWidget(BodyLabel("名称："))
+    lay.addWidget(_inline_label("名称", w))
     label_edit = LineEdit(w)
     label_edit.setPlaceholderText("段落名称")
     label_edit.setMaximumWidth(160)
@@ -376,15 +388,13 @@ class _HeadingPage(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        lay.addWidget(BodyLabel("级别："))
-        self._level_spin = SpinBox(self)
-        self._level_spin.setRange(1, 3)
-        self._level_spin.setValue(node.level)
-        self._level_spin.setMaximumWidth(70)
-        self._level_spin.valueChanged.connect(self._on_level)
-        lay.addWidget(self._level_spin)
+        # Heading level is fixed at H2 in practice (SEO forces H2, and
+        # small-red-book / 导购文 templates don't use H1/H3). Keep the
+        # field on the node for schema compatibility but hide the input.
+        if not node.level:
+            node.level = 2
 
-        lay.addWidget(BodyLabel("序号："))
+        lay.addWidget(_inline_label("序号", self))
         self._index_edit = LineEdit(self)
         self._index_edit.setPlaceholderText("如：一")
         self._index_edit.setText(node.index)
@@ -392,16 +402,12 @@ class _HeadingPage(QWidget):
         self._index_edit.editingFinished.connect(self._on_index)
         lay.addWidget(self._index_edit)
 
-        lay.addWidget(BodyLabel("文本："))
+        lay.addWidget(_inline_label("文本", self))
         self._text_edit = LineEdit(self)
         self._text_edit.setPlaceholderText("标题文本")
         self._text_edit.setText(node.text)
         self._text_edit.editingFinished.connect(self._on_text)
         lay.addWidget(self._text_edit, 1)
-
-    def _on_level(self, v: int) -> None:
-        self._node.level = v
-        self.changed.emit()
 
     def _on_index(self) -> None:
         self._node.index = self._index_edit.text().strip()
@@ -426,20 +432,20 @@ class _NumberedListPage(QWidget):
         src_lay = QHBoxLayout(src_w)
         src_lay.setContentsMargins(0, 0, 0, 0)
         src_lay.setSpacing(6)
-        src_lay.addWidget(BodyLabel("目录："))
+        src_lay.addWidget(_inline_label("目录", src_w))
         self._picker = CascadePickerButton(src_w)
         self._picker.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._picker.setup(vault_dirs, node.module)
         self._picker.path_selected.connect(self._on_module)
         src_lay.addWidget(self._picker, 2)
-        src_lay.addWidget(BodyLabel("名称："))
+        src_lay.addWidget(_inline_label("名称", src_w))
         self._label_edit = LineEdit(src_w)
         self._label_edit.setPlaceholderText("段落名称")
         self._label_edit.setMaximumWidth(160)
         self._label_edit.setText(node.label or "")
         self._label_edit.editingFinished.connect(self._on_label)
         src_lay.addWidget(self._label_edit, 1)
-        src_lay.addWidget(BodyLabel("编号样式："))
+        src_lay.addWidget(_inline_label("编号样式", src_w))
         self._style_combo = ComboBox(src_w)
         self._style_combo.addItems(NUMBER_STYLE_OPTIONS)
         idx = NUMBER_STYLE_OPTIONS.index(node.number_style) if node.number_style in NUMBER_STYLE_OPTIONS else 0
@@ -474,21 +480,21 @@ class _HeroBrandPage(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        lay.addWidget(BodyLabel("品牌标题："))
+        lay.addWidget(_inline_label("品牌标题", self))
         self._title_edit = LineEdit(self)
         self._title_edit.setPlaceholderText("品牌名称")
         self._title_edit.setText(node.title)
         self._title_edit.editingFinished.connect(self._on_title)
         lay.addWidget(self._title_edit, 1)
 
-        lay.addWidget(BodyLabel("理由标签："))
+        lay.addWidget(_inline_label("理由标签", self))
         self._reason_edit = LineEdit(self)
         self._reason_edit.setText(node.reason_label)
         self._reason_edit.setMaximumWidth(140)
         self._reason_edit.editingFinished.connect(self._on_reason)
         lay.addWidget(self._reason_edit)
 
-        lay.addWidget(BodyLabel("编号："))
+        lay.addWidget(_inline_label("编号", self))
         self._style_combo = ComboBox(self)
         self._style_combo.addItems(NUMBER_STYLE_OPTIONS)
         idx = NUMBER_STYLE_OPTIONS.index(node.number_style) if node.number_style in NUMBER_STYLE_OPTIONS else 0
@@ -523,7 +529,7 @@ class _CompetitorPoolPage(QWidget):
         src_lay = QHBoxLayout(src_w)
         src_lay.setContentsMargins(0, 0, 0, 0)
         src_lay.setSpacing(6)
-        src_lay.addWidget(BodyLabel("目录："))
+        src_lay.addWidget(_inline_label("目录", src_w))
         self._picker = CascadePickerButton(src_w)
         self._picker.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._picker.setup(vault_dirs, node.module)
@@ -598,11 +604,10 @@ class _BlockRow(CardWidget):
         outer.setContentsMargins(16 + level * self._INDENT_PX, 8, 12, 8)
         outer.setSpacing(6)
 
-        # ── Position label ────────────────────────────────────────────────
-        pos_lbl = SubtitleLabel(position)
-        pos_lbl.setFixedWidth(max(32, 14 * len(position)))
-        pos_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        outer.addWidget(pos_lbl)
+        # Position (e.g. "1", "2-1") is tracked internally for move / delete
+        # operations but not displayed — the visual order is enough, and
+        # hiding the sequence number keeps the row compact.
+        self._position = position
 
         # ── Expand chevron (paragraph only) ──────────────────────────────
         self._expand_btn = TransparentToolButton(FluentIcon.CHEVRON_RIGHT, self)
