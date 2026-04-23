@@ -70,9 +70,7 @@ def generate(
         )
 
     system, user = build_prompt(PromptInputs(
-        template_system_prompt=template.system_prompt_default,
         user_skill_prompt=req.user_skill_prompt,
-        seo=template.seo_defaults,
         keyword=req.keyword, draft=draft,
     ))
 

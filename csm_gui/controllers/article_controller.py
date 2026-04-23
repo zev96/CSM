@@ -191,9 +191,7 @@ class ArticleController(QObject):
         # freshly re-composed one — otherwise manual tweaks are lost.
         draft = draft_override if draft_override is not None else compose_draft(plan)
         system, user = build_prompt(PromptInputs(
-            template_system_prompt=template.system_prompt_default,
             user_skill_prompt=skill_text,
-            seo=template.seo_defaults,
             keyword=plan.keyword,
             draft=draft,
         ))
