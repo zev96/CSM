@@ -61,7 +61,8 @@ class ControlsPanel(QWidget):
         self.clear_all_button = PushButton(FluentIcon.DELETE, "清空全部", self)
         self.rerun_all_button = PushButton(FluentIcon.SYNC, "重新随机", self)
         self.polish_button = PrimaryPushButton(FluentIcon.EDIT, "润色", self)
-        self.export_button = PushButton(FluentIcon.SAVE, "导出", self)
+        self.export_button = PrimaryPushButton(FluentIcon.SAVE, "导出", self)
+        self.export_button.setObjectName("exportButton")
 
         root.addWidget(self.clear_all_button)
         root.addWidget(self.rerun_all_button)

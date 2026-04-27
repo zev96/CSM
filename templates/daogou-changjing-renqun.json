@@ -1,15 +1,16 @@
 {
   "id": "daogou-changjing-renqun",
-  "name": "导购文-科普导购文",
+  "name": "导购文-科普导购文（三品）",
   "product": "吸尘器",
+  "default_skill_id": "知乎科普人设",
   "blocks": [
     {
       "kind": "paragraph",
-      "id": "slot_1",
+      "id": "block_1",
       "label": "痛点共鸣",
       "source": {
         "type": "notes_query",
-        "module": "引言模块/吸尘器/痛点共鸣",
+        "module": "营销资料库/引言模块/吸尘器/痛点共鸣",
         "filter": {
           "素材类型": "引言痛点"
         }
@@ -19,11 +20,12 @@
       "constraints": [
         "unique_notes"
       ],
-      "depends_on": []
+      "depends_on": [],
+      "children": []
     },
     {
       "kind": "paragraph",
-      "id": "slot_2",
+      "id": "block_2",
       "label": "市场乱象",
       "source": {
         "type": "notes_query",
@@ -37,11 +39,12 @@
       "constraints": [
         "unique_notes"
       ],
-      "depends_on": []
+      "depends_on": [],
+      "children": []
     },
     {
       "kind": "paragraph",
-      "id": "slot_3",
+      "id": "block_3",
       "label": "人设引入",
       "source": {
         "type": "notes_query",
@@ -55,11 +58,12 @@
       "constraints": [
         "unique_notes"
       ],
-      "depends_on": []
+      "depends_on": [],
+      "children": []
     },
     {
       "kind": "paragraph",
-      "id": "slot_4",
+      "id": "block_4",
       "label": "过渡连接",
       "source": {
         "type": "notes_query",
@@ -73,18 +77,19 @@
       "constraints": [
         "unique_notes"
       ],
-      "depends_on": []
+      "depends_on": [],
+      "children": []
     },
     {
       "kind": "heading",
-      "id": "h_1",
+      "id": "block_5",
       "level": 2,
       "index": "一",
       "text": "{keyword}应该怎么选？"
     },
     {
       "kind": "numbered_list",
-      "id": "slot_5",
+      "id": "block_6",
       "label": "挑选攻略",
       "source": {
         "type": "notes_query",
@@ -93,31 +98,27 @@
           "素材类型": "科普选购"
         }
       },
-      "pick_notes": {
-        "random_between": [
-          3,
-          3
-        ]
-      },
-      "number_style": "1."
+      "pick_notes": 3,
+      "number_style": "1.",
+      "item_separator": "\n\n"
     },
     {
       "kind": "heading",
-      "id": "h_2",
+      "id": "block_7",
       "level": 2,
       "index": "二",
       "text": "{keyword}推荐"
     },
     {
       "kind": "hero_brand",
-      "id": "hero_1",
+      "id": "block_8",
       "title": "CEWEY DS18无线吸尘器",
       "reason_label": "推荐理由：",
       "number_style": "1."
     },
     {
       "kind": "paragraph",
-      "id": "slot_6",
+      "id": "block_9",
       "label": "市场地位",
       "source": {
         "type": "notes_query",
@@ -135,7 +136,7 @@
       "children": [
         {
           "kind": "paragraph",
-          "id": "slot_6_1",
+          "id": "block_9_1",
           "label": "品牌背书",
           "source": {
             "type": "notes_query",
@@ -149,11 +150,12 @@
           "constraints": [
             "unique_notes"
           ],
-          "depends_on": []
+          "depends_on": [],
+          "children": []
         },
         {
           "kind": "paragraph",
-          "id": "slot_6_2",
+          "id": "block_9_2",
           "label": "海外口碑",
           "source": {
             "type": "notes_query",
@@ -167,11 +169,12 @@
           "constraints": [
             "unique_notes"
           ],
-          "depends_on": []
+          "depends_on": [],
+          "children": []
         },
         {
           "kind": "paragraph",
-          "id": "slot_6_3",
+          "id": "block_9_3",
           "label": "品牌背书",
           "source": {
             "type": "notes_query",
@@ -185,11 +188,12 @@
           "constraints": [
             "unique_notes"
           ],
-          "depends_on": []
+          "depends_on": [],
+          "children": []
         },
         {
           "kind": "paragraph",
-          "id": "slot_6_4",
+          "id": "block_9_4",
           "label": "媒体认证",
           "source": {
             "type": "notes_query",
@@ -203,13 +207,14 @@
           "constraints": [
             "unique_notes"
           ],
-          "depends_on": []
+          "depends_on": [],
+          "children": []
         }
       ]
     },
     {
       "kind": "paragraph",
-      "id": "slot_7",
+      "id": "block_10",
       "label": "动力技术",
       "source": {
         "type": "notes_query",
@@ -225,7 +230,7 @@
       "children": [
         {
           "kind": "paragraph",
-          "id": "slot_7_1",
+          "id": "block_10_1",
           "label": "气旋技术",
           "source": {
             "type": "notes_query",
@@ -237,13 +242,14 @@
           "pick_notes": 1,
           "pick_variants_per_note": 1,
           "constraints": [],
-          "depends_on": []
+          "depends_on": [],
+          "children": []
         }
       ]
     },
     {
       "kind": "competitor_pool",
-      "id": "comp_1",
+      "id": "block_11",
       "source": {
         "type": "notes_query",
         "module": "产品模块/吸尘器/竞品推荐内容",
@@ -255,20 +261,23 @@
         "random_between": [
           2,
           2
-        ]
+        ],
+        "user_configurable": false,
+        "default": null,
+        "range": null
       },
       "reason_label": "推荐理由："
     },
     {
       "kind": "heading",
-      "id": "h_3",
+      "id": "block_12",
       "level": 2,
       "index": "三",
       "text": "总结"
     },
     {
       "kind": "paragraph",
-      "id": "slot_summary",
+      "id": "block_13",
       "label": "总结",
       "source": {
         "type": "notes_query",
@@ -282,8 +291,8 @@
       "constraints": [
         "unique_notes"
       ],
-      "depends_on": []
+      "depends_on": [],
+      "children": []
     }
-  ],
-  "default_skill_id": "daogou-changjing-renqun-migrated"
+  ]
 }

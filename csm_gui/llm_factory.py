@@ -13,4 +13,12 @@ def build_client(cfg: AppConfig, provider: str) -> LLMClient:
         default = cfg.default_model.get(provider)
         if default:
             kwargs["model"] = default
+        base_url = cfg.base_urls.get(provider)
+        if base_url:
+            kwargs["base_url"] = base_url
+        # Anthropic uses the official SDK and doesn't accept ``timeout`` as
+        # a keyword on its dataclass; the OpenAI-compatible providers all
+        # do. Limit the kwarg to those.
+        if cfg.timeout_seconds and provider in {"deepseek", "openai", "gemini", "qwen"}:
+            kwargs["timeout"] = float(cfg.timeout_seconds)
     return make_client(provider=provider, **kwargs)

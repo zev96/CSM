@@ -1,16 +1,21 @@
 """Article workspace — two-column layout.
 
-Left: pick-list panel (per-pick reroll buttons).
-Right-top: markdown preview (large).
-Right-bottom: action bar (compact) — polish-skill + 重新随机/润色/导出 buttons.
+Left:  center doc (header card + markdown/paragraph-card preview + tabs)
+Right: workspace side panel — Skill list + 微调 + 检查 + 整篇重新生成 / 导出.
+
+The old left-hand pick-list column was folded into the draft tab of
+``MarkdownView``: each paragraph is now a hover-tools card with its own
+reroll/copy/delete buttons. A compatibility alias ``pick_list_panel`` is
+exposed so ``main_window`` wiring for reroll + busy states keeps working
+without changes.
 """
 from __future__ import annotations
 from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
 from ..widgets.markdown_view import MarkdownView
-from ..widgets.controls_panel import ControlsPanel
-from ..widgets.pick_list_panel import PickListPanel
+from ..widgets.workspace_side_panel import WorkspaceSidePanel
+from ..widgets.doc_header_bar import DocHeaderBar
 
 
 class ArticlePage(QWidget):
@@ -19,74 +24,101 @@ class ArticlePage(QWidget):
         super().__init__(parent)
         self.setObjectName("ArticlePage")
 
-        # Outer horizontal splitter: left placeholder | right column
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(0)
 
-        self.pick_list_panel = PickListPanel(self.splitter)
-        self.pick_list_panel.setMinimumWidth(260)
-        # Back-compat alias (existing tests and callers reference ``slot_panel``).
-        self.slot_panel = self.pick_list_panel
-
-        # Right column: vertical splitter with markdown preview on top and a
-        # compact action bar pinned below. Using a splitter (not a fixed
-        # layout) so users can drag the divider if they want more preview
-        # room, but we seed the sizes so the controls bar stays small.
-        self.right_splitter = QSplitter(Qt.Orientation.Vertical, self.splitter)
-
-        self.markdown_view = MarkdownView(self.right_splitter)
-        self.markdown_view.setMinimumWidth(480)
-        self.markdown_view.setMinimumHeight(320)
+        # ── Left: header card + markdown preview ─────────────────────────
+        center = QWidget(self.splitter)
+        center.setStyleSheet("background: transparent;")
+        c_lay = QVBoxLayout(center)
+        c_lay.setContentsMargins(18, 14, 18, 14)
+        c_lay.setSpacing(10)
+        self.header_bar = DocHeaderBar(center)
+        c_lay.addWidget(self.header_bar)
+        self.header_bar.title_changed.connect(self._on_title_changed)
+        self.markdown_view = MarkdownView(center)
+        self.markdown_view.setMinimumWidth(560)
+        c_lay.addWidget(self.markdown_view, 1)
+        self._center = center
         self.preview_panel = self.markdown_view
+        # Back-compat: main_window.py wires reroll + set_busy via
+        # ``article.pick_list_panel``. After removing the left column, the
+        # per-paragraph cards inside MarkdownView play that role — expose
+        # MarkdownView under the old name (it provides ``reroll_requested``
+        # and ``set_busy`` with matching signatures).
+        self.pick_list_panel = self.markdown_view
+        self.slot_panel = self.markdown_view
 
-        self.controls = ControlsPanel(
+        # ── Right: workspace side panel (owns hidden ControlsPanel) ──────
+        self.controls = WorkspaceSidePanel(
             skill_dir=skill_dir,
             provider_default=default_provider,
-            parent=self.right_splitter,
+            parent=self.splitter,
         )
-        self.controls.setMaximumHeight(72)
-        self.controls.setMinimumHeight(56)
+        self.controls.setMinimumWidth(300)
         self.controls_panel = self.controls
+        self._last_polished: str = ""
 
-        self.right_splitter.addWidget(self.markdown_view)
-        self.right_splitter.addWidget(self.controls)
-        self.right_splitter.setStretchFactor(0, 1)
-        self.right_splitter.setStretchFactor(1, 0)
-        self.right_splitter.setCollapsible(0, False)
-        self.right_splitter.setCollapsible(1, False)
-        self.right_splitter.setSizes([680, 64])
-
-        self.splitter.addWidget(self.pick_list_panel)
-        self.splitter.addWidget(self.right_splitter)
-        self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([320, 980])
+        self.splitter.addWidget(self._center)
+        self.splitter.addWidget(self.controls)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([900, 340])
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.splitter)
 
     def clear(self) -> None:
+        self.markdown_view.reset_polished_edits()
         self.markdown_view.set_draft("")
         self.markdown_view.set_polished("")
-        # After set_polished() the view auto-jumped to 成文; flip back to 初稿
-        # so a fresh generate lands on the draft tab.
+        self._last_polished = ""
+        self._current_template = None
+        self._current_plan = None
+        self._current_draft = ""
+        self.header_bar.reset_title_dirty()
+        self.header_bar.update_doc(None, None, "", "")
+        self.markdown_view.set_title(self.header_bar.current_title())
         self.markdown_view._pivot.setCurrentItem("draft")
-        from csm_core.assembler.plan import AssemblyPlan
-        self.pick_list_panel.load_plan(
-            AssemblyPlan(keyword="", template_id="", seed=0, results=[])
-        )
+
+    def _on_title_changed(self, text: str) -> None:
+        self.markdown_view.set_title(text)
 
     def load_result(self, template, plan, draft: str, final_text: str) -> None:
         """Render a generated article. All inputs are plain data."""
-        self.markdown_view.set_draft(draft)
+        self.markdown_view.reset_polished_edits()
+        self.markdown_view.set_draft_plan(template, plan, draft)
         self.markdown_view.set_polished(final_text)
-        self.pick_list_panel.load_plan(plan, template)
         self.controls.set_preferred_skill(getattr(template, "default_skill_id", None))
+        self._last_polished = final_text
+        self._current_template = template
+        self._current_plan = plan
+        self._current_draft = draft
+        self.header_bar.reset_title_dirty()
+        self.header_bar.update_doc(template, plan, draft, final_text)
+        self.markdown_view.set_title(self.header_bar.current_title())
 
     def update_plan(self, template, plan, draft: str) -> None:
         """Refresh draft after resampling (polished text unchanged)."""
-        self.markdown_view.set_draft(draft)
-        self.pick_list_panel.load_plan(plan, template)
+        self.markdown_view.set_draft_plan(template, plan, draft)
+        self._current_template = template
+        self._current_plan = plan
+        self._current_draft = draft
+        self.header_bar.update_doc(template, plan, draft, self._last_polished)
+        self.markdown_view.set_title(self.header_bar.current_title())
+
+    def sync_title_to_polished(self, polished: str) -> None:
+        """After AI polish lands, sync the title from the polished heading."""
+        self._last_polished = polished
+        self.header_bar.update_doc(
+            getattr(self, "_current_template", None),
+            getattr(self, "_current_plan", None),
+            getattr(self, "_current_draft", ""),
+            polished,
+        )
+        self.markdown_view.set_title(self.header_bar.current_title())
 
     def apply_config(self, cfg):
         self.controls.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)

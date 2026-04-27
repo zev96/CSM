@@ -12,8 +12,12 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog
+from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QFileDialog,
+    QGridLayout, QFrame, QLabel, QSizePolicy,
+)
 from qfluentwidgets import (
     SubtitleLabel, StrongBodyLabel, BodyLabel,
     LineEdit, PrimaryPushButton, PushButton, FluentIcon,
@@ -21,8 +25,116 @@ from qfluentwidgets import (
     InfoBar, InfoBarPosition, ScrollArea,
 )
 
-from csm_core.template.loader import list_templates, save_template
+from csm_core.template.loader import list_templates, load_template, save_template
 from csm_core.template.schema import Template, LiteralBlock
+
+
+# ---------------------------------------------------------------------------
+# Block-type thumbnail — paints a small visual representation of a template
+# based on its block sequence so users can scan the grid by structure rather
+# than by name alone.
+# ---------------------------------------------------------------------------
+
+# Maps block class-names to a (height-px, color, label) triple. Heights stack
+# vertically inside the thumbnail; colors come from the palette.
+_BLOCK_VIZ = {
+    "HeadingBlock":        (8,  "#2f6f5e", "H"),
+    "ParagraphBlock":      (16, "#dde9e3", "¶"),
+    "NumberedListBlock":   (22, "#ecf2ee", "≡"),
+    "HeroBrandBlock":      (24, "#c96442", "★"),
+    "CompetitorPoolBlock": (20, "#f4e0d5", "▦"),
+    "LiteralBlock":        (12, "#faf8f3", "•"),
+}
+
+
+class _ThumbCanvas(QFrame):
+    """Custom-painted thumbnail showing the template's block sequence."""
+
+    def __init__(self, blocks: list, parent=None):
+        super().__init__(parent)
+        self._blocks = blocks or []
+        self.setFixedHeight(96)
+        self.setStyleSheet(
+            "border-radius: 8px; background-color: #faf8f3;"
+            "border: 1px solid rgba(30,28,25,0.06);"
+        )
+
+    def paintEvent(self, ev):  # noqa: N802
+        super().paintEvent(ev)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(8, 8, -8, -8)
+        if not self._blocks:
+            p.setPen(QColor(30, 28, 25, 80))
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, "（空模板）")
+            return
+        y = rect.top()
+        for blk in self._blocks[:5]:
+            cls = type(blk).__name__
+            h, color, _ = _BLOCK_VIZ.get(cls, (10, "#dde9e3", "·"))
+            if y + h > rect.bottom():
+                break
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(QColor(color)))
+            p.drawRoundedRect(rect.left(), y, rect.width(), h, 3, 3)
+            y += h + 4
+
+
+class _TplCard(QFrame):
+    """Single template card: thumbnail + name + product chip."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, name: str, product: str, blocks: list, selected: bool = False, parent=None):
+        super().__init__(parent)
+        self.setObjectName("tplCard")
+        self.setProperty("selected", selected)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(184)
+        self.setMinimumWidth(170)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet(self._qss(selected))
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+        lay.addWidget(_ThumbCanvas(blocks, self))
+
+        title = QLabel(name, self)
+        title.setStyleSheet(
+            "font-size: 12.5px; font-weight: 600; color: #1e1c19; background: transparent;")
+        title.setWordWrap(False)
+        lay.addWidget(title)
+
+        meta_row = QHBoxLayout()
+        chip = QLabel(product or "—", self)
+        chip.setStyleSheet(
+            "padding: 1px 6px; border-radius: 5px; font-size: 10.5px;"
+            "background: rgba(30,28,25,0.06); color: rgba(30,28,25,0.62);")
+        meta_row.addWidget(chip)
+        meta_row.addStretch(1)
+        count = QLabel(f"{len(blocks)} 模块", self)
+        count.setStyleSheet("font-size: 10.5px; color: rgba(30,28,25,0.38);")
+        meta_row.addWidget(count)
+        lay.addLayout(meta_row)
+
+    def set_selected(self, selected: bool) -> None:
+        self.setProperty("selected", selected)
+        self.setStyleSheet(self._qss(selected))
+
+    @staticmethod
+    def _qss(selected: bool) -> str:
+        if selected:
+            return ("#tplCard { background: #ffffff; border: 1.5px solid #2f6f5e;"
+                    " border-radius: 12px; }")
+        return ("#tplCard { background: #ffffff; border: 1px solid rgba(30,28,25,0.08);"
+                " border-radius: 12px; }"
+                "#tplCard:hover { border: 1px solid rgba(47,111,94,0.45); background: #faf8f3; }")
+
+    def mousePressEvent(self, ev):  # noqa: N802
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(ev)
 
 
 # ---------------------------------------------------------------------------
@@ -111,15 +223,33 @@ class TemplateListPanel(QWidget):
         dir_lay.addLayout(dir_row)
         root.addWidget(dir_card)
 
-        # ── 模板列表 ──────────────────────────────────────────────────────
+        # ── 模板卡片网格 ──────────────────────────────────────────────────
         list_card = CardWidget(self)
         list_lay = QVBoxLayout(list_card)
-        list_lay.setContentsMargins(12, 8, 12, 8)
-        list_lay.setSpacing(6)
+        list_lay.setContentsMargins(12, 10, 12, 10)
+        list_lay.setSpacing(8)
         list_lay.addWidget(BodyLabel("模板列表"))
-        self.list_widget = ListWidget(list_card)
-        self.list_widget.itemClicked.connect(self._on_item_clicked)
-        list_lay.addWidget(self.list_widget, 1)
+
+        self._scroll = ScrollArea(list_card)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setStyleSheet("ScrollArea { background: transparent; border: none; }")
+        self._grid_host = QWidget(self._scroll)
+        self._grid_host.setStyleSheet("background: transparent;")
+        self._grid = QGridLayout(self._grid_host)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(10)
+        self._grid.setVerticalSpacing(10)
+        self._scroll.setWidget(self._grid_host)
+        list_lay.addWidget(self._scroll, 1)
+
+        # Hidden ListWidget kept for backward compatibility — some callers
+        # still reach into self.list_widget for currentItem(). It mirrors
+        # the cards but is never shown.
+        self.list_widget = ListWidget(self)
+        self.list_widget.hide()
+
+        self._cards: list[_TplCard] = []
+        self._selected_idx: int = -1
         root.addWidget(list_card, 1)
 
         # ── 操作按钮 ──────────────────────────────────────────────────────
@@ -148,31 +278,69 @@ class TemplateListPanel(QWidget):
         self.template_dir_changed.emit(self._dir)
 
     def refresh(self) -> None:
-        """Re-scan the current directory and rebuild the list."""
+        """Re-scan the current directory and rebuild the card grid."""
+        # Wipe both representations.
         self.list_widget.clear()
+        for card in self._cards:
+            card.setParent(None)
+        self._cards.clear()
         self._paths = []
+        self._selected_idx = -1
         self.delete_btn.setEnabled(False)
+        # Drop any stretch leftover from a previous fill.
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
         if self._dir is None:
             return
-        for name, p in list_templates(self._dir):
+        cols = 2
+        for i, (name, p) in enumerate(list_templates(self._dir)):
             self.list_widget.addItem(name)
             self._paths.append(p)
+            blocks: list = []
+            product = ""
+            try:
+                tpl = load_template(p)
+                blocks = list(tpl.blocks)
+                product = tpl.product or ""
+            except Exception:
+                # Corrupt / unreadable template — render an empty placeholder
+                # rather than failing the whole grid refresh.
+                pass
+            card = _TplCard(name, product, blocks, parent=self._grid_host)
+            card.clicked.connect(lambda idx=i: self._on_card_clicked(idx))
+            self._grid.addWidget(card, i // cols, i % cols)
+            self._cards.append(card)
+        # Push everything to the top.
+        self._grid.setRowStretch(self._grid.rowCount(), 1)
 
     def select_by_path(self, path: Path) -> None:
         """Programmatically select the row matching *path*."""
         try:
             idx = self._paths.index(path)
-            self.list_widget.setCurrentRow(idx)
-            self.delete_btn.setEnabled(True)
         except ValueError:
-            pass
+            return
+        self._highlight(idx)
+        self.list_widget.setCurrentRow(idx)
+        self.delete_btn.setEnabled(True)
 
     def current_path(self) -> Path | None:
         """Return the path of the currently selected template, or None."""
-        row = self.list_widget.currentRow()
-        if 0 <= row < len(self._paths):
-            return self._paths[row]
+        if 0 <= self._selected_idx < len(self._paths):
+            return self._paths[self._selected_idx]
         return None
+
+    def _highlight(self, idx: int) -> None:
+        for i, c in enumerate(self._cards):
+            c.set_selected(i == idx)
+        self._selected_idx = idx
+
+    def _on_card_clicked(self, idx: int) -> None:
+        self._highlight(idx)
+        self.list_widget.setCurrentRow(idx)
+        self.delete_btn.setEnabled(True)
+        self.template_selected.emit(self._paths[idx])
 
     # ------------------------------------------------------------------
     # Private slots

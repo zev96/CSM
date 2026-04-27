@@ -212,24 +212,24 @@ class ArticleController(QObject):
         self.polish_failed.emit(msg)
         self.busy_changed.emit(False)
 
-    def export(self) -> None:
+    def export(self, out_dir: str | None = None) -> None:
         if self._current_result is None:
             return
-        if not self._config.out_dir:
+        target = out_dir or self._config.out_dir
+        if not target:
             self.export_failed.emit("OutputDirectoryMissing: 请先在设置页配置输出目录")
             return
         if not (self._current_result.final_text or "").strip():
             # Draft-only flow: nothing to export until 润色 has produced 成文.
             self.export_failed.emit("NotPolished: 请先点击「润色」生成成文再导出")
             return
-        out_dir = Path(self._config.out_dir)
         try:
             paths = export_article(
-                out_dir=out_dir,
+                out_dir=Path(target),
                 keyword=self._current_result.plan.keyword,
                 final_text=self._current_result.final_text,
                 plan=self._current_result.plan,
-                prompt_snapshot={},
+                fmt=self._config.export_format,
             )
         except Exception as exc:  # noqa: BLE001 — boundary, surface to UI
             self.export_failed.emit(f"{type(exc).__name__}: {exc}")

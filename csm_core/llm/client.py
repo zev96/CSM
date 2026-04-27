@@ -18,4 +18,13 @@ def make_client(*, provider: str, **kwargs) -> LLMClient:
     if provider == "deepseek":
         from .providers.deepseek import DeepSeekClient
         return DeepSeekClient(**kwargs)
+    if provider == "openai":
+        from .providers.openai import OpenAIClient
+        return OpenAIClient(**kwargs)
+    if provider == "gemini":
+        from .providers.gemini import GeminiClient
+        return GeminiClient(**kwargs)
+    if provider == "qwen":
+        from .providers.qwen import QwenClient
+        return QwenClient(**kwargs)
     raise ValueError(f"unknown provider: {provider}")

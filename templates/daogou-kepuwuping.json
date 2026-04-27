@@ -2,6 +2,7 @@
   "id": "daogou-kepuwuping",
   "name": "导购文-科普导购文（五品）",
   "product": "吸尘器",
+  "default_skill_id": "知乎科普人设",
   "blocks": [
     {
       "kind": "paragraph",
@@ -99,94 +100,21 @@
     {
       "kind": "paragraph",
       "id": "block_8",
-      "label": "品牌背书",
+      "label": "媒体背书",
       "source": {
         "type": "notes_query",
         "module": "营销资料库/产品模块/吸尘器/希喂推荐内容/品牌背书",
-        "filter": {}
+        "filter": {
+          "素材类型": "媒体背书"
+        }
       },
       "pick_notes": 1,
       "pick_variants_per_note": 1,
-      "constraints": [],
+      "constraints": [
+        "unique_notes"
+      ],
       "depends_on": [],
-      "children": [
-        {
-          "kind": "paragraph",
-          "id": "block_8_1",
-          "label": "品牌背书 - 变体1",
-          "source": {
-            "type": "notes_query",
-            "module": "营销资料库/产品模块/吸尘器/希喂推荐内容/品牌背书",
-            "filter": {
-              "素材类型": "品牌故事"
-            }
-          },
-          "pick_notes": 1,
-          "pick_variants_per_note": 1,
-          "constraints": [
-            "unique_notes"
-          ],
-          "depends_on": [],
-          "children": []
-        },
-        {
-          "kind": "paragraph",
-          "id": "block_8_2",
-          "label": "品牌背书 - 变体2",
-          "source": {
-            "type": "notes_query",
-            "module": "营销资料库/产品模块/吸尘器/希喂推荐内容/品牌背书",
-            "filter": {
-              "素材类型": "品牌背书"
-            }
-          },
-          "pick_notes": 1,
-          "pick_variants_per_note": 1,
-          "constraints": [
-            "unique_notes"
-          ],
-          "depends_on": [],
-          "children": []
-        },
-        {
-          "kind": "paragraph",
-          "id": "block_8_3",
-          "label": "品牌背书 - 变体3",
-          "source": {
-            "type": "notes_query",
-            "module": "营销资料库/产品模块/吸尘器/希喂推荐内容/品牌背书",
-            "filter": {
-              "素材类型": "媒体背书"
-            }
-          },
-          "pick_notes": 1,
-          "pick_variants_per_note": 1,
-          "constraints": [
-            "unique_notes"
-          ],
-          "depends_on": [],
-          "children": []
-        },
-        {
-          "kind": "paragraph",
-          "id": "block_8_4",
-          "label": "品牌背书 - 变体4",
-          "source": {
-            "type": "notes_query",
-            "module": "营销资料库/产品模块/吸尘器/希喂推荐内容/品牌背书",
-            "filter": {
-              "素材类型": "海外口碑"
-            }
-          },
-          "pick_notes": 1,
-          "pick_variants_per_note": 1,
-          "constraints": [
-            "unique_notes"
-          ],
-          "depends_on": [],
-          "children": []
-        }
-      ]
+      "children": []
     },
     {
       "kind": "paragraph",
@@ -304,6 +232,5 @@
       "depends_on": [],
       "children": []
     }
-  ],
-  "default_skill_id": "daogou-kepuwuping-migrated"
+  ]
 }

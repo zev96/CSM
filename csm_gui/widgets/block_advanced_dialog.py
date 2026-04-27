@@ -10,7 +10,7 @@ from typing import Any, TYPE_CHECKING
 
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy,
 )
 from qfluentwidgets import (
     BodyLabel, StrongBodyLabel, CaptionLabel,
@@ -112,10 +112,14 @@ class _FilterSection(QWidget):
         key_edit.addItems(sorted(self._fm_candidates.keys()))
         key_edit.setText(key)
         key_edit.setPlaceholderText("如：素材类型")
+        key_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        key_edit.setMinimumWidth(0)
         row_lay.addWidget(key_edit, 2)
 
         value_edit = EditableComboBox(row_w)
         value_edit.setPlaceholderText("如：引言痛点, 引言期待")
+        value_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        value_edit.setMinimumWidth(0)
 
         def _on_key_changed(_text: str, ve=value_edit, ke=key_edit):
             current = ve.currentText()

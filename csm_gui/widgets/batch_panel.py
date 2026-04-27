@@ -1,9 +1,8 @@
 """Batch-tab panel: multi-line keyword editor + file import + start button."""
 from __future__ import annotations
-import csv
-from pathlib import Path
 from PyQt6.QtCore import pyqtSignal, QTimer
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QPlainTextEdit
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit
+from .csv_import_wizard import CSVImportWizard
 try:
     from qfluentwidgets import CaptionLabel
 except ImportError:  # pragma: no cover
@@ -80,22 +79,23 @@ class BatchPanel(QWidget):
         self.start_button.setEnabled(ok)
 
     def _on_import_clicked(self) -> None:
-        path_str, _ = QFileDialog.getOpenFileName(
-            self, "导入关键词", filter="文本 (*.txt *.csv)",
-        )
-        if not path_str:
+        dlg = CSVImportWizard(self.window())
+        if not dlg.exec():
             return
-        path = Path(path_str)
-        if path.suffix.lower() == ".csv":
-            lines: list[str] = []
-            with path.open("r", encoding="utf-8", newline="") as f:
-                for row in csv.reader(f):
-                    if row:
-                        lines.append(row[0])
-            text = "\n".join(lines)
-        else:
-            text = path.read_text(encoding="utf-8")
-        self.keyword_edit.setPlainText(text)
+        keywords = dlg.result_keywords()
+        if not keywords:
+            return
+        # Merge with whatever is already in the editor — users can pipe
+        # multiple files in by re-opening the wizard.
+        existing = [k.strip() for k in self.keyword_edit.toPlainText().splitlines() if k.strip()]
+        merged: list[str] = []
+        seen: set[str] = set()
+        for k in (*existing, *keywords):
+            if k in seen:
+                continue
+            seen.add(k)
+            merged.append(k)
+        self.keyword_edit.setPlainText("\n".join(merged))
         self._recount()
 
     def _emit(self) -> None:

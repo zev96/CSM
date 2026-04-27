@@ -1,13 +1,19 @@
 """FluentWindow shell with three navigation items."""
 from __future__ import annotations
 from pathlib import Path
-from qfluentwidgets import FluentWindow, FluentIcon, NavigationItemPosition
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from qfluentwidgets import (
+    FluentWindow, FluentIcon, NavigationItemPosition, NavigationDisplayMode,
+)
 from .config import AppConfig, load_config, save_config as _save_config
 from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
 from .pages.template_manager_page import TemplateManagerPage
 from .pages.skills_page import SkillsPage
+from .pages.recent_docs_page import RecentDocsPage
+from .recent_docs import append_export, load_recent
 from .controllers.article_controller import ArticleController
 from .controllers.batch_controller import BatchController
 from .pages.batch_result_page import BatchResultPage
@@ -37,6 +43,36 @@ class MainWindow(FluentWindow):
         self.setWindowTitle("")
         self.titleBar.iconLabel.hide()
         self.titleBar.titleLabel.hide()
+        # Kill Mica/Aero translucency on the title bar so the warm paper
+        # background applied via QSS shows through cleanly. ``setMicaEffect``
+        # is a no-op on platforms without Mica support, so this is safe.
+        try:
+            self.setMicaEffectEnabled(False)
+        except Exception:
+            pass
+        # FluentWindow paints its own background via paintEvent using the
+        # tokens set by ``setCustomBackgroundColor``. Override both the
+        # light- and dark-mode tokens with our warm paper bg so the title
+        # bar strip and any Mica leftover area both pick it up.
+        from PyQt6.QtGui import QColor as _QC
+        try:
+            self.setCustomBackgroundColor(_QC("#f7f6f2"), _QC("#1e1c19"))
+            # ``setCustomBackgroundColor`` animates from the previous tint
+            # to our token; in offscreen contexts (and on the first paint
+            # tick) the animation never completes so the window keeps the
+            # stale Mica blue. Skip the tween — slam the value in directly.
+            self.backgroundColorAni.stop()
+            self.bgColorObject.backgroundColor = _QC("#f7f6f2")
+            self.update()
+        except Exception:
+            pass
+        # Some Qt builds need the title bar's autoFillBackground flipped on
+        # before QSS paints — without it the bar keeps the parent's mica
+        # tint even after our stylesheet is installed.
+        self.titleBar.setAutoFillBackground(True)
+        self.titleBar.setStyleSheet(
+            "background-color: #f7f6f2; border-bottom: 1px solid rgba(30,28,25,0.08);"
+        )
 
         self.article_controller = ArticleController(self.config, parent=self)
         self.article_controller.generated.connect(self._on_generated)
@@ -64,11 +100,14 @@ class MainWindow(FluentWindow):
         self.batch_result_page.cancel_requested.connect(self.batch_controller.cancel)
         self.batch_result_page.return_requested.connect(lambda: self.switchTo(self.home))
         self.stackedWidget.addWidget(self.batch_result_page)
+        # Reachable via "全部 →" link on the home page; not exposed in sidebar.
+        # Added below after `recent_docs_page` is constructed.
 
         self.article_controller.busy_changed.connect(self._on_any_busy)
         self.batch_controller.busy_changed.connect(self._on_any_busy)
 
         self.home.request_batch.connect(self._on_request_batch)
+        self.home.request_navigate.connect(self._on_home_navigate)
         self.article = ArticlePage(
             skill_dir=Path(self.config.skill_dir) if self.config.skill_dir else None,
             default_provider=self.config.default_provider,
@@ -84,21 +123,111 @@ class MainWindow(FluentWindow):
         self._polish_busy_dialog = None
         self.template_manager = TemplateManagerPage(config=self.config, parent=self)
         self.skills = SkillsPage(config=self.config, parent=self)
+        self.recent_docs_page = RecentDocsPage(config_dir=self.config_dir, parent=self)
+        self.recent_docs_page.back_requested.connect(lambda: self.switchTo(self.home))
+        self.recent_docs_page.cleared.connect(
+            lambda: self.home.set_recents(load_recent(self.config_dir))
+        )
+        self.stackedWidget.addWidget(self.recent_docs_page)
+        # Hydrate the home recents from the persisted store on startup.
+        self.home.set_recents(load_recent(self.config_dir))
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
-        self.addSubInterface(self.home, FluentIcon.HOME, "首页")
-        self.addSubInterface(self.article, FluentIcon.DOCUMENT, "文章")
-        self.addSubInterface(self.template_manager, FluentIcon.LIBRARY, "模板")
-        self.addSubInterface(self.skills, FluentIcon.DICTIONARY, "Skills")
+        # Brand header at the very top of the sidebar — replaces the default
+        # back / hamburger row with the CSM identity per the design.
+        self._build_brand_header()
+
+        self.addSubInterface(self.home, FluentIcon.HOME, "主页")
+        self.addSubInterface(self.article, FluentIcon.DOCUMENT, "创作区")
+        self.navigationInterface.addSeparator()
+        self.addSubInterface(self.template_manager, FluentIcon.LIBRARY, "模板库")
+        self.addSubInterface(self.skills, FluentIcon.DICTIONARY, "Skill 库")
         self.addSubInterface(
             self.settings, FluentIcon.SETTING, "设置",
             position=NavigationItemPosition.BOTTOM,
         )
 
+        # Force the sidebar into permanent EXPAND mode — the design wants
+        # text labels visible at all widths. Without this, FluentWindow
+        # collapses to icon-only at the default ~1280px and we lose the
+        # whole left navigation column the design calls for.
+        try:
+            panel = self.navigationInterface.panel
+            self.navigationInterface.setExpandWidth(220)
+            panel.setMinimumWidth(220)
+            panel.setCollapsible(False)
+            panel.setReturnButtonVisible(False)
+            panel.expand(useAni=False)
+            # Kill the travelling indicator animation — our custom paint
+            # renders a full black pill on select, so the sliding bar is
+            # both redundant and visually competing.
+            self.navigationInterface.setIndicatorAnimationEnabled(False)
+            # Suppress the auto-collapse on width change.
+            self.navigationInterface.displayModeChanged.connect(
+                lambda _m: panel.expand(useAni=False)
+            )
+        except Exception:
+            pass
+
         # ``self.stackedWidget.addWidget(self.batch_result_page)`` above made
         # that page index 0, so FluentWindow would land there on startup.
         # Force the home page to be the initial view.
         self.switchTo(self.home)
+
+    def _build_brand_header(self) -> None:
+        """Inject a CSM / Content Studio header at the top of the nav panel.
+
+        ``NavigationInterface.insertWidget`` requires a NavigationWidget
+        subclass and we want a passive label, so reach into the panel's
+        topLayout directly. The hamburger is hidden first so the brand
+        sits at the actual top edge.
+        """
+        panel = self.navigationInterface.panel
+        try:
+            panel.setMenuButtonVisible(False)
+        except Exception:
+            pass
+
+        header = QWidget(panel)
+        lay = QVBoxLayout(header)
+        lay.setContentsMargins(20, 14, 16, 12)
+        lay.setSpacing(0)
+
+        # Brand mark — show the bundled logo at 32×32 if it ships with the
+        # app; fall back to the original "CSM / Content Studio" wordmark so
+        # the build keeps running even before the asset is dropped in.
+        from PyQt6.QtGui import QPixmap
+        logo_path = Path(__file__).parent / "assets" / "csm-logo.png"
+        if logo_path.exists():
+            logo = QLabel(header)
+            pm = QPixmap(str(logo_path)).scaled(
+                32, 32,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo.setPixmap(pm)
+            logo.setFixedSize(32, 32)
+            logo.setStyleSheet("background: transparent;")
+            lay.addWidget(logo)
+        else:
+            title = QLabel("CSM", header)
+            title.setStyleSheet(
+                "color: #1e1c19; font-size: 18px; font-weight: 700;"
+                "letter-spacing: 0.5px; background: transparent;"
+            )
+            subtitle = QLabel("Content Studio", header)
+            subtitle.setStyleSheet(
+                "color: rgba(30,28,25,0.45); font-size: 11px; background: transparent;"
+            )
+            lay.addWidget(title)
+            lay.addWidget(subtitle)
+        try:
+            panel.topLayout.insertWidget(0, header, alignment=Qt.AlignmentFlag.AlignTop)
+        except Exception:
+            try:
+                panel.vBoxLayout.insertWidget(0, header, alignment=Qt.AlignmentFlag.AlignTop)
+            except Exception:
+                pass
 
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
@@ -111,6 +240,7 @@ class MainWindow(FluentWindow):
         self.template_manager.apply_config(new_cfg)
         self.skills.apply_config(new_cfg)
         self.batch_controller.apply_config(new_cfg)
+        self.article_controller.apply_config(new_cfg)
 
     def _on_request_generate(self, payload: dict) -> None:
         ok = self.article_controller.request_generate(payload)
@@ -135,6 +265,7 @@ class MainWindow(FluentWindow):
             result.plan, draft, result.final_text,
         )
         self.switchTo(self.article)
+        self.navigationInterface.setCurrentItem(self.article.objectName())
 
     def _show_plan_warnings_list(self, warnings: list) -> None:
         if not warnings:
@@ -162,6 +293,8 @@ class MainWindow(FluentWindow):
             )
             return
         self.article.clear()
+        self.switchTo(self.home)
+        self.navigationInterface.setCurrentItem(self.home.objectName())
 
     def _on_rerun_all(self) -> None:
         ok = self.article_controller.rerun_all()
@@ -230,16 +363,37 @@ class MainWindow(FluentWindow):
         # ``set_polished`` auto-flips the pivot to 成文, fulfilling the
         # "polish done → jump to result tab" behaviour.
         self.article.markdown_view.set_polished(text)
+        self.article.sync_title_to_polished(text)
 
     def _on_export(self) -> None:
-        self.article_controller.export()
+        from PyQt6.QtWidgets import QFileDialog
+        start_dir = self.config.out_dir or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "选择导出文件夹", start_dir)
+        if not chosen:
+            return
+        self.article_controller.export(out_dir=chosen)
 
     def _on_exported(self, paths: dict) -> None:
         from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
         import os
-        out_dir = Path(self.config.out_dir)
+        # ``document`` is the new canonical key; keep ``markdown`` as a
+        # fallback for any stray callers that still hold the old dict shape.
+        doc_path = paths.get("document") or paths.get("markdown", "")
+        out_dir = Path(doc_path).parent
+        # Record the export in the recent-docs history and refresh the home
+        # hero list so the user sees the new entry immediately. ``title``
+        # is the article's first heading (extracted by the exporter),
+        # falling back to the on-disk stem if extraction failed.
+        if doc_path:
+            title = paths.get("title") or Path(doc_path).stem
+            append_export(
+                self.config_dir, title=title, path=doc_path,
+                fmt=paths.get("format", "markdown"),
+            )
+            self.home.set_recents(load_recent(self.config_dir))
+            self.recent_docs_page.refresh()
         bar = InfoBar.success(
-            title="导出成功", content=paths["markdown"],
+            title="导出成功", content=doc_path,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
         )
         open_btn = PushButton("打开文件夹", bar)
@@ -252,7 +406,7 @@ class MainWindow(FluentWindow):
         first_line = msg.splitlines()[0] if msg else "未知错误"
         if first_line.startswith("OutputDirectoryMissing"):
             InfoBar.error(
-                "缺少输出目录", "请先在设置页配置输出目录",
+                "未选择文件夹", "请选择导出文件夹",
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
@@ -266,6 +420,19 @@ class MainWindow(FluentWindow):
             "导出失败", first_line,
             parent=self, position=InfoBarPosition.TOP, duration=5000,
         )
+
+    def _on_home_navigate(self, key: str) -> None:
+        """Tile clicks on home route to the matching navigation subinterface."""
+        target = {
+            "templates": self.template_manager,
+            "skills":    self.skills,
+            "wizard":    self.skills,
+            "recents":   self.recent_docs_page,
+        }.get(key)
+        if target is not None:
+            if key == "recents":
+                self.recent_docs_page.refresh()
+            self.switchTo(target)
 
     def _on_request_batch(self, payload: dict) -> None:
         if self.article_controller.is_busy():

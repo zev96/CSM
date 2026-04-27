@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
-Provider = Literal["mock", "anthropic", "deepseek"]
+Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen"]
 
 
 class AppConfig(BaseModel):
@@ -21,6 +21,11 @@ class AppConfig(BaseModel):
     skill_dir: str | None = None
     last_seed: int = 0
     default_model: dict[str, str] = Field(default_factory=dict)
+    base_urls: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: int = 60
+    concurrency: int = 3
+    upload_training_hints: bool = False
+    export_format: Literal["markdown", "docx"] = "markdown"
 
 
 def load_config(path: Path) -> AppConfig:

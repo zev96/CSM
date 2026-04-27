@@ -202,7 +202,12 @@
       "Bash(.venv/Scripts/python.exe -c \"import csm_gui.widgets.slot_tree_widget; import csm_gui.widgets.template_editor_panel; import csm_gui.widgets.template_list_panel; print\\('ok'\\)\")",
       "Bash(.venv/Scripts/python.exe -m pytest tests/gui/test_template_editor_panel.py -v)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/gui/ -q)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/gui/ -q --ignore=tests/gui/test_article_controller.py --ignore=tests/gui/test_article_page.py --ignore=tests/gui/test_batch_smoke.py --ignore=tests/gui/test_main_window.py --ignore=tests/gui/test_reroll.py --ignore=tests/gui/test_slot_card.py)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/gui/ -q --ignore=tests/gui/test_article_controller.py --ignore=tests/gui/test_article_page.py --ignore=tests/gui/test_batch_smoke.py --ignore=tests/gui/test_main_window.py --ignore=tests/gui/test_reroll.py --ignore=tests/gui/test_slot_card.py)",
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(cp \"C:\\\\Users\\\\EDY\\\\.claude\\\\projects\\\\D--CSM--claude-worktrees-kind-pascal-46d622\\\\2f186af1-82d1-4115-8849-54b52df8344a\\\\tool-results\\\\webfetch-1777002954616-50z3h0.bin\" /tmp/design.tar.gz)",
+      "Bash(mkdir -p /tmp/design)",
+      "Bash(tar -xzf /tmp/design.tar.gz -C /tmp/design)",
+      "Read(//tmp/**)"
     ]
   }
 }
