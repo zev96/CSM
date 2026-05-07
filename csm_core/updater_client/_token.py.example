@@ -1,0 +1,8 @@
+"""Template for the CI-injected GitHub PAT.
+
+Copy this to ``_token.py`` for local testing OR let CI populate it during
+the build (the real ``_token.py`` is gitignored).
+
+The PAT must have ``Contents: Read`` permission on the CSM private repo.
+"""
+TOKEN = ""
