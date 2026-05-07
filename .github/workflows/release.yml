@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*.*.*'
 
+# softprops/action-gh-release needs contents:write to create the Release.
+# The default GITHUB_TOKEN no longer has this permission since GitHub's
+# 2023 security tightening — declare it explicitly here.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
