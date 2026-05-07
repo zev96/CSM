@@ -51,3 +51,28 @@ def test_load_type_error_returns_defaults(tmp_path: Path):
     p.write_text('{"last_seed": "not-an-int"}', encoding="utf-8")
     cfg = load_config(p)
     assert cfg == AppConfig()
+
+
+def test_appconfig_default_close_action():
+    from csm_gui.config import AppConfig
+    cfg = AppConfig()
+    assert cfg.close_action == "minimize_to_tray"
+    assert cfg.tray_first_minimize_shown is False
+
+
+def test_appconfig_close_action_validates_literal():
+    from csm_gui.config import AppConfig
+    from pydantic import ValidationError
+    import pytest
+    with pytest.raises(ValidationError):
+        AppConfig(close_action="invalid_value")
+
+
+def test_appconfig_loads_old_settings_without_close_action(tmp_path):
+    """老 settings.json 没有 close_action 时回退到默认值（向后兼容）。"""
+    from csm_gui.config import AppConfig, load_config
+    p = tmp_path / "settings.json"
+    p.write_text('{"vault_root":"/tmp"}', encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.close_action == "minimize_to_tray"
+    assert cfg.tray_first_minimize_shown is False

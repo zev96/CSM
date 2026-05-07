@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, ValidationError
 logger = logging.getLogger(__name__)
 
 Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen"]
+CloseAction = Literal["minimize_to_tray", "quit"]
 
 
 class AppConfig(BaseModel):
@@ -26,6 +27,8 @@ class AppConfig(BaseModel):
     concurrency: int = 3
     upload_training_hints: bool = False
     export_format: Literal["markdown", "docx"] = "markdown"
+    close_action: CloseAction = "minimize_to_tray"
+    tray_first_minimize_shown: bool = False
 
 
 def load_config(path: Path) -> AppConfig:
