@@ -303,3 +303,38 @@ def test_main_window_polished_does_nothing_when_dedup_disabled(qtbot, tmp_path, 
 
     win._on_polished("内容" * 100)
     assert triggered == []
+
+
+def test_main_window_check_update_button_dispatches(qtbot, tmp_path, monkeypatch):
+    """Settings page emits check_update_requested → MainWindow starts a worker."""
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+
+    started = []
+    monkeypatch.setattr(win, "_start_update_check_manual",
+                        lambda: started.append(True))
+    win.settings.check_update_requested.emit()
+    assert started == [True]
+
+
+def test_main_window_handles_update_check_no_update(qtbot, tmp_path):
+    """When CheckResult has no update, no dialog should be shown."""
+    from csm_gui.main_window import MainWindow
+    from csm_core.updater_client.checker import CheckResult
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    # Should not crash; explicit no-update path
+    win._on_update_check_done(CheckResult(False, None, None), is_manual=False)
+
+
+def test_main_window_dispatch_update_check_skips_when_no_repo(qtbot, tmp_path):
+    """If update_repo is empty, manual check shows a warning (no worker started)."""
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.update_repo = ""  # explicitly empty
+    n_workers_before = len(win._update_workers)
+    win._dispatch_update_check(is_manual=True)
+    # No worker should be started
+    assert len(win._update_workers) == n_workers_before
