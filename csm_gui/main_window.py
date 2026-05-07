@@ -2,11 +2,13 @@
 from __future__ import annotations
 from pathlib import Path
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
 from qfluentwidgets import (
     FluentWindow, FluentIcon, NavigationItemPosition, NavigationDisplayMode,
 )
 from .config import AppConfig, load_config, save_config as _save_config
+from .tray.manager import TrayManager
 from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
@@ -174,6 +176,17 @@ class MainWindow(FluentWindow):
         # Force the home page to be the initial view.
         self.switchTo(self.home)
 
+        # Tray manager — owned by the window. app.py's start sequence shows it.
+        self.tray = TrayManager(self)
+        self.tray.show_requested.connect(self._show_main_window)
+        self.tray.new_article_requested.connect(self._on_tray_new_article)
+        self.tray.new_template_requested.connect(self._on_tray_new_template)
+        self.tray.new_skill_requested.connect(self._on_tray_new_skill)
+        self.tray.settings_requested.connect(self._on_tray_settings)
+        self.tray.quit_requested.connect(self._on_tray_quit)
+        if self.tray.is_available() and self.config.close_action == "minimize_to_tray":
+            self.tray.show()
+
     def _build_brand_header(self) -> None:
         """Inject a CSM / Content Studio header at the top of the nav panel.
 
@@ -241,6 +254,65 @@ class MainWindow(FluentWindow):
         self.skills.apply_config(new_cfg)
         self.batch_controller.apply_config(new_cfg)
         self.article_controller.apply_config(new_cfg)
+        # 同步托盘可见性（用户可能切换了 close_action）
+        if self.tray.is_available():
+            if new_cfg.close_action == "minimize_to_tray":
+                self.tray.show()
+            else:
+                self.tray.hide()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Intercept × per AppConfig.close_action."""
+        if self.config.close_action == "minimize_to_tray" and self.tray.is_available():
+            event.ignore()
+            self.hide()
+            if not self.config.tray_first_minimize_shown:
+                self.tray.show_first_minimize_bubble()
+                self.config.tray_first_minimize_shown = True
+                self.save_config()
+            return
+        event.accept()
+        super().closeEvent(event)
+
+    def _show_main_window(self) -> None:
+        """Restore the main window from tray. Idempotent."""
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_new_article(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.home)
+        try:
+            self.home.keyword_input.setFocus()
+        except AttributeError:
+            pass
+
+    def _on_tray_new_template(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.template_manager)
+        try:
+            self.template_manager.list_panel._on_new()
+        except AttributeError:
+            pass
+
+    def _on_tray_new_skill(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.skills)
+        try:
+            self.skills.new_btn.click()
+        except AttributeError:
+            pass
+
+    def _on_tray_settings(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.settings)
+
+    def _on_tray_quit(self) -> None:
+        """Bypass closeEvent — true exit."""
+        self.tray.hide()
+        QApplication.instance().quit()
 
     def _on_request_generate(self, payload: dict) -> None:
         ok = self.article_controller.request_generate(payload)

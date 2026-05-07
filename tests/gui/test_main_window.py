@@ -1,4 +1,55 @@
 from csm_gui.main_window import MainWindow
+from PyQt6.QtGui import QCloseEvent
+
+
+def _make_close_event() -> QCloseEvent:
+    return QCloseEvent()
+
+
+def test_close_event_minimize_to_tray_hides_window(qtbot, tmp_path):
+    """close_action='minimize_to_tray' should hide() the window instead of closing."""
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.close_action = "minimize_to_tray"
+    win.show()
+    qtbot.waitExposed(win)
+    assert win.isVisible()
+
+    ev = _make_close_event()
+    win.closeEvent(ev)
+    qtbot.wait(100)
+    assert not win.isVisible()
+    assert not ev.isAccepted()
+
+
+def test_close_event_quit_mode_accepts(qtbot, tmp_path):
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.close_action = "quit"
+    ev = _make_close_event()
+    win.closeEvent(ev)
+    assert ev.isAccepted()
+
+
+def test_show_main_window_brings_to_front(qtbot, tmp_path):
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.hide()
+    win._show_main_window()
+    qtbot.wait(50)
+    assert win.isVisible()
+
+
+def test_tray_new_article_focuses_keyword_input(qtbot, tmp_path):
+    """When tray menu emits new_article_requested, MainWindow switches to home."""
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitExposed(win)
+
+    win._on_tray_new_article()
+    qtbot.wait(50)
+    assert win.stackedWidget.currentWidget() is win.home
 
 
 def test_main_window_has_nav_items(qtbot, tmp_path):
