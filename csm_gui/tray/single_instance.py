@@ -57,7 +57,8 @@ class SingleInstance(QObject):
         return True
 
     def _on_new_connection(self) -> None:
-        assert self._server is not None
+        if self._server is None:
+            return
         sock = self._server.nextPendingConnection()
         if sock is None:
             return
@@ -75,11 +76,14 @@ class SingleInstance(QObject):
         if not sock.waitForConnected(_TIMEOUT_MS):
             return False
         sock.write(_SHOW_MSG)
+        # On Windows named pipes, waitForBytesWritten blocks until the server
+        # reads the data — which cannot happen until _on_new_connection runs.
+        # Since both sides share one thread, we must pump the event loop here
+        # to let newConnection / readyRead dispatch before waiting on the write.
+        # This is a Windows pipe constraint, not test-mechanical code.
+        QCoreApplication.processEvents()
         ok = sock.waitForBytesWritten(_TIMEOUT_MS)
         sock.disconnectFromServer()
-        # Allow the server's Qt event loop to process the newConnection/readyRead
-        # signals before we return (important for in-process tests).
-        QCoreApplication.processEvents()
         return ok
 
     def release(self) -> None:
