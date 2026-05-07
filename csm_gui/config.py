@@ -30,6 +30,14 @@ class AppConfig(BaseModel):
     close_action: CloseAction = "minimize_to_tray"
     tray_first_minimize_shown: bool = False
 
+    # ── Dedup detection ────────────────────────────────────────────────
+    dedup_enabled: bool = False
+    dedup_history_dir: str = ""
+    dedup_threshold_green: int = 15           # %
+    dedup_threshold_yellow: int = 30          # %
+    dedup_history_last_built: str = ""        # ISO timestamp
+    dedup_vault_last_built: str = ""
+
 
 def load_config(path: Path) -> AppConfig:
     path = Path(path)

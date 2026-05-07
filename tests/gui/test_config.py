@@ -76,3 +76,31 @@ def test_appconfig_loads_old_settings_without_close_action(tmp_path):
     cfg = load_config(p)
     assert cfg.close_action == "minimize_to_tray"
     assert cfg.tray_first_minimize_shown is False
+
+
+def test_appconfig_dedup_defaults():
+    from csm_gui.config import AppConfig
+    cfg = AppConfig()
+    assert cfg.dedup_enabled is False
+    assert cfg.dedup_history_dir == ""
+    assert cfg.dedup_threshold_green == 15
+    assert cfg.dedup_threshold_yellow == 30
+    assert cfg.dedup_history_last_built == ""
+    assert cfg.dedup_vault_last_built == ""
+
+
+def test_appconfig_dedup_loads_old_settings(tmp_path):
+    """老 settings.json 没有 dedup_* 字段时回退到默认值。"""
+    from csm_gui.config import AppConfig, load_config
+    p = tmp_path / "settings.json"
+    p.write_text('{"vault_root":"/tmp"}', encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.dedup_enabled is False
+    assert cfg.dedup_history_dir == ""
+
+
+def test_appconfig_dedup_threshold_validation():
+    from csm_gui.config import AppConfig
+    cfg = AppConfig(dedup_threshold_green=20, dedup_threshold_yellow=40)
+    assert cfg.dedup_threshold_green == 20
+    assert cfg.dedup_threshold_yellow == 40
