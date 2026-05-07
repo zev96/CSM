@@ -33,10 +33,22 @@ jobs:
 
       - name: Inject PAT into _token.py
         shell: pwsh
+        # IMPORTANT: do NOT use a here-string here. YAML's `run: |` indents
+        # the body, but PowerShell here-string terminator `"@` MUST be at
+        # column 0 — indentation breaks it silently (file gets garbage).
+        # Use a one-line Set-Content with a single-quoted literal instead.
+        run: Set-Content -Path csm_core\updater_client\_token.py -Encoding utf8 -Value 'TOKEN = "${{ secrets.CSM_RELEASE_PAT }}"'
+
+      - name: Verify _token.py was written correctly
+        shell: pwsh
         run: |
-          @"
-          TOKEN = "${{ secrets.CSM_RELEASE_PAT }}"
-          "@ | Set-Content -Path csm_core\updater_client\_token.py -Encoding utf8
+          $content = Get-Content csm_core\updater_client\_token.py -Raw
+          $size = (Get-Item csm_core\updater_client\_token.py).Length
+          Write-Host "_token.py size: $size bytes"
+          # Sanity check: file should be > 30 bytes (TOKEN = "..." with a real PAT)
+          # but < 200 bytes (a real PAT is ~93 chars). Don't print content.
+          if ($size -lt 30) { Write-Error "TOKEN appears empty — check CSM_RELEASE_PAT secret"; exit 1 }
+          if ($size -gt 200) { Write-Warning "TOKEN looks unusually long ($size bytes)" }
 
       - name: Build CSM main app
         run: pyinstaller CSM.spec

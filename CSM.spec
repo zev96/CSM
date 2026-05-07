@@ -61,6 +61,10 @@ hiddenimports = [
     'csm_core.updater_client.checker',
     'csm_core.updater_client.downloader',
     'csm_core.updater_client.github_client',
+    # _token.py is created by CI at build time; the import is inside a
+    # try/except in main_window which PyInstaller's static analyzer
+    # sometimes skips. List explicitly so it's always bundled.
+    'csm_core.updater_client._token',
     # Version
     'csm_gui._version',
 ]
