@@ -79,3 +79,47 @@ def test_settings_page_close_action_save_quit(qtbot):
     page._save()
     assert saved
     assert saved[-1].close_action == "quit"
+
+
+def test_settings_page_has_dedup_section(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    cfg = AppConfig()
+    page = SettingsPage(config=cfg, on_save=lambda c: None)
+    qtbot.addWidget(page)
+    assert hasattr(page, "dedup_enabled_switch")
+    assert hasattr(page, "dedup_history_dir_edit")
+    assert hasattr(page, "dedup_rebuild_history_button")
+    assert hasattr(page, "dedup_rebuild_vault_button")
+    assert hasattr(page, "dedup_threshold_green_spin")
+    assert hasattr(page, "dedup_threshold_yellow_spin")
+
+
+def test_settings_page_dedup_save_persists_fields(qtbot, tmp_path):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    cfg = AppConfig()
+    saved: list[AppConfig] = []
+    page = SettingsPage(config=cfg, on_save=lambda c: saved.append(c))
+    qtbot.addWidget(page)
+    page.dedup_enabled_switch.setChecked(True)
+    page.dedup_history_dir_edit.setText(str(tmp_path))
+    page.dedup_threshold_green_spin.setValue(20)
+    page.dedup_threshold_yellow_spin.setValue(40)
+    page._save()
+    assert saved
+    assert saved[-1].dedup_enabled is True
+    assert saved[-1].dedup_history_dir == str(tmp_path)
+    assert saved[-1].dedup_threshold_green == 20
+    assert saved[-1].dedup_threshold_yellow == 40
+
+
+def test_settings_page_dedup_rebuild_history_emits_signal(qtbot, tmp_path):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    cfg = AppConfig(dedup_history_dir=str(tmp_path))
+    page = SettingsPage(config=cfg, on_save=lambda c: None)
+    qtbot.addWidget(page)
+    with qtbot.waitSignal(page.dedup_rebuild_requested, timeout=1000) as blocker:
+        page.dedup_rebuild_history_button.click()
+    assert blocker.args[0] == "history"

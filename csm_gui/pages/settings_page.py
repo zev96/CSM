@@ -15,10 +15,10 @@ import sys
 import subprocess
 from typing import Callable, Literal, cast
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QStackedWidget,
-    QScrollArea, QFrame, QLabel, QButtonGroup, QSizePolicy,
+    QScrollArea, QFrame, QLabel, QButtonGroup, QSizePolicy, QSpinBox,
 )
 from qfluentwidgets import (
     ComboBox, SpinBox, LineEdit, PasswordLineEdit,
@@ -614,11 +614,14 @@ _GROUPS = [
     ("models",  "模型",       FluentIcon.ROBOT),
     ("skill",   "Skill 默认", FluentIcon.DICTIONARY),
     ("export",  "导出",       FluentIcon.SAVE),
+    ("dedup",   "历史查重",   FluentIcon.SEARCH),
     ("account", "账号",       FluentIcon.PEOPLE),
 ]
 
 
 class SettingsPage(QWidget):
+    dedup_rebuild_requested = pyqtSignal(str)  # "history" | "vault"
+
     def __init__(self, config: AppConfig, on_save: Callable[[AppConfig], None], parent=None):
         super().__init__(parent)
         self.setObjectName("SettingsPage")
@@ -720,6 +723,7 @@ class SettingsPage(QWidget):
         self._group_index["models"] = self._add_panel(self._build_models())
         self._group_index["skill"] = self._add_panel(self._build_skill())
         self._group_index["export"] = self._add_panel(self._build_export())
+        self._group_index["dedup"] = self._add_panel(self._build_dedup())
         self._group_index["account"] = self._add_panel(self._build_account())
 
         # Default selection
@@ -938,6 +942,82 @@ class SettingsPage(QWidget):
         card.add_row(r)
         return self._wrap_group(card)
 
+    def _build_dedup(self) -> QWidget:
+        """历史查重 section — enable toggle, corpus dir, rebuild buttons, thresholds."""
+        card = _SettingsCard("历史查重", "对比历史文章库和 vault 素材，识别撞稿与未消化原文")
+
+        # Enable switch
+        row_enable = _SettingsRow("启用历史查重")
+        self.dedup_enabled_switch = SwitchButton(self)
+        self.dedup_enabled_switch.setChecked(self._config.dedup_enabled)
+        row_enable.set_control(self.dedup_enabled_switch)
+        card.add_row(row_enable)
+
+        # History dir
+        row_dir = _SettingsRow("历史文章库目录")
+        dir_holder = QWidget(self)
+        dir_lay = QHBoxLayout(dir_holder)
+        dir_lay.setContentsMargins(0, 0, 0, 0)
+        dir_lay.setSpacing(6)
+        self.dedup_history_dir_edit = LineEdit(dir_holder)
+        self.dedup_history_dir_edit.setText(self._config.dedup_history_dir or "")
+        self.dedup_history_dir_edit.setPlaceholderText("选择存放历史成品文章的目录")
+        dir_lay.addWidget(self.dedup_history_dir_edit, 1)
+        browse_btn = PushButton("选择…", dir_holder)
+        browse_btn.clicked.connect(self._on_browse_dedup_history_dir)
+        dir_lay.addWidget(browse_btn)
+        row_dir.set_control(dir_holder)
+        card.add_row(row_dir)
+
+        # Rebuild buttons
+        row_rebuild = _SettingsRow("重建索引")
+        rebuild_holder = QWidget(self)
+        rb_lay = QHBoxLayout(rebuild_holder)
+        rb_lay.setContentsMargins(0, 0, 0, 0)
+        rb_lay.setSpacing(6)
+        self.dedup_rebuild_history_button = PushButton("重建历史索引", rebuild_holder)
+        self.dedup_rebuild_history_button.clicked.connect(
+            lambda: self.dedup_rebuild_requested.emit("history")
+        )
+        rb_lay.addWidget(self.dedup_rebuild_history_button)
+        self.dedup_rebuild_vault_button = PushButton("重建 Vault 索引", rebuild_holder)
+        self.dedup_rebuild_vault_button.clicked.connect(
+            lambda: self.dedup_rebuild_requested.emit("vault")
+        )
+        rb_lay.addWidget(self.dedup_rebuild_vault_button)
+        rb_lay.addStretch(1)
+        row_rebuild.set_control(rebuild_holder)
+        card.add_row(row_rebuild)
+
+        # Thresholds
+        row_th = _SettingsRow("阈值 (绿/黄)")
+        th_holder = QWidget(self)
+        th_lay = QHBoxLayout(th_holder)
+        th_lay.setContentsMargins(0, 0, 0, 0)
+        th_lay.setSpacing(6)
+        self.dedup_threshold_green_spin = QSpinBox(th_holder)
+        self.dedup_threshold_green_spin.setRange(1, 99)
+        self.dedup_threshold_green_spin.setSuffix(" %")
+        self.dedup_threshold_green_spin.setValue(self._config.dedup_threshold_green)
+        th_lay.addWidget(self.dedup_threshold_green_spin)
+        self.dedup_threshold_yellow_spin = QSpinBox(th_holder)
+        self.dedup_threshold_yellow_spin.setRange(1, 99)
+        self.dedup_threshold_yellow_spin.setSuffix(" %")
+        self.dedup_threshold_yellow_spin.setValue(self._config.dedup_threshold_yellow)
+        th_lay.addWidget(self.dedup_threshold_yellow_spin)
+        th_lay.addStretch(1)
+        row_th.set_control(th_holder)
+        card.add_row(row_th)
+
+        return self._wrap_group(card)
+
+    def _on_browse_dedup_history_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(
+            self, "选择历史文章库目录",
+            self.dedup_history_dir_edit.text() or "")
+        if d:
+            self.dedup_history_dir_edit.setText(d)
+
     def _build_account(self) -> QWidget:
         card = _SettingsCard("账号")
         r = _SettingsRow("当前用户")
@@ -984,6 +1064,10 @@ class SettingsPage(QWidget):
         idx = self.close_action_combo.findData(cfg.close_action)
         if idx >= 0:
             self.close_action_combo.setCurrentIndex(idx)
+        self.dedup_enabled_switch.setChecked(cfg.dedup_enabled)
+        self.dedup_history_dir_edit.setText(cfg.dedup_history_dir or "")
+        self.dedup_threshold_green_spin.setValue(cfg.dedup_threshold_green)
+        self.dedup_threshold_yellow_spin.setValue(cfg.dedup_threshold_yellow)
 
     def _save(self) -> None:
         api_keys: dict[str, str] = {}
@@ -1022,5 +1106,12 @@ class SettingsPage(QWidget):
                 Literal["minimize_to_tray", "quit"],
                 self.close_action_combo.currentData() or "minimize_to_tray",
             ),
+            dedup_enabled=self.dedup_enabled_switch.isChecked(),
+            dedup_history_dir=self.dedup_history_dir_edit.text(),
+            dedup_threshold_green=self.dedup_threshold_green_spin.value(),
+            dedup_threshold_yellow=self.dedup_threshold_yellow_spin.value(),
+            dedup_history_last_built=self._config.dedup_history_last_built,
+            dedup_vault_last_built=self._config.dedup_vault_last_built,
         )
+        self._config = new_cfg
         self._on_save(new_cfg)
