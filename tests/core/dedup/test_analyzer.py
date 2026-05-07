@@ -33,7 +33,11 @@ def test_analyze_finds_overlap(tmp_path: Path):
     analyzer = DedupAnalyzer()
     analyzer.build_index(tmp_path, kind="history")
 
-    current = "前缀文本无关。今天天气真好，适合出门散步去公园看花。后缀也无关内容。"
+    current = (
+        "前缀文字相关内容描述无关的填充。"
+        + "今天天气真好，适合出门散步去公园看花。" * 3
+        + "后缀继续写无关的内容拉长整段文本以满足最小长度要求。"
+    )
     report = analyzer.analyze(current, kind="history")
 
     assert report.corpus_kind == "history"

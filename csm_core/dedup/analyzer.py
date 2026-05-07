@@ -22,7 +22,7 @@ from .shingles import (
 
 logger = logging.getLogger(__name__)
 
-MIN_ANALYZABLE_CHARS = 20
+MIN_ANALYZABLE_CHARS = 50
 TOP_MATCHES_RETURNED = 3
 TOP_K_CANDIDATES = 10
 EXCERPT_CONTEXT = 50
