@@ -43,6 +43,7 @@ _KIND_LABELS = {
     "hero_brand":     "主推",
     "competitor_pool":"对比池",
     "literal":        "文本",
+    "test_framework": "测试部分",
 }
 
 

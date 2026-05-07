@@ -22,11 +22,20 @@ class AnthropicClient:
         return self._sdk
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def complete(self, *, system: str, user: str) -> str:
-        resp = self._client().messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
+    def complete(
+        self,
+        *,
+        system: str,
+        user: str,
+        temperature: float | None = None,
+    ) -> str:
+        kwargs: dict[str, object] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        resp = self._client().messages.create(**kwargs)
         return resp.content[0].text

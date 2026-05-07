@@ -123,3 +123,7 @@ class ArticlePage(QWidget):
     def apply_config(self, cfg):
         self.controls.set_skill_dir(Path(cfg.skill_dir) if cfg.skill_dir else None)
         self.controls.set_provider_default(cfg.default_provider)
+
+    def showEvent(self, ev):  # noqa: N802
+        super().showEvent(ev)
+        self.controls.refresh_skills()

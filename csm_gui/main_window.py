@@ -1,8 +1,11 @@
 """FluentWindow shell with three navigation items."""
 from __future__ import annotations
 from pathlib import Path
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QGraphicsOpacityEffect,
+)
 from qfluentwidgets import (
     FluentWindow, FluentIcon, NavigationItemPosition, NavigationDisplayMode,
 )
@@ -84,8 +87,10 @@ class MainWindow(FluentWindow):
         self.article_controller.export_failed.connect(self._on_export_failed)
         self.article_controller.reroll_completed.connect(self._on_reroll_completed)
         self.article_controller.reroll_failed.connect(self._on_reroll_failed)
+        self.article_controller.titles_ready.connect(self._on_titles_ready)
+        self.article_controller.titles_failed.connect(self._on_titles_failed)
 
-        self.home = HomePage(config=self.config, parent=self)
+        self.home = HomePage(config=self.config, config_dir=self.config_dir, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
 
         self.batch_controller = BatchController(self.config, parent=self)
@@ -174,13 +179,20 @@ class MainWindow(FluentWindow):
         # Force the home page to be the initial view.
         self.switchTo(self.home)
 
+        # First-run gate — if no local account, take over the entire
+        # window with a full-screen welcome overlay before any other UI
+        # is reachable. ``_show_first_run_overlay`` hides the title bar /
+        # sidebar / stack and only restores them once the user submits.
+        self._first_run_overlay: QWidget | None = None
+        if not self.config.user_name:
+            QTimer.singleShot(0, self._show_first_run_overlay)
+
     def _build_brand_header(self) -> None:
         """Inject a CSM / Content Studio header at the top of the nav panel.
 
-        ``NavigationInterface.insertWidget`` requires a NavigationWidget
-        subclass and we want a passive label, so reach into the panel's
-        topLayout directly. The hamburger is hidden first so the brand
-        sits at the actual top edge.
+        Layout: [logo / wordmark]  [account avatar].
+        The avatar is a circular initials button right of the brand. Click
+        opens the account-edit dialog.
         """
         panel = self.navigationInterface.panel
         try:
@@ -189,17 +201,20 @@ class MainWindow(FluentWindow):
             pass
 
         header = QWidget(panel)
-        lay = QVBoxLayout(header)
-        lay.setContentsMargins(20, 14, 16, 12)
-        lay.setSpacing(0)
+        outer = QHBoxLayout(header)
+        outer.setContentsMargins(20, 14, 12, 12)
+        outer.setSpacing(8)
 
-        # Brand mark — show the bundled logo at 32×32 if it ships with the
-        # app; fall back to the original "CSM / Content Studio" wordmark so
-        # the build keeps running even before the asset is dropped in.
+        # ── Brand mark column ──────────────────────────────────────────
+        brand_col = QWidget(header)
+        brand_lay = QVBoxLayout(brand_col)
+        brand_lay.setContentsMargins(0, 0, 0, 0)
+        brand_lay.setSpacing(0)
+
         from PyQt6.QtGui import QPixmap
         logo_path = Path(__file__).parent / "assets" / "csm-logo.png"
         if logo_path.exists():
-            logo = QLabel(header)
+            logo = QLabel(brand_col)
             pm = QPixmap(str(logo_path)).scaled(
                 32, 32,
                 Qt.AspectRatioMode.KeepAspectRatio,
@@ -208,19 +223,29 @@ class MainWindow(FluentWindow):
             logo.setPixmap(pm)
             logo.setFixedSize(32, 32)
             logo.setStyleSheet("background: transparent;")
-            lay.addWidget(logo)
+            brand_lay.addWidget(logo)
         else:
-            title = QLabel("CSM", header)
+            title = QLabel("CSM", brand_col)
             title.setStyleSheet(
                 "color: #1e1c19; font-size: 18px; font-weight: 700;"
                 "letter-spacing: 0.5px; background: transparent;"
             )
-            subtitle = QLabel("Content Studio", header)
+            subtitle = QLabel("Content Studio", brand_col)
             subtitle.setStyleSheet(
                 "color: rgba(30,28,25,0.45); font-size: 11px; background: transparent;"
             )
-            lay.addWidget(title)
-            lay.addWidget(subtitle)
+            brand_lay.addWidget(title)
+            brand_lay.addWidget(subtitle)
+        outer.addWidget(brand_col, 1)
+
+        # ── Account avatar ─────────────────────────────────────────────
+        self._avatar_btn = QPushButton(header)
+        self._avatar_btn.setFixedSize(32, 32)
+        self._avatar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._avatar_btn.clicked.connect(self._on_edit_account)
+        self._refresh_avatar_button()
+        outer.addWidget(self._avatar_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         try:
             panel.topLayout.insertWidget(0, header, alignment=Qt.AlignmentFlag.AlignTop)
         except Exception:
@@ -228,6 +253,139 @@ class MainWindow(FluentWindow):
                 panel.vBoxLayout.insertWidget(0, header, alignment=Qt.AlignmentFlag.AlignTop)
             except Exception:
                 pass
+
+    # ── Local account ───────────────────────────────────────────────────
+    def _refresh_avatar_button(self) -> None:
+        from .widgets.account_dialog import initial_for
+        name = self.config.user_name
+        product = self.config.user_product
+        initial = initial_for(name)
+        # Accent green bg, white text for solid contrast on either theme.
+        bg = "#2f6f5e"
+        fg = "#ffffff"
+        self._avatar_btn.setText(initial)
+        self._avatar_btn.setStyleSheet(
+            f"QPushButton {{ background: {bg}; color: {fg};"
+            f" border: none; border-radius: 16px;"
+            f" font-weight: 700; font-size: 13px; }}"
+            f"QPushButton:hover {{ background: #245a4c; }}"
+        )
+        if name:
+            tip = f"{name} · {product}" if product else name
+        else:
+            tip = "点击建立本地账户"
+        self._avatar_btn.setToolTip(tip)
+
+    def _on_edit_account(self) -> None:
+        from .widgets.account_dialog import AccountDialog
+        dlg = AccountDialog(
+            name=self.config.user_name,
+            product=self.config.user_product,
+            parent=self,
+        )
+        if not dlg.exec():
+            return
+        name, product = dlg.values()
+        self.notify_account_changed(name, product)
+
+    # ── First-run welcome overlay ──────────────────────────────────────
+    def _show_first_run_overlay(self) -> None:
+        """Slap a full-window welcome screen on top of everything.
+
+        While the overlay is up, the navigation sidebar, title bar, and
+        page stack are all hidden — the user sees only the welcome form.
+        On submit we persist the account, fade the overlay out, and
+        restore the chrome.
+        """
+        from .widgets.first_run_welcome import FirstRunWelcome
+
+        if self._first_run_overlay is not None:
+            return
+
+        # Hide chrome.
+        try:
+            self.titleBar.hide()
+        except Exception:
+            pass
+        try:
+            self.navigationInterface.hide()
+        except Exception:
+            pass
+        try:
+            self.stackedWidget.hide()
+        except Exception:
+            pass
+
+        overlay = FirstRunWelcome(self)
+        overlay.setGeometry(self.rect())
+        overlay.show()
+        overlay.raise_()
+        overlay.submitted.connect(self._on_first_run_submitted)
+        self._first_run_overlay = overlay
+
+    def _on_first_run_submitted(self, name: str, product) -> None:
+        """Fade overlay → persist account → restore chrome."""
+        # Persist immediately so a crash mid-fade doesn't lose the data.
+        self.notify_account_changed(name, product or None)
+
+        overlay = self._first_run_overlay
+        if overlay is None:
+            return
+
+        # Fade-out animation on a graphics opacity effect (windowOpacity
+        # is top-level only). 200ms ease-out.
+        effect = QGraphicsOpacityEffect(overlay)
+        effect.setOpacity(1.0)
+        overlay.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(200)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def _finish() -> None:
+            try:
+                self.titleBar.show()
+            except Exception:
+                pass
+            try:
+                self.navigationInterface.show()
+            except Exception:
+                pass
+            try:
+                self.stackedWidget.show()
+            except Exception:
+                pass
+            overlay.hide()
+            overlay.deleteLater()
+            self._first_run_overlay = None
+
+        anim.finished.connect(_finish)
+        anim.start()
+        # Keep a reference so Qt doesn't GC the animation mid-flight.
+        self._first_run_anim = anim
+
+    def resizeEvent(self, ev):  # noqa: N802
+        super().resizeEvent(ev)
+        # Keep the overlay glued to the full window during the welcome step.
+        if self._first_run_overlay is not None:
+            self._first_run_overlay.setGeometry(self.rect())
+
+    def notify_account_changed(self, name: str | None, product: str | None) -> None:
+        """Single source of truth for account updates: persists + broadcasts."""
+        self.config.user_name = name
+        self.config.user_product = product
+        self.save_config()
+        self._refresh_avatar_button()
+        # Push into pages that surface the account.
+        try:
+            self.home.apply_user(name)
+        except Exception:
+            pass
+        try:
+            self.settings.apply_user(name, product)
+        except Exception:
+            pass
 
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
@@ -243,6 +401,14 @@ class MainWindow(FluentWindow):
         self.article_controller.apply_config(new_cfg)
 
     def _on_request_generate(self, payload: dict) -> None:
+        # Wipe any title candidates left over from the previous article so
+        # the cycle button doesn't surface stale options while the new
+        # title worker is still running. New candidates will populate via
+        # ``titles_ready`` once the LLM responds.
+        try:
+            self.article.header_bar.clear_title_candidates()
+        except Exception:
+            pass
         ok = self.article_controller.request_generate(payload)
         if not ok:
             from qfluentwidgets import InfoBar, InfoBarPosition
@@ -325,6 +491,29 @@ class MainWindow(FluentWindow):
         from qfluentwidgets import InfoBar, InfoBarPosition
         InfoBar.warning(
             title="重抽失败", content=msg, parent=self,
+            position=InfoBarPosition.TOP, duration=4000,
+        )
+
+    def _on_titles_ready(self, titles: list) -> None:
+        # Hand the candidate list to the header bar — it picks the first
+        # one for the title input (unless the user edited it) and exposes
+        # the rest behind the cycle button.
+        try:
+            self.article.header_bar.set_title_candidates(list(titles))
+        except Exception:
+            # Header bar might not be ready in some unit-test contexts —
+            # silently ignore rather than crash the worker callback.
+            pass
+
+    def _on_titles_failed(self, msg: str) -> None:
+        # Title generation failure is non-fatal — the article can still
+        # be drafted / polished / exported with a manual title. Surface
+        # only as a quiet info bar so users see *why* the title didn't
+        # update, but the workspace doesn't lose focus.
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        first_line = msg.splitlines()[0] if msg else "未知错误"
+        InfoBar.warning(
+            title="标题生成失败", content=first_line, parent=self,
             position=InfoBarPosition.TOP, duration=4000,
         )
 

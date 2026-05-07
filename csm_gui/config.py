@@ -26,6 +26,15 @@ class AppConfig(BaseModel):
     concurrency: int = 3
     upload_training_hints: bool = False
     export_format: Literal["markdown", "docx"] = "markdown"
+    # Local account — first-run wizard collects these, sidebar avatar /
+    # home greeting / settings chip read them. ``user_name`` is required
+    # for any first-run flow to dismiss; ``user_product`` is optional.
+    user_name: str | None = None
+    user_product: str | None = None
+    # Per-provider "last successfully tested" signature (sha256 of
+    # api_key|model|base_url). Settings page restores the 已连接 badge on
+    # startup when the current form values still match the recorded sig.
+    tested_ok: dict[str, str] = Field(default_factory=dict)
 
 
 def load_config(path: Path) -> AppConfig:

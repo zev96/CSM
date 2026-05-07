@@ -28,6 +28,21 @@ def _heading_level(line: str) -> tuple[int, str] | None:
     return len(m.group(1)), m.group(2).strip()
 
 
+# Inline markdown bold ``**text**``. Non-greedy, single-line, requires at
+# least one inner char. Used by the docx writer to apply Word's bold run
+# property instead of leaving the raw asterisks visible.
+_BOLD_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
+
+
+def _strip_bold_markers(text: str) -> str:
+    """Drop ``**...**`` wrappers but keep the inner text.
+
+    Used for heading bodies — Word heading styles are already bold, so
+    the asterisks are pure noise.
+    """
+    return _BOLD_RE.sub(r"\1", text)
+
+
 def extract_title(text: str) -> str:
     """Pull the first H1 / H2 line from a markdown document.
 
@@ -149,13 +164,36 @@ def _override_heading_styles(doc) -> None:
             rFonts.set(qn(attr), _DOCX_FONT)
 
 
+def _add_inline_runs(paragraph, text: str) -> None:
+    """Append runs to *paragraph*, parsing inline ``**bold**`` markup.
+
+    Splits *text* into alternating plain / bold segments and emits each
+    as a separate run with the right ``run.bold`` flag. The Word run
+    font is also reset on every run so the document's default 黑色 +
+    OPPOSans styling stays consistent.
+    """
+    pos = 0
+    for m in _BOLD_RE.finditer(text):
+        if m.start() > pos:
+            run = paragraph.add_run(text[pos:m.start()])
+            _set_run_font(run, color=_HEADING_COLOR)
+        run = paragraph.add_run(m.group(1))
+        run.bold = True
+        _set_run_font(run, color=_HEADING_COLOR)
+        pos = m.end()
+    if pos < len(text):
+        run = paragraph.add_run(text[pos:])
+        _set_run_font(run, color=_HEADING_COLOR)
+
+
 def _write_docx(path: Path, text: str) -> None:
     """Render the markdown as a .docx — headings + paragraphs.
 
     Paragraph grouping follows markdown semantics: blocks are separated
     by blank lines. Headings (`#`…`######`) become Word heading styles
-    repainted black; everything else becomes a Normal paragraph. All
-    paragraphs run at 1.5 line spacing.
+    repainted black; everything else becomes a Normal paragraph with
+    inline ``**bold**`` markup applied via Word's run-bold property.
+    All paragraphs run at 1.5 line spacing.
     """
     from docx import Document
     doc = Document()
@@ -182,6 +220,9 @@ def _write_docx(path: Path, text: str) -> None:
         heading = _heading_level(first)
         if heading is not None and len(block) == 1:
             level, body = heading
+            # Word heading 样式自带粗体，去掉 ``**...**`` 包裹只保留文字
+            # 否则会看到字面星号。
+            body = _strip_bold_markers(body)
             p = doc.add_heading(level=min(level, 4))
             p.paragraph_format.line_spacing = _LINE_SPACING
             run = p.add_run(body)
@@ -198,8 +239,7 @@ def _write_docx(path: Path, text: str) -> None:
                 br_run = p.add_run()
                 br_run.add_break()
                 _set_run_font(br_run, color=_HEADING_COLOR)
-            run = p.add_run(line)
-            _set_run_font(run, color=_HEADING_COLOR)
+            _add_inline_runs(p, line)
 
     doc.save(str(path))
 

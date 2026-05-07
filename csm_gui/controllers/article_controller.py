@@ -14,6 +14,7 @@ from ..config import AppConfig
 from csm_core.pipeline import GenerateRequest
 from ..workers.generate_worker import GenerateWorker
 from ..workers.polish_worker import PolishWorker
+from ..workers.title_worker import TitleWorker
 from ..llm_factory import build_client
 from csm_core.llm.prompts import build_prompt, PromptInputs
 from csm_core.assembler.render import compose_draft
@@ -31,6 +32,8 @@ class ArticleController(QObject):
     busy_changed = pyqtSignal(bool)
     reroll_completed = pyqtSignal(object)    # AssemblyPlan
     reroll_failed = pyqtSignal(str)
+    titles_ready = pyqtSignal(list)          # list[str] — candidate titles
+    titles_failed = pyqtSignal(str)
 
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -42,6 +45,7 @@ class ArticleController(QObject):
         self._generate_worker = None
         self._polish_worker = None
         self._reroll_worker = None
+        self._title_worker = None
         # Last payload accepted by ``request_generate`` — stored so
         # ``rerun_all`` can re-submit with a fresh seed without making the
         # UI round-trip back to the home page.
@@ -73,6 +77,9 @@ class ArticleController(QObject):
             # Two-phase flow: only assemble the draft here. The user reviews
             # / edits, then triggers ``polish`` to spend the LLM call.
             draft_only=True,
+            # Optional override — UI may pass a user-edited core keyword.
+            # When absent, assembler auto-extracts from keyword.
+            core_keyword=payload.get("core_keyword") or None,
         )
         self._generate_worker = GenerateWorker(req, self)
         self._generate_worker.finished.connect(self._on_generate_finished)
@@ -80,7 +87,54 @@ class ArticleController(QObject):
         self._generate_worker.start()
         self._last_payload = dict(payload)
         self.busy_changed.emit(True)
+
+        # Fire title generation in parallel with draft assembly. The
+        # worker is fire-and-forget — title results don't block the draft
+        # flow and arrive via ``titles_ready`` whenever the LLM responds.
+        self._fire_title_worker(payload)
         return True
+
+    def _fire_title_worker(self, payload: dict) -> None:
+        """Kick off auto-title generation alongside draft assembly.
+
+        Reads the template once just to extract ``template_type``; we
+        don't cache that on the controller because the user may have
+        switched templates between runs. Failures are non-fatal —
+        ``titles_failed`` only fires for unexpected exceptions; the
+        generator itself returns a fallback title rather than raising
+        when the LLM trips.
+        """
+        from csm_core.template.loader import load_template
+        if self._title_worker is not None and self._title_worker.isRunning():
+            # Don't pile up — let the previous run finish. The user can
+            # cycle candidates manually if they ran 重新生成 quickly.
+            return
+        try:
+            tpl = load_template(self._last_template_path)
+        except Exception as exc:  # noqa: BLE001
+            self.titles_failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+        client = build_client(self._config, payload["provider"])
+        self._title_worker = TitleWorker(
+            keyword=payload["keyword"],
+            template_type=tpl.template_type,
+            vault_root=Path(payload["vault_root"]),
+            llm_client=client,
+            parent=self,
+        )
+        self._title_worker.finished.connect(self._on_titles_finished)
+        self._title_worker.failed.connect(self._on_titles_failed)
+        self._title_worker.start()
+
+    def _on_titles_finished(self, titles: list) -> None:
+        # Generator never returns an empty list, but be defensive — UI
+        # should still see at least a one-element list.
+        if not titles:
+            return
+        self.titles_ready.emit(list(titles))
+
+    def _on_titles_failed(self, msg: str) -> None:
+        self.titles_failed.emit(msg)
 
     def rerun_all(self) -> bool:
         """Re-submit the last generate request with a freshly rolled seed.
@@ -255,6 +309,8 @@ class ArticleController(QObject):
         gen_busy = self._generate_worker is not None and self._generate_worker.isRunning()
         polish_busy = self._polish_worker is not None and self._polish_worker.isRunning()
         reroll_busy = self._reroll_worker is not None and self._reroll_worker.isRunning()
+        # Title worker intentionally NOT counted — it's a background
+        # affordance, not a step the user is waiting on.
         return gen_busy or polish_busy or reroll_busy
 
     # --- internals ---

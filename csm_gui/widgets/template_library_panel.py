@@ -21,12 +21,18 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     SubtitleLabel, BodyLabel, CaptionLabel,
-    LineEdit, PushButton, PrimaryPushButton, FluentIcon,
+    LineEdit, PushButton, PrimaryPushButton, ToolButton, ComboBox, FluentIcon,
     ScrollArea, MessageBox, MessageBoxBase, InfoBar, InfoBarPosition,
 )
 
 from csm_core.template.loader import list_templates, load_template, save_template
 from csm_core.template.schema import Template, LiteralBlock
+
+
+# ── 模板分类 ─────────────────────────────────────────────────────────────
+# 与 csm_core.template.schema.TemplateType 的 Literal 一一对应。新增分类时
+# 两边都要改。第一项默认作为"新建模板"对话框的初始值。
+TEMPLATE_TYPES: list[str] = ["导购文", "对比文", "单品文", "长文"]
 
 
 # ── Design tokens (mirroring theme.css) ──────────────────────────────────────
@@ -212,6 +218,7 @@ _SPINE_COLORS = {
 
 class _TplCard(QFrame):
     clicked = pyqtSignal()
+    copy_requested = pyqtSignal()  # 用户点击 "复制" 图标
 
     def __init__(self, name: str, desc: str, tag: str, blocks: int,
                  used: int, date: str, kind: str, spine: str = "", parent=None):
@@ -263,15 +270,32 @@ class _TplCard(QFrame):
         foot = QFrame(self)
         foot.setStyleSheet(
             f"QFrame {{ border: none; border-top: 1px dashed {_qss_color(_INK_5)}; }}")
-        foot.setFixedHeight(24)
+        foot.setFixedHeight(28)
         foot_lay = QHBoxLayout(foot)
         foot_lay.setContentsMargins(0, 4, 0, 0); foot_lay.setSpacing(6)
         used_lbl = QLabel(f"已用 {used} 次", foot)
         used_lbl.setStyleSheet(
             f"color: {_qss_color(_INK_3)}; font-size: 11.5px; background: transparent; border: none;")
+        foot_lay.addWidget(used_lbl)
+        foot_lay.addStretch(1)
+
+        # 复制按钮 — 小尺寸图标，点击发 copy_requested 信号；
+        # ``mousePressEvent`` 用了一个本地 lambda 捕获点击但不冒泡到卡片，
+        # 否则点复制会同时触发卡片的 ``clicked`` → 进入编辑器。
+        self._copy_btn = ToolButton(FluentIcon.COPY, foot)
+        self._copy_btn.setFixedSize(20, 20)
+        self._copy_btn.setToolTip("复制此模板")
+        self._copy_btn.setStyleSheet(
+            "ToolButton { background: transparent; border: none; }"
+            f"ToolButton:hover {{ background: {_qss_color(_ACCENT_SOFTER)};"
+            f" border-radius: 4px; }}"
+        )
+        self._copy_btn.clicked.connect(self.copy_requested.emit)
+        foot_lay.addWidget(self._copy_btn)
+
         date_lbl = QLabel(date, foot)
         date_lbl.setStyleSheet(used_lbl.styleSheet())
-        foot_lay.addWidget(used_lbl); foot_lay.addStretch(1); foot_lay.addWidget(date_lbl)
+        foot_lay.addWidget(date_lbl)
         lay.addWidget(foot)
 
     def paintEvent(self, ev):  # noqa: N802
@@ -343,14 +367,25 @@ class _NewTemplateDialog(MessageBoxBase):
         super().__init__(parent)
         self.widget.setMinimumWidth(420)
         self.viewLayout.addWidget(SubtitleLabel("新建模板", self))
+
         self.viewLayout.addWidget(BodyLabel("模板名称"))
         self.name_input = LineEdit(self)
         self.name_input.setPlaceholderText("如：导购文-场景人群型")
         self.viewLayout.addWidget(self.name_input)
+
         self.viewLayout.addWidget(BodyLabel("产品类别"))
         self.product_input = LineEdit(self)
         self.product_input.setPlaceholderText("如：吸尘器")
         self.viewLayout.addWidget(self.product_input)
+
+        # 模板类型 — 文章风格分类，用于首页 / 模板库的二次筛选。
+        self.viewLayout.addWidget(BodyLabel("模板类型"))
+        self.type_combo = ComboBox(self)
+        for t in TEMPLATE_TYPES:
+            self.type_combo.addItem(t)
+        self.type_combo.setCurrentIndex(0)
+        self.viewLayout.addWidget(self.type_combo)
+
         self.yesButton.setText("创建")
         self.cancelButton.setText("取消")
 
@@ -520,6 +555,7 @@ class TemplateLibraryPanel(QWidget):
                 parent=self._grid_host,
             )
             card.clicked.connect(lambda p=path: self.template_selected.emit(p))
+            card.copy_requested.connect(lambda p=path: self.copy_template(p))
             self._grid.addWidget(card, idx // cols, idx % cols)
             self._cards.append(card)
             idx += 1
@@ -587,6 +623,7 @@ class TemplateLibraryPanel(QWidget):
             return
         tpl_name = dlg.name_input.text().strip()
         tpl_product = dlg.product_input.text().strip()
+        tpl_type = dlg.type_combo.currentText() or TEMPLATE_TYPES[0]
 
         import time
         tpl_id = f"template-{int(time.time())}"
@@ -598,6 +635,7 @@ class TemplateLibraryPanel(QWidget):
 
         skeleton = Template(
             id=target.stem, name=tpl_name, product=tpl_product,
+            template_type=tpl_type,
             blocks=[LiteralBlock(id="intro", text="引言")],
         )
         save_template(skeleton, target)
@@ -618,3 +656,63 @@ class TemplateLibraryPanel(QWidget):
             dest = trash / f"{path.stem}-{n}{path.suffix}"; n += 1
         shutil.move(str(path), str(dest))
         self.refresh()
+
+    def copy_template(self, path: Path) -> None:
+        """Duplicate the template at *path* into the same directory.
+
+        The copy keeps everything (blocks, product, type, default Skill)
+        but gets a fresh ``id`` and an auto-suffixed name like
+        "导购文-科普 - 副本" / "导购文-科普 - 副本 2" to avoid clashing
+        with siblings. The new file lands next to the original; the
+        gallery refreshes and selects the copy so the user can rename
+        it immediately if they want.
+        """
+        try:
+            src = load_template(path)
+        except Exception as exc:  # noqa: BLE001 — boundary, surface to UI
+            InfoBar.error(
+                "复制失败", f"加载源模板出错：{exc}".splitlines()[0],
+                parent=self.window(), position=InfoBarPosition.TOP,
+                duration=5000,
+            )
+            return
+
+        # 选一个不撞名的副本名 — 同目录扫一遍现有名字。
+        existing_names = {t[0] for t in list_templates(path.parent)}
+        base = f"{src.name} - 副本"
+        new_name = base
+        suffix = 2
+        while new_name in existing_names:
+            new_name = f"{base} {suffix}"
+            suffix += 1
+
+        # id / 文件名沿用 ``_on_new`` 的命名约定 — 时间戳保证全局唯一。
+        import time
+        new_id = f"template-{int(time.time())}"
+        target = path.parent / f"{new_id}.json"
+        n = 1
+        while target.exists():
+            target = path.parent / f"{new_id}-{n}.json"
+            n += 1
+
+        # Pydantic ``model_copy`` 深拷贝 + 改 id / name；其它字段（blocks /
+        # product / template_type / default_skill_id）原样保留。
+        copy_obj = src.model_copy(update={
+            "id": target.stem,
+            "name": new_name,
+        })
+        try:
+            save_template(copy_obj, target)
+        except Exception as exc:  # noqa: BLE001
+            InfoBar.error(
+                "复制失败", f"写入新模板时出错：{exc}".splitlines()[0],
+                parent=self.window(), position=InfoBarPosition.TOP,
+                duration=5000,
+            )
+            return
+
+        self.refresh()
+        InfoBar.success(
+            "复制成功", f"已创建「{new_name}」",
+            parent=self.window(), position=InfoBarPosition.TOP, duration=3000,
+        )

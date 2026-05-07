@@ -44,7 +44,7 @@ except ImportError:
 from csm_core.template.schema import (
     Block,
     ParagraphBlock, HeadingBlock, NumberedListBlock,
-    HeroBrandBlock, CompetitorPoolBlock, LiteralBlock,
+    HeroBrandBlock, CompetitorPoolBlock, LiteralBlock, TestFrameworkBlock,
     NotesQuerySource, PickCountSpec,
 )
 
@@ -118,6 +118,7 @@ BLOCK_KINDS = [
     "hero_brand",
     "competitor_pool",
     "literal",
+    "test_framework",
 ]
 
 BLOCK_KIND_LABELS = {
@@ -127,6 +128,7 @@ BLOCK_KIND_LABELS = {
     "hero_brand":      "主推品",
     "competitor_pool": "竞品池",
     "literal":         "固定文本",
+    "test_framework":  "测试部分",
 }
 
 NUMBER_STYLE_OPTIONS = ["1.", "一、", "none"]
@@ -179,6 +181,13 @@ class _BlockNode:
     # --- literal field ---
     literal_text: str = ""
 
+    # --- test_framework fields ---
+    framework_module: str = ""
+    results_module: str = ""
+    follow_slot: str = ""
+    hero_slot: str = "主推"
+    competitor_slots: list[str] = field(default_factory=lambda: ["竞品A", "竞品B"])
+
     @classmethod
     def from_block(cls, b: Block) -> "_BlockNode":
         n = cls(kind=b.kind, block_id=b.id)
@@ -228,6 +237,25 @@ class _BlockNode:
             n.reason_label = b.reason_label
         elif isinstance(b, LiteralBlock):
             n.literal_text = b.text
+        elif isinstance(b, TestFrameworkBlock):
+            n.label = b.label
+            n.framework_module = b.framework_module
+            n.results_module = b.results_module
+            n.follow_slot = b.follow_slot
+            # ``_DependsSection`` UI reads/writes node.depends_on, so we
+            # mirror follow_slot's "id1+id2" form into the list field.
+            # On to_block we re-join with "+".
+            n.depends_on = [
+                p.strip() for p in (b.follow_slot or "").split("+") if p.strip()
+            ]
+            n.hero_slot = b.hero_slot
+            n.competitor_slots = list(b.competitor_slots)
+            n.number_style = b.number_style
+            pick = b.pick_count
+            if hasattr(pick, "model_dump"):
+                pick = pick.model_dump()
+            n.pick_notes = pick
+            n.unique_notes = "unique_notes" in (b.constraints or [])
         return n
 
     def to_block(self, bid: str) -> Block:
@@ -289,6 +317,29 @@ class _BlockNode:
             return LiteralBlock(
                 id=bid,
                 text=self.literal_text or "文本",
+            )
+        elif self.kind == "test_framework":
+            pick = self._resolve_pick(self.pick_notes)
+            constraints = ["unique_notes"] if self.unique_notes else []
+            # follow_slot canonical form is "id1+id2"; the UI edits via
+            # node.depends_on (list), so we re-join here. If the user
+            # never touched the depends combo we fall back to whatever
+            # was in n.follow_slot from from_block.
+            follow = (
+                "+".join(self.depends_on)
+                if self.depends_on else (self.follow_slot or "")
+            )
+            return TestFrameworkBlock(
+                id=bid,
+                label=self.label or bid,
+                framework_module=self.framework_module,
+                results_module=self.results_module,
+                follow_slot=follow,
+                pick_count=pick if pick else 3,
+                hero_slot=self.hero_slot or "主推",
+                competitor_slots=list(self.competitor_slots) or ["竞品A", "竞品B"],
+                number_style=self.number_style or "1.",
+                constraints=constraints,
             )
         else:
             raise ValueError(f"Unknown block kind: {self.kind!r}")

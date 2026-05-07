@@ -69,7 +69,10 @@ class TemplateManagerPage(QWidget):
 
         if cfg.default_template:
             tpl_path = Path(cfg.default_template)
-            tpl_dir = tpl_path.parent
+            # ``default_template`` is now a directory (new behaviour) but
+            # may still be a single .json file in older configs — handle
+            # both transparently.
+            tpl_dir = tpl_path if tpl_path.is_dir() else tpl_path.parent
             if tpl_dir.is_dir() and (self.list_panel._dir is None
                                       or str(tpl_dir) != str(self.list_panel._dir)):
                 self.list_panel.set_directory(tpl_dir)

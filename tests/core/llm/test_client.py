@@ -15,7 +15,15 @@ def test_mock_client_returns_fixed_response():
 def test_mock_client_records_calls():
     client = MockClient(response="ok")
     client.complete(system="S", user="U")
-    assert client.calls == [{"system": "S", "user": "U"}]
+    # ``temperature`` defaults to ``None`` when caller didn't pass one —
+    # provider implementations that skip it preserve legacy behaviour.
+    assert client.calls == [{"system": "S", "user": "U", "temperature": None}]
+
+
+def test_mock_client_records_temperature_override():
+    client = MockClient(response="ok")
+    client.complete(system="S", user="U", temperature=0.4)
+    assert client.calls == [{"system": "S", "user": "U", "temperature": 0.4}]
 
 
 def test_make_client_dispatches_by_provider():

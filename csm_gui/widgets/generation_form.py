@@ -37,21 +37,27 @@ class GenerationForm(QWidget):
     def _reload_templates(self, selected_path: str) -> None:
         """Re-scan template directory and repopulate the combo.
 
-        Directory = parent of *selected_path* when provided; otherwise
-        the combo is left empty with its placeholder showing.
+        ``selected_path`` may be either a directory (new behaviour: the
+        templates folder) or a single .json file (legacy behaviour — its
+        parent dir is used). Either way the combo is populated with all
+        templates found in the resolved directory.
         """
         self.template_combo.blockSignals(True)
         self.template_combo.clear()
         target_dir: Path | None = None
+        preselect_path: str | None = None
         if selected_path:
             p = Path(selected_path)
-            if p.parent.is_dir():
+            if p.is_dir():
+                target_dir = p
+            elif p.parent.is_dir():
                 target_dir = p.parent
+                preselect_path = str(p)
         if target_dir is not None:
             for name, path in list_templates(target_dir):
                 self.template_combo.addItem(name, userData=str(path))
-            if selected_path:
-                idx = self.template_combo.findData(str(Path(selected_path)))
+            if preselect_path:
+                idx = self.template_combo.findData(preselect_path)
                 if idx >= 0:
                     self.template_combo.setCurrentIndex(idx)
         self.template_combo.blockSignals(False)

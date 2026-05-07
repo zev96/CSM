@@ -92,8 +92,21 @@ def compose_draft(plan: AssemblyPlan) -> str:
     aggregated as the hero's reason body (each rendered normally, then
     joined with blank lines). The `competitor_pool` then appends its
     own items continuing the hero's numbering.
+
+    Variable substitution
+    ---------------------
+    ``{keyword}``         → core product term (e.g. "无线吸尘器")
+                            — what you almost always want in a body
+                            block. Default for legacy templates.
+    ``{search_keyword}``  → full long-tail keyword (e.g. "无线吸尘器
+                            哪款好用") — only used by templates that
+                            want to mirror the user's exact search query.
     """
-    variables = {"keyword": plan.keyword}
+    core = plan.get_core_keyword()
+    variables = {
+        "keyword": core,
+        "search_keyword": plan.keyword,
+    }
     parts: list[str] = []
     i = 0
     while i < len(plan.results):
@@ -104,8 +117,10 @@ def compose_draft(plan: AssemblyPlan) -> str:
                 parts.append(chunk)
             continue
         if r.kind == "competitor_pool":
+            # Use core keyword so brand titles read "CEWEY DS18 无线吸尘器"
+            # rather than "CEWEY DS18 无线吸尘器哪款好用".
             parts.append(_render_competitor_pool(
-                r, start_index=1, keyword=plan.keyword,
+                r, start_index=1, keyword=core,
             ))
             i += 1
             continue
@@ -133,6 +148,10 @@ def _render_standalone(r: BlockResult, variables: dict[str, str]) -> str:
         return _numbered_list_text(r)
     if r.kind == "hero_brand":
         return r.text
+    if r.kind == "test_framework":
+        # Sampler已经把所有槽位都填好了。变量替换走一道，让 {keyword}
+        # 等占位符在框架原理/方法描述里也能正常展开。
+        return _substitute(r.text or "", variables)
     return ""
 
 

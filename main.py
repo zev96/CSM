@@ -5,14 +5,36 @@
 或双击此文件（配合 .venv 或系统 Python）即可启动应用。
 """
 import sys
+import traceback
 from pathlib import Path
 
-# 确保项目根目录在 sys.path 中（双击运行时工作目录可能不同）
-ROOT = Path(__file__).resolve().parent
+# PyInstaller 冻结后用 exe 同目录；源码运行用项目根目录。
+ROOT = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from csm_gui.app import run  # noqa: E402
-
 if __name__ == "__main__":
-    sys.exit(run())
+    try:
+        from csm_gui.app import run
+        sys.exit(run())
+    except BaseException:
+        tb = traceback.format_exc()
+        try:
+            (ROOT / "csm_crash.log").write_text(tb, encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            sys.stderr.write(tb)
+            sys.stderr.flush()
+        except Exception:
+            pass
+        # 控制台版防闪退：等用户看完再关
+        try:
+            input("按回车关闭...")
+        except Exception:
+            pass
+        sys.exit(1)

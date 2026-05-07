@@ -10,6 +10,7 @@ account / cloud sync yet), so the 通用 / 导出 / 账号 sections render as
 read-only placeholders — wired only when those features land.
 """
 from __future__ import annotations
+import hashlib
 import os
 import sys
 import subprocess
@@ -24,7 +25,7 @@ from qfluentwidgets import (
     ComboBox, SpinBox, LineEdit, PasswordLineEdit,
     PrimaryPushButton, PushButton, ToolButton, FluentIcon,
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel, CardWidget,
-    SwitchButton,
+    SwitchButton, StateToolTip,
 )
 
 from ..config import AppConfig, Provider
@@ -458,6 +459,12 @@ class _ProviderCard(QFrame):
         self.key_input = PasswordLineEdit(self)
         self.key_input.setPlaceholderText(meta["key_placeholder"])
         self.key_input.textChanged.connect(self._refresh_status)
+        # Editing model or base url after a successful test should also
+        # revert the badge to 待测试 — the signature recorded in config
+        # would no longer match the new values.
+        self.model_combo.textChanged.connect(
+            lambda _t: self._refresh_status(self.key_input.text())
+        )
         outer.addLayout(_field("API Key", self.key_input))
 
         # Base URL — overrides the SDK default when set. Provider-specific
@@ -472,6 +479,11 @@ class _ProviderCard(QFrame):
         else:
             self.base_url_input.setPlaceholderText(f"自定义 {api_style} 端点（留空使用默认）")
         outer.addLayout(_field("Base URL", self.base_url_input))
+        # Once base_url_input exists we can wire it to the same status
+        # reset path used by the API-key field.
+        self.base_url_input.textChanged.connect(
+            lambda _t: self._refresh_status(self.key_input.text())
+        )
 
         # Action row
         actions = QHBoxLayout(); actions.setSpacing(8); actions.setContentsMargins(0, 0, 0, 0)
@@ -682,11 +694,18 @@ class SettingsPage(QWidget):
         chip_text_lay = QVBoxLayout(chip_text)
         chip_text_lay.setContentsMargins(0, 0, 0, 0)
         chip_text_lay.setSpacing(0)
-        l1 = QLabel("工作空间 · 本地", chip_text)
-        l1.setStyleSheet(f"color: {_INK}; font-size: 11.5px; font-weight: 500; background: transparent;")
+        # Workspace chip — first line shows the local account's product
+        # (falls back to "本地" when product isn't set). Refreshed via
+        # ``apply_user`` whenever the account changes.
+        self._workspace_l1 = QLabel(
+            f"工作空间 · {config.user_product or '本地'}", chip_text,
+        )
+        self._workspace_l1.setStyleSheet(
+            f"color: {_INK}; font-size: 11.5px; font-weight: 500; background: transparent;"
+        )
         l2 = QLabel("个人版 · 当前活跃", chip_text)
         l2.setStyleSheet(f"color: {_INK_3}; font-size: 10.5px; background: transparent;")
-        chip_text_lay.addWidget(l1)
+        chip_text_lay.addWidget(self._workspace_l1)
         chip_text_lay.addWidget(l2)
         chip_lay.addWidget(chip_text, 1)
         nav_lay.addWidget(chip)
@@ -762,13 +781,13 @@ class SettingsPage(QWidget):
         )
         self.vault_card = _PathField("dir")
         self.out_card = _PathField("dir")
-        self.template_card = _PathField("file")
+        self.template_card = _PathField("dir")
         self.skill_card = _PathField("dir")
 
         rows = [
             ("素材库",       "Obsidian Vault — 文章引用的素材源", self.vault_card),
             ("导出目录",     "导出 Markdown / 报告 的默认落地位置", self.out_card),
-            ("默认模板",     "新建文章时优先选用的模板（.json）", self.template_card),
+            ("模板目录",     "存放模板文件（.json）的文件夹 — 决定模板下拉里的可选项", self.template_card),
             ("Skills 目录",  "Skill .md 文件目录 — 决定润色风格选项", self.skill_card),
         ]
         for label, hint, field in rows:
@@ -839,9 +858,21 @@ class SettingsPage(QWidget):
 
         return self._wrap_group(grid_card, adv_card)
 
+    @staticmethod
+    def _provider_signature(api_key: str, model: str, base_url: str) -> str:
+        """Stable fingerprint of the values that determine a working test.
+
+        Used to persist 已连接 status across restarts: if any of api_key /
+        model / base_url change after a successful test, the recorded
+        signature no longer matches and the badge falls back to 待测试.
+        """
+        raw = f"{api_key}|{model}|{base_url}".encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
     def _on_test_provider(self, key: str) -> None:
         """Ping the provider's REST endpoint with the current key + model."""
         from csm_gui.llm_factory import build_client
+        from PyQt6.QtWidgets import QApplication
         card = self._provider_cards.get(key)
         if card is None:
             return
@@ -861,13 +892,32 @@ class SettingsPage(QWidget):
                           **({key: base_url} if base_url else {})},
             "timeout_seconds": self.timeout_spin.value(),
         })
+        # Loading toast — the test call is synchronous and can take a few
+        # seconds, so surface that progress instead of freezing silently.
+        tip = StateToolTip("测试连接中…", f"正在校验 {card._meta['name']} 配置", self.window())
+        tip.move(self.window().width() - tip.width() - 24, 80)
+        tip.show()
+        card.test_btn.setEnabled(False)
+        QApplication.processEvents()
         try:
             client = build_client(snapshot, key)
             # Keep the probe cheap — 1-token smoke to confirm auth + network.
             _ = client.complete(system="ping", user="ping")
             card.set_test_result(True)
+            tip.setContent("连接成功")
+            tip.setState(True)
+            # Persist the success so the 已连接 badge survives restart.
+            sig = self._provider_signature(api_key, model or "", base_url or "")
+            self._config.tested_ok[key] = sig
+            self._save()
         except Exception as e:
             card.set_test_result(False, str(e))
+            tip.setContent(f"连接失败：{e}")
+            tip.setState(True)
+            # Drop any stale recorded success — the current values fail.
+            self._config.tested_ok.pop(key, None)
+        finally:
+            card.test_btn.setEnabled(True)
 
     def _on_set_default_provider(self, key: str) -> None:
         self.provider_card.setCurrentText(key)
@@ -923,11 +973,58 @@ class SettingsPage(QWidget):
         return self._wrap_group(card)
 
     def _build_account(self) -> QWidget:
-        card = _SettingsCard("账号")
-        r = _SettingsRow("当前用户")
-        r.set_control(BodyLabel("本地用户（未登录）", card))
-        card.add_row(r)
+        card = _SettingsCard(
+            "账号",
+            "本地账户 — 仅保存在 settings.json，不会上传任何地方",
+        )
+
+        # 当前用户 — display only
+        r1 = _SettingsRow("当前用户")
+        self._account_user_label = BodyLabel(
+            self._format_account_line(self._config), card,
+        )
+        r1.set_control(self._account_user_label)
+        card.add_row(r1)
+
+        # 编辑账户按钮
+        r2 = _SettingsRow("编辑账户", "修改姓名或负责产品线")
+        edit_btn = PushButton(FluentIcon.EDIT, "编辑…", card)
+        edit_btn.setFixedHeight(28)
+        edit_btn.clicked.connect(self._on_edit_account)
+        r2.set_control(edit_btn)
+        card.add_row(r2)
+
         return self._wrap_group(card)
+
+    @staticmethod
+    def _format_account_line(cfg: AppConfig) -> str:
+        if not cfg.user_name:
+            return "未建立本地账户"
+        if cfg.user_product:
+            return f"{cfg.user_name} · {cfg.user_product}"
+        return cfg.user_name
+
+    def _on_edit_account(self) -> None:
+        """Open AccountDialog, persist + broadcast on confirm."""
+        from ..widgets.account_dialog import AccountDialog
+        dlg = AccountDialog(
+            name=self._config.user_name,
+            product=self._config.user_product,
+            parent=self.window(),
+        )
+        if not dlg.exec():
+            return
+        name, product = dlg.values()
+        self._config.user_name = name
+        self._config.user_product = product
+        # Notify the host window so it can persist + broadcast to all
+        # the other consumers (sidebar avatar, home greeting, etc.).
+        win = self.window()
+        notify = getattr(win, "notify_account_changed", None)
+        if callable(notify):
+            notify(name, product)
+        else:
+            self.apply_user(name, product)
 
     # ── Behaviour ─────────────────────────────────────────────────────────
     def _switch(self, key: str) -> None:
@@ -957,6 +1054,15 @@ class SettingsPage(QWidget):
                 card.model_combo.setText(model)
             card.base_url_input.setText(cfg.base_urls.get(key, ""))
             card.set_is_default(cfg.default_provider == key)
+            # Restore the 已连接 badge if the recorded signature still
+            # matches the current api_key / model / base_url combo.
+            recorded = cfg.tested_ok.get(key)
+            if recorded:
+                api_key = card.key_input.text().strip()
+                model = card.model_combo.text().strip()
+                base_url = card.base_url_input.text().strip()
+                if api_key and recorded == self._provider_signature(api_key, model, base_url):
+                    card.set_test_result(True)
         self.seed_card.setValue(cfg.last_seed)
         self.timeout_spin.setValue(cfg.timeout_seconds)
         self.concurrency_pills.set_value(cfg.concurrency)
@@ -965,6 +1071,14 @@ class SettingsPage(QWidget):
             if self.export_format_combo.itemData(i) == cfg.export_format:
                 self.export_format_combo.setCurrentIndex(i)
                 break
+
+    def apply_user(self, name: str | None, product: str | None) -> None:
+        """Refresh the workspace chip and account-card label after the
+        local account changes (called from MainWindow.notify_account_changed)."""
+        self._config.user_name = name
+        self._config.user_product = product
+        self._workspace_l1.setText(f"工作空间 · {product or '本地'}")
+        self._account_user_label.setText(self._format_account_line(self._config))
 
     def _save(self) -> None:
         api_keys: dict[str, str] = {}
@@ -999,5 +1113,11 @@ class SettingsPage(QWidget):
                 Literal["markdown", "docx"],
                 self.export_format_combo.currentData() or "markdown",
             ),
+            # Persist the local account as-is — settings page doesn't
+            # touch these directly; AccountDialog routes through
+            # MainWindow.notify_account_changed which calls save_config.
+            user_name=self._config.user_name,
+            user_product=self._config.user_product,
+            tested_ok=dict(self._config.tested_ok),
         )
         self._on_save(new_cfg)
