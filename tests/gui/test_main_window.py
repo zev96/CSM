@@ -249,3 +249,18 @@ def test_batch_completed_with_failures_shows_warning(qtbot, tmp_path, monkeypatc
     )
     win.batch_controller.batch_completed.emit(report)
     assert len(shown) == 1
+
+
+def test_app_does_not_quit_when_hidden_to_tray(qtbot, tmp_path, qapp):
+    """Once setQuitOnLastWindowClosed(False) is set, hiding the window must not exit the app."""
+    from csm_gui.main_window import MainWindow
+    qapp.setQuitOnLastWindowClosed(False)
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitExposed(win)
+    win.hide()
+    qtbot.wait(100)
+    # If qapp had quit, this assert would never run — the test runner would die.
+    assert not win.isVisible()
+    qapp.setQuitOnLastWindowClosed(True)  # restore for next test
