@@ -123,3 +123,54 @@ def test_settings_page_dedup_rebuild_history_emits_signal(qtbot, tmp_path):
     with qtbot.waitSignal(page.dedup_rebuild_requested, timeout=1000) as blocker:
         page.dedup_rebuild_history_button.click()
     assert blocker.args[0] == "history"
+
+
+def test_settings_page_has_about_section(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    cfg = AppConfig()
+    page = SettingsPage(config=cfg, on_save=lambda c: None)
+    qtbot.addWidget(page)
+    assert hasattr(page, "current_version_label")
+    assert hasattr(page, "check_update_button")
+    assert hasattr(page, "update_repo_edit")
+
+
+def test_settings_page_about_shows_current_version(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    from csm_gui._version import __version__
+    page = SettingsPage(config=AppConfig(), on_save=lambda c: None)
+    qtbot.addWidget(page)
+    assert __version__ in page.current_version_label.text()
+
+
+def test_settings_page_check_update_emits_signal(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    page = SettingsPage(config=AppConfig(), on_save=lambda c: None)
+    qtbot.addWidget(page)
+    with qtbot.waitSignal(page.check_update_requested, timeout=1000):
+        page.check_update_button.click()
+
+
+def test_settings_page_about_has_update_repo_edit(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    page = SettingsPage(config=AppConfig(update_repo="zev96/csm"),
+                        on_save=lambda c: None)
+    qtbot.addWidget(page)
+    assert page.update_repo_edit.text() == "zev96/csm"
+
+
+def test_settings_page_save_persists_update_repo(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    saved: list[AppConfig] = []
+    page = SettingsPage(config=AppConfig(),
+                        on_save=lambda c: saved.append(c))
+    qtbot.addWidget(page)
+    page.update_repo_edit.setText("foo/bar")
+    page._save()
+    assert saved
+    assert saved[-1].update_repo == "foo/bar"

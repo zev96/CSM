@@ -616,11 +616,13 @@ _GROUPS = [
     ("export",  "导出",       FluentIcon.SAVE),
     ("dedup",   "历史查重",   FluentIcon.SEARCH),
     ("account", "账号",       FluentIcon.PEOPLE),
+    ("about",   "关于",       FluentIcon.INFO),
 ]
 
 
 class SettingsPage(QWidget):
     dedup_rebuild_requested = pyqtSignal(str)  # "history" | "vault"
+    check_update_requested = pyqtSignal()
 
     def __init__(self, config: AppConfig, on_save: Callable[[AppConfig], None], parent=None):
         super().__init__(parent)
@@ -725,6 +727,7 @@ class SettingsPage(QWidget):
         self._group_index["export"] = self._add_panel(self._build_export())
         self._group_index["dedup"] = self._add_panel(self._build_dedup())
         self._group_index["account"] = self._add_panel(self._build_account())
+        self._group_index["about"] = self._add_panel(self._build_about())
 
         # Default selection
         self._switch("paths")
@@ -1025,6 +1028,33 @@ class SettingsPage(QWidget):
         card.add_row(r)
         return self._wrap_group(card)
 
+    def _build_about(self) -> QWidget:
+        """关于 CSM section — current version + update repo + check button."""
+        from csm_gui._version import __version__
+        card = _SettingsCard("关于 CSM", "版本信息与更新")
+
+        row_ver = _SettingsRow("当前版本")
+        self.current_version_label = BodyLabel(f"v{__version__}", self)
+        row_ver.set_control(self.current_version_label)
+        card.add_row(row_ver)
+
+        row_repo = _SettingsRow("更新仓库 (owner/name)")
+        self.update_repo_edit = LineEdit(self)
+        self.update_repo_edit.setText(self._config.update_repo or "")
+        self.update_repo_edit.setPlaceholderText("例如：zev96/csm，留空则不检查更新")
+        row_repo.set_control(self.update_repo_edit)
+        card.add_row(row_repo)
+
+        row_btn = _SettingsRow("更新")
+        self.check_update_button = PushButton("检查更新", self)
+        self.check_update_button.clicked.connect(
+            self.check_update_requested.emit
+        )
+        row_btn.set_control(self.check_update_button)
+        card.add_row(row_btn)
+
+        return self._wrap_group(card)
+
     # ── Behaviour ─────────────────────────────────────────────────────────
     def _switch(self, key: str) -> None:
         idx = self._group_index.get(key)
@@ -1112,6 +1142,7 @@ class SettingsPage(QWidget):
             dedup_threshold_yellow=self.dedup_threshold_yellow_spin.value(),
             dedup_history_last_built=self._config.dedup_history_last_built,
             dedup_vault_last_built=self._config.dedup_vault_last_built,
+            update_repo=self.update_repo_edit.text().strip(),
         )
         self._config = new_cfg
         self._on_save(new_cfg)
