@@ -892,7 +892,23 @@ class SettingsPage(QWidget):
         r3 = _SettingsRow("界面语言")
         r3.set_control(BodyLabel("简体中文", lang))
         lang.add_row(r3)
-        return self._wrap_group(appearance, lang)
+
+        behavior = _SettingsCard("行为", "窗口与系统托盘相关选项")
+        self.close_action_combo = ComboBox(behavior)
+        self.close_action_combo.setMinimumWidth(220)
+        self.close_action_combo.addItem("最小化到托盘（推荐）", userData="minimize_to_tray")
+        self.close_action_combo.addItem("直接退出 CSM", userData="quit")
+        from PyQt6.QtWidgets import QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.close_action_combo.setEnabled(False)
+            self.close_action_combo.setToolTip("当前系统不支持托盘，已强制使用 \"直接退出\"")
+            idx = self.close_action_combo.findData("quit")
+            self.close_action_combo.setCurrentIndex(idx)
+        r4 = _SettingsRow("关闭按钮行为", "点击窗口关闭按钮时的动作")
+        r4.set_control(self.close_action_combo)
+        behavior.add_row(r4)
+
+        return self._wrap_group(appearance, lang, behavior)
 
     def _build_skill(self) -> QWidget:
         card = _SettingsCard(
@@ -965,6 +981,9 @@ class SettingsPage(QWidget):
             if self.export_format_combo.itemData(i) == cfg.export_format:
                 self.export_format_combo.setCurrentIndex(i)
                 break
+        idx = self.close_action_combo.findData(cfg.close_action)
+        if idx >= 0:
+            self.close_action_combo.setCurrentIndex(idx)
 
     def _save(self) -> None:
         api_keys: dict[str, str] = {}
@@ -998,6 +1017,10 @@ class SettingsPage(QWidget):
             export_format=cast(
                 Literal["markdown", "docx"],
                 self.export_format_combo.currentData() or "markdown",
+            ),
+            close_action=cast(
+                Literal["minimize_to_tray", "quit"],
+                self.close_action_combo.currentData() or "minimize_to_tray",
             ),
         )
         self._on_save(new_cfg)
