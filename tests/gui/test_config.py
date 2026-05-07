@@ -104,3 +104,17 @@ def test_appconfig_dedup_threshold_validation():
     cfg = AppConfig(dedup_threshold_green=20, dedup_threshold_yellow=40)
     assert cfg.dedup_threshold_green == 20
     assert cfg.dedup_threshold_yellow == 40
+
+
+def test_appconfig_update_repo_default_empty():
+    from csm_gui.config import AppConfig
+    cfg = AppConfig()
+    assert cfg.update_repo == ""
+
+
+def test_appconfig_update_repo_loads_old_settings(tmp_path):
+    from csm_gui.config import AppConfig, load_config
+    p = tmp_path / "settings.json"
+    p.write_text('{"vault_root":"/tmp"}', encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.update_repo == ""

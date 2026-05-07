@@ -38,6 +38,9 @@ class AppConfig(BaseModel):
     dedup_history_last_built: str = ""        # ISO timestamp
     dedup_vault_last_built: str = ""
 
+    # ── Update / hot-upgrade ───────────────────────────────────────────
+    update_repo: str = ""    # GitHub "owner/name", 留空 = 不检查更新
+
 
 def load_config(path: Path) -> AppConfig:
     path = Path(path)
