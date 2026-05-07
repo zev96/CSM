@@ -63,11 +63,17 @@ def parse_release_json(payload: dict[str, Any]) -> UpdateInfo:
     if not manifest_asset:
         raise ManifestError("release has no manifest.json asset")
 
+    # Prefer the API URL ("url" field) over browser_download_url. For PRIVATE
+    # repos, browser_download_url 302-redirects to a signed S3 URL but our
+    # Authorization: Bearer header carries through and breaks the S3 request.
+    # The API URL with Accept: application/octet-stream gives the binary
+    # directly with the same auth header. Falls back to browser_download_url
+    # if the test fixture (or non-GitHub backend) didn't include "url".
     return UpdateInfo(
         version=".".join(m.group(1, 2, 3)),
         tag_name=tag,
-        zip_url=zip_asset["browser_download_url"],
-        manifest_url=manifest_asset["browser_download_url"],
+        zip_url=zip_asset.get("url") or zip_asset["browser_download_url"],
+        manifest_url=manifest_asset.get("url") or manifest_asset["browser_download_url"],
         changelog=body,
         published_at=published,
         asset_size=int(zip_asset.get("size", 0)),

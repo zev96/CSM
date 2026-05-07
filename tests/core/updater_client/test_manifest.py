@@ -12,12 +12,14 @@ def _release_json(version="0.2.0", manifest_in_assets=True, zip_in_assets=True):
         assets.append({
             "name": f"CSM-v{version}.zip",
             "size": 232_000_000,
+            "url": f"https://api.github.com/repos/x/y/releases/assets/100",
             "browser_download_url": f"https://example.com/CSM-v{version}.zip",
         })
     if manifest_in_assets:
         assets.append({
             "name": "manifest.json",
             "size": 320,
+            "url": "https://api.github.com/repos/x/y/releases/assets/200",
             "browser_download_url": "https://example.com/manifest.json",
         })
     return {
@@ -34,10 +36,29 @@ def test_parse_release_json_minimal():
     assert isinstance(info, UpdateInfo)
     assert info.version == "0.2.0"
     assert info.tag_name == "v0.2.0"
-    assert info.zip_url.endswith(".zip")
-    assert info.manifest_url.endswith("manifest.json")
+    # Now uses API URL (assets[].url) for private-repo asset auth.
+    assert info.zip_url.startswith("https://api.github.com/")
+    assert info.manifest_url.startswith("https://api.github.com/")
     assert "系统托盘" in info.changelog
     assert info.published_at == "2026-05-07T08:00:00Z"
+
+
+def test_parse_release_falls_back_to_browser_url_when_api_missing():
+    """If a fixture / non-GitHub backend lacks 'url', fall back to browser_download_url."""
+    payload = {
+        "tag_name": "v0.2.0",
+        "body": "",
+        "published_at": "",
+        "assets": [
+            {"name": "CSM-v0.2.0.zip", "size": 1,
+             "browser_download_url": "https://example.com/CSM-v0.2.0.zip"},
+            {"name": "manifest.json", "size": 1,
+             "browser_download_url": "https://example.com/manifest.json"},
+        ],
+    }
+    info = parse_release_json(payload)
+    assert info.zip_url == "https://example.com/CSM-v0.2.0.zip"
+    assert info.manifest_url == "https://example.com/manifest.json"
 
 
 def test_parse_release_strips_v_prefix():

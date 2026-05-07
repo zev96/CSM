@@ -649,13 +649,22 @@ class MainWindow(FluentWindow):
         import os, sys, tempfile
         from pathlib import Path
         import httpx
-        # Read SHA256 from manifest
+        # Read SHA256 from manifest. Private-repo release assets must be
+        # fetched via the API URL with Accept: application/octet-stream —
+        # browser_download_url 302-redirects to S3 and our Bearer token
+        # carries through and breaks the S3 request.
         token = _read_token()
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        headers = {"Accept": "application/octet-stream"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
-            with httpx.Client(timeout=10.0, follow_redirects=True,
+            with httpx.Client(timeout=15.0, follow_redirects=True,
                               headers=headers) as c:
-                m = c.get(info.manifest_url).json()
+                resp = c.get(info.manifest_url)
+                resp.raise_for_status()
+                # Response body IS the manifest.json content (bytes); parse.
+                import json as _json
+                m = _json.loads(resp.content.decode("utf-8"))
             expected_sha = m["sha256"]
         except Exception as e:
             from qfluentwidgets import InfoBar, InfoBarPosition
