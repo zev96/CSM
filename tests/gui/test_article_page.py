@@ -92,3 +92,37 @@ def test_article_page_load_result_populates_pick_list(qtbot):
     )
     page.load_result(template=None, plan=plan, draft="draft", final_text="")
     assert page.pick_list_panel.row_count() == 1
+
+
+def test_workspace_side_panel_has_dedup_panel(qtbot):
+    """Right-side panel exposes a DedupPanel instance below polish button."""
+    from csm_gui.widgets.workspace_side_panel import WorkspaceSidePanel
+    from csm_gui.widgets.dedup_panel import DedupPanel
+    panel = WorkspaceSidePanel()
+    qtbot.addWidget(panel)
+    assert isinstance(panel.dedup_panel, DedupPanel)
+
+
+def test_workspace_dedup_recalculate_signal_relayed(qtbot):
+    """Click 重新计算 in nested DedupPanel → WorkspaceSidePanel re-emits."""
+    from csm_gui.widgets.workspace_side_panel import WorkspaceSidePanel
+    panel = WorkspaceSidePanel()
+    qtbot.addWidget(panel)
+    with qtbot.waitSignal(panel.dedup_recalculate_requested, timeout=1000):
+        panel.dedup_panel.recalc_button.click()
+
+
+def test_workspace_dedup_drilldown_signal_relayed(qtbot):
+    """Click ⓘ详情 → relays kind through WorkspaceSidePanel."""
+    from csm_gui.widgets.workspace_side_panel import WorkspaceSidePanel
+    from csm_core.dedup.report import DuplicateReport
+    from datetime import datetime
+    panel = WorkspaceSidePanel()
+    qtbot.addWidget(panel)
+    panel.dedup_panel.set_report(DuplicateReport(
+        corpus_kind="history", text_length=1000, duplicate_chars=120,
+        duplicate_ratio=0.12, top_matches=[], hits=[], computed_at=datetime.now(),
+    ))
+    with qtbot.waitSignal(panel.dedup_drilldown_requested, timeout=1000) as blocker:
+        panel.dedup_panel.history_drill_button.click()
+    assert blocker.args[0] == "history"
