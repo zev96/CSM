@@ -264,3 +264,42 @@ def test_app_does_not_quit_when_hidden_to_tray(qtbot, tmp_path, qapp):
     # If qapp had quit, this assert would never run — the test runner would die.
     assert not win.isVisible()
     qapp.setQuitOnLastWindowClosed(True)  # restore for next test
+
+
+def test_main_window_has_dedup_analyzer(qtbot, tmp_path):
+    from csm_gui.main_window import MainWindow
+    from csm_core.dedup.analyzer import DedupAnalyzer
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    assert isinstance(win.dedup_analyzer, DedupAnalyzer)
+
+
+def test_main_window_polished_triggers_dedup_when_enabled(qtbot, tmp_path, monkeypatch):
+    """When dedup_enabled=True, _on_polished should kick off two analyses."""
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.dedup_enabled = True
+
+    triggered = []
+    monkeypatch.setattr(win, "_kick_dedup_analysis",
+                        lambda text, kind: triggered.append((text[:5], kind)))
+
+    win._on_polished("已经润色完成的文章内容文字" * 10)
+    kinds = sorted([k for _, k in triggered])
+    assert "history" in kinds
+    assert "vault" in kinds
+
+
+def test_main_window_polished_does_nothing_when_dedup_disabled(qtbot, tmp_path, monkeypatch):
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.dedup_enabled = False
+
+    triggered = []
+    monkeypatch.setattr(win, "_kick_dedup_analysis",
+                        lambda text, kind: triggered.append(kind))
+
+    win._on_polished("内容" * 100)
+    assert triggered == []

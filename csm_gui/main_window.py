@@ -19,6 +19,9 @@ from .recent_docs import append_export, load_recent
 from .controllers.article_controller import ArticleController
 from .controllers.batch_controller import BatchController
 from .pages.batch_result_page import BatchResultPage
+from csm_core.dedup.analyzer import DedupAnalyzer
+from .workers.dedup_worker import DedupAnalyzeWorker, DedupBuildWorker
+from .widgets.dedup_drill_dialog import DedupDrillDialog
 
 
 class MainWindow(FluentWindow):
@@ -187,6 +190,32 @@ class MainWindow(FluentWindow):
         if self.tray.is_available() and self.config.close_action == "minimize_to_tray":
             self.tray.show()
 
+        # ── Dedup analyzer ────────────────────────────────────────────
+        self.dedup_analyzer = DedupAnalyzer()
+        self._dedup_loaded = False
+        self._dedup_workers: list = []
+        self._last_polished_text: str = ""
+        self._last_dedup_reports: dict = {}
+
+        # Wire side panel + settings page
+        self.article.controls.dedup_recalculate_requested.connect(
+            self._on_dedup_recalculate
+        )
+        self.article.controls.dedup_drilldown_requested.connect(
+            self._on_dedup_drilldown
+        )
+        self.settings.dedup_rebuild_requested.connect(self._on_dedup_rebuild)
+
+        # Apply thresholds on the panel
+        self.article.controls.dedup_panel.set_thresholds(
+            green=self.config.dedup_threshold_green,
+            yellow=self.config.dedup_threshold_yellow,
+        )
+        if not self.config.dedup_enabled:
+            self.article.controls.dedup_panel.set_disabled_message(
+                "未启用 — 在设置中开启「历史查重」"
+            )
+
     def _build_brand_header(self) -> None:
         """Inject a CSM / Content Studio header at the top of the nav panel.
 
@@ -260,6 +289,17 @@ class MainWindow(FluentWindow):
                 self.tray.show()
             else:
                 self.tray.hide()
+        # Dedup: refresh thresholds + enabled state on the panel
+        self.article.controls.dedup_panel.set_thresholds(
+            green=new_cfg.dedup_threshold_green,
+            yellow=new_cfg.dedup_threshold_yellow,
+        )
+        if new_cfg.dedup_enabled:
+            self.article.controls.dedup_panel.clear_disabled_message()
+        else:
+            self.article.controls.dedup_panel.set_disabled_message(
+                "未启用 — 在设置中开启「历史查重」"
+            )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Intercept × per AppConfig.close_action."""
@@ -338,6 +378,12 @@ class MainWindow(FluentWindow):
         )
         self.switchTo(self.article)
         self.navigationInterface.setCurrentItem(self.article.objectName())
+        # Dedup on the draft (history only — vault is full of source material
+        # so vault-comparison on draft would always be near 100%).
+        if self.config.dedup_enabled:
+            from csm_core.assembler.render import compose_draft
+            draft = compose_draft(result.plan)
+            self._kick_dedup_analysis(draft, kind="history")
 
     def _show_plan_warnings_list(self, warnings: list) -> None:
         if not warnings:
@@ -436,6 +482,89 @@ class MainWindow(FluentWindow):
         # "polish done → jump to result tab" behaviour.
         self.article.markdown_view.set_polished(text)
         self.article.sync_title_to_polished(text)
+        # Dedup: stash text + analyze against both corpora if enabled
+        self._last_polished_text = text
+        if self.config.dedup_enabled:
+            self._kick_dedup_analysis(text, kind="history")
+            self._kick_dedup_analysis(text, kind="vault")
+
+    def _ensure_dedup_index_loaded(self) -> None:
+        """Lazy-load LSH indexes from disk on first use."""
+        if self._dedup_loaded:
+            return
+        idx_dir = self.config_dir / "dedup_index"
+        self.dedup_analyzer.load(idx_dir)
+        self._dedup_loaded = True
+
+    def _kick_dedup_analysis(self, text: str, *, kind: str) -> None:
+        """Start a background DedupAnalyzeWorker; result lands in panel via signal."""
+        self._ensure_dedup_index_loaded()
+        worker = DedupAnalyzeWorker(
+            analyzer=self.dedup_analyzer, text=text, kind=kind, parent=self,
+        )
+        worker.finished.connect(self._on_dedup_finished)
+        worker.finished.connect(
+            lambda *_: self._dedup_workers.remove(worker)
+            if worker in self._dedup_workers else None
+        )
+        self._dedup_workers.append(worker)
+        worker.start()
+
+    def _on_dedup_finished(self, report) -> None:
+        self.article.controls.dedup_panel.set_report(report)
+        self._last_dedup_reports[report.corpus_kind] = report
+
+    def _on_dedup_recalculate(self) -> None:
+        """User clicked ⟳ — re-run on last polished text."""
+        text = self._last_polished_text
+        if not text:
+            return
+        if self.config.dedup_enabled:
+            self._kick_dedup_analysis(text, kind="history")
+            self._kick_dedup_analysis(text, kind="vault")
+
+    def _on_dedup_drilldown(self, kind: str) -> None:
+        report = self._last_dedup_reports.get(kind)
+        if not report:
+            return
+        dlg = DedupDrillDialog(report, parent=self)
+        dlg.open_source_requested.connect(self._on_dedup_open_source)
+        dlg.exec()
+
+    def _on_dedup_open_source(self, path: str) -> None:
+        """Open source file in OS default app."""
+        import os
+        try:
+            os.startfile(path)
+        except (OSError, AttributeError):
+            pass
+
+    def _on_dedup_rebuild(self, kind: str) -> None:
+        """User clicked 重建索引 in settings."""
+        if kind == "history":
+            root = self.config.dedup_history_dir
+        else:
+            root = self.config.vault_root
+        if not root:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning("缺少目录", f"请先配置 {kind} 目录",
+                            parent=self, position=InfoBarPosition.TOP)
+            return
+        from pathlib import Path
+        worker = DedupBuildWorker(
+            analyzer=self.dedup_analyzer, root=Path(root), kind=kind, parent=self,
+        )
+        worker.finished.connect(lambda: self.dedup_analyzer.save(
+            self.config_dir / "dedup_index"))
+        worker.finished.connect(
+            lambda: self._dedup_workers.remove(worker)
+            if worker in self._dedup_workers else None
+        )
+        self._dedup_workers.append(worker)
+        worker.start()
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.info(f"开始重建 {kind} 索引", "完成后会自动保存",
+                     parent=self, position=InfoBarPosition.TOP)
 
     def _on_export(self) -> None:
         from PyQt6.QtWidgets import QFileDialog
