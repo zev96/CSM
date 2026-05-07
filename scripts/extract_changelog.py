@@ -50,7 +50,10 @@ def main(argv: list[str]) -> int:
         print(f"ERROR: section [{version}] not found in {changelog_path}",
               file=sys.stderr)
         return 1
-    print(body)
+    # Write bytes directly to stdout to bypass the platform's default codec
+    # (Windows defaults to cp1252 which can't encode CJK / emoji).
+    sys.stdout.buffer.write(body.encode("utf-8"))
+    sys.stdout.buffer.write(b"\n")
     return 0
 
 

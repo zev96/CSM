@@ -8,9 +8,11 @@ SCRIPT = ROOT / "scripts" / "extract_changelog.py"
 
 
 def _run(version: str, changelog: Path):
+    # encoding="utf-8" — the script writes UTF-8 bytes to stdout to avoid
+    # platform codec issues (Windows defaults to cp1252/gbk).
     return subprocess.run(
         [sys.executable, str(SCRIPT), version, str(changelog)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8",
     )
 
 
