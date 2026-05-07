@@ -62,12 +62,14 @@
 
 ---
 
-## Task 1: 版本号单一来源 + CHANGELOG.md 初始化
+## Task 1: 版本号单一来源 + CHANGELOG.md 初始化 + AppConfig 加 update_repo 字段
 
 **Files:**
 - Create: `csm_gui/_version.py`
 - Create: `CHANGELOG.md`
 - Modify: `pyproject.toml`
+- Modify: `csm_gui/config.py`
+- Modify: `tests/gui/test_config.py`
 
 - [ ] **Step 1: 创建 _version.py**
 
@@ -138,11 +140,39 @@ pip show csm | findstr Version
 - 项目初版。
 ```
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 5: 加 AppConfig.update_repo 字段（与 _version 同时落地，便于后续任务直接用）**
+
+写测试，追加到 `tests/gui/test_config.py`：
+
+```python
+def test_appconfig_update_repo_default_empty():
+    from csm_gui.config import AppConfig
+    cfg = AppConfig()
+    assert cfg.update_repo == ""
+
+
+def test_appconfig_update_repo_loads_old_settings(tmp_path):
+    from csm_gui.config import AppConfig, load_config
+    p = tmp_path / "settings.json"
+    p.write_text('{"vault_root":"/tmp"}', encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.update_repo == ""
+```
+
+跑测试确认失败。然后在 `csm_gui/config.py` 的 `AppConfig` 末尾追加：
+
+```python
+    # ── Update / hot-upgrade ───────────────────────────────────────────
+    update_repo: str = ""    # GitHub "owner/name", 留空 = 不检查更新
+```
+
+跑测试通过。
+
+- [ ] **Step 6: 提交**
 
 ```bash
-git add csm_gui/_version.py CHANGELOG.md pyproject.toml
-git commit -m "feat(version): single-source version + CHANGELOG.md"
+git add csm_gui/_version.py CHANGELOG.md pyproject.toml csm_gui/config.py tests/gui/test_config.py
+git commit -m "feat(version): single-source version + CHANGELOG + update_repo config"
 ```
 
 ---
@@ -2110,6 +2140,29 @@ def test_settings_page_check_update_emits_signal(qtbot):
     qtbot.addWidget(page)
     with qtbot.waitSignal(page.check_update_requested, timeout=1000):
         page.check_update_button.click()
+
+
+def test_settings_page_about_has_update_repo_edit(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    page = SettingsPage(config=AppConfig(update_repo="zev96/csm"),
+                        on_save=lambda c: None)
+    qtbot.addWidget(page)
+    assert hasattr(page, "update_repo_edit")
+    assert page.update_repo_edit.text() == "zev96/csm"
+
+
+def test_settings_page_save_persists_update_repo(qtbot):
+    from csm_gui.config import AppConfig
+    from csm_gui.pages.settings_page import SettingsPage
+    saved: list[AppConfig] = []
+    page = SettingsPage(config=AppConfig(),
+                        on_save=lambda c: saved.append(c))
+    qtbot.addWidget(page)
+    page.update_repo_edit.setText("foo/bar")
+    page._save()
+    assert saved
+    assert saved[-1].update_repo == "foo/bar"
 ```
 
 - [ ] **Step 3: 跑失败**
@@ -2133,7 +2186,7 @@ b) **Add `_build_about` method**:
 
 ```python
     def _build_about(self) -> None:
-        """关于 CSM section — current version + check for update button."""
+        """关于 CSM section — current version + update repo + check button."""
         from csm_gui._version import __version__
         card = _SettingsCard("关于 CSM", "版本信息与更新")
 
@@ -2141,6 +2194,13 @@ b) **Add `_build_about` method**:
         self.current_version_label = BodyLabel(f"v{__version__}", self)
         row_ver.set_control(self.current_version_label)
         card.add_row(row_ver)
+
+        row_repo = _SettingsRow("更新仓库 (owner/name)")
+        self.update_repo_edit = LineEdit(self)
+        self.update_repo_edit.setText(self._config.update_repo or "")
+        self.update_repo_edit.setPlaceholderText("例如：zev96/csm，留空则不检查更新")
+        row_repo.set_control(self.update_repo_edit)
+        card.add_row(row_repo)
 
         row_btn = _SettingsRow("更新")
         self.check_update_button = PushButton("检查更新", self)
@@ -2162,6 +2222,15 @@ d) **Add navigation entry** in `_GROUPS` (if applicable):
 ```
 
 (Use whatever icon is appropriate — INFO or HELP fits.)
+
+e) **Update `_save()`** to persist `update_repo`:
+
+```python
+new_cfg = AppConfig(
+    # ...existing fields...
+    update_repo=self.update_repo_edit.text().strip(),
+)
+```
 
 - [ ] **Step 5: 跑通过**
 
@@ -2233,12 +2302,9 @@ from .widgets.update_dialog import UpdateDialog
 from .widgets.update_progress_dialog import UpdateProgressDialog
 ```
 
-b) **GitHub repo + token constants** (near top of file, after imports):
+b) **Helper to read CI-injected token** (near top of file, after imports):
 
 ```python
-# Hard-coded for now — user's private CSM repo. Adjust during release prep.
-_GITHUB_REPO = "zev96/csm"
-
 def _read_token() -> str:
     """Read the CI-injected PAT, return '' if not present (local dev)."""
     try:
@@ -2247,6 +2313,8 @@ def _read_token() -> str:
     except ImportError:
         return ""
 ```
+
+The repo identifier is read from `self.config.update_repo` at runtime — no hardcoded constant.
 
 c) **In `__init__`** — at the end:
 
@@ -2271,8 +2339,18 @@ d) **Add new methods**:
         self._dispatch_update_check(is_manual=True)
 
     def _dispatch_update_check(self, *, is_manual: bool) -> None:
+        repo = (self.config.update_repo or "").strip()
+        if not repo:
+            if is_manual:
+                from qfluentwidgets import InfoBar, InfoBarPosition
+                InfoBar.warning(
+                    "未配置仓库",
+                    "请在「设置 → 关于 CSM」填入 update_repo（owner/name）",
+                    parent=self, position=InfoBarPosition.TOP, duration=4000,
+                )
+            return
         worker = UpdateCheckWorker(
-            repo=_GITHUB_REPO,
+            repo=repo,
             token=_read_token(),
             current_version=__version__,
             parent=self,
