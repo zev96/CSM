@@ -719,24 +719,45 @@ class MainWindow(FluentWindow):
     def _on_download_ok(self, progress_dlg, info, zip_path) -> None:
         progress_dlg.accept()
         import sys
+        import shutil
+        import tempfile
         from pathlib import Path
         if hasattr(sys, "frozen") and getattr(sys, "frozen"):
             exe_dir = Path(sys.executable).parent
-            updater = exe_dir / "updater.exe"
+            updater_src = exe_dir / "updater.exe"
         else:
             exe_dir = Path.cwd()
-            updater = Path(__file__).resolve().parents[1] / "updater" / "main.py"
-        if not updater.exists():
+            updater_src = Path(__file__).resolve().parents[1] / "updater" / "main.py"
+        if not updater_src.exists():
             from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.error("升级失败", f"updater 不存在: {updater}",
+            InfoBar.error("升级失败", f"updater 不存在: {updater_src}",
                           parent=self, position=InfoBarPosition.TOP, duration=5000)
             return
         import os, subprocess
         target_dir = exe_dir if hasattr(sys, "frozen") else Path.cwd()
-        if updater.suffix == ".exe":
-            cmd = [str(updater)]
+
+        # CRITICAL: copy updater.exe to TEMP before running it. Otherwise
+        # updater.exe will be running from inside ``target_dir``, and
+        # Windows refuses to rename a directory that contains a running
+        # process's executable (WinError 32 — sharing violation). Copying
+        # to TEMP decouples the updater from the install dir so the rename
+        # can succeed.
+        if updater_src.suffix == ".exe":
+            tmp_dir = Path(tempfile.gettempdir()) / "csm_update"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            updater_run = tmp_dir / "updater.exe"
+            try:
+                shutil.copy2(str(updater_src), str(updater_run))
+            except OSError as e:
+                from qfluentwidgets import InfoBar, InfoBarPosition
+                InfoBar.error("升级失败", f"无法复制 updater 到临时目录: {e}",
+                              parent=self, position=InfoBarPosition.TOP, duration=5000)
+                return
+            cmd = [str(updater_run)]
         else:
-            cmd = [sys.executable, str(updater)]
+            # Dev mode — running from source, updater is a .py file outside
+            # the install dir, no need to copy.
+            cmd = [sys.executable, str(updater_src)]
         cmd.extend(["--pid", str(os.getpid()),
                     "--zip", str(zip_path),
                     "--target", str(target_dir)])
