@@ -1,4 +1,55 @@
 from csm_gui.main_window import MainWindow
+from PyQt6.QtGui import QCloseEvent
+
+
+def _make_close_event() -> QCloseEvent:
+    return QCloseEvent()
+
+
+def test_close_event_minimize_to_tray_hides_window(qtbot, tmp_path):
+    """close_action='minimize_to_tray' should hide() the window instead of closing."""
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.close_action = "minimize_to_tray"
+    win.show()
+    qtbot.waitExposed(win)
+    assert win.isVisible()
+
+    ev = _make_close_event()
+    win.closeEvent(ev)
+    qtbot.wait(100)
+    assert not win.isVisible()
+    assert not ev.isAccepted()
+
+
+def test_close_event_quit_mode_accepts(qtbot, tmp_path):
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.close_action = "quit"
+    ev = _make_close_event()
+    win.closeEvent(ev)
+    assert ev.isAccepted()
+
+
+def test_show_main_window_brings_to_front(qtbot, tmp_path):
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.hide()
+    win._show_main_window()
+    qtbot.wait(50)
+    assert win.isVisible()
+
+
+def test_tray_new_article_focuses_keyword_input(qtbot, tmp_path):
+    """When tray menu emits new_article_requested, MainWindow switches to home."""
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitExposed(win)
+
+    win._on_tray_new_article()
+    qtbot.wait(50)
+    assert win.stackedWidget.currentWidget() is win.home
 
 
 def test_main_window_has_nav_items(qtbot, tmp_path):
@@ -198,3 +249,92 @@ def test_batch_completed_with_failures_shows_warning(qtbot, tmp_path, monkeypatc
     )
     win.batch_controller.batch_completed.emit(report)
     assert len(shown) == 1
+
+
+def test_app_does_not_quit_when_hidden_to_tray(qtbot, tmp_path, qapp):
+    """Once setQuitOnLastWindowClosed(False) is set, hiding the window must not exit the app."""
+    from csm_gui.main_window import MainWindow
+    qapp.setQuitOnLastWindowClosed(False)
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitExposed(win)
+    win.hide()
+    qtbot.wait(100)
+    # If qapp had quit, this assert would never run — the test runner would die.
+    assert not win.isVisible()
+    qapp.setQuitOnLastWindowClosed(True)  # restore for next test
+
+
+def test_main_window_has_dedup_analyzer(qtbot, tmp_path):
+    from csm_gui.main_window import MainWindow
+    from csm_core.dedup.analyzer import DedupAnalyzer
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    assert isinstance(win.dedup_analyzer, DedupAnalyzer)
+
+
+def test_main_window_polished_triggers_dedup_when_enabled(qtbot, tmp_path, monkeypatch):
+    """When dedup_enabled=True, _on_polished should kick off two analyses."""
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.dedup_enabled = True
+
+    triggered = []
+    monkeypatch.setattr(win, "_kick_dedup_analysis",
+                        lambda text, kind: triggered.append((text[:5], kind)))
+
+    win._on_polished("已经润色完成的文章内容文字" * 10)
+    kinds = sorted([k for _, k in triggered])
+    assert "history" in kinds
+    assert "vault" in kinds
+
+
+def test_main_window_polished_does_nothing_when_dedup_disabled(qtbot, tmp_path, monkeypatch):
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.dedup_enabled = False
+
+    triggered = []
+    monkeypatch.setattr(win, "_kick_dedup_analysis",
+                        lambda text, kind: triggered.append(kind))
+
+    win._on_polished("内容" * 100)
+    assert triggered == []
+
+
+def test_main_window_check_update_button_dispatches(qtbot, tmp_path, monkeypatch):
+    """Settings page emits check_update_requested → MainWindow starts a worker."""
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+
+    started = []
+    monkeypatch.setattr(win, "_start_update_check_manual",
+                        lambda: started.append(True))
+    win.settings.check_update_requested.emit()
+    assert started == [True]
+
+
+def test_main_window_handles_update_check_no_update(qtbot, tmp_path):
+    """When CheckResult has no update, no dialog should be shown."""
+    from csm_gui.main_window import MainWindow
+    from csm_core.updater_client.checker import CheckResult
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    # Should not crash; explicit no-update path
+    win._on_update_check_done(CheckResult(False, None, None), is_manual=False)
+
+
+def test_main_window_dispatch_update_check_skips_when_no_repo(qtbot, tmp_path):
+    """If update_repo is empty, manual check shows a warning (no worker started)."""
+    from csm_gui.main_window import MainWindow
+    win = MainWindow(config_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.config.update_repo = ""  # explicitly empty
+    n_workers_before = len(win._update_workers)
+    win._dispatch_update_check(is_manual=True)
+    # No worker should be started
+    assert len(win._update_workers) == n_workers_before

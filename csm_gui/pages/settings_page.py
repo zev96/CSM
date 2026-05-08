@@ -10,22 +10,21 @@ account / cloud sync yet), so the 通用 / 导出 / 账号 sections render as
 read-only placeholders — wired only when those features land.
 """
 from __future__ import annotations
-import hashlib
 import os
 import sys
 import subprocess
 from typing import Callable, Literal, cast
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QStackedWidget,
-    QScrollArea, QFrame, QLabel, QButtonGroup, QSizePolicy,
+    QScrollArea, QFrame, QLabel, QButtonGroup, QSizePolicy, QSpinBox,
 )
 from qfluentwidgets import (
     ComboBox, SpinBox, LineEdit, PasswordLineEdit,
     PrimaryPushButton, PushButton, ToolButton, FluentIcon,
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel, CardWidget,
-    SwitchButton, StateToolTip,
+    SwitchButton,
 )
 
 from ..config import AppConfig, Provider
@@ -459,12 +458,6 @@ class _ProviderCard(QFrame):
         self.key_input = PasswordLineEdit(self)
         self.key_input.setPlaceholderText(meta["key_placeholder"])
         self.key_input.textChanged.connect(self._refresh_status)
-        # Editing model or base url after a successful test should also
-        # revert the badge to 待测试 — the signature recorded in config
-        # would no longer match the new values.
-        self.model_combo.textChanged.connect(
-            lambda _t: self._refresh_status(self.key_input.text())
-        )
         outer.addLayout(_field("API Key", self.key_input))
 
         # Base URL — overrides the SDK default when set. Provider-specific
@@ -479,11 +472,6 @@ class _ProviderCard(QFrame):
         else:
             self.base_url_input.setPlaceholderText(f"自定义 {api_style} 端点（留空使用默认）")
         outer.addLayout(_field("Base URL", self.base_url_input))
-        # Once base_url_input exists we can wire it to the same status
-        # reset path used by the API-key field.
-        self.base_url_input.textChanged.connect(
-            lambda _t: self._refresh_status(self.key_input.text())
-        )
 
         # Action row
         actions = QHBoxLayout(); actions.setSpacing(8); actions.setContentsMargins(0, 0, 0, 0)
@@ -626,11 +614,16 @@ _GROUPS = [
     ("models",  "模型",       FluentIcon.ROBOT),
     ("skill",   "Skill 默认", FluentIcon.DICTIONARY),
     ("export",  "导出",       FluentIcon.SAVE),
+    ("dedup",   "历史查重",   FluentIcon.SEARCH),
     ("account", "账号",       FluentIcon.PEOPLE),
+    ("about",   "关于",       FluentIcon.INFO),
 ]
 
 
 class SettingsPage(QWidget):
+    dedup_rebuild_requested = pyqtSignal(str)  # "history" | "vault"
+    check_update_requested = pyqtSignal()
+
     def __init__(self, config: AppConfig, on_save: Callable[[AppConfig], None], parent=None):
         super().__init__(parent)
         self.setObjectName("SettingsPage")
@@ -694,18 +687,11 @@ class SettingsPage(QWidget):
         chip_text_lay = QVBoxLayout(chip_text)
         chip_text_lay.setContentsMargins(0, 0, 0, 0)
         chip_text_lay.setSpacing(0)
-        # Workspace chip — first line shows the local account's product
-        # (falls back to "本地" when product isn't set). Refreshed via
-        # ``apply_user`` whenever the account changes.
-        self._workspace_l1 = QLabel(
-            f"工作空间 · {config.user_product or '本地'}", chip_text,
-        )
-        self._workspace_l1.setStyleSheet(
-            f"color: {_INK}; font-size: 11.5px; font-weight: 500; background: transparent;"
-        )
+        l1 = QLabel("工作空间 · 本地", chip_text)
+        l1.setStyleSheet(f"color: {_INK}; font-size: 11.5px; font-weight: 500; background: transparent;")
         l2 = QLabel("个人版 · 当前活跃", chip_text)
         l2.setStyleSheet(f"color: {_INK_3}; font-size: 10.5px; background: transparent;")
-        chip_text_lay.addWidget(self._workspace_l1)
+        chip_text_lay.addWidget(l1)
         chip_text_lay.addWidget(l2)
         chip_lay.addWidget(chip_text, 1)
         nav_lay.addWidget(chip)
@@ -739,7 +725,9 @@ class SettingsPage(QWidget):
         self._group_index["models"] = self._add_panel(self._build_models())
         self._group_index["skill"] = self._add_panel(self._build_skill())
         self._group_index["export"] = self._add_panel(self._build_export())
+        self._group_index["dedup"] = self._add_panel(self._build_dedup())
         self._group_index["account"] = self._add_panel(self._build_account())
+        self._group_index["about"] = self._add_panel(self._build_about())
 
         # Default selection
         self._switch("paths")
@@ -781,13 +769,13 @@ class SettingsPage(QWidget):
         )
         self.vault_card = _PathField("dir")
         self.out_card = _PathField("dir")
-        self.template_card = _PathField("dir")
+        self.template_card = _PathField("file")
         self.skill_card = _PathField("dir")
 
         rows = [
             ("素材库",       "Obsidian Vault — 文章引用的素材源", self.vault_card),
             ("导出目录",     "导出 Markdown / 报告 的默认落地位置", self.out_card),
-            ("模板目录",     "存放模板文件（.json）的文件夹 — 决定模板下拉里的可选项", self.template_card),
+            ("默认模板",     "新建文章时优先选用的模板（.json）", self.template_card),
             ("Skills 目录",  "Skill .md 文件目录 — 决定润色风格选项", self.skill_card),
         ]
         for label, hint, field in rows:
@@ -858,21 +846,9 @@ class SettingsPage(QWidget):
 
         return self._wrap_group(grid_card, adv_card)
 
-    @staticmethod
-    def _provider_signature(api_key: str, model: str, base_url: str) -> str:
-        """Stable fingerprint of the values that determine a working test.
-
-        Used to persist 已连接 status across restarts: if any of api_key /
-        model / base_url change after a successful test, the recorded
-        signature no longer matches and the badge falls back to 待测试.
-        """
-        raw = f"{api_key}|{model}|{base_url}".encode("utf-8")
-        return hashlib.sha256(raw).hexdigest()
-
     def _on_test_provider(self, key: str) -> None:
         """Ping the provider's REST endpoint with the current key + model."""
         from csm_gui.llm_factory import build_client
-        from PyQt6.QtWidgets import QApplication
         card = self._provider_cards.get(key)
         if card is None:
             return
@@ -892,32 +868,13 @@ class SettingsPage(QWidget):
                           **({key: base_url} if base_url else {})},
             "timeout_seconds": self.timeout_spin.value(),
         })
-        # Loading toast — the test call is synchronous and can take a few
-        # seconds, so surface that progress instead of freezing silently.
-        tip = StateToolTip("测试连接中…", f"正在校验 {card._meta['name']} 配置", self.window())
-        tip.move(self.window().width() - tip.width() - 24, 80)
-        tip.show()
-        card.test_btn.setEnabled(False)
-        QApplication.processEvents()
         try:
             client = build_client(snapshot, key)
             # Keep the probe cheap — 1-token smoke to confirm auth + network.
             _ = client.complete(system="ping", user="ping")
             card.set_test_result(True)
-            tip.setContent("连接成功")
-            tip.setState(True)
-            # Persist the success so the 已连接 badge survives restart.
-            sig = self._provider_signature(api_key, model or "", base_url or "")
-            self._config.tested_ok[key] = sig
-            self._save()
         except Exception as e:
             card.set_test_result(False, str(e))
-            tip.setContent(f"连接失败：{e}")
-            tip.setState(True)
-            # Drop any stale recorded success — the current values fail.
-            self._config.tested_ok.pop(key, None)
-        finally:
-            card.test_btn.setEnabled(True)
 
     def _on_set_default_provider(self, key: str) -> None:
         self.provider_card.setCurrentText(key)
@@ -942,7 +899,23 @@ class SettingsPage(QWidget):
         r3 = _SettingsRow("界面语言")
         r3.set_control(BodyLabel("简体中文", lang))
         lang.add_row(r3)
-        return self._wrap_group(appearance, lang)
+
+        behavior = _SettingsCard("行为", "窗口与系统托盘相关选项")
+        self.close_action_combo = ComboBox(behavior)
+        self.close_action_combo.setMinimumWidth(220)
+        self.close_action_combo.addItem("最小化到托盘（推荐）", userData="minimize_to_tray")
+        self.close_action_combo.addItem("直接退出 CSM", userData="quit")
+        from PyQt6.QtWidgets import QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.close_action_combo.setEnabled(False)
+            self.close_action_combo.setToolTip("当前系统不支持托盘，已强制使用 \"直接退出\"")
+            idx = self.close_action_combo.findData("quit")
+            self.close_action_combo.setCurrentIndex(idx)
+        r4 = _SettingsRow("关闭按钮行为", "点击窗口关闭按钮时的动作")
+        r4.set_control(self.close_action_combo)
+        behavior.add_row(r4)
+
+        return self._wrap_group(appearance, lang, behavior)
 
     def _build_skill(self) -> QWidget:
         card = _SettingsCard(
@@ -972,59 +945,115 @@ class SettingsPage(QWidget):
         card.add_row(r)
         return self._wrap_group(card)
 
-    def _build_account(self) -> QWidget:
-        card = _SettingsCard(
-            "账号",
-            "本地账户 — 仅保存在 settings.json，不会上传任何地方",
-        )
+    def _build_dedup(self) -> QWidget:
+        """历史查重 section — enable toggle, corpus dir, rebuild buttons, thresholds."""
+        card = _SettingsCard("历史查重", "对比历史文章库和 vault 素材，识别撞稿与未消化原文")
 
-        # 当前用户 — display only
-        r1 = _SettingsRow("当前用户")
-        self._account_user_label = BodyLabel(
-            self._format_account_line(self._config), card,
-        )
-        r1.set_control(self._account_user_label)
-        card.add_row(r1)
+        # Enable switch
+        row_enable = _SettingsRow("启用历史查重")
+        self.dedup_enabled_switch = SwitchButton(self)
+        self.dedup_enabled_switch.setChecked(self._config.dedup_enabled)
+        row_enable.set_control(self.dedup_enabled_switch)
+        card.add_row(row_enable)
 
-        # 编辑账户按钮
-        r2 = _SettingsRow("编辑账户", "修改姓名或负责产品线")
-        edit_btn = PushButton(FluentIcon.EDIT, "编辑…", card)
-        edit_btn.setFixedHeight(28)
-        edit_btn.clicked.connect(self._on_edit_account)
-        r2.set_control(edit_btn)
-        card.add_row(r2)
+        # History dir
+        row_dir = _SettingsRow("历史文章库目录")
+        dir_holder = QWidget(self)
+        dir_lay = QHBoxLayout(dir_holder)
+        dir_lay.setContentsMargins(0, 0, 0, 0)
+        dir_lay.setSpacing(6)
+        self.dedup_history_dir_edit = LineEdit(dir_holder)
+        self.dedup_history_dir_edit.setText(self._config.dedup_history_dir or "")
+        self.dedup_history_dir_edit.setPlaceholderText("选择存放历史成品文章的目录")
+        dir_lay.addWidget(self.dedup_history_dir_edit, 1)
+        browse_btn = PushButton("选择…", dir_holder)
+        browse_btn.clicked.connect(self._on_browse_dedup_history_dir)
+        dir_lay.addWidget(browse_btn)
+        row_dir.set_control(dir_holder)
+        card.add_row(row_dir)
+
+        # Rebuild buttons
+        row_rebuild = _SettingsRow("重建索引")
+        rebuild_holder = QWidget(self)
+        rb_lay = QHBoxLayout(rebuild_holder)
+        rb_lay.setContentsMargins(0, 0, 0, 0)
+        rb_lay.setSpacing(6)
+        self.dedup_rebuild_history_button = PushButton("重建历史索引", rebuild_holder)
+        self.dedup_rebuild_history_button.clicked.connect(
+            lambda: self.dedup_rebuild_requested.emit("history")
+        )
+        rb_lay.addWidget(self.dedup_rebuild_history_button)
+        self.dedup_rebuild_vault_button = PushButton("重建 Vault 索引", rebuild_holder)
+        self.dedup_rebuild_vault_button.clicked.connect(
+            lambda: self.dedup_rebuild_requested.emit("vault")
+        )
+        rb_lay.addWidget(self.dedup_rebuild_vault_button)
+        rb_lay.addStretch(1)
+        row_rebuild.set_control(rebuild_holder)
+        card.add_row(row_rebuild)
+
+        # Thresholds
+        row_th = _SettingsRow("阈值 (绿/黄)")
+        th_holder = QWidget(self)
+        th_lay = QHBoxLayout(th_holder)
+        th_lay.setContentsMargins(0, 0, 0, 0)
+        th_lay.setSpacing(6)
+        self.dedup_threshold_green_spin = QSpinBox(th_holder)
+        self.dedup_threshold_green_spin.setRange(1, 99)
+        self.dedup_threshold_green_spin.setSuffix(" %")
+        self.dedup_threshold_green_spin.setValue(self._config.dedup_threshold_green)
+        th_lay.addWidget(self.dedup_threshold_green_spin)
+        self.dedup_threshold_yellow_spin = QSpinBox(th_holder)
+        self.dedup_threshold_yellow_spin.setRange(1, 99)
+        self.dedup_threshold_yellow_spin.setSuffix(" %")
+        self.dedup_threshold_yellow_spin.setValue(self._config.dedup_threshold_yellow)
+        th_lay.addWidget(self.dedup_threshold_yellow_spin)
+        th_lay.addStretch(1)
+        row_th.set_control(th_holder)
+        card.add_row(row_th)
 
         return self._wrap_group(card)
 
-    @staticmethod
-    def _format_account_line(cfg: AppConfig) -> str:
-        if not cfg.user_name:
-            return "未建立本地账户"
-        if cfg.user_product:
-            return f"{cfg.user_name} · {cfg.user_product}"
-        return cfg.user_name
+    def _on_browse_dedup_history_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(
+            self, "选择历史文章库目录",
+            self.dedup_history_dir_edit.text() or "")
+        if d:
+            self.dedup_history_dir_edit.setText(d)
 
-    def _on_edit_account(self) -> None:
-        """Open AccountDialog, persist + broadcast on confirm."""
-        from ..widgets.account_dialog import AccountDialog
-        dlg = AccountDialog(
-            name=self._config.user_name,
-            product=self._config.user_product,
-            parent=self.window(),
+    def _build_account(self) -> QWidget:
+        card = _SettingsCard("账号")
+        r = _SettingsRow("当前用户")
+        r.set_control(BodyLabel("本地用户（未登录）", card))
+        card.add_row(r)
+        return self._wrap_group(card)
+
+    def _build_about(self) -> QWidget:
+        """关于 CSM section — current version + update repo + check button."""
+        from csm_gui._version import __version__
+        card = _SettingsCard("关于 CSM", "版本信息与更新")
+
+        row_ver = _SettingsRow("当前版本")
+        self.current_version_label = BodyLabel(f"v{__version__}", self)
+        row_ver.set_control(self.current_version_label)
+        card.add_row(row_ver)
+
+        row_repo = _SettingsRow("更新仓库 (owner/name)")
+        self.update_repo_edit = LineEdit(self)
+        self.update_repo_edit.setText(self._config.update_repo or "")
+        self.update_repo_edit.setPlaceholderText("例如：zev96/csm，留空则不检查更新")
+        row_repo.set_control(self.update_repo_edit)
+        card.add_row(row_repo)
+
+        row_btn = _SettingsRow("更新")
+        self.check_update_button = PushButton("检查更新", self)
+        self.check_update_button.clicked.connect(
+            self.check_update_requested.emit
         )
-        if not dlg.exec():
-            return
-        name, product = dlg.values()
-        self._config.user_name = name
-        self._config.user_product = product
-        # Notify the host window so it can persist + broadcast to all
-        # the other consumers (sidebar avatar, home greeting, etc.).
-        win = self.window()
-        notify = getattr(win, "notify_account_changed", None)
-        if callable(notify):
-            notify(name, product)
-        else:
-            self.apply_user(name, product)
+        row_btn.set_control(self.check_update_button)
+        card.add_row(row_btn)
+
+        return self._wrap_group(card)
 
     # ── Behaviour ─────────────────────────────────────────────────────────
     def _switch(self, key: str) -> None:
@@ -1054,15 +1083,6 @@ class SettingsPage(QWidget):
                 card.model_combo.setText(model)
             card.base_url_input.setText(cfg.base_urls.get(key, ""))
             card.set_is_default(cfg.default_provider == key)
-            # Restore the 已连接 badge if the recorded signature still
-            # matches the current api_key / model / base_url combo.
-            recorded = cfg.tested_ok.get(key)
-            if recorded:
-                api_key = card.key_input.text().strip()
-                model = card.model_combo.text().strip()
-                base_url = card.base_url_input.text().strip()
-                if api_key and recorded == self._provider_signature(api_key, model, base_url):
-                    card.set_test_result(True)
         self.seed_card.setValue(cfg.last_seed)
         self.timeout_spin.setValue(cfg.timeout_seconds)
         self.concurrency_pills.set_value(cfg.concurrency)
@@ -1071,14 +1091,13 @@ class SettingsPage(QWidget):
             if self.export_format_combo.itemData(i) == cfg.export_format:
                 self.export_format_combo.setCurrentIndex(i)
                 break
-
-    def apply_user(self, name: str | None, product: str | None) -> None:
-        """Refresh the workspace chip and account-card label after the
-        local account changes (called from MainWindow.notify_account_changed)."""
-        self._config.user_name = name
-        self._config.user_product = product
-        self._workspace_l1.setText(f"工作空间 · {product or '本地'}")
-        self._account_user_label.setText(self._format_account_line(self._config))
+        idx = self.close_action_combo.findData(cfg.close_action)
+        if idx >= 0:
+            self.close_action_combo.setCurrentIndex(idx)
+        self.dedup_enabled_switch.setChecked(cfg.dedup_enabled)
+        self.dedup_history_dir_edit.setText(cfg.dedup_history_dir or "")
+        self.dedup_threshold_green_spin.setValue(cfg.dedup_threshold_green)
+        self.dedup_threshold_yellow_spin.setValue(cfg.dedup_threshold_yellow)
 
     def _save(self) -> None:
         api_keys: dict[str, str] = {}
@@ -1113,11 +1132,17 @@ class SettingsPage(QWidget):
                 Literal["markdown", "docx"],
                 self.export_format_combo.currentData() or "markdown",
             ),
-            # Persist the local account as-is — settings page doesn't
-            # touch these directly; AccountDialog routes through
-            # MainWindow.notify_account_changed which calls save_config.
-            user_name=self._config.user_name,
-            user_product=self._config.user_product,
-            tested_ok=dict(self._config.tested_ok),
+            close_action=cast(
+                Literal["minimize_to_tray", "quit"],
+                self.close_action_combo.currentData() or "minimize_to_tray",
+            ),
+            dedup_enabled=self.dedup_enabled_switch.isChecked(),
+            dedup_history_dir=self.dedup_history_dir_edit.text(),
+            dedup_threshold_green=self.dedup_threshold_green_spin.value(),
+            dedup_threshold_yellow=self.dedup_threshold_yellow_spin.value(),
+            dedup_history_last_built=self._config.dedup_history_last_built,
+            dedup_vault_last_built=self._config.dedup_vault_last_built,
+            update_repo=self.update_repo_edit.text().strip(),
         )
+        self._config = new_cfg
         self._on_save(new_cfg)

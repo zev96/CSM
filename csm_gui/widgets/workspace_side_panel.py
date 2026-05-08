@@ -26,6 +26,7 @@ from qfluentwidgets import (
 )
 
 from .controls_panel import ControlsPanel
+from .dedup_panel import DedupPanel
 
 
 # ── Design tokens ───────────────────────────────────────────────────────────
@@ -54,6 +55,8 @@ class WorkspaceSidePanel(QWidget):
     rerun_all_requested = pyqtSignal()
     clear_all_requested = pyqtSignal()
     skill_library_requested = pyqtSignal()  # kept for back-compat (unused now)
+    dedup_recalculate_requested = pyqtSignal()
+    dedup_drilldown_requested = pyqtSignal(str)   # "history" | "vault"
 
     def __init__(
         self,
@@ -114,6 +117,17 @@ class WorkspaceSidePanel(QWidget):
         self.polish_btn.clicked.connect(self._on_polish_clicked)
         b_lay.addSpacing(4)
         b_lay.addWidget(self.polish_btn)
+
+        # ── Dedup metrics (insert below polish button) ───────────────
+        b_lay.addSpacing(8)
+        self.dedup_panel = DedupPanel(inner)
+        self.dedup_panel.recalculate_requested.connect(
+            self.dedup_recalculate_requested.emit
+        )
+        self.dedup_panel.drilldown_requested.connect(
+            self.dedup_drilldown_requested.emit
+        )
+        b_lay.addWidget(self.dedup_panel)
 
         b_lay.addStretch(1)
         scroll.setWidget(inner)

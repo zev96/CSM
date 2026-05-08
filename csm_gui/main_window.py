@@ -1,15 +1,14 @@
 """FluentWindow shell with three navigation items."""
 from __future__ import annotations
 from pathlib import Path
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGraphicsOpacityEffect,
-)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
 from qfluentwidgets import (
     FluentWindow, FluentIcon, NavigationItemPosition, NavigationDisplayMode,
 )
 from .config import AppConfig, load_config, save_config as _save_config
+from .tray.manager import TrayManager
 from .pages.home_page import HomePage
 from .pages.article_page import ArticlePage
 from .pages.settings_page import SettingsPage
@@ -20,6 +19,22 @@ from .recent_docs import append_export, load_recent
 from .controllers.article_controller import ArticleController
 from .controllers.batch_controller import BatchController
 from .pages.batch_result_page import BatchResultPage
+from csm_core.dedup.analyzer import DedupAnalyzer
+from .workers.dedup_worker import DedupAnalyzeWorker, DedupBuildWorker
+from .widgets.dedup_drill_dialog import DedupDrillDialog
+from csm_gui._version import __version__
+from .workers.update_check_worker import UpdateCheckWorker
+from .widgets.update_dialog import UpdateDialog
+from .widgets.update_progress_dialog import UpdateProgressDialog
+
+
+def _read_token() -> str:
+    """Read the CI-injected PAT, return '' if not present (local dev)."""
+    try:
+        from csm_core.updater_client._token import TOKEN
+        return TOKEN
+    except ImportError:
+        return ""
 
 
 class MainWindow(FluentWindow):
@@ -87,10 +102,8 @@ class MainWindow(FluentWindow):
         self.article_controller.export_failed.connect(self._on_export_failed)
         self.article_controller.reroll_completed.connect(self._on_reroll_completed)
         self.article_controller.reroll_failed.connect(self._on_reroll_failed)
-        self.article_controller.titles_ready.connect(self._on_titles_ready)
-        self.article_controller.titles_failed.connect(self._on_titles_failed)
 
-        self.home = HomePage(config=self.config, config_dir=self.config_dir, parent=self)
+        self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
 
         self.batch_controller = BatchController(self.config, parent=self)
@@ -179,20 +192,59 @@ class MainWindow(FluentWindow):
         # Force the home page to be the initial view.
         self.switchTo(self.home)
 
-        # First-run gate — if no local account, take over the entire
-        # window with a full-screen welcome overlay before any other UI
-        # is reachable. ``_show_first_run_overlay`` hides the title bar /
-        # sidebar / stack and only restores them once the user submits.
-        self._first_run_overlay: QWidget | None = None
-        if not self.config.user_name:
-            QTimer.singleShot(0, self._show_first_run_overlay)
+        # Tray manager — owned by the window. app.py's start sequence shows it.
+        self.tray = TrayManager(self)
+        self.tray.show_requested.connect(self._show_main_window)
+        self.tray.new_article_requested.connect(self._on_tray_new_article)
+        self.tray.new_template_requested.connect(self._on_tray_new_template)
+        self.tray.new_skill_requested.connect(self._on_tray_new_skill)
+        self.tray.settings_requested.connect(self._on_tray_settings)
+        self.tray.quit_requested.connect(self._on_tray_quit)
+        if self.tray.is_available() and self.config.close_action == "minimize_to_tray":
+            self.tray.show()
+
+        # ── Dedup analyzer ────────────────────────────────────────────
+        self.dedup_analyzer = DedupAnalyzer()
+        self._dedup_loaded = False
+        self._dedup_workers: list = []
+        self._last_polished_text: str = ""
+        self._last_dedup_reports: dict = {}
+
+        # Wire side panel + settings page
+        self.article.controls.dedup_recalculate_requested.connect(
+            self._on_dedup_recalculate
+        )
+        self.article.controls.dedup_drilldown_requested.connect(
+            self._on_dedup_drilldown
+        )
+        self.settings.dedup_rebuild_requested.connect(self._on_dedup_rebuild)
+
+        # Apply thresholds on the panel
+        self.article.controls.dedup_panel.set_thresholds(
+            green=self.config.dedup_threshold_green,
+            yellow=self.config.dedup_threshold_yellow,
+        )
+        if not self.config.dedup_enabled:
+            self.article.controls.dedup_panel.set_disabled_message(
+                "未启用 — 在设置中开启「历史查重」"
+            )
+
+        # ── Update checker ───────────────────────────────────────────
+        self._update_workers: list = []
+        self.settings.check_update_requested.connect(
+            lambda: self._start_update_check_manual()
+        )
+        # Silent check 2 seconds after startup
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(2000, lambda: self._start_update_check_silent())
 
     def _build_brand_header(self) -> None:
         """Inject a CSM / Content Studio header at the top of the nav panel.
 
-        Layout: [logo / wordmark]  [account avatar].
-        The avatar is a circular initials button right of the brand. Click
-        opens the account-edit dialog.
+        ``NavigationInterface.insertWidget`` requires a NavigationWidget
+        subclass and we want a passive label, so reach into the panel's
+        topLayout directly. The hamburger is hidden first so the brand
+        sits at the actual top edge.
         """
         panel = self.navigationInterface.panel
         try:
@@ -201,20 +253,17 @@ class MainWindow(FluentWindow):
             pass
 
         header = QWidget(panel)
-        outer = QHBoxLayout(header)
-        outer.setContentsMargins(20, 14, 12, 12)
-        outer.setSpacing(8)
+        lay = QVBoxLayout(header)
+        lay.setContentsMargins(20, 14, 16, 12)
+        lay.setSpacing(0)
 
-        # ── Brand mark column ──────────────────────────────────────────
-        brand_col = QWidget(header)
-        brand_lay = QVBoxLayout(brand_col)
-        brand_lay.setContentsMargins(0, 0, 0, 0)
-        brand_lay.setSpacing(0)
-
+        # Brand mark — show the bundled logo at 32×32 if it ships with the
+        # app; fall back to the original "CSM / Content Studio" wordmark so
+        # the build keeps running even before the asset is dropped in.
         from PyQt6.QtGui import QPixmap
         logo_path = Path(__file__).parent / "assets" / "csm-logo.png"
         if logo_path.exists():
-            logo = QLabel(brand_col)
+            logo = QLabel(header)
             pm = QPixmap(str(logo_path)).scaled(
                 32, 32,
                 Qt.AspectRatioMode.KeepAspectRatio,
@@ -223,29 +272,19 @@ class MainWindow(FluentWindow):
             logo.setPixmap(pm)
             logo.setFixedSize(32, 32)
             logo.setStyleSheet("background: transparent;")
-            brand_lay.addWidget(logo)
+            lay.addWidget(logo)
         else:
-            title = QLabel("CSM", brand_col)
+            title = QLabel("CSM", header)
             title.setStyleSheet(
                 "color: #1e1c19; font-size: 18px; font-weight: 700;"
                 "letter-spacing: 0.5px; background: transparent;"
             )
-            subtitle = QLabel("Content Studio", brand_col)
+            subtitle = QLabel("Content Studio", header)
             subtitle.setStyleSheet(
                 "color: rgba(30,28,25,0.45); font-size: 11px; background: transparent;"
             )
-            brand_lay.addWidget(title)
-            brand_lay.addWidget(subtitle)
-        outer.addWidget(brand_col, 1)
-
-        # ── Account avatar ─────────────────────────────────────────────
-        self._avatar_btn = QPushButton(header)
-        self._avatar_btn.setFixedSize(32, 32)
-        self._avatar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._avatar_btn.clicked.connect(self._on_edit_account)
-        self._refresh_avatar_button()
-        outer.addWidget(self._avatar_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
+            lay.addWidget(title)
+            lay.addWidget(subtitle)
         try:
             panel.topLayout.insertWidget(0, header, alignment=Qt.AlignmentFlag.AlignTop)
         except Exception:
@@ -253,139 +292,6 @@ class MainWindow(FluentWindow):
                 panel.vBoxLayout.insertWidget(0, header, alignment=Qt.AlignmentFlag.AlignTop)
             except Exception:
                 pass
-
-    # ── Local account ───────────────────────────────────────────────────
-    def _refresh_avatar_button(self) -> None:
-        from .widgets.account_dialog import initial_for
-        name = self.config.user_name
-        product = self.config.user_product
-        initial = initial_for(name)
-        # Accent green bg, white text for solid contrast on either theme.
-        bg = "#2f6f5e"
-        fg = "#ffffff"
-        self._avatar_btn.setText(initial)
-        self._avatar_btn.setStyleSheet(
-            f"QPushButton {{ background: {bg}; color: {fg};"
-            f" border: none; border-radius: 16px;"
-            f" font-weight: 700; font-size: 13px; }}"
-            f"QPushButton:hover {{ background: #245a4c; }}"
-        )
-        if name:
-            tip = f"{name} · {product}" if product else name
-        else:
-            tip = "点击建立本地账户"
-        self._avatar_btn.setToolTip(tip)
-
-    def _on_edit_account(self) -> None:
-        from .widgets.account_dialog import AccountDialog
-        dlg = AccountDialog(
-            name=self.config.user_name,
-            product=self.config.user_product,
-            parent=self,
-        )
-        if not dlg.exec():
-            return
-        name, product = dlg.values()
-        self.notify_account_changed(name, product)
-
-    # ── First-run welcome overlay ──────────────────────────────────────
-    def _show_first_run_overlay(self) -> None:
-        """Slap a full-window welcome screen on top of everything.
-
-        While the overlay is up, the navigation sidebar, title bar, and
-        page stack are all hidden — the user sees only the welcome form.
-        On submit we persist the account, fade the overlay out, and
-        restore the chrome.
-        """
-        from .widgets.first_run_welcome import FirstRunWelcome
-
-        if self._first_run_overlay is not None:
-            return
-
-        # Hide chrome.
-        try:
-            self.titleBar.hide()
-        except Exception:
-            pass
-        try:
-            self.navigationInterface.hide()
-        except Exception:
-            pass
-        try:
-            self.stackedWidget.hide()
-        except Exception:
-            pass
-
-        overlay = FirstRunWelcome(self)
-        overlay.setGeometry(self.rect())
-        overlay.show()
-        overlay.raise_()
-        overlay.submitted.connect(self._on_first_run_submitted)
-        self._first_run_overlay = overlay
-
-    def _on_first_run_submitted(self, name: str, product) -> None:
-        """Fade overlay → persist account → restore chrome."""
-        # Persist immediately so a crash mid-fade doesn't lose the data.
-        self.notify_account_changed(name, product or None)
-
-        overlay = self._first_run_overlay
-        if overlay is None:
-            return
-
-        # Fade-out animation on a graphics opacity effect (windowOpacity
-        # is top-level only). 200ms ease-out.
-        effect = QGraphicsOpacityEffect(overlay)
-        effect.setOpacity(1.0)
-        overlay.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(200)
-        anim.setStartValue(1.0)
-        anim.setEndValue(0.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        def _finish() -> None:
-            try:
-                self.titleBar.show()
-            except Exception:
-                pass
-            try:
-                self.navigationInterface.show()
-            except Exception:
-                pass
-            try:
-                self.stackedWidget.show()
-            except Exception:
-                pass
-            overlay.hide()
-            overlay.deleteLater()
-            self._first_run_overlay = None
-
-        anim.finished.connect(_finish)
-        anim.start()
-        # Keep a reference so Qt doesn't GC the animation mid-flight.
-        self._first_run_anim = anim
-
-    def resizeEvent(self, ev):  # noqa: N802
-        super().resizeEvent(ev)
-        # Keep the overlay glued to the full window during the welcome step.
-        if self._first_run_overlay is not None:
-            self._first_run_overlay.setGeometry(self.rect())
-
-    def notify_account_changed(self, name: str | None, product: str | None) -> None:
-        """Single source of truth for account updates: persists + broadcasts."""
-        self.config.user_name = name
-        self.config.user_product = product
-        self.save_config()
-        self._refresh_avatar_button()
-        # Push into pages that surface the account.
-        try:
-            self.home.apply_user(name)
-        except Exception:
-            pass
-        try:
-            self.settings.apply_user(name, product)
-        except Exception:
-            pass
 
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
@@ -399,16 +305,78 @@ class MainWindow(FluentWindow):
         self.skills.apply_config(new_cfg)
         self.batch_controller.apply_config(new_cfg)
         self.article_controller.apply_config(new_cfg)
+        # 同步托盘可见性（用户可能切换了 close_action）
+        if self.tray.is_available():
+            if new_cfg.close_action == "minimize_to_tray":
+                self.tray.show()
+            else:
+                self.tray.hide()
+        # Dedup: refresh thresholds + enabled state on the panel
+        self.article.controls.dedup_panel.set_thresholds(
+            green=new_cfg.dedup_threshold_green,
+            yellow=new_cfg.dedup_threshold_yellow,
+        )
+        if new_cfg.dedup_enabled:
+            self.article.controls.dedup_panel.clear_disabled_message()
+        else:
+            self.article.controls.dedup_panel.set_disabled_message(
+                "未启用 — 在设置中开启「历史查重」"
+            )
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Intercept × per AppConfig.close_action."""
+        if self.config.close_action == "minimize_to_tray" and self.tray.is_available():
+            event.ignore()
+            self.hide()
+            if not self.config.tray_first_minimize_shown:
+                self.tray.show_first_minimize_bubble()
+                self.config.tray_first_minimize_shown = True
+                self.save_config()
+            return
+        event.accept()
+        super().closeEvent(event)
+
+    def _show_main_window(self) -> None:
+        """Restore the main window from tray. Idempotent."""
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_new_article(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.home)
+        try:
+            self.home.keyword_input.setFocus()
+        except AttributeError:
+            pass
+
+    def _on_tray_new_template(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.template_manager)
+        try:
+            self.template_manager.list_panel._on_new()
+        except AttributeError:
+            pass
+
+    def _on_tray_new_skill(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.skills)
+        try:
+            self.skills.new_btn.click()
+        except AttributeError:
+            pass
+
+    def _on_tray_settings(self) -> None:
+        self._show_main_window()
+        self.switchTo(self.settings)
+
+    def _on_tray_quit(self) -> None:
+        """Bypass closeEvent — true exit."""
+        self.tray.hide()
+        QApplication.instance().quit()
 
     def _on_request_generate(self, payload: dict) -> None:
-        # Wipe any title candidates left over from the previous article so
-        # the cycle button doesn't surface stale options while the new
-        # title worker is still running. New candidates will populate via
-        # ``titles_ready`` once the LLM responds.
-        try:
-            self.article.header_bar.clear_title_candidates()
-        except Exception:
-            pass
         ok = self.article_controller.request_generate(payload)
         if not ok:
             from qfluentwidgets import InfoBar, InfoBarPosition
@@ -432,6 +400,12 @@ class MainWindow(FluentWindow):
         )
         self.switchTo(self.article)
         self.navigationInterface.setCurrentItem(self.article.objectName())
+        # Dedup on the draft (history only — vault is full of source material
+        # so vault-comparison on draft would always be near 100%).
+        if self.config.dedup_enabled:
+            from csm_core.assembler.render import compose_draft
+            draft = compose_draft(result.plan)
+            self._kick_dedup_analysis(draft, kind="history")
 
     def _show_plan_warnings_list(self, warnings: list) -> None:
         if not warnings:
@@ -494,29 +468,6 @@ class MainWindow(FluentWindow):
             position=InfoBarPosition.TOP, duration=4000,
         )
 
-    def _on_titles_ready(self, titles: list) -> None:
-        # Hand the candidate list to the header bar — it picks the first
-        # one for the title input (unless the user edited it) and exposes
-        # the rest behind the cycle button.
-        try:
-            self.article.header_bar.set_title_candidates(list(titles))
-        except Exception:
-            # Header bar might not be ready in some unit-test contexts —
-            # silently ignore rather than crash the worker callback.
-            pass
-
-    def _on_titles_failed(self, msg: str) -> None:
-        # Title generation failure is non-fatal — the article can still
-        # be drafted / polished / exported with a manual title. Surface
-        # only as a quiet info bar so users see *why* the title didn't
-        # update, but the workspace doesn't lose focus.
-        from qfluentwidgets import InfoBar, InfoBarPosition
-        first_line = msg.splitlines()[0] if msg else "未知错误"
-        InfoBar.warning(
-            title="标题生成失败", content=first_line, parent=self,
-            position=InfoBarPosition.TOP, duration=4000,
-        )
-
     def _on_polish(self, skill_path) -> None:
         # Provider is read from config (the workspace no longer has a picker).
         # Pass the current (possibly user-edited) draft text so manual
@@ -553,6 +504,272 @@ class MainWindow(FluentWindow):
         # "polish done → jump to result tab" behaviour.
         self.article.markdown_view.set_polished(text)
         self.article.sync_title_to_polished(text)
+        # Dedup: stash text + analyze against both corpora if enabled
+        self._last_polished_text = text
+        if self.config.dedup_enabled:
+            self._kick_dedup_analysis(text, kind="history")
+            self._kick_dedup_analysis(text, kind="vault")
+
+    def _ensure_dedup_index_loaded(self) -> None:
+        """Lazy-load LSH indexes from disk on first use."""
+        if self._dedup_loaded:
+            return
+        idx_dir = self.config_dir / "dedup_index"
+        self.dedup_analyzer.load(idx_dir)
+        self._dedup_loaded = True
+
+    def _kick_dedup_analysis(self, text: str, *, kind: str) -> None:
+        """Start a background DedupAnalyzeWorker; result lands in panel via signal."""
+        self._ensure_dedup_index_loaded()
+        worker = DedupAnalyzeWorker(
+            analyzer=self.dedup_analyzer, text=text, kind=kind, parent=self,
+        )
+        worker.finished.connect(self._on_dedup_finished)
+        worker.finished.connect(
+            lambda *_: self._dedup_workers.remove(worker)
+            if worker in self._dedup_workers else None
+        )
+        self._dedup_workers.append(worker)
+        worker.start()
+
+    def _on_dedup_finished(self, report) -> None:
+        self.article.controls.dedup_panel.set_report(report)
+        self._last_dedup_reports[report.corpus_kind] = report
+
+    def _on_dedup_recalculate(self) -> None:
+        """User clicked ⟳ — re-run on last polished text."""
+        text = self._last_polished_text
+        if not text:
+            return
+        if self.config.dedup_enabled:
+            self._kick_dedup_analysis(text, kind="history")
+            self._kick_dedup_analysis(text, kind="vault")
+
+    def _on_dedup_drilldown(self, kind: str) -> None:
+        report = self._last_dedup_reports.get(kind)
+        if not report:
+            return
+        dlg = DedupDrillDialog(report, parent=self)
+        dlg.open_source_requested.connect(self._on_dedup_open_source)
+        dlg.exec()
+
+    def _on_dedup_open_source(self, path: str) -> None:
+        """Open source file in OS default app."""
+        import os
+        try:
+            os.startfile(path)
+        except (OSError, AttributeError):
+            pass
+
+    def _on_dedup_rebuild(self, kind: str) -> None:
+        """User clicked 重建索引 in settings."""
+        if kind == "history":
+            root = self.config.dedup_history_dir
+        else:
+            root = self.config.vault_root
+        if not root:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning("缺少目录", f"请先配置 {kind} 目录",
+                            parent=self, position=InfoBarPosition.TOP)
+            return
+        from pathlib import Path
+        worker = DedupBuildWorker(
+            analyzer=self.dedup_analyzer, root=Path(root), kind=kind, parent=self,
+        )
+        worker.finished.connect(lambda: self.dedup_analyzer.save(
+            self.config_dir / "dedup_index"))
+        worker.finished.connect(
+            lambda: self._dedup_workers.remove(worker)
+            if worker in self._dedup_workers else None
+        )
+        self._dedup_workers.append(worker)
+        worker.start()
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.info(f"开始重建 {kind} 索引", "完成后会自动保存",
+                     parent=self, position=InfoBarPosition.TOP)
+
+    # ── Update check / upgrade flow ─────────────────────────────────
+    def _start_update_check_silent(self) -> None:
+        self._dispatch_update_check(is_manual=False)
+
+    def _start_update_check_manual(self) -> None:
+        self._dispatch_update_check(is_manual=True)
+
+    def _dispatch_update_check(self, *, is_manual: bool) -> None:
+        repo = (self.config.update_repo or "").strip()
+        if not repo:
+            if is_manual:
+                from qfluentwidgets import InfoBar, InfoBarPosition
+                InfoBar.warning(
+                    "未配置仓库",
+                    "请在「设置 → 关于 CSM」填入 update_repo（owner/name）",
+                    parent=self, position=InfoBarPosition.TOP, duration=4000,
+                )
+            return
+        worker = UpdateCheckWorker(
+            repo=repo,
+            token=_read_token(),
+            current_version=__version__,
+            parent=self,
+        )
+        worker.finished.connect(
+            lambda result, m=is_manual: self._on_update_check_done(result, is_manual=m)
+        )
+        worker.finished.connect(
+            lambda *_: self._update_workers.remove(worker)
+            if worker in self._update_workers else None
+        )
+        self._update_workers.append(worker)
+        worker.start()
+
+    def _on_update_check_done(self, result, *, is_manual: bool) -> None:
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        if result.error:
+            if is_manual:
+                InfoBar.error("检查更新失败", result.error,
+                              parent=self, position=InfoBarPosition.TOP, duration=4000)
+            return
+        if not result.has_update:
+            if is_manual:
+                InfoBar.success(
+                    "已是最新", f"当前版本 v{__version__} 已是最新",
+                    parent=self, position=InfoBarPosition.TOP, duration=3000)
+            return
+        # 弹升级对话框
+        info = result.info
+        dlg = UpdateDialog(info=info, current_version=__version__, parent=self)
+        dlg.upgrade_requested.connect(lambda i=info: self._on_upgrade_clicked(i))
+        dlg.exec()
+
+    def _on_upgrade_clicked(self, info) -> None:
+        """User clicked '立即升级'. Download zip, then spawn updater.exe."""
+        from csm_core.updater_client.downloader import (
+            download_with_verification, DownloadError, DownloadCancelled,
+        )
+        import os, sys, tempfile
+        from pathlib import Path
+        import httpx
+        # Read SHA256 from manifest. Private-repo release assets must be
+        # fetched via the API URL with Accept: application/octet-stream —
+        # browser_download_url 302-redirects to S3 and our Bearer token
+        # carries through and breaks the S3 request.
+        token = _read_token()
+        headers = {"Accept": "application/octet-stream"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            with httpx.Client(timeout=15.0, follow_redirects=True,
+                              headers=headers) as c:
+                resp = c.get(info.manifest_url)
+                resp.raise_for_status()
+                # Response body IS the manifest.json content (bytes); parse.
+                import json as _json
+                m = _json.loads(resp.content.decode("utf-8"))
+            expected_sha = m["sha256"]
+        except Exception as e:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error("升级失败", f"无法读取 manifest: {e}",
+                          parent=self, position=InfoBarPosition.TOP, duration=4000)
+            return
+
+        # Show progress dialog + start download
+        progress = UpdateProgressDialog(self)
+        zip_path = Path(tempfile.gettempdir()) / "csm_update" / f"CSM-{info.tag_name}.zip"
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+        from PyQt6.QtCore import QThread, pyqtSignal as _sig
+        class _DownloadThread(QThread):
+            finished_ok = _sig(str)
+            failed = _sig(str)
+            cancelled = _sig()
+            progress = _sig(int, int)
+
+            def __init__(self, url, target, sha, dl_headers, parent=None):
+                super().__init__(parent)
+                self._url, self._target, self._sha, self._h = url, target, sha, dl_headers
+                self._cancel = False
+
+            def cancel(self): self._cancel = True
+
+            def run(self):
+                try:
+                    download_with_verification(
+                        url=self._url, target=self._target,
+                        expected_sha256=self._sha,
+                        progress_cb=lambda d, t: self.progress.emit(d, t),
+                        is_cancelled=lambda: self._cancel,
+                        headers=self._h,
+                    )
+                    self.finished_ok.emit(str(self._target))
+                except DownloadCancelled:
+                    self.cancelled.emit()
+                except DownloadError as e:
+                    self.failed.emit(str(e))
+
+        dl = _DownloadThread(info.zip_url, zip_path, expected_sha, headers, parent=self)
+        dl.progress.connect(progress.set_progress)
+        dl.finished_ok.connect(lambda p: self._on_download_ok(progress, info, Path(p)))
+        dl.failed.connect(lambda msg: self._on_download_failed(progress, msg))
+        dl.cancelled.connect(lambda: progress.reject())
+        progress.cancel_requested.connect(dl.cancel)
+        self._update_workers.append(dl)
+        dl.start()
+        progress.exec()
+
+    def _on_download_ok(self, progress_dlg, info, zip_path) -> None:
+        progress_dlg.accept()
+        import sys
+        import shutil
+        import tempfile
+        from pathlib import Path
+        if hasattr(sys, "frozen") and getattr(sys, "frozen"):
+            exe_dir = Path(sys.executable).parent
+            updater_src = exe_dir / "updater.exe"
+        else:
+            exe_dir = Path.cwd()
+            updater_src = Path(__file__).resolve().parents[1] / "updater" / "main.py"
+        if not updater_src.exists():
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error("升级失败", f"updater 不存在: {updater_src}",
+                          parent=self, position=InfoBarPosition.TOP, duration=5000)
+            return
+        import os, subprocess
+        target_dir = exe_dir if hasattr(sys, "frozen") else Path.cwd()
+
+        # CRITICAL: copy updater.exe to TEMP before running it. Otherwise
+        # updater.exe will be running from inside ``target_dir``, and
+        # Windows refuses to rename a directory that contains a running
+        # process's executable (WinError 32 — sharing violation). Copying
+        # to TEMP decouples the updater from the install dir so the rename
+        # can succeed.
+        if updater_src.suffix == ".exe":
+            tmp_dir = Path(tempfile.gettempdir()) / "csm_update"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            updater_run = tmp_dir / "updater.exe"
+            try:
+                shutil.copy2(str(updater_src), str(updater_run))
+            except OSError as e:
+                from qfluentwidgets import InfoBar, InfoBarPosition
+                InfoBar.error("升级失败", f"无法复制 updater 到临时目录: {e}",
+                              parent=self, position=InfoBarPosition.TOP, duration=5000)
+                return
+            cmd = [str(updater_run)]
+        else:
+            # Dev mode — running from source, updater is a .py file outside
+            # the install dir, no need to copy.
+            cmd = [sys.executable, str(updater_src)]
+        cmd.extend(["--pid", str(os.getpid()),
+                    "--zip", str(zip_path),
+                    "--target", str(target_dir)])
+        subprocess.Popen(cmd, close_fds=True)
+        from PyQt6.QtWidgets import QApplication
+        QApplication.instance().quit()
+
+    def _on_download_failed(self, progress_dlg, msg: str) -> None:
+        progress_dlg.reject()
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.error("下载失败", msg,
+                      parent=self, position=InfoBarPosition.TOP, duration=5000)
 
     def _on_export(self) -> None:
         from PyQt6.QtWidgets import QFileDialog

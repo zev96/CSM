@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, ValidationError
 logger = logging.getLogger(__name__)
 
 Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen"]
+CloseAction = Literal["minimize_to_tray", "quit"]
 
 
 class AppConfig(BaseModel):
@@ -26,15 +27,19 @@ class AppConfig(BaseModel):
     concurrency: int = 3
     upload_training_hints: bool = False
     export_format: Literal["markdown", "docx"] = "markdown"
-    # Local account — first-run wizard collects these, sidebar avatar /
-    # home greeting / settings chip read them. ``user_name`` is required
-    # for any first-run flow to dismiss; ``user_product`` is optional.
-    user_name: str | None = None
-    user_product: str | None = None
-    # Per-provider "last successfully tested" signature (sha256 of
-    # api_key|model|base_url). Settings page restores the 已连接 badge on
-    # startup when the current form values still match the recorded sig.
-    tested_ok: dict[str, str] = Field(default_factory=dict)
+    close_action: CloseAction = "minimize_to_tray"
+    tray_first_minimize_shown: bool = False
+
+    # ── Dedup detection ────────────────────────────────────────────────
+    dedup_enabled: bool = False
+    dedup_history_dir: str = ""
+    dedup_threshold_green: int = 15           # %
+    dedup_threshold_yellow: int = 30          # %
+    dedup_history_last_built: str = ""        # ISO timestamp
+    dedup_vault_last_built: str = ""
+
+    # ── Update / hot-upgrade ───────────────────────────────────────────
+    update_repo: str = ""    # GitHub "owner/name", 留空 = 不检查更新
 
 
 def load_config(path: Path) -> AppConfig:

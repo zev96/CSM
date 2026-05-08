@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# softprops/action-gh-release needs contents:write to create the Release.
+# The default GITHUB_TOKEN no longer has this permission since GitHub's
+# 2023 security tightening — declare it explicitly here.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify tag matches __version__
+        run: python scripts/release_check.py "${{ github.ref_name }}"
+
+      - name: Install project deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[gui]
+          pip install pyinstaller
+
+      - name: Inject PAT into _token.py
+        shell: pwsh
+        # IMPORTANT: do NOT use a here-string here. YAML's `run: |` indents
+        # the body, but PowerShell here-string terminator `"@` MUST be at
+        # column 0 — indentation breaks it silently (file gets garbage).
+        # Use a one-line Set-Content with a single-quoted literal instead.
+        run: Set-Content -Path csm_core\updater_client\_token.py -Encoding utf8 -Value 'TOKEN = "${{ secrets.CSM_RELEASE_PAT }}"'
+
+      - name: Verify _token.py was written correctly
+        shell: pwsh
+        run: |
+          $content = Get-Content csm_core\updater_client\_token.py -Raw
+          $size = (Get-Item csm_core\updater_client\_token.py).Length
+          Write-Host "_token.py size: $size bytes"
+          # Sanity check: file should be > 30 bytes (TOKEN = "..." with a real PAT)
+          # but < 200 bytes (a real PAT is ~93 chars). Don't print content.
+          if ($size -lt 30) { Write-Error "TOKEN appears empty — check CSM_RELEASE_PAT secret"; exit 1 }
+          if ($size -gt 200) { Write-Warning "TOKEN looks unusually long ($size bytes)" }
+
+      - name: Build CSM main app
+        run: pyinstaller CSM.spec
+
+      - name: Build updater
+        run: pyinstaller updater/updater.spec --distpath dist/updater
+
+      - name: Copy updater.exe into main dist
+        shell: pwsh
+        run: |
+          Copy-Item dist\updater\updater.exe dist\CSM\updater.exe
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\CSM -DestinationPath "CSM-${{ github.ref_name }}.zip"
+
+      - name: Generate manifest.json
+        run: |
+          python scripts/build_manifest.py --version "${{ github.ref_name }}" --zip "CSM-${{ github.ref_name }}.zip" --out manifest.json
+
+      - name: Extract CHANGELOG section
+        id: changelog
+        shell: pwsh
+        run: |
+          $body = python scripts/extract_changelog.py "${{ github.ref_name }}"
+          $body = $body -replace "`r`n", "`n"
+          $delim = "EOF_$(Get-Random)"
+          "body<<$delim" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "$body"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "$delim"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.changelog.outputs.body }}
+          files: |
+            CSM-${{ github.ref_name }}.zip
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

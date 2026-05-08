@@ -15,3 +15,5 @@ templates/.trash/
 *.bak
 .vscode/
 .idea/
+
+csm_core/updater_client/_token.py

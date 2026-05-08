@@ -22,6 +22,9 @@ hiddenimports = [
     'tenacity',
     'pydantic',
     'click',
+    'datasketch',
+    'datasketch.minhash',
+    'datasketch.lsh',
     # LLM providers are conditionally imported inside make_client();
     # list them so PyInstaller bundles every provider.
     'csm_core.llm.providers.mock',
@@ -31,10 +34,44 @@ hiddenimports = [
     'csm_core.llm.providers.deepseek',
     'csm_core.llm.providers.gemini',
     'csm_core.llm.providers.qwen',
+    # Dedup module
+    'csm_core.dedup',
+    'csm_core.dedup.shingles',
+    'csm_core.dedup.corpus',
+    'csm_core.dedup.index',
+    'csm_core.dedup.analyzer',
+    'csm_core.dedup.report',
+    # Tray module (feature 1)
+    'csm_gui.tray',
+    'csm_gui.tray.manager',
+    'csm_gui.tray.menu',
+    'csm_gui.tray.icon',
+    'csm_gui.tray.single_instance',
+    # Workers
+    'csm_gui.workers.dedup_worker',
+    'csm_gui.workers.update_check_worker',
+    # Widgets
+    'csm_gui.widgets.dedup_panel',
+    'csm_gui.widgets.dedup_drill_dialog',
+    'csm_gui.widgets.update_dialog',
+    'csm_gui.widgets.update_progress_dialog',
+    # Updater client
+    'csm_core.updater_client',
+    'csm_core.updater_client.manifest',
+    'csm_core.updater_client.checker',
+    'csm_core.updater_client.downloader',
+    'csm_core.updater_client.github_client',
+    # _token.py is created by CI at build time; the import is inside a
+    # try/except in main_window which PyInstaller's static analyzer
+    # sometimes skips. List explicitly so it's always bundled.
+    'csm_core.updater_client._token',
+    # Version
+    'csm_gui._version',
 ]
 hiddenimports += collect_submodules('docx')
 hiddenimports += collect_submodules('qfluentwidgets')
 hiddenimports += collect_submodules('anthropic')
+hiddenimports += collect_submodules('datasketch')
 
 
 a = Analysis(

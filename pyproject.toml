@@ -1,6 +1,6 @@
 [project]
 name = "csm"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Content SEO Maker - 基于 Obsidian Vault 的 SEO 文章生成工具"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,6 +10,8 @@ dependencies = [
     "tenacity>=8.2",
     "click>=8.1",
     "anthropic>=0.39",
+    "datasketch>=1.6",
+    "python-docx>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -47,3 +49,6 @@ addopts = "-v --tb=short"
 markers = [
     "integration: 真实外部 API 调用测试（默认不跑）",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "csm_gui._version.__version__" }
