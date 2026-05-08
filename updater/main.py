@@ -19,8 +19,31 @@ import zipfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO,
-                    format="[updater] %(asctime)s %(levelname)s %(message)s")
+
+
+def _setup_logging() -> Path | None:
+    """Set up console + file logging. Log file goes next to the target so
+    users can find it easily when something goes wrong.
+    """
+    log_path: Path | None = None
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    # Try to add a file handler to %TEMP%\csm_update\updater.log so logs
+    # survive after the console window closes.
+    try:
+        log_dir = Path(os.environ.get("TEMP", ".")) / "csm_update"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "updater.log"
+        fh = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+        handlers.append(fh)
+    except Exception:
+        pass
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="[updater] %(asctime)s %(levelname)s %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+    return log_path
 
 
 def wait_for_pid_exit(pid: int, timeout_s: float = 10.0) -> None:
@@ -173,40 +196,69 @@ def replace_directory(*, target: Path, zip_path: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    log_path = _setup_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--zip", type=Path, required=True)
     parser.add_argument("--target", type=Path, required=True)
+    parser.add_argument("--keep-window", action="store_true",
+                        help="keep the console window open after finishing")
     args = parser.parse_args(argv[1:])
+
+    logger.info("=" * 60)
+    logger.info("CSM updater starting")
+    logger.info("  --pid    = %d", args.pid)
+    logger.info("  --zip    = %s (exists=%s, size=%s)",
+                args.zip, args.zip.exists(),
+                args.zip.stat().st_size if args.zip.exists() else "n/a")
+    logger.info("  --target = %s (exists=%s)",
+                args.target, args.target.exists())
+    if log_path:
+        logger.info("  log file = %s", log_path)
+    logger.info("=" * 60)
 
     logger.info("waiting for main pid %d to exit", args.pid)
     wait_for_pid_exit(args.pid, timeout_s=10)
+    logger.info("main pid exited (or timeout passed)")
 
+    success = False
     try:
         replace_directory(target=args.target, zip_path=args.zip)
+        success = True
+        logger.info("replace_directory OK")
     except Exception as e:
-        logger.error("update failed: %s", e)
-        # Try to relaunch old app via the .bak that we restored
-        exe = args.target / "CSM.exe"
-        if exe.exists():
-            subprocess.Popen([str(exe)], close_fds=True)
-        return 1
+        logger.exception("update failed: %s", e)
 
-    # Cleanup downloaded zip
-    try:
-        args.zip.unlink()
-    except OSError:
-        pass
+    # Cleanup downloaded zip on success only — keep it for debugging on failure.
+    if success:
+        try:
+            args.zip.unlink()
+            logger.info("cleaned up zip %s", args.zip)
+        except OSError as e:
+            logger.warning("failed to clean zip: %s", e)
 
-    # Relaunch new app
+    # Relaunch (whether new or old after rollback)
     new_exe = args.target / "CSM.exe"
     if new_exe.exists():
+        logger.info("relaunching %s", new_exe)
         subprocess.Popen([str(new_exe)], close_fds=True)
-        logger.info("relaunched %s", new_exe)
     else:
-        logger.warning("new exe not found at %s", new_exe)
-        return 1
-    return 0
+        logger.error("CSM.exe not found at %s — cannot relaunch", new_exe)
+
+    # Keep window open if --keep-window OR if there was a failure (so user
+    # can read the log).
+    if args.keep_window or not success:
+        logger.info("=" * 60)
+        if not success:
+            logger.error("UPDATE FAILED — see log above. Press Enter to close.")
+        else:
+            logger.info("Update succeeded — press Enter to close.")
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    return 0 if success else 1
 
 
 if __name__ == "__main__":
