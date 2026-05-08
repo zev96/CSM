@@ -13,6 +13,8 @@ CloseAction = Literal["minimize_to_tray", "quit"]
 
 
 class AppConfig(BaseModel):
+    user_name: str | None = None
+    user_product: str | None = None
     vault_root: str | None = None
     out_dir: str | None = None
     default_provider: Provider = "mock"
@@ -23,7 +25,15 @@ class AppConfig(BaseModel):
     last_seed: int = 0
     default_model: dict[str, str] = Field(default_factory=dict)
     base_urls: dict[str, str] = Field(default_factory=dict)
-    timeout_seconds: int = 60
+    # Per-provider "this (key, model, base_url) tested OK" markers. Set
+    # when the user clicks 测试连接 and the ping returns; restored on next
+    # launch so the green 已连接 badge survives restarts. Stored as a
+    # truncated SHA-256 of ``key|model|base_url`` rather than the raw
+    # values — the api_key is already in this same file, but the hash
+    # keeps a careless settings.json paste from leaking working triplets
+    # in a second, redundant place.
+    provider_test_signatures: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: int = 180
     concurrency: int = 3
     upload_training_hints: bool = False
     export_format: Literal["markdown", "docx"] = "markdown"

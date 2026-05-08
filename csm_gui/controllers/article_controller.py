@@ -34,6 +34,10 @@ class ArticleController(QObject):
     reroll_failed = pyqtSignal(str)
     titles_ready = pyqtSignal(list)          # list[str] — candidate titles
     titles_failed = pyqtSignal(str)
+    # Non-fatal — fires when title generation silently fell back to a
+    # mechanical title (LLM unreachable or kept producing invalid output).
+    # The UI surfaces this as a warning toast.
+    titles_llm_failed = pyqtSignal(str)
 
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -124,6 +128,7 @@ class ArticleController(QObject):
         )
         self._title_worker.finished.connect(self._on_titles_finished)
         self._title_worker.failed.connect(self._on_titles_failed)
+        self._title_worker.llm_failed.connect(self.titles_llm_failed.emit)
         self._title_worker.start()
 
     def _on_titles_finished(self, titles: list) -> None:

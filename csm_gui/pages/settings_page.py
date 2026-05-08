@@ -10,16 +10,84 @@ account / cloud sync yet), so the 通用 / 导出 / 账号 sections render as
 read-only placeholders — wired only when those features land.
 """
 from __future__ import annotations
+import hashlib
 import os
 import sys
 import subprocess
 from typing import Callable, Literal, cast
 
+
+def _provider_signature(api_key: str, model: str, base_url: str) -> str:
+    """Stable hash of (key, model, base_url).
+
+    Used as the "this triplet tested OK" marker. We compare hashes (not
+    plaintext) so a settings.json reader can't trivially recover working
+    api_key + model + custom-url combinations from this field — the
+    api_key is already in the file, but no need to duplicate it.
+    """
+    payload = f"{api_key}\n{model}\n{base_url}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QStackedWidget,
-    QScrollArea, QFrame, QLabel, QButtonGroup, QSizePolicy, QSpinBox,
+    QScrollArea, QFrame, QLabel, QButtonGroup, QSizePolicy,
 )
+
+
+class _AdaptiveStack(QWidget):
+    """Stacked container that ONLY reports the current page's size.
+
+    ``QStackedWidget`` uses ``QStackedLayout``, whose ``minimumSize()``
+    is the max of ALL children regardless of visibility. That forces the
+    enclosing scroll-area host to the height of the tallest page (模型),
+    so a short page (通用 / 关于) renders inside an over-tall host and
+    QScrollArea draws a phantom vertical scrollbar.
+
+    Replacement: a plain ``QVBoxLayout`` plus manual show/hide. Hidden
+    children contribute zero to a QBoxLayout's minimum/preferred size,
+    so the host shrinks to the actual current page and the scrollbar
+    only appears when the page genuinely overflows.
+
+    Exposes the small subset of ``QStackedWidget`` API the rest of the
+    file uses: ``addWidget``, ``setCurrentIndex``, ``currentIndex``,
+    ``currentWidget``.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(0)
+        self._pages: list[QWidget] = []
+        self._current: int = -1
+
+    def addWidget(self, w: QWidget) -> int:  # type: ignore[override]
+        idx = len(self._pages)
+        self._lay.addWidget(w)
+        self._pages.append(w)
+        if self._current < 0:
+            self._current = idx
+            w.setVisible(True)
+        else:
+            w.setVisible(False)
+        return idx
+
+    def setCurrentIndex(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self._pages) or idx == self._current:
+            return
+        self._current = idx
+        for i, w in enumerate(self._pages):
+            w.setVisible(i == idx)
+        self.updateGeometry()
+
+    def currentIndex(self) -> int:
+        return self._current
+
+    def currentWidget(self) -> QWidget | None:
+        if 0 <= self._current < len(self._pages):
+            return self._pages[self._current]
+        return None
 from qfluentwidgets import (
     ComboBox, SpinBox, LineEdit, PasswordLineEdit,
     PrimaryPushButton, PushButton, ToolButton, FluentIcon,
@@ -389,6 +457,14 @@ class _ProviderCard(QFrame):
         self.setObjectName("ProviderCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._is_default = False
+        # Signature of (key, model, base_url) at the moment the user last
+        # ran 测试连接 successfully. Restored from AppConfig on startup so
+        # the green 已连接 badge persists across restarts.
+        self._tested_signature: str | None = None
+        # Transient flag set when 测试连接 fails. Cleared on any field edit
+        # so the user can recover from "● 连接失败" by re-typing without
+        # the page hanging on to a stale error state.
+        self._last_test_failed: bool = False
         self._apply_card_style()
 
         outer = QVBoxLayout(self)
@@ -452,12 +528,15 @@ class _ProviderCard(QFrame):
         self.model_combo = LineEdit(self)
         self.model_combo.setPlaceholderText(meta["default_model"])
         self.model_combo.setText(meta["default_model"])
+        # Editing the model invalidates the saved 已连接 marker — the new
+        # combo hasn't been verified yet.
+        self.model_combo.textChanged.connect(self._on_field_edited)
         outer.addLayout(_field("模型", self.model_combo))
 
         # API key
         self.key_input = PasswordLineEdit(self)
         self.key_input.setPlaceholderText(meta["key_placeholder"])
-        self.key_input.textChanged.connect(self._refresh_status)
+        self.key_input.textChanged.connect(self._on_field_edited)
         outer.addLayout(_field("API Key", self.key_input))
 
         # Base URL — overrides the SDK default when set. Provider-specific
@@ -471,6 +550,9 @@ class _ProviderCard(QFrame):
             )
         else:
             self.base_url_input.setPlaceholderText(f"自定义 {api_style} 端点（留空使用默认）")
+        # Same invalidation semantics as model — base_url is part of the
+        # tested signature.
+        self.base_url_input.textChanged.connect(self._on_field_edited)
         outer.addLayout(_field("Base URL", self.base_url_input))
 
         # Action row
@@ -529,25 +611,58 @@ class _ProviderCard(QFrame):
         self.default_btn.setText("当前默认" if is_default else "设为默认")
         self._apply_card_style()
 
-    def set_test_result(self, ok: bool, message: str = "") -> None:
-        if ok:
-            self._status.setText("● 已连接")
-            self._status.setStyleSheet(
-                f"color: {_ACCENT}; background: #e6f1ec; border-radius: 10px;"
-                " padding: 2px 10px; font-size: 10.5px;"
-            )
-        else:
-            self._status.setText("● 连接失败")
-            self._status.setStyleSheet(
-                "color: #c25c4d; background: #fbe7e3; border-radius: 10px;"
-                " padding: 2px 10px; font-size: 10.5px;"
-            )
-            if message:
-                self._status.setToolTip(message)
+    # ── Status badge ──────────────────────────────────────────────────
+    def current_signature(self) -> str:
+        """Composite signature of the three fields the test verified."""
+        return _provider_signature(
+            self.key_input.text().strip(),
+            self.model_combo.text().strip(),
+            self.base_url_input.text().strip(),
+        )
 
-    def _refresh_status(self, text: str) -> None:
+    def restore_tested_signature(self, sig: str | None) -> None:
+        """Restore a saved 测试 OK marker from AppConfig at app startup.
+
+        Called by ``SettingsPage._load_from`` *after* the three text fields
+        have been populated, so a subsequent ``current_signature()`` reads
+        the loaded values. If the saved signature still matches the
+        current fields, the badge paints 已连接; if the user later edits
+        any field, ``_on_field_edited`` repaints to 待测试 automatically.
+        """
+        self._tested_signature = sig
+        # Don't carry a previous-session "失败" state forward — failures
+        # are transient and only valid during the same UI session.
+        self._last_test_failed = False
+        self._refresh_status()
+
+    def set_test_result(self, ok: bool, message: str = "") -> None:
+        """Apply the immediate result of a 测试连接 click.
+
+        On success we record the current (key, model, base_url) signature
+        as the "verified" marker; the SettingsPage then mirrors it into
+        AppConfig and asks MainWindow to persist. On failure we set a
+        transient flag — no signature change.
+        """
+        if ok:
+            self._tested_signature = self.current_signature()
+            self._last_test_failed = False
+        else:
+            self._last_test_failed = True
+        self._refresh_status()
+        # Tooltip only carries useful info on failure.
+        self._status.setToolTip(message if not ok else "")
+
+    def _on_field_edited(self, *_args) -> None:
+        # Any keystroke clears a prior failure (the user is fixing it)
+        # and may also drop us out of 已连接 if the new triplet doesn't
+        # match the saved signature. ``_refresh_status`` handles both.
+        self._last_test_failed = False
+        self._refresh_status()
+
+    def _refresh_status(self, *_args) -> None:
         if self._placeholder:
             return
+        text = self.key_input.text().strip()
         if not text:
             self._status.setText("● 未配置")
             self._status.setStyleSheet(
@@ -555,13 +670,32 @@ class _ProviderCard(QFrame):
                 " padding: 2px 10px; font-size: 10.5px;"
             )
             self._status.setToolTip("")
-        else:
-            self._status.setText("● 待测试")
+            return
+        if self._last_test_failed:
+            self._status.setText("● 连接失败")
             self._status.setStyleSheet(
-                f"color: {_INK_2}; background: {_INK_5}; border-radius: 10px;"
+                "color: #c25c4d; background: #fbe7e3; border-radius: 10px;"
+                " padding: 2px 10px; font-size: 10.5px;"
+            )
+            return
+        if (
+            self._tested_signature
+            and self.current_signature() == self._tested_signature
+        ):
+            self._status.setText("● 已连接")
+            self._status.setStyleSheet(
+                f"color: {_ACCENT}; background: #e6f1ec; border-radius: 10px;"
                 " padding: 2px 10px; font-size: 10.5px;"
             )
             self._status.setToolTip("")
+            return
+        # Configured + no successful test yet for THIS triplet.
+        self._status.setText("● 待测试")
+        self._status.setStyleSheet(
+            f"color: {_INK_2}; background: {_INK_5}; border-radius: 10px;"
+            " padding: 2px 10px; font-size: 10.5px;"
+        )
+        self._status.setToolTip("")
 
 
 class _ConcurrencyPills(QWidget):
@@ -623,6 +757,12 @@ _GROUPS = [
 class SettingsPage(QWidget):
     dedup_rebuild_requested = pyqtSignal(str)  # "history" | "vault"
     check_update_requested = pyqtSignal()
+    # Fired the moment a 测试连接 ping returns OK — carries the provider
+    # key and the new (key, model, base_url) signature. MainWindow uses
+    # this to write the signature into settings.json *immediately*, so
+    # the 已连接 badge survives an app restart even if the user closes
+    # the window without clicking 保存设置.
+    test_signature_changed = pyqtSignal(str, str)
 
     def __init__(self, config: AppConfig, on_save: Callable[[AppConfig], None], parent=None):
         super().__init__(parent)
@@ -660,7 +800,7 @@ class SettingsPage(QWidget):
         nav_lay.setSpacing(2)
 
         self._nav_buttons: dict[str, _NavButton] = {}
-        self.stack = QStackedWidget(self)
+        self.stack = _AdaptiveStack(self)
         self._group_index: dict[str, int] = {}
 
         for key, label, icon in _GROUPS:
@@ -699,6 +839,14 @@ class SettingsPage(QWidget):
         body.addWidget(nav)
 
         # ── Right scroll area ─────────────────────────────────────────────
+        # The stacked panels live inside a single QScrollArea. Without
+        # extra care, QStackedWidget sizes itself to the *largest* child
+        # page — which on settings means short pages (通用 / 关于) end up
+        # rendered in a viewport tall enough for the longest page (模型),
+        # leaving a chunk of empty space below them that the scrollbar
+        # can still reach. ``_switch`` resets the scrollbar to 0 on every
+        # page change; combined with each panel getting MinimumExpanding
+        # sizing, this keeps short pages flush against the top.
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -708,6 +856,7 @@ class SettingsPage(QWidget):
             "QScrollArea > QWidget > QWidget { background: transparent; }"
         )
         scroll.viewport().setAutoFillBackground(False)
+        self._scroll = scroll
         host = QWidget()
         host.setStyleSheet("background: transparent;")
         self._stack_lay = QVBoxLayout(host)
@@ -750,6 +899,14 @@ class SettingsPage(QWidget):
 
     # ── Panel construction ────────────────────────────────────────────────
     def _add_panel(self, panel: QWidget) -> int:
+        # Without an explicit Preferred / Expanding policy, QStackedWidget
+        # collapses short pages oddly when other (taller) siblings exist.
+        # Preferred + MinimumExpanding lets each page grow to fit the
+        # viewport but never demands the height of its tallest sibling —
+        # which is what produced the "blank space below 通用 once you've
+        # scrolled inside 模型" bug.
+        panel.setSizePolicy(QSizePolicy.Policy.Preferred,
+                            QSizePolicy.Policy.MinimumExpanding)
         return self.stack.addWidget(panel)
 
     def _wrap_group(self, *cards: _SettingsCard) -> QWidget:
@@ -815,7 +972,7 @@ class SettingsPage(QWidget):
 
         self.timeout_spin = SpinBox(adv_card)
         self.timeout_spin.setRange(5, 600)
-        self.timeout_spin.setValue(60)
+        self.timeout_spin.setValue(180)
         self.timeout_spin.setMinimumWidth(120)
         r1 = _SettingsRow("超时", "单次请求等待上限，超过自动重试一次")
         suffix = BodyLabel("秒", adv_card)
@@ -873,6 +1030,17 @@ class SettingsPage(QWidget):
             # Keep the probe cheap — 1-token smoke to confirm auth + network.
             _ = client.complete(system="ping", user="ping")
             card.set_test_result(True)
+            # ``set_test_result(True)`` recorded the freshly-tested
+            # signature on the card; mirror it into our config and ask
+            # MainWindow to flush it to disk so the 已连接 badge sticks
+            # across restarts even without 保存设置.
+            sig = card._tested_signature
+            if sig:
+                new_sigs = {**self._config.provider_test_signatures, key: sig}
+                self._config = self._config.model_copy(update={
+                    "provider_test_signatures": new_sigs,
+                })
+                self.test_signature_changed.emit(key, sig)
         except Exception as e:
             card.set_test_result(False, str(e))
 
@@ -992,21 +1160,32 @@ class SettingsPage(QWidget):
         row_rebuild.set_control(rebuild_holder)
         card.add_row(row_rebuild)
 
-        # Thresholds
-        row_th = _SettingsRow("阈值 (绿/黄)")
+        # Thresholds — fluent SpinBox so the up/down arrows render in the
+        # warm-paper theme (the raw QSpinBox previously rendered with the
+        # native Win32 spin arrows, which were invisible against the card
+        # background on light builds).
+        row_th = _SettingsRow(
+            "阈值 (绿/黄)",
+            "重复率低于「绿」显示为安全，介于绿/黄之间为提示，超过「黄」为告警",
+        )
         th_holder = QWidget(self)
         th_lay = QHBoxLayout(th_holder)
         th_lay.setContentsMargins(0, 0, 0, 0)
-        th_lay.setSpacing(6)
-        self.dedup_threshold_green_spin = QSpinBox(th_holder)
+        th_lay.setSpacing(8)
+        self.dedup_threshold_green_spin = SpinBox(th_holder)
         self.dedup_threshold_green_spin.setRange(1, 99)
         self.dedup_threshold_green_spin.setSuffix(" %")
         self.dedup_threshold_green_spin.setValue(self._config.dedup_threshold_green)
+        self.dedup_threshold_green_spin.setMinimumWidth(110)
         th_lay.addWidget(self.dedup_threshold_green_spin)
-        self.dedup_threshold_yellow_spin = QSpinBox(th_holder)
+        sep = BodyLabel("/", th_holder)
+        sep.setStyleSheet(f"color: {_INK_3}; background: transparent;")
+        th_lay.addWidget(sep)
+        self.dedup_threshold_yellow_spin = SpinBox(th_holder)
         self.dedup_threshold_yellow_spin.setRange(1, 99)
         self.dedup_threshold_yellow_spin.setSuffix(" %")
         self.dedup_threshold_yellow_spin.setValue(self._config.dedup_threshold_yellow)
+        self.dedup_threshold_yellow_spin.setMinimumWidth(110)
         th_lay.addWidget(self.dedup_threshold_yellow_spin)
         th_lay.addStretch(1)
         row_th.set_control(th_holder)
@@ -1022,11 +1201,85 @@ class SettingsPage(QWidget):
             self.dedup_history_dir_edit.setText(d)
 
     def _build_account(self) -> QWidget:
-        card = _SettingsCard("账号")
-        r = _SettingsRow("当前用户")
-        r.set_control(BodyLabel("本地用户（未登录）", card))
-        card.add_row(r)
+        card = _SettingsCard(
+            "账号",
+            "本地账户信息 — 用于工作台问候语、导出署名等。仅保存在本机。",
+        )
+
+        # Current user — name (and optional product line) + edit button.
+        # The labels are populated by ``_refresh_account_labels`` so they
+        # stay in sync with config edits made elsewhere.
+        row_user = _SettingsRow("当前用户")
+        user_holder = QWidget(card)
+        user_holder.setStyleSheet("background: transparent;")
+        u_lay = QHBoxLayout(user_holder)
+        u_lay.setContentsMargins(0, 0, 0, 0)
+        u_lay.setSpacing(8)
+        self._account_name_label = BodyLabel("", user_holder)
+        self._account_name_label.setStyleSheet(
+            f"color: {_INK}; font-size: 13px; background: transparent;"
+        )
+        u_lay.addWidget(self._account_name_label)
+        u_lay.addStretch(1)
+        self.account_edit_button = PushButton(FluentIcon.EDIT, "编辑账号", user_holder)
+        self.account_edit_button.setFixedHeight(28)
+        self.account_edit_button.clicked.connect(self._on_edit_account)
+        u_lay.addWidget(self.account_edit_button)
+        row_user.set_control(user_holder)
+        card.add_row(row_user)
+
+        # Product line — read-only display, edited via the same dialog.
+        row_product = _SettingsRow("负责产品线")
+        self._account_product_label = BodyLabel("—", card)
+        self._account_product_label.setStyleSheet(
+            f"color: {_INK_2}; font-size: 13px; background: transparent;"
+        )
+        row_product.set_control(self._account_product_label)
+        card.add_row(row_product)
+
+        self._refresh_account_labels()
         return self._wrap_group(card)
+
+    def _refresh_account_labels(self) -> None:
+        """Sync the account card text with ``self._config``."""
+        if not hasattr(self, "_account_name_label"):
+            return
+        name = (self._config.user_name or "").strip()
+        product = (self._config.user_product or "").strip()
+        if name:
+            self._account_name_label.setText(name)
+            self._account_name_label.setStyleSheet(
+                f"color: {_INK}; font-size: 13px; font-weight: 500;"
+                " background: transparent;"
+            )
+            self.account_edit_button.setText("编辑账号")
+        else:
+            self._account_name_label.setText("未登录")
+            self._account_name_label.setStyleSheet(
+                f"color: {_INK_3}; font-size: 13px; background: transparent;"
+            )
+            self.account_edit_button.setText("设置账号")
+        self._account_product_label.setText(product or "—")
+
+    def _on_edit_account(self) -> None:
+        """Pop the AccountDialog, persist the new name/product on accept."""
+        from ..widgets.account_dialog import AccountDialog
+        dlg = AccountDialog(
+            name=self._config.user_name,
+            product=self._config.user_product,
+            parent=self,
+        )
+        if dlg.exec() != 1:
+            return
+        name, product = dlg.values()
+        # Update in-memory config and persist via the standard save path so
+        # MainWindow's apply_config fan-out (home greeting, etc.) runs.
+        self._config = self._config.model_copy(update={
+            "user_name": name,
+            "user_product": product,
+        })
+        self._refresh_account_labels()
+        self._on_save(self._config)
 
     def _build_about(self) -> QWidget:
         """关于 CSM section — current version + update repo + check button."""
@@ -1063,6 +1316,18 @@ class SettingsPage(QWidget):
         self.stack.setCurrentIndex(idx)
         for k, btn in self._nav_buttons.items():
             btn.setChecked(k == key)
+        # Tell the layout chain that the stack's reported size hint just
+        # changed (it now reflects the new current page) so the scroll
+        # area can drop the vertical scrollbar when the new page fits.
+        self.stack.updateGeometry()
+        scroll = getattr(self, "_scroll", None)
+        if scroll is not None:
+            # Reset scroll position so a short page (通用 / 关于) doesn't
+            # render below the viewport when the user had scrolled inside
+            # a taller page (模型 / 已连接模型) just before switching.
+            bar = scroll.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(0)
 
     def _load_from(self, cfg: AppConfig) -> None:
         self.vault_card.setText(cfg.vault_root or "")
@@ -1082,6 +1347,11 @@ class SettingsPage(QWidget):
             if model:
                 card.model_combo.setText(model)
             card.base_url_input.setText(cfg.base_urls.get(key, ""))
+            # AFTER fields are populated — order matters because
+            # ``current_signature()`` reads the live values.
+            card.restore_tested_signature(
+                cfg.provider_test_signatures.get(key)
+            )
             card.set_is_default(cfg.default_provider == key)
         self.seed_card.setValue(cfg.last_seed)
         self.timeout_spin.setValue(cfg.timeout_seconds)
@@ -1116,6 +1386,8 @@ class SettingsPage(QWidget):
             if b:
                 base_urls[key] = b
         new_cfg = AppConfig(
+            user_name=self._config.user_name,
+            user_product=self._config.user_product,
             vault_root=self.vault_card.text() or None,
             out_dir=self.out_card.text() or None,
             default_provider=cast(Provider, self.provider_card.currentText()),
@@ -1125,6 +1397,12 @@ class SettingsPage(QWidget):
             last_seed=self.seed_card.value(),
             default_model=default_model,
             base_urls=base_urls,
+            # Preserve test-signature state. ``self._config`` is kept in
+            # sync by ``_on_test_provider`` whenever a test passes, so
+            # forwarding it here keeps the 已连接 badge stable across a
+            # 保存设置 click — the alternative was wiping every signature
+            # on every save (Pydantic default_factory => empty dict).
+            provider_test_signatures=self._config.provider_test_signatures,
             timeout_seconds=self.timeout_spin.value(),
             concurrency=self.concurrency_pills.value(),
             upload_training_hints=self.training_switch.isChecked(),

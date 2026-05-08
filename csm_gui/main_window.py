@@ -102,6 +102,13 @@ class MainWindow(FluentWindow):
         self.article_controller.export_failed.connect(self._on_export_failed)
         self.article_controller.reroll_completed.connect(self._on_reroll_completed)
         self.article_controller.reroll_failed.connect(self._on_reroll_failed)
+        # Title candidates from the LLM landed here previously without
+        # anywhere to go — the signal was emitted but never connected, so
+        # AI-generated titles silently disappeared and the user only ever
+        # saw the assembler's keyword-as-title placeholder. Wire it now.
+        self.article_controller.titles_ready.connect(self._on_titles_ready)
+        self.article_controller.titles_failed.connect(self._on_titles_failed)
+        self.article_controller.titles_llm_failed.connect(self._on_titles_llm_failed)
 
         self.home = HomePage(config=self.config, parent=self)
         self.home.request_generate.connect(self._on_request_generate)
@@ -218,6 +225,14 @@ class MainWindow(FluentWindow):
             self._on_dedup_drilldown
         )
         self.settings.dedup_rebuild_requested.connect(self._on_dedup_rebuild)
+        # Persist test signatures the moment a 测试连接 ping returns OK,
+        # without disturbing other consumers — the 已连接 badge is a UI
+        # marker, not a runtime config change, so we don't need to call
+        # apply_config on the controllers (and we definitely don't want
+        # to trigger that on every test click).
+        self.settings.test_signature_changed.connect(
+            self._on_provider_test_signature_changed
+        )
 
         # Apply thresholds on the panel
         self.article.controls.dedup_panel.set_thresholds(
@@ -295,6 +310,21 @@ class MainWindow(FluentWindow):
 
     def save_config(self) -> None:
         _save_config(self.config, self._config_path)
+
+    def _on_provider_test_signature_changed(self, provider_key: str, sig: str) -> None:
+        """Flush a single provider's test-signature to disk.
+
+        Fires from SettingsPage when a 测试连接 ping returns OK. The
+        operation is deliberately narrow — we update only the
+        ``provider_test_signatures`` field, leaving everything else
+        (including any in-progress edits the user hasn't clicked 保存
+        on yet) untouched.
+        """
+        new_sigs = {**self.config.provider_test_signatures, provider_key: sig}
+        self.config = self.config.model_copy(update={
+            "provider_test_signatures": new_sigs,
+        })
+        self.save_config()
 
     def _on_settings_save(self, new_cfg: AppConfig) -> None:
         self.config = new_cfg
@@ -422,6 +452,39 @@ class MainWindow(FluentWindow):
     def _on_polish_failed(self, msg: str) -> None:
         self._dismiss_polish_busy()
         self._on_generate_failed(msg)
+
+    def _on_titles_ready(self, titles: list) -> None:
+        """Push LLM-generated title candidates into the article header."""
+        if not titles:
+            return
+        try:
+            self.article.header_bar.set_title_candidates(list(titles))
+        except Exception:  # noqa: BLE001 — never let the toast path break
+            return
+
+    def _on_titles_failed(self, msg: str) -> None:
+        # Title gen failing is not fatal (the assembler already wrote the
+        # keyword as a placeholder title), but the user should know AI
+        # plumbing is broken — otherwise they think the keyword IS the
+        # AI title.
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.warning(
+            title="标题生成失败",
+            content=msg.splitlines()[0] if msg else "未知错误",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+    def _on_titles_llm_failed(self, msg: str) -> None:
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.warning(
+            title="AI 标题未启用",
+            content=msg,
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=6000,
+        )
 
     def _on_clear_all(self) -> None:
         ok = self.article_controller.clear()

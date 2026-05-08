@@ -5,7 +5,7 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from csm_core.llm.client import LLMClient
-from csm_core.title.generator import generate_titles
+from csm_core.title.generator import generate_titles, fallback_title
 
 
 class TitleWorker(QThread):
@@ -16,10 +16,17 @@ class TitleWorker(QThread):
     least one usable title and never has to special-case a failed run.
     ``failed`` is reserved for unexpected programming errors (e.g. vault
     path doesn't exist) and carries a traceback for the log.
+
+    ``llm_failed`` is a *non-fatal* warning: it fires when the generator
+    silently fell back to the mechanical title (LLM unreachable / kept
+    failing validation). The UI surfaces this as a toast so the user
+    knows their AI config is broken instead of staring at a templated
+    title and wondering why it doesn't look AI-polished.
     """
 
     finished = pyqtSignal(list)  # list[str] — candidate titles
     failed = pyqtSignal(str)
+    llm_failed = pyqtSignal(str)  # non-fatal: AI couldn't produce, fallback used
 
     def __init__(
         self,
@@ -45,5 +52,14 @@ class TitleWorker(QThread):
                 llm_client=self._client,
             )
             self.finished.emit(titles)
+            # Detect the silent-fallback path. ``generate_titles`` returns
+            # exactly ``[fallback_title(keyword)]`` only when the LLM call
+            # raised every attempt OR all candidates failed validation —
+            # in either case the user got a mechanical title, not AI.
+            if len(titles) == 1 and titles[0] == fallback_title(self._keyword):
+                self.llm_failed.emit(
+                    "AI 标题生成未返回有效结果，已使用默认标题。"
+                    "请检查「设置 → 模型」的 API Key / 模型名 / 网络。"
+                )
         except Exception as exc:  # noqa: BLE001 — worker boundary
             self.failed.emit(f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}")

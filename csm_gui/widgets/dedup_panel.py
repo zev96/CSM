@@ -1,28 +1,42 @@
 """DedupPanel — two-metric row widget for the article right-side panel.
 
-Layout:
+Layout (matches the right-side workspace 'eyebrow' style — quiet, small caps,
+no icon):
 
-    📊 内容查重           ⟳ 重新计算
-    历史重复率   12% ▓▓░░░░░░  ⓘ
-    素材引用率   38% ▓▓▓▓░░░░  ⓘ
+    内容查重                           重新计算
+    历史重复率                12% ▓▓░░░░░░  ⓘ
+    素材引用率                38% ▓▓▓▓░░░░  ⓘ
 
 The panel is purely presentational. It exposes two signals:
-- ``recalculate_requested()`` — user clicked ⟳
+- ``recalculate_requested()`` — user clicked 重新计算
 - ``drilldown_requested(kind: str)`` — user clicked ⓘ for "history" or "vault"
 """
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
 )
-from qfluentwidgets import (
-    BodyLabel, StrongBodyLabel, PushButton, ToolButton, FluentIcon,
-)
+from qfluentwidgets import FluentIcon, ToolButton
 
 from csm_core.dedup.report import DuplicateReport
 
 _PERCENT_PLACEHOLDER = "—"
+
+# Tokens — mirror workspace_side_panel.py
+_INK    = "#1e1c19"
+_INK_2  = "rgba(30,28,25,0.62)"
+_INK_3  = "rgba(30,28,25,0.38)"
+_INK_5  = "rgba(30,28,25,0.08)"
+_ACCENT = "#2f6f5e"
+
+
+def _eyebrow_style() -> str:
+    """Same visual recipe as workspace_side_panel._section_eyebrow."""
+    return (
+        f"color: {_INK_3}; font-size: 11px; letter-spacing: 0.6px;"
+        " font-weight: 600; background: transparent;"
+    )
 
 
 class _MetricRow(QWidget):
@@ -37,27 +51,72 @@ class _MetricRow(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
 
-        self.label = BodyLabel(label, self)
+        self.label = QLabel(label, self)
         self.label.setMinimumWidth(72)
+        self.label.setStyleSheet(
+            f"color: {_INK_2}; font-size: 12px; background: transparent;"
+        )
         lay.addWidget(self.label)
 
-        self.value_label = StrongBodyLabel(_PERCENT_PLACEHOLDER, self)
-        self.value_label.setMinimumWidth(50)
+        self.value_label = QLabel(_PERCENT_PLACEHOLDER, self)
+        self.value_label.setMinimumWidth(44)
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.value_label.setStyleSheet(
+            f"color: {_INK_3}; font-size: 12px; font-weight: 600; background: transparent;"
+        )
         lay.addWidget(self.value_label)
 
         self.bar = QProgressBar(self)
         self.bar.setRange(0, 100)
         self.bar.setValue(0)
         self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(8)
+        self.bar.setFixedHeight(6)
+        self.bar.setStyleSheet(
+            "QProgressBar { background: rgba(30,28,25,0.06);"
+            " border: none; border-radius: 3px; }"
+            f"QProgressBar::chunk {{ background: {_INK_3}; border-radius: 3px; }}"
+        )
         lay.addWidget(self.bar, 1)
 
         self.drill_button = ToolButton(FluentIcon.INFO, self)
         self.drill_button.setToolTip("查看详情")
+        self.drill_button.setFixedSize(22, 22)
         self.drill_button.setEnabled(False)
+        self.drill_button.setStyleSheet(
+            "ToolButton { background: transparent; border: none; }"
+            f"ToolButton:hover {{ background: {_INK_5}; border-radius: 4px; }}"
+        )
         self.drill_button.clicked.connect(self.drill_requested.emit)
         lay.addWidget(self.drill_button)
+
+    def set_bar_color(self, color: str) -> None:
+        self.bar.setStyleSheet(
+            "QProgressBar { background: rgba(30,28,25,0.06);"
+            " border: none; border-radius: 3px; }"
+            f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
+        )
+
+
+class _LinkButton(QPushButton):
+    """Small, quiet text button — looks like a hyperlink, not a card.
+
+    Used for the 重新计算 affordance so the dedup panel reads as a quiet
+    metrics block instead of competing with the primary 润色 button above.
+    """
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(20)
+        self.setFlat(True)
+        self.setStyleSheet(
+            "QPushButton {"
+            f" color: {_ACCENT}; background: transparent; border: none;"
+            " padding: 0 0; font-size: 11.5px; text-align: right;"
+            "}"
+            "QPushButton:hover { color: #1f5246; text-decoration: underline; }"
+            "QPushButton:disabled { color: rgba(30,28,25,0.30); }"
+        )
 
 
 class DedupPanel(QWidget):
@@ -78,17 +137,21 @@ class DedupPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        # Header row: title + 重新计算 button
+        # Header row: small-caps eyebrow + 重新计算 link button
         header = QHBoxLayout()
         header.setSpacing(6)
-        title = StrongBodyLabel("📊 内容查重", self)
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("内容查重", self)
+        title.setStyleSheet(_eyebrow_style())
         header.addWidget(title)
         header.addStretch(1)
-        self.recalc_button = PushButton(FluentIcon.SYNC, "重新计算", self)
-        self.recalc_button.setFixedHeight(26)
+        self.recalc_button = _LinkButton("重新计算", self)
         self.recalc_button.clicked.connect(self.recalculate_requested.emit)
         header.addWidget(self.recalc_button)
         root.addLayout(header)
+
+        # Spacer between eyebrow and rows for breathing room
+        root.addSpacing(2)
 
         # 历史重复率行
         self._history_row = _MetricRow("历史重复率", self)
@@ -106,7 +169,10 @@ class DedupPanel(QWidget):
 
         # Hint label (used for disabled state messages)
         self._hint_label = QLabel("", self)
-        self._hint_label.setStyleSheet("color: rgba(30,28,25,0.45); font-size: 11px;")
+        self._hint_label.setWordWrap(True)
+        self._hint_label.setStyleSheet(
+            f"color: {_INK_3}; font-size: 11px; background: transparent;"
+        )
         self._hint_label.setVisible(False)
         root.addWidget(self._hint_label)
 
@@ -144,8 +210,9 @@ class DedupPanel(QWidget):
         row.drill_button.setEnabled(True)
         color = self._color_for(pct)
         row.value_label.setStyleSheet(
-            f"color: {color}; background: transparent;"
+            f"color: {color}; font-size: 12px; font-weight: 600; background: transparent;"
         )
+        row.set_bar_color(color)
 
     def set_disabled_message(self, msg: str) -> None:
         self._disabled_msg = msg
