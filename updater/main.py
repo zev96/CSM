@@ -56,63 +56,120 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _rmtree_retry(path: Path, max_attempts: int = 8, delay: float = 0.5) -> None:
+    """rmtree with retry. Windows can hold file locks for several seconds
+    after the source process exits — DLLs in particular have lazy-release
+    semantics. Each attempt waits longer than the last.
+    """
+    p = Path(path)
+    if not p.exists():
+        return
+    last_exc: Exception | None = None
+    for i in range(max_attempts):
+        try:
+            shutil.rmtree(str(p))
+            return
+        except OSError as e:
+            last_exc = e
+            time.sleep(delay * (i + 1))
+    logger.warning("rmtree %s failed after %d attempts: %s",
+                   p, max_attempts, last_exc)
+    # Don't raise — caller decides if missing cleanup is fatal.
+
+
+def _rename_retry(src: Path, dst: Path,
+                  max_attempts: int = 8, delay: float = 0.5) -> None:
+    """os.rename with retry for Windows file lock tolerance."""
+    last_exc: Exception | None = None
+    for i in range(max_attempts):
+        try:
+            os.rename(str(src), str(dst))
+            return
+        except OSError as e:
+            last_exc = e
+            time.sleep(delay * (i + 1))
+    if last_exc:
+        raise last_exc
+
+
 def replace_directory(*, target: Path, zip_path: Path) -> None:
-    """Atomically swap the install directory with the contents of ``zip_path``.
+    """Swap the install directory with the contents of ``zip_path``.
 
-    Steps:
-        1. Rename target → target.bak
-        2. Extract zip to target.parent (zip contains 'CSM/...' tree)
-        3. Move extracted dir → target
-        4. Remove target.bak
+    Strategy (order matters — keeps live install untouched until ready):
+        1. Extract zip into a sibling temp dir (``.<name>.upd``).
+           Failures here don't touch the live install.
+        2. Verify extracted dir has expected top-level layout.
+        3. Rename target → target.bak (atomic on same volume).
+        4. Rename extracted/<top> → target (atomic).
+        5. Remove tmp + backup with retry (Windows file-lock tolerance).
 
-    On any failure, attempt to roll back: remove partial target, restore .bak.
+    Rollback semantics: any failure during steps 3-4 restores the .bak.
+    Failures in steps 1-2 leave the live install untouched.
     """
     target = Path(target).resolve()
     zip_path = Path(zip_path).resolve()
+    parent = target.parent
     backup = target.with_name(target.name + ".bak")
-    extract_root = target.parent
+    tmp_extract = parent / f".{target.name}.upd"
 
+    # Clean any leftover artifacts from a previous interrupted run.
+    if tmp_extract.exists():
+        _rmtree_retry(tmp_extract)
     if backup.exists():
-        shutil.rmtree(backup, ignore_errors=True)
+        _rmtree_retry(backup)
 
-    # 1. Move current install aside
-    if target.exists():
-        shutil.move(str(target), str(backup))
-
-    extracted_inner = None
+    # 1. Extract zip to tmp dir.
+    tmp_extract.mkdir(parents=True)
     try:
-        # 2. Extract the zip
         with zipfile.ZipFile(zip_path) as zf:
-            top_levels = sorted({Path(n).parts[0] for n in zf.namelist() if n})
-            zf.extractall(str(extract_root))
-        if not top_levels:
-            raise RuntimeError("zip is empty")
-        extracted_inner = extract_root / top_levels[0]
-        if not extracted_inner.exists():
-            raise RuntimeError(f"expected {extracted_inner} to exist after extract")
-
-        # 3. Rename extracted dir to target
-        if extracted_inner.resolve() != target.resolve():
-            shutil.move(str(extracted_inner), str(target))
-
-        # 4. Cleanup .bak
-        if backup.exists():
-            shutil.rmtree(backup, ignore_errors=True)
+            top_levels = sorted(
+                {Path(n).parts[0] for n in zf.namelist() if n}
+            )
+            if not top_levels:
+                raise RuntimeError("zip is empty")
+            zf.extractall(str(tmp_extract))
     except Exception:
-        logger.exception("replace failed — rolling back")
+        _rmtree_retry(tmp_extract)
+        raise
+
+    extracted_inner = tmp_extract / top_levels[0]
+    if not extracted_inner.exists():
+        _rmtree_retry(tmp_extract)
+        raise RuntimeError(
+            f"expected {extracted_inner} to exist after extract"
+        )
+
+    # 2. Move target → backup (with retry on locked DLLs).
+    if target.exists():
         try:
-            if target.exists():
-                shutil.rmtree(target, ignore_errors=True)
-        except OSError:
-            pass
+            _rename_retry(target, backup)
+        except OSError as e:
+            logger.error("could not rename target → backup: %s", e)
+            _rmtree_retry(tmp_extract)
+            raise
+
+    # 3. Move extracted/<top> → target (atomic on same volume).
+    try:
+        _rename_retry(extracted_inner, target)
+    except Exception:
+        logger.exception("move new → target failed; rolling back")
+        # Live install was already moved to backup; restore it.
+        if target.exists():
+            _rmtree_retry(target)
         if backup.exists():
             try:
-                shutil.move(str(backup), str(target))
+                os.rename(str(backup), str(target))
             except OSError:
-                logger.error("rollback failed — install dir may be inconsistent")
-        if extracted_inner and extracted_inner.exists() and extracted_inner != target:
-            shutil.rmtree(extracted_inner, ignore_errors=True)
+                logger.error(
+                    "rollback rename failed — install may be inconsistent"
+                )
+        _rmtree_retry(tmp_extract)
         raise
+
+    # 4. Cleanup tmp + backup. ``_rmtree_retry`` swallows persistent failures
+    # so a stuck .bak doesn't break the relaunch — user can clean up manually.
+    _rmtree_retry(tmp_extract)
+    _rmtree_retry(backup)
 
 
 def main(argv: list[str]) -> int:
