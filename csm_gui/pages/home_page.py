@@ -14,7 +14,8 @@ where to send the user. ``request_show_batch`` pops the internal batch
 panel (kept to preserve the single/batch flow without a navigation jump).
 """
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from PyQt6.QtCore import pyqtSignal, Qt, QEvent
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -222,29 +223,34 @@ class _HeroView(QWidget):
     request_generate = pyqtSignal(dict)
     request_navigate = pyqtSignal(str)  # 'templates' | 'skills' | 'batch' | 'wizard' | 'recents'
 
-    def __init__(self, config: AppConfig, parent=None):
+    def __init__(self, config: AppConfig, config_dir: Path | None = None, parent=None):
         super().__init__(parent)
         self._config = config
+        self._config_dir: Path | None = Path(config_dir) if config_dir else None
+        self._yesterday_count_cached: int = 0
         self.setStyleSheet(_HERO_CARD_QSS + _TILE_QSS + _RECENT_QSS)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(12)
 
-        # Eyebrow + title + stats
+        # Eyebrow + title + stats — simple vertical stack. (The rotating
+        # quote that briefly lived in the top-right was removed per
+        # 用户反馈，简洁优先。)
         today = datetime.now()
         weekday = "一二三四五六日"[today.weekday()]
+
         eyebrow = QLabel(f"工作台 · {today.month}月{today.day}日 星期{weekday}", self)
         eyebrow.setObjectName("pageEyebrow")
         root.addWidget(eyebrow)
 
-        title = QLabel(self._greeting(), self)
-        title.setObjectName("pageTitle")
-        root.addWidget(title)
+        self._greeting_label = QLabel(self._greeting(config.user_name), self)
+        self._greeting_label.setObjectName("pageTitle")
+        root.addWidget(self._greeting_label)
 
-        sub = QLabel("用关键词起一篇，或从模板 / Skill 开始。", self)
-        sub.setObjectName("pageSub")
-        root.addWidget(sub)
+        self._sub_label = QLabel(self._stats_sub(), self)
+        self._sub_label.setObjectName("pageSub")
+        root.addWidget(self._sub_label)
 
         root.addSpacing(18)
 
@@ -271,6 +277,7 @@ class _HeroView(QWidget):
         f.setPointSize(max(f.pointSize() + 1, 11))
         self.keyword_input.setFont(f)
         self.keyword_input.textChanged.connect(self._refresh_enabled)
+        self.keyword_input.textChanged.connect(self._on_keyword_changed)
         self.keyword_input.returnPressed.connect(self._emit_generate)
         input_row.addWidget(self.keyword_input, 1)
 
@@ -279,6 +286,58 @@ class _HeroView(QWidget):
         self.generate_button.clicked.connect(self._emit_generate)
         input_row.addWidget(self.generate_button)
         left.addLayout(input_row)
+
+        # ── Core-keyword chip ────────────────────────────────────────
+        # Sits one line below the keyword input. Auto-syncs to whatever
+        # the extractor pulls from the keyword; user can click 修改 to
+        # override (e.g. "无线吸尘器哪款好用" → core "无线吸尘器", but
+        # the user might want "吸尘器" instead). Hidden until the user
+        # actually types something.
+        core_row = QHBoxLayout()
+        core_row.setSpacing(6)
+        core_row.setContentsMargins(2, 0, 0, 0)
+        self._core_label = QLabel("核心词：", hero)
+        self._core_label.setStyleSheet(
+            "color: rgba(30,28,25,0.45); font-size: 11.5px; background: transparent;"
+        )
+        core_row.addWidget(self._core_label)
+
+        self._core_value = QLabel("—", hero)
+        self._core_value.setStyleSheet(
+            "color: rgba(30,28,25,0.78); font-size: 11.5px; font-weight: 500;"
+            " background: transparent;"
+        )
+        core_row.addWidget(self._core_value)
+
+        self._core_input = LineEdit(hero)
+        self._core_input.setMaximumWidth(180)
+        self._core_input.setFixedHeight(22)
+        self._core_input.setPlaceholderText("覆盖核心词…")
+        self._core_input.editingFinished.connect(self._on_core_edit_finished)
+        self._core_input.hide()
+        core_row.addWidget(self._core_input)
+
+        self._core_edit_btn = QPushButton("✏️ 修改", hero)
+        self._core_edit_btn.setFlat(True)
+        self._core_edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._core_edit_btn.setStyleSheet(
+            "QPushButton { color: rgba(30,28,25,0.45); font-size: 11px;"
+            " background: transparent; border: none; padding: 0 4px; }"
+            "QPushButton:hover { color: #2f6f5e; }"
+        )
+        self._core_edit_btn.clicked.connect(self._enter_core_edit)
+        core_row.addWidget(self._core_edit_btn)
+        core_row.addStretch(1)
+
+        # Wrap so we can hide the entire row at once before user types.
+        self._core_row_widget = QWidget(hero)
+        self._core_row_widget.setStyleSheet("background: transparent;")
+        self._core_row_widget.setLayout(core_row)
+        self._core_row_widget.hide()
+        # Track whether the user has manually overridden the auto extraction —
+        # keeps `_on_keyword_changed` from clobbering the override.
+        self._core_user_override: str | None = None
+        left.addWidget(self._core_row_widget)
 
         # Compact template selector — keeps the functional contract.
         self.form = GenerationForm(config, hero)
@@ -369,17 +428,46 @@ class _HeroView(QWidget):
                             doc.status, self._recent_card)
             self._recent_vbox.addWidget(row)
 
-    def _greeting(self) -> str:
+    def _greeting(self, name: str | None) -> str:
         h = datetime.now().hour
         if h < 6:
-            return "夜深了，休息吧"
-        if h < 11:
-            return "早上好，今天写点什么"
-        if h < 14:
-            return "午安，好好吃饭"
-        if h < 18:
-            return "下午好，继续创作"
-        return "晚上好，继续创作"
+            base, suffix = "夜深了", "休息吧"
+        elif h < 11:
+            base, suffix = "早上好", "今天写点什么"
+        elif h < 14:
+            base, suffix = "午安", "好好吃饭"
+        elif h < 18:
+            base, suffix = "下午好", "继续创作"
+        else:
+            base, suffix = "晚上好", "继续创作"
+        if name:
+            return f"{base}，{name}，{suffix}"
+        return f"{base}，{suffix}"
+
+    def _yesterday_count(self) -> int:
+        """Count exports from ``recent_docs.json`` whose date == yesterday."""
+        if self._config_dir is None:
+            return 0
+        try:
+            from ..recent_docs import load_recent
+            docs = load_recent(self._config_dir)
+        except Exception:
+            return 0
+        yesterday = (datetime.now() - timedelta(days=1)).date()
+        return sum(1 for d in docs if d.exported_dt.date() == yesterday)
+
+    def _stats_sub(self) -> str:
+        n = self._yesterday_count()
+        self._yesterday_count_cached = n
+        if n == 0:
+            return "昨天还没动笔 — 今天起一篇吧。"
+        return f"昨天处理了 {n} 篇文章，继续保持节奏。"
+
+    def apply_user(self, name: str | None) -> None:
+        """Refresh greeting + stats sub-line. Called whenever the local
+        account name changes (first-run dialog, settings edit, avatar edit)."""
+        self._greeting_label.setText(self._greeting(name))
+        self._sub_label.setText(self._stats_sub())
 
     def _refresh_enabled(self):
         ok = self.form.is_valid() and bool(self.keyword_input.text().strip())
@@ -390,7 +478,67 @@ class _HeroView(QWidget):
             return
         payload = dict(self.form.payload())
         payload["keyword"] = self.keyword_input.text().strip()
+        payload["core_keyword"] = self._current_core_keyword()
         self.request_generate.emit(payload)
+
+    # ── Core-keyword chip behaviour ────────────────────────────────────
+    def _current_core_keyword(self) -> str:
+        """Return whatever core keyword should be used for body substitution.
+
+        User override wins; otherwise auto-extract from the live keyword.
+        """
+        if self._core_user_override is not None:
+            return self._core_user_override
+        from csm_core.keyword import extract_core
+        return extract_core(self.keyword_input.text().strip())
+
+    def _on_keyword_changed(self, text: str) -> None:
+        """Sync the core-keyword chip whenever the keyword input changes.
+
+        Manual overrides are dropped on every keystroke — typing a new
+        keyword reverts the chip to auto-extraction. (If we kept the
+        override sticky, switching from "无线吸尘器哪款好用" to "扫地机器人"
+        would still show 无线吸尘器 as the override.)
+        """
+        kw = (text or "").strip()
+        if not kw:
+            self._core_row_widget.hide()
+            self._core_user_override = None
+            return
+
+        from csm_core.keyword import extract_core
+        auto_core = extract_core(kw)
+        # Drop any prior manual override on a fresh keystroke.
+        self._core_user_override = None
+        self._core_value.setText(auto_core)
+        self._core_value.show()
+        self._core_input.hide()
+        self._core_edit_btn.show()
+        self._core_row_widget.show()
+
+    def _enter_core_edit(self) -> None:
+        """Switch the chip into edit mode."""
+        self._core_input.setText(self._core_value.text())
+        self._core_value.hide()
+        self._core_edit_btn.hide()
+        self._core_input.show()
+        self._core_input.setFocus()
+        self._core_input.selectAll()
+
+    def _on_core_edit_finished(self) -> None:
+        """User finished editing the core keyword — commit or cancel."""
+        new_value = self._core_input.text().strip()
+        if not new_value:
+            # Empty input → revert to auto.
+            from csm_core.keyword import extract_core
+            new_value = extract_core(self.keyword_input.text().strip())
+            self._core_user_override = None
+        else:
+            self._core_user_override = new_value
+        self._core_value.setText(new_value)
+        self._core_input.hide()
+        self._core_value.show()
+        self._core_edit_btn.show()
 
     def _on_tile(self, key: str) -> None:
         if key == "paste":
@@ -417,7 +565,7 @@ class HomePage(QWidget):
     # 'templates' | 'skills' | 'wizard' — main window handles these.
     request_navigate = pyqtSignal(str)
 
-    def __init__(self, config: AppConfig, parent=None):
+    def __init__(self, config: AppConfig, config_dir: Path | None = None, parent=None):
         super().__init__(parent)
         self.setObjectName("HomePage")
         self._config = config
@@ -428,7 +576,7 @@ class HomePage(QWidget):
 
         self.stack = QStackedWidget(self)
 
-        self._hero = _HeroView(config, self)
+        self._hero = _HeroView(config, config_dir, self)
         self._hero.request_generate.connect(self.request_generate.emit)
         self._hero.request_navigate.connect(self._on_navigate)
         self.stack.addWidget(self._hero)
@@ -475,6 +623,14 @@ class HomePage(QWidget):
 
     def set_recents(self, docs) -> None:
         self._hero.set_recents(docs)
+        # Recents drives the "昨天处理 N 篇" sub-line — refresh after every
+        # update (export, history clear, etc.) so the count stays honest.
+        self._hero.apply_user(self._config.user_name)
+
+    def apply_user(self, name: str | None) -> None:
+        """Push the current local account name into the home greeting."""
+        self._config.user_name = name  # keep cached config in sync
+        self._hero.apply_user(name)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)

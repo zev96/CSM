@@ -87,11 +87,14 @@ class _GalleryCard(QFrame):
     """One skill tile in the gallery grid."""
 
     from PyQt6.QtCore import pyqtSignal as _Signal
-    clicked = _Signal(object)  # emits Path
+    clicked = _Signal(object)        # emits Path — fired when not in selection mode
+    toggled = _Signal(object, bool)  # emits (Path, selected) — fired in selection mode
 
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
         self._path = path
+        self._selection_mode = False
+        self._selected = False
         self.setObjectName("SkillGalleryCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -128,6 +131,16 @@ class _GalleryCard(QFrame):
         )
         head.addWidget(chip)
         head.addStretch(1)
+
+        # Selection-mode checkmark badge — hidden until the page enters
+        # delete-selection mode. Painted in the top-right of the card head.
+        self._check_badge = QLabel("", self)
+        self._check_badge.setFixedSize(20, 20)
+        self._check_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._check_badge.hide()
+        self._refresh_badge_style()
+        head.addWidget(self._check_badge)
+
         outer.addLayout(head)
 
         # Description — first prose line of the skill body.
@@ -154,6 +167,23 @@ class _GalleryCard(QFrame):
     def path(self) -> Path:
         return self._path
 
+    def set_selection_mode(self, on: bool) -> None:
+        """Toggle selection-mode visuals (checkmark badge visibility)."""
+        self._selection_mode = on
+        if not on:
+            self._selected = False
+        self._check_badge.setVisible(on)
+        self._refresh_badge_style()
+        self._apply_style(False)
+
+    def set_selected(self, on: bool) -> None:
+        self._selected = bool(on)
+        self._refresh_badge_style()
+        self._apply_style(False)
+
+    def is_selected(self) -> bool:
+        return self._selected
+
     def enterEvent(self, ev):  # noqa: N802
         self._apply_style(True)
         super().enterEvent(ev)
@@ -164,12 +194,36 @@ class _GalleryCard(QFrame):
 
     def mousePressEvent(self, ev):  # noqa: N802
         if ev.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._path)
+            if self._selection_mode:
+                self._selected = not self._selected
+                self._refresh_badge_style()
+                self._apply_style(False)
+                self.toggled.emit(self._path, self._selected)
+            else:
+                self.clicked.emit(self._path)
         super().mousePressEvent(ev)
 
+    def _refresh_badge_style(self) -> None:
+        if self._selected:
+            self._check_badge.setText("✓")
+            self._check_badge.setStyleSheet(
+                f"background: {_ACCENT}; color: #ffffff;"
+                " border-radius: 10px; font-weight: 700; font-size: 12px;"
+            )
+        else:
+            self._check_badge.setText("")
+            self._check_badge.setStyleSheet(
+                f"background: #ffffff; border: 1.5px solid {_INK_5};"
+                " border-radius: 10px;"
+            )
+
     def _apply_style(self, hover: bool) -> None:
-        bg = "#fafaf7" if hover else "#ffffff"
-        border = _ACCENT if hover else _INK_5
+        if self._selected:
+            bg = _ACCENT_SOFTER
+            border = _ACCENT
+        else:
+            bg = "#fafaf7" if hover else "#ffffff"
+            border = _ACCENT if hover else _INK_5
         self.setStyleSheet(
             f"#SkillGalleryCard {{ background: {bg};"
             f" border: 1px solid {border}; border-radius: 12px; }}"
@@ -205,6 +259,8 @@ class SkillsPage(QWidget):
         self._gallery_cards: list[_GalleryCard] = []
         self._current_filter = "mine"
         self._search_text = ""
+        self._selection_mode: bool = False
+        self._selected_paths: set[Path] = set()
 
         # Hidden data + legacy compat — the new gallery cards mirror
         # ``list_panel._paths`` so test code that drives the ListWidget
@@ -252,9 +308,32 @@ class SkillsPage(QWidget):
         title_col.addWidget(sub)
         head.addLayout(title_col, 1)
 
-        self.docs_btn = PushButton(FluentIcon.DOCUMENT, "查看文档", page)
-        self.docs_btn.setFixedHeight(30)
-        head.addWidget(self.docs_btn)
+        # Delete entry-point: toggles the gallery into selection mode.
+        self.delete_mode_btn = PushButton(FluentIcon.DELETE, "删除", page)
+        self.delete_mode_btn.setFixedHeight(30)
+        self.delete_mode_btn.clicked.connect(
+            lambda: self._set_selection_mode(True)
+        )
+        head.addWidget(self.delete_mode_btn)
+
+        # Selection-mode controls — hidden by default. Shown together
+        # while the user is ticking cards to delete.
+        self.cancel_select_btn = PushButton("取消", page)
+        self.cancel_select_btn.setFixedHeight(30)
+        self.cancel_select_btn.clicked.connect(
+            lambda: self._set_selection_mode(False)
+        )
+        self.cancel_select_btn.hide()
+        head.addWidget(self.cancel_select_btn)
+
+        self.confirm_delete_btn = PrimaryPushButton(
+            FluentIcon.DELETE, "删除选中", page,
+        )
+        self.confirm_delete_btn.setFixedHeight(30)
+        self.confirm_delete_btn.clicked.connect(self._on_confirm_delete)
+        self.confirm_delete_btn.hide()
+        head.addWidget(self.confirm_delete_btn)
+
         self.new_btn = PrimaryPushButton(FluentIcon.ADD, "新建 Skill", page)
         self.new_btn.setFixedHeight(30)
         # Reuse the existing wizard flow on the hidden list panel.
@@ -372,6 +451,10 @@ class SkillsPage(QWidget):
         for i, p in enumerate(paths):
             card = _GalleryCard(p, self._grid_host)
             card.clicked.connect(self._on_card_clicked)
+            card.toggled.connect(self._on_card_toggled)
+            card.set_selection_mode(self._selection_mode)
+            if p in self._selected_paths:
+                card.set_selected(True)
             self._gallery_cards.append(card)
             self._grid.addWidget(card, i // cols, i % cols)
         # Keep the last row from stretching by adding a stretch on the next row
@@ -418,6 +501,78 @@ class SkillsPage(QWidget):
         # Drive the same flow as the legacy list panel so the dirty
         # confirmation and select-by-path behaviours stay consistent.
         self.list_panel._on_card_clicked(path)
+
+    # ── Selection / delete mode ────────────────────────────────────────
+    def _set_selection_mode(self, on: bool) -> None:
+        self._selection_mode = on
+        self._selected_paths.clear()
+        # Toggle header buttons.
+        self.delete_mode_btn.setVisible(not on)
+        self.new_btn.setVisible(not on)
+        self.cancel_select_btn.setVisible(on)
+        self.confirm_delete_btn.setVisible(on)
+        self._update_confirm_label()
+        # Push state into existing cards (also resets their selected flag).
+        for card in self._gallery_cards:
+            card.set_selection_mode(on)
+
+    def _on_card_toggled(self, path: Path, selected: bool) -> None:
+        if selected:
+            self._selected_paths.add(path)
+        else:
+            self._selected_paths.discard(path)
+        self._update_confirm_label()
+
+    def _update_confirm_label(self) -> None:
+        n = len(self._selected_paths)
+        self.confirm_delete_btn.setText(f"删除选中（{n}）")
+        self.confirm_delete_btn.setEnabled(n > 0)
+
+    def _on_confirm_delete(self) -> None:
+        if not self._selected_paths:
+            return
+        names = "、".join(sorted(p.stem for p in self._selected_paths))
+        dlg = MessageBox(
+            "删除 Skill",
+            f"确认删除以下 {len(self._selected_paths)} 个 Skill？此操作不可恢复。\n\n{names}",
+            self.window(),
+        )
+        dlg.yesButton.setText("删除")
+        dlg.cancelButton.setText("取消")
+        if not dlg.exec():
+            return
+
+        failed: list[tuple[Path, str]] = []
+        deleted = 0
+        for p in list(self._selected_paths):
+            try:
+                p.unlink()
+                deleted += 1
+            except OSError as e:
+                failed.append((p, str(e)))
+
+        # Refresh list-panel data + the gallery.
+        self.list_panel.refresh()
+        self._set_selection_mode(False)
+        self._rebuild_gallery()
+
+        if failed:
+            details = "\n".join(f"· {p.stem}: {msg}" for p, msg in failed[:5])
+            InfoBar.warning(
+                title=f"部分删除失败（成功 {deleted} / 失败 {len(failed)}）",
+                content=details,
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=6000,
+            )
+        else:
+            InfoBar.success(
+                title="删除成功",
+                content=f"已删除 {deleted} 个 Skill",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
 
     def _on_skill_selected(self, path: Path) -> None:
         if self.editor_panel.is_dirty():

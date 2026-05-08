@@ -5,7 +5,23 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class LLMClient(Protocol):
-    def complete(self, *, system: str, user: str) -> str: ...
+    def complete(
+        self,
+        *,
+        system: str,
+        user: str,
+        temperature: float | None = None,
+    ) -> str:
+        """Run an LLM completion.
+
+        ``temperature`` is optional — pass a value in [0.0, 2.0] to
+        override the provider's default sampling temperature for this one
+        call (used e.g. by title generation where we want lower variance
+        than polish's defaults). When ``None`` the provider falls back to
+        whatever temperature it ships with, which preserves the legacy
+        behaviour for every existing call-site.
+        """
+        ...
 
 
 def make_client(*, provider: str, **kwargs) -> LLMClient:

@@ -19,7 +19,7 @@ STAGES = ("扫描资料库", "加载模板", "采样 blocks", "组装 prompt", "
 
 @dataclass
 class GenerateRequest:
-    keyword: str
+    keyword: str                       # 完整搜索关键词（长尾，用于标题）
     vault_root: Path
     template_path: Path
     out_dir: Path
@@ -28,6 +28,9 @@ class GenerateRequest:
     seed: int = 0
     user_config: dict[str, int] | None = None
     draft_only: bool = False
+    # 核心产品词覆盖。``None`` 让 assembler 自己从 keyword 抽取；UI 上
+    # 用户手动改过"核心词"识别结果时把它显式传进来。
+    core_keyword: str | None = None
 
 
 @dataclass
@@ -58,6 +61,7 @@ def generate(
         keyword=req.keyword, template=template,
         index=index, registry=registry,
         seed=req.seed, user_config=req.user_config or {},
+        core_keyword=req.core_keyword,
     )
 
     _emit("组装 prompt")

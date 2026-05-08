@@ -207,7 +207,21 @@
       "Bash(cp \"C:\\\\Users\\\\EDY\\\\.claude\\\\projects\\\\D--CSM--claude-worktrees-kind-pascal-46d622\\\\2f186af1-82d1-4115-8849-54b52df8344a\\\\tool-results\\\\webfetch-1777002954616-50z3h0.bin\" /tmp/design.tar.gz)",
       "Bash(mkdir -p /tmp/design)",
       "Bash(tar -xzf /tmp/design.tar.gz -C /tmp/design)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(where python *)",
+      "Bash(python -c \"import PyInstaller; print\\(PyInstaller.__version__\\)\")",
+      "Bash(D:/CSM/.venv/Scripts/python.exe --version)",
+      "Bash(D:/CSM/.venv/Scripts/python.exe -c \"import PyInstaller, PyQt6, qfluentwidgets; print\\('PI', PyInstaller.__version__\\); print\\('PyQt6 OK'\\)\")",
+      "Bash(D:/CSM/.venv/Scripts/python.exe -c \"import PyQt6, qfluentwidgets; print\\('PyQt6 OK', 'qfw OK'\\)\")",
+      "Bash(D:/CSM/.venv/Scripts/python.exe -m pip install pyinstaller)",
+      "Bash(D:/CSM/.venv/Scripts/python.exe -m PyInstaller --noconfirm --windowed --name CSM --add-data \"csm_gui/assets;csm_gui/assets\" --collect-data qfluentwidgets --collect-data PyQt6 --hidden-import csm_gui --hidden-import csm_core main.py)",
+      "Bash(tasklist)",
+      "Bash(taskkill /F /IM CSM.exe)",
+      "PowerShell(Stop-Process -Name CSM -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Name CSM -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; \\(Get-Process CSM -ErrorAction SilentlyContinue\\) -eq $null)",
+      "Bash(D:/CSM/.venv/Scripts/python.exe -c ' *)",
+      "Bash(xargs -I {} sh -c 'echo \"=== {} ===\"; grep -E \"user_name|user_product|vault_root|skill_dir\" \"{}\" 2>/dev/null | head -6')",
+      "Bash(D:/CSM/.venv/Scripts/python.exe D:/CSM/scripts/clear_account.py)"
     ]
   }
 }

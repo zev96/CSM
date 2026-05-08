@@ -10,7 +10,10 @@ polished)`` from ``article_page`` after every load/resample.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QLineEdit,
+)
+from qfluentwidgets import ToolButton, FluentIcon
 
 
 # Design tokens (shared with workspace_side_panel)
@@ -68,7 +71,11 @@ class DocHeaderBar(QWidget):
         row.addWidget(self._save_hint)
         lay.addLayout(row)
 
-        # ── Title (editable) ────────────────────────────────────────────
+        # ── Title (editable) + 换一条 button ─────────────────────────────
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
         self._title = QLineEdit(self)
         self._title.setPlaceholderText("尚未生成文章")
         self._title.setFrame(False)
@@ -83,7 +90,27 @@ class DocHeaderBar(QWidget):
         )
         self._title_dirty = False
         self._title.textEdited.connect(self._on_title_edited)
-        lay.addWidget(self._title)
+        title_row.addWidget(self._title, 1)
+
+        # 换一条候选标题 — 点击循环切换 LLM 返回的候选；候选不足时禁用。
+        self._cycle_btn = ToolButton(FluentIcon.SYNC, self)
+        self._cycle_btn.setFixedSize(28, 28)
+        self._cycle_btn.setToolTip("换一条候选标题")
+        self._cycle_btn.setStyleSheet(
+            "ToolButton { background: transparent; border: none; }"
+            f"ToolButton:hover {{ background: {_ACCENT_SOFTER}; border-radius: 6px; }}"
+            "ToolButton:disabled { background: transparent; }"
+        )
+        self._cycle_btn.clicked.connect(self._cycle_title)
+        self._cycle_btn.setEnabled(False)
+        title_row.addWidget(self._cycle_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        lay.addLayout(title_row)
+
+        # Candidate state — populated by ``set_title_candidates`` from the
+        # ArticleController's ``titles_ready`` signal.
+        self._candidates: list[str] = []
+        self._candidate_idx: int = -1
 
         # ── Meta ────────────────────────────────────────────────────────
         self._meta = QLabel("—", self)
@@ -102,11 +129,23 @@ class DocHeaderBar(QWidget):
     # ── Public API ──────────────────────────────────────────────────────
     def update_doc(self, template=None, plan=None, draft: str = "",
                    polished: str = "") -> None:
-        # Title priority: polished heading → draft heading → template literal,
-        # with {keyword} substituted from the plan. User-edited titles stick.
+        # Title priority:
+        #   1. user-edited title           (``_title_dirty``)
+        #   2. LLM-generated candidates    (``_candidates`` non-empty)
+        #   3. polished heading
+        #   4. draft heading
+        #   5. raw keyword
+        #
+        # The LLM-candidate guard exists to handle a race: when the title
+        # worker is faster than draft assembly, ``set_title_candidates``
+        # arrives first and writes the title; ``update_doc`` then runs
+        # second (from ``load_result``) and would otherwise overwrite the
+        # candidate with the keyword. Equally important: when the LLM
+        # eventually returns *after* update_doc, set_title_candidates
+        # owns that path and writes the candidate then.
         keyword = getattr(plan, "keyword", "") if plan else ""
         title = self._derive_title(template, plan, draft, polished, keyword)
-        if not self._title_dirty:
+        if not self._title_dirty and not self._candidates:
             self._title.blockSignals(True)
             self._title.setText(title)
             self._title.blockSignals(False)
@@ -131,6 +170,61 @@ class DocHeaderBar(QWidget):
 
     def set_save_hint(self, text: str) -> None:
         self._save_hint.setText(text)
+
+    def clear_title_candidates(self) -> None:
+        """Wipe stored LLM candidates without touching the visible title.
+
+        Called at the start of a fresh generate run so the cycle button
+        doesn't surface stale options from the previous article. The
+        title input itself is left alone — ``update_doc`` will overwrite
+        it shortly with the new keyword (since ``_candidates`` is now
+        empty again).
+        """
+        self._candidates = []
+        self._candidate_idx = -1
+        self._cycle_btn.setEnabled(False)
+
+    def set_title_candidates(self, titles: list[str]) -> None:
+        """Push a fresh batch of LLM-generated title candidates.
+
+        The first candidate auto-fills the title input *unless* the user
+        has already manually edited the field — manual edits always win.
+        Subsequent candidates are reachable via the cycle button on the
+        right of the title input, which always overwrites (clicking it is
+        an explicit "give me another option" gesture, so we honour it
+        even if the field is dirty).
+        """
+        self._candidates = [t for t in (titles or []) if t]
+        self._candidate_idx = 0 if self._candidates else -1
+        self._cycle_btn.setEnabled(len(self._candidates) > 1)
+
+        if not self._candidates:
+            return
+        if self._title_dirty:
+            # User already typed something — leave the field, just stash
+            # the candidates so they can cycle to one if they want.
+            return
+        first = self._candidates[0]
+        self._title.blockSignals(True)
+        self._title.setText(first)
+        self._title.blockSignals(False)
+        self.title_changed.emit(first)
+
+    def _cycle_title(self) -> None:
+        if not self._candidates:
+            return
+        # Advance to the next candidate. Wraps around so users can keep
+        # clicking without thinking about the list size.
+        self._candidate_idx = (self._candidate_idx + 1) % len(self._candidates)
+        next_title = self._candidates[self._candidate_idx]
+        self._title.blockSignals(True)
+        self._title.setText(next_title)
+        self._title.blockSignals(False)
+        # Clicking the cycle button is an explicit user choice — clear
+        # the dirty flag so subsequent ``update_doc`` calls don't try to
+        # overwrite this with a derived heading.
+        self._title_dirty = False
+        self.title_changed.emit(next_title)
 
     def current_title(self) -> str:
         return self._title.text().strip()

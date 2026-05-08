@@ -142,6 +142,18 @@ class TemplateEditorPanel(QWidget):
         self.default_skill_combo.setMinimumWidth(180)
         self.default_skill_combo.currentIndexChanged.connect(self._mark_dirty)
         meta_row.addWidget(self.default_skill_combo)
+        meta_row.addSpacing(12)
+
+        # 模板类型 — 与新建模板对话框 / TemplateType Literal 同步。
+        meta_row.addWidget(self._meta_label("模板类型"))
+        from .template_library_panel import TEMPLATE_TYPES
+        self.template_type_combo = ComboBox(header_card)
+        for t in TEMPLATE_TYPES:
+            self.template_type_combo.addItem(t)
+        self.template_type_combo.setMinimumWidth(120)
+        self.template_type_combo.currentIndexChanged.connect(self._mark_dirty)
+        meta_row.addWidget(self.template_type_combo)
+
         meta_row.addStretch(1)
         self.dirty_label = CaptionLabel("● 有未保存的更改", header_card)
         self.dirty_label.setStyleSheet(f"color: {_ACCENT}; font-size: 11.5px;")
@@ -254,6 +266,20 @@ class TemplateEditorPanel(QWidget):
         finally:
             self.default_skill_combo.blockSignals(False)
 
+        # Hydrate 模板类型 — old templates without the field default to the
+        # first option so the combo always carries a valid value.
+        self.template_type_combo.blockSignals(True)
+        try:
+            target_type = tpl.template_type or self.template_type_combo.itemText(0)
+            idx = 0
+            for i in range(self.template_type_combo.count()):
+                if self.template_type_combo.itemText(i) == target_type:
+                    idx = i
+                    break
+            self.template_type_combo.setCurrentIndex(idx)
+        finally:
+            self.template_type_combo.blockSignals(False)
+
         self.block_list.load_blocks(tpl.blocks)
 
         self._dirty = False
@@ -303,6 +329,7 @@ class TemplateEditorPanel(QWidget):
         self.name_input.setEnabled(enabled)
         self.product_input.setEnabled(enabled)
         self.default_skill_combo.setEnabled(enabled)
+        self.template_type_combo.setEnabled(enabled)
 
     def _mark_dirty(self, *_) -> None:
         if not self._dirty:
@@ -337,9 +364,25 @@ class TemplateEditorPanel(QWidget):
         self._refresh_subtitle()
 
     def _all_blocks_for_inspector(self):
+        """Provide ``(bid, label, ref)`` tuples for the inspector's
+        depends-on combo.
+
+        Use the same ``_friendly_title`` resolution as the inspector's
+        own header so the dropdown reads "对比池" / "主推 · CEWEY DS18" /
+        the heading text — not the raw ``block_N`` id (which surfaced
+        for kinds without a ``label`` field, e.g. competitor_pool /
+        hero_brand)."""
+        from .block_inspector import BlockInspector
         roots = [self.block_list._roots[i] for i in range(self.block_list.total())]
-        return [(f"block_{i + 1}", n.label or n.text or f"block_{i + 1}", n)
-                for i, n in enumerate(roots)]
+        out: list[tuple[str, str, object]] = []
+        for i, n in enumerate(roots):
+            bid = f"block_{i + 1}"
+            label = BlockInspector._friendly_title(n) or bid
+            # Defensive: ``_friendly_title`` returns "（未填写）" for empty
+            # heading/hero blocks; that's still a more useful link target
+            # label than "block_9" — keep it.
+            out.append((bid, label, n))
+        return out
 
     def _on_delete_requested(self) -> None:
         idx = self.block_list.selected_index()
@@ -357,6 +400,7 @@ class TemplateEditorPanel(QWidget):
             "id": self._template_id,
             "name": self.name_input.text().strip(),
             "product": self.product_input.text().strip(),
+            "template_type": self.template_type_combo.currentText() or None,
             "default_skill_id": default_skill_id,
             "blocks": [b.model_dump() for b in blocks],
         }

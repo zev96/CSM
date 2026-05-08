@@ -193,6 +193,15 @@ class WorkspaceSidePanel(QWidget):
             self._preferred_skill = preferred_skill
         self._refresh_skill_list()
 
+    def refresh_skills(self) -> None:
+        """Re-scan the skill directory and update the dropdown.
+
+        Called when the article workspace becomes visible so newly
+        created / renamed / deleted skills from the Skill 库 page show up
+        without requiring a settings save round-trip.
+        """
+        self._refresh_skill_list()
+
     def set_preferred_skill(self, name: str | None) -> None:
         self._preferred_skill = name
         self._controls.set_preferred_skill(name)

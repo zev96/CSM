@@ -8,6 +8,12 @@ class MockClient:
     response: str = "mock response"
     calls: list[dict] = field(default_factory=list)
 
-    def complete(self, *, system: str, user: str) -> str:
-        self.calls.append({"system": system, "user": user})
+    def complete(
+        self,
+        *,
+        system: str,
+        user: str,
+        temperature: float | None = None,
+    ) -> str:
+        self.calls.append({"system": system, "user": user, "temperature": temperature})
         return self.response

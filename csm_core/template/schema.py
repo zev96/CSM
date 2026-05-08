@@ -54,6 +54,13 @@ PickNotes = Union[int, PickCountSpec]
 NumberStyle = Literal["1.", "一、", "none"]
 
 
+# 模板分类 — 与首页 / 模板库的筛选 UI 对齐。新增分类时：
+#   1. 在这里加 Literal 值
+#   2. 在 csm_gui.widgets.template_library_panel.TEMPLATE_TYPES 同步加上
+#   3. 为旧模板提供默认（这里用 None，UI 端在保存时会回填）
+TemplateType = Literal["导购文", "对比文", "单品文", "长文"]
+
+
 # ── Block types ───────────────────────────────────────────────────────
 class ParagraphBlock(BaseModel):
     kind: Literal["paragraph"] = "paragraph"
@@ -107,10 +114,37 @@ class LiteralBlock(BaseModel):
     text: str = Field(min_length=1)
 
 
+class TestFrameworkBlock(BaseModel):
+    """随机抽 N 个测试项框架 + 自动填入 hero/pool 选中产品的对应结果。
+
+    每篇框架笔记里写好"测试原理 / 测试方法 / 测试数据图 / 测试总结"等
+    通用方法论，并用 ``主推 测试部分：`` / ``竞品A 测试部分：`` /
+    ``竞品B 测试部分：`` 这样的占位行标记品牌段落。生成时每条占位行会
+    被替换为该产品在对应测试项下的实际结果（按品牌结果笔记里的 H2
+    section 匹配）。
+    """
+
+    kind: Literal["test_framework"] = "test_framework"
+    id: str
+    label: str = ""
+    framework_module: str           # 测试项框架笔记所在目录
+    results_module: str             # 品牌结果笔记所在目录
+    follow_slot: str                # "hero_a+pool_a" — 跟随哪些 block 选的产品
+    pick_count: PickNotes = 3       # 抽几个测试项；同一篇文章不重复抽
+    hero_slot: str = "主推"          # 框架笔记里识别"主推 测试部分：" 行的标签
+    competitor_slots: list[str] = Field(
+        default_factory=lambda: ["竞品A", "竞品B"],
+    )
+    # 测试项编号样式 — 渲染为 "## 1. xxx" / "## 一、xxx" / "## xxx"。
+    number_style: NumberStyle = "1."
+    constraints: list[str] = Field(default_factory=lambda: ["unique_notes"])
+
+
 Block = Annotated[
     Union[
         ParagraphBlock, HeadingBlock, NumberedListBlock,
         HeroBrandBlock, CompetitorPoolBlock, LiteralBlock,
+        TestFrameworkBlock,
     ],
     Field(discriminator="kind"),
 ]
@@ -126,6 +160,8 @@ class Template(BaseModel):
     id: str
     name: str
     product: str
+    # ``template_type`` 旧模板没有这个字段 — 默认 None，UI 端按需补默认值。
+    template_type: TemplateType | None = None
     default_skill_id: str | None = None
     blocks: list[Block] = Field(min_length=1)
 

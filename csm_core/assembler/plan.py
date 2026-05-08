@@ -15,6 +15,7 @@ class PickedVariant(BaseModel):
 BlockKind = Literal[
     "paragraph", "heading", "numbered_list",
     "hero_brand", "competitor_pool", "literal",
+    "test_framework",
 ]
 
 
@@ -41,11 +42,19 @@ class BlockResult(BaseModel):
 
 
 class AssemblyPlan(BaseModel):
-    keyword: str
+    keyword: str                       # 完整搜索关键词（长尾，用于标题）
     template_id: str
     seed: int
+    # 核心产品词 — 长尾关键词剥离尾巴后的 noun phrase，用于正文里的
+    # ``{keyword}`` 占位替换 + 产品标题拼接。``None`` 表示尚未抽取（旧
+    # plan JSON 没有这个字段时回退到 ``keyword`` 自身）。
+    core_keyword: str | None = None
     results: list[BlockResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    def get_core_keyword(self) -> str:
+        """Return the core keyword (always non-empty for valid plans)."""
+        return self.core_keyword or self.keyword
 
     def to_json(self) -> str:
         return json.dumps(self.model_dump(), ensure_ascii=False, indent=2)

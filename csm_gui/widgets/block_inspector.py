@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QSizePolicy,
     QAbstractSpinBox, QAbstractButton,
@@ -39,6 +40,7 @@ _KIND_LABELS = {
     "hero_brand":     "主推",
     "competitor_pool":"对比池",
     "literal":        "文本",
+    "test_framework": "测试部分",
 }
 
 _NUMBER_STYLES = ["1.", "1）", "①", "一、", "(1)"]
@@ -151,14 +153,93 @@ class BlockInspector(QWidget):
         root.addWidget(self._lbl_reason)
         root.addWidget(self._reason_input)
 
+        # ── Fields: test_framework block ────────────────────────────────
+        # Two cascade pickers (框架目录 / 结果目录) + slot label inputs.
+        # 跟随区块 + 测试项数量复用 paragraph 那套（depends_on / pick_notes）。
+        self._lbl_framework_module = _field_label("测试框架目录", self)
+        self._framework_module_picker = CascadePickerButton(self)
+        self._framework_module_picker.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed,
+        )
+        self._framework_module_picker.path_selected.connect(
+            self._on_framework_module_changed,
+        )
+        root.addWidget(self._lbl_framework_module)
+        root.addWidget(self._framework_module_picker)
+
+        self._lbl_results_module = _field_label("测试结果目录", self)
+        self._results_module_picker = CascadePickerButton(self)
+        self._results_module_picker.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed,
+        )
+        self._results_module_picker.path_selected.connect(
+            self._on_results_module_changed,
+        )
+        root.addWidget(self._lbl_results_module)
+        root.addWidget(self._results_module_picker)
+
+        self._lbl_hero_slot = _field_label("主推槽位标签", self)
+        self._hero_slot_input = LineEdit(self)
+        self._hero_slot_input.setPlaceholderText("如：主推（识别框架笔记里的「主推 测试部分：」行）")
+        self._hero_slot_input.textChanged.connect(self._on_hero_slot_changed)
+        root.addWidget(self._lbl_hero_slot)
+        root.addWidget(self._hero_slot_input)
+
+        self._lbl_competitor_slots = _field_label("竞品槽位标签（逗号分隔）", self)
+        self._competitor_slots_input = LineEdit(self)
+        self._competitor_slots_input.setPlaceholderText("如：竞品A, 竞品B")
+        self._competitor_slots_input.textChanged.connect(self._on_competitor_slots_changed)
+        root.addWidget(self._lbl_competitor_slots)
+        root.addWidget(self._competitor_slots_input)
+
         # ── Field: 文本 (heading text / literal text) ────────────────────
+        # Header row hosts the field label on the left and a "插入 {关键词}"
+        # quick-action button on the right — saves users from having to
+        # remember / type the placeholder syntax. Ctrl+K does the same
+        # thing from the keyboard.
+        text_header = QHBoxLayout()
+        text_header.setContentsMargins(0, 0, 0, 0)
+        text_header.setSpacing(6)
         self._lbl_text = _field_label("文本", self)
+        text_header.addWidget(self._lbl_text)
+        text_header.addStretch(1)
+
+        self._insert_keyword_btn = PushButton("+ 关键词", self)
+        self._insert_keyword_btn.setFixedHeight(22)
+        self._insert_keyword_btn.setToolTip(
+            "在光标位置插入 {keyword} —— 渲染时会替换为产品核心词\n"
+            "快捷键：Ctrl+K",
+        )
+        self._insert_keyword_btn.setStyleSheet(
+            "PushButton {"
+            f" background: transparent; color: {_ACCENT};"
+            f" border: 1px solid rgba(47,111,94,0.30);"
+            f" border-radius: 11px; padding: 0 10px; font-size: 11px; }}"
+            "PushButton:hover {"
+            f" background: #ecf2ee; border-color: {_ACCENT}; }}"
+        )
+        self._insert_keyword_btn.clicked.connect(
+            lambda: self._insert_into_text("{keyword}")
+        )
+        text_header.addWidget(self._insert_keyword_btn)
+
+        root.addLayout(text_header)
+
         self._text_input = PlainTextEdit(self)
-        self._text_input.setPlaceholderText("…")
+        self._text_input.setPlaceholderText(
+            "如：{keyword}应该怎么选? · 用上方「+ 关键词」按钮或 Ctrl+K 快速插入变量"
+        )
         self._text_input.setMaximumHeight(110)
         self._text_input.textChanged.connect(self._on_text_changed)
-        root.addWidget(self._lbl_text)
         root.addWidget(self._text_input)
+
+        # Ctrl+K — keyboard shortcut for the same insert (works whenever
+        # the text field has focus; the parent-scoped shortcut means it
+        # doesn't fire when the user is typing in unrelated inspector
+        # fields).
+        sc = QShortcut(QKeySequence("Ctrl+K"), self._text_input)
+        sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc.activated.connect(lambda: self._insert_into_text("{keyword}"))
 
         # ── Inline advanced container (筛选 / 取值 / 链接) ────────────────
         self._adv_divider = _section_divider(self)
@@ -253,13 +334,18 @@ class BlockInspector(QWidget):
             self._lbl_style, self._style_combo,
             self._lbl_reason, self._reason_input,
             self._lbl_text, self._text_input,
+            self._insert_keyword_btn,
+            self._lbl_framework_module, self._framework_module_picker,
+            self._lbl_results_module, self._results_module_picker,
+            self._lbl_hero_slot, self._hero_slot_input,
+            self._lbl_competitor_slots, self._competitor_slots_input,
             self._delete_btn,
         ):
             w.setVisible(vis)
 
     def _show_name_field(self, kind: str) -> None:
         n = self._node
-        if kind in {"paragraph", "numbered_list"}:
+        if kind in {"paragraph", "numbered_list", "test_framework"}:
             self._name_input.blockSignals(True)
             self._name_input.setText(n.label or "")
             self._name_input.blockSignals(False)
@@ -294,6 +380,7 @@ class BlockInspector(QWidget):
             self._text_input.blockSignals(False)
             self._text_input.setMaximumHeight(60)
             self._lbl_text.setVisible(True); self._text_input.setVisible(True)
+            self._insert_keyword_btn.setVisible(True)
         elif kind == "literal":
             self._lbl_text.setText("固定文本")
             self._text_input.blockSignals(True)
@@ -301,6 +388,7 @@ class BlockInspector(QWidget):
             self._text_input.blockSignals(False)
             self._text_input.setMaximumHeight(160)
             self._lbl_text.setVisible(True); self._text_input.setVisible(True)
+            self._insert_keyword_btn.setVisible(True)
         elif kind == "numbered_list":
             self._style_combo.blockSignals(True)
             i = self._style_combo.findText(n.number_style)
@@ -322,6 +410,41 @@ class BlockInspector(QWidget):
             self._reason_input.setText(n.reason_label or "")
             self._reason_input.blockSignals(False)
             self._lbl_reason.setVisible(True); self._reason_input.setVisible(True)
+        elif kind == "test_framework":
+            # 框架目录 + 结果目录 (cascade pickers)
+            self._framework_module_picker.setup(
+                self._vault_dirs, n.framework_module or "",
+            )
+            self._results_module_picker.setup(
+                self._vault_dirs, n.results_module or "",
+            )
+            self._lbl_framework_module.setVisible(True)
+            self._framework_module_picker.setVisible(True)
+            self._lbl_results_module.setVisible(True)
+            self._results_module_picker.setVisible(True)
+
+            # 主推 / 竞品标签
+            self._hero_slot_input.blockSignals(True)
+            self._hero_slot_input.setText(n.hero_slot or "主推")
+            self._hero_slot_input.blockSignals(False)
+            self._lbl_hero_slot.setVisible(True)
+            self._hero_slot_input.setVisible(True)
+
+            self._competitor_slots_input.blockSignals(True)
+            self._competitor_slots_input.setText(
+                ", ".join(n.competitor_slots) if n.competitor_slots else "竞品A, 竞品B"
+            )
+            self._competitor_slots_input.blockSignals(False)
+            self._lbl_competitor_slots.setVisible(True)
+            self._competitor_slots_input.setVisible(True)
+
+            # 编号样式（复用现有的样式下拉，跟 numbered_list / hero_brand 一致）
+            self._lbl_style.setText("编号样式")
+            self._style_combo.blockSignals(True)
+            i = self._style_combo.findText(n.number_style)
+            self._style_combo.setCurrentIndex(i if i >= 0 else 0)
+            self._style_combo.blockSignals(False)
+            self._lbl_style.setVisible(True); self._style_combo.setVisible(True)
 
     # ── Inline advanced section ──────────────────────────────────────────
     def _clear_advanced(self) -> None:
@@ -336,7 +459,7 @@ class BlockInspector(QWidget):
 
     def _rebuild_advanced(self, kind: str) -> None:
         self._clear_advanced()
-        has_adv = kind in {"paragraph", "numbered_list", "competitor_pool"}
+        has_adv = kind in {"paragraph", "numbered_list", "competitor_pool", "test_framework"}
         self._adv_divider.setVisible(has_adv)
         self._adv_container.setVisible(has_adv)
         if not has_adv:
@@ -352,12 +475,31 @@ class BlockInspector(QWidget):
             "paragraph": "段落高级设置",
             "numbered_list": "列表高级设置",
             "competitor_pool": "对比池高级设置",
+            "test_framework": "测试部分高级设置",
         }
         head = StrongBodyLabel(title_map.get(kind, "高级设置"), self._adv_container)
         head.setStyleSheet(f"color: {_INK}; background: transparent;")
         self._adv_lay.addWidget(head)
 
         node = self._node
+
+        # test_framework block 没有筛选；只暴露"测试项数量 + 跟随区块"两组。
+        if kind == "test_framework":
+            self._adv_lay.addWidget(_field_label("测试项数量", self._adv_container))
+            self._sample_section = _SampleSection(node, parent=self._adv_container)
+            # test_framework 不是 paragraph — 隐藏 paragraph-only 字段
+            # (子素材随机数量 / 不重复素材)
+            self._sample_section.set_paragraph_only_fields_visible(False)
+            self._adv_lay.addWidget(self._sample_section)
+
+            self._adv_lay.addWidget(_field_label("跟随区块（hero / pool）", self._adv_container))
+            all_blocks = list(self._all_blocks_provider() or [])
+            self._depends_section = _DependsSection(
+                node, all_blocks, parent_widget=self._adv_container,
+            )
+            self._adv_lay.addWidget(self._depends_section)
+            return
+
         fm_candidates: dict[str, list[str]] = {}
         if self._vault_root is not None and getattr(node, "module", ""):
             try:
@@ -427,13 +569,42 @@ class BlockInspector(QWidget):
         if self._suspend_signals or self._node is None:
             return
         kind = self._node.kind
-        if kind in {"paragraph", "numbered_list"}:
+        if kind in {"paragraph", "numbered_list", "test_framework"}:
             self._node.label = text.strip()
         elif kind == "hero_brand":
             self._node.title = text.strip()
         else:
             return
         self._title.setText(self._friendly_title(self._node))
+        self.node_changed.emit()
+
+    # ── test_framework field handlers ────────────────────────────────
+    def _on_framework_module_changed(self, path: str) -> None:
+        if self._suspend_signals or self._node is None:
+            return
+        self._node.framework_module = path or ""
+        self.node_changed.emit()
+
+    def _on_results_module_changed(self, path: str) -> None:
+        if self._suspend_signals or self._node is None:
+            return
+        self._node.results_module = path or ""
+        self.node_changed.emit()
+
+    def _on_hero_slot_changed(self, text: str) -> None:
+        if self._suspend_signals or self._node is None:
+            return
+        self._node.hero_slot = text.strip() or "主推"
+        self.node_changed.emit()
+
+    def _on_competitor_slots_changed(self, text: str) -> None:
+        if self._suspend_signals or self._node is None:
+            return
+        # CSV-encode 竞品标签：用户输入 "竞品A, 竞品B" → ["竞品A", "竞品B"]
+        # 同时容忍中文逗号 / 顿号。
+        import re
+        parts = [s.strip() for s in re.split(r"[,，、]", text) if s.strip()]
+        self._node.competitor_slots = parts or ["竞品A", "竞品B"]
         self.node_changed.emit()
 
     def _on_module_changed(self, path: str) -> None:
@@ -489,4 +660,25 @@ class BlockInspector(QWidget):
         else:
             return
         self._title.setText(self._friendly_title(self._node))
+
+    def _insert_into_text(self, snippet: str) -> None:
+        """Insert *snippet* at the current cursor position in ``_text_input``.
+
+        Used by the "+ 关键词" button and the Ctrl+K shortcut so users
+        don't have to type ``{keyword}`` manually. The text field
+        automatically receives focus afterwards so the user can keep
+        typing without an extra click.
+        """
+        # Block types without a text input shouldn't see the button (it's
+        # only shown alongside heading / literal blocks). ``isHidden`` rather
+        # than ``isVisible`` because the latter is False whenever the parent
+        # window isn't shown — would block all programmatic insertions.
+        if self._text_input.isHidden():
+            return
+        cursor = self._text_input.textCursor()
+        cursor.insertText(snippet)
+        # ``insertText`` advances the cursor past the snippet; setTextCursor
+        # syncs the UI cursor to match so subsequent typing lands after.
+        self._text_input.setTextCursor(cursor)
+        self._text_input.setFocus()
         self.node_changed.emit()
