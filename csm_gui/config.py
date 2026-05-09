@@ -12,6 +12,47 @@ Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen"]
 CloseAction = Literal["minimize_to_tray", "quit"]
 
 
+class MonitorConfig(BaseModel):
+    """Settings for the monitor module (Zhihu question / multi-platform comments).
+
+    Lives as a sub-model on AppConfig so it round-trips through the same
+    JSON file as the rest of the user's settings. The actual monitor data
+    (tasks, results, credentials) goes into a separate sqlite db under
+    ``<config_dir>/monitor.db`` — this model only carries small,
+    user-facing knobs.
+    """
+
+    enabled: bool = False
+    # Top-N threshold for the rank-fell-out alert. When a Zhihu task's
+    # target keyword leaves Top N (or a comment leaves Top N hot list),
+    # MonitorScheduler emits ``alert_triggered``. Default 5 matches the
+    # "first page of answers" intuition.
+    alert_top_n: int = 5
+    # Per-platform max concurrent in-flight tasks. Higher numbers blow
+    # past anti-bot rate limits — keep conservative.
+    concurrency_per_platform: int = 2
+    # Random delay window (seconds) inserted between requests to the same
+    # platform. Spread mimics a human's browsing tempo and is the single
+    # biggest knob for staying under risk-control radar.
+    request_delay_min: float = 5.0
+    request_delay_max: float = 15.0
+    # Cooldown window (hours) before the same task can fire another
+    # rank-fell-out alert. Without this every scheduled tick would re-fire
+    # the alert until the rank recovers.
+    alert_cooldown_hours: int = 24
+    # Path to the user's local Chrome executable. Empty = let DrissionPage
+    # auto-detect. Only consulted when the curl_cffi fast path fails over
+    # to the browser fallback.
+    chrome_path: str = ""
+    # Whether to auto-trigger the AI summarizer (Top-answers → Vault note)
+    # when a Zhihu task completes. Off by default to avoid burning LLM
+    # tokens on every poll.
+    ai_summarize_zhihu: bool = False
+    # Whether to auto-classify comment sentiment with the LLM after each
+    # comment-monitoring run.
+    ai_classify_comments: bool = False
+
+
 class AppConfig(BaseModel):
     user_name: str | None = None
     user_product: str | None = None
@@ -50,6 +91,9 @@ class AppConfig(BaseModel):
 
     # ── Update / hot-upgrade ───────────────────────────────────────────
     update_repo: str = ""    # GitHub "owner/name", 留空 = 不检查更新
+
+    # ── Monitor (Zhihu / comment-platforms) ────────────────────────────
+    monitor: MonitorConfig = Field(default_factory=MonitorConfig)
 
 
 def load_config(path: Path) -> AppConfig:

@@ -89,13 +89,13 @@ class _AdaptiveStack(QWidget):
             return self._pages[self._current]
         return None
 from qfluentwidgets import (
-    ComboBox, SpinBox, LineEdit, PasswordLineEdit,
+    ComboBox, SpinBox, DoubleSpinBox, LineEdit, PasswordLineEdit,
     PrimaryPushButton, PushButton, ToolButton, FluentIcon,
     SubtitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel, CardWidget,
     SwitchButton,
 )
 
-from ..config import AppConfig, Provider
+from ..config import AppConfig, MonitorConfig, Provider
 
 
 # ── Color tokens (mirrors theme.css `--ink-*`) ───────────────────────────────
@@ -749,6 +749,7 @@ _GROUPS = [
     ("skill",   "Skill 默认", FluentIcon.DICTIONARY),
     ("export",  "导出",       FluentIcon.SAVE),
     ("dedup",   "历史查重",   FluentIcon.SEARCH),
+    ("monitor", "监测",       FluentIcon.VIEW),
     ("account", "账号",       FluentIcon.PEOPLE),
     ("about",   "关于",       FluentIcon.INFO),
 ]
@@ -875,6 +876,7 @@ class SettingsPage(QWidget):
         self._group_index["skill"] = self._add_panel(self._build_skill())
         self._group_index["export"] = self._add_panel(self._build_export())
         self._group_index["dedup"] = self._add_panel(self._build_dedup())
+        self._group_index["monitor"] = self._add_panel(self._build_monitor())
         self._group_index["account"] = self._add_panel(self._build_account())
         self._group_index["about"] = self._add_panel(self._build_about())
 
@@ -1200,6 +1202,156 @@ class SettingsPage(QWidget):
         if d:
             self.dedup_history_dir_edit.setText(d)
 
+    def _build_monitor(self) -> QWidget:
+        """监测中心相关设置：调度并发、请求间隔、告警阈值、Cookie 管理。"""
+        m: MonitorConfig = self._config.monitor
+
+        # ── 限速与并发 ───────────────────────────────────────────────
+        rate_card = _SettingsCard(
+            "限速与并发",
+            "降低被风控的概率。所有抓取都在 QThread worker 中进行，不影响主界面。",
+        )
+
+        self.monitor_concurrency_spin = SpinBox(self)
+        self.monitor_concurrency_spin.setRange(1, 8)
+        self.monitor_concurrency_spin.setMinimumWidth(140)
+        self.monitor_concurrency_spin.setValue(m.concurrency_per_platform)
+        r_conc = _SettingsRow(
+            "每平台并发数", "同一平台同时进行的检测任务上限"
+        )
+        r_conc.set_control(self.monitor_concurrency_spin)
+        rate_card.add_row(r_conc)
+
+        # Min/max delay live in one row, side-by-side, since they're a
+        # single conceptual value (a window).
+        self.monitor_delay_min_spin = DoubleSpinBox(self)
+        self.monitor_delay_min_spin.setRange(0.0, 60.0)
+        self.monitor_delay_min_spin.setSingleStep(0.5)
+        self.monitor_delay_min_spin.setSuffix(" 秒")
+        self.monitor_delay_min_spin.setMinimumWidth(120)
+        self.monitor_delay_min_spin.setValue(m.request_delay_min)
+        self.monitor_delay_max_spin = DoubleSpinBox(self)
+        self.monitor_delay_max_spin.setRange(0.0, 120.0)
+        self.monitor_delay_max_spin.setSingleStep(0.5)
+        self.monitor_delay_max_spin.setSuffix(" 秒")
+        self.monitor_delay_max_spin.setMinimumWidth(120)
+        self.monitor_delay_max_spin.setValue(m.request_delay_max)
+        delay_holder = QWidget(self)
+        delay_lay = QHBoxLayout(delay_holder)
+        delay_lay.setContentsMargins(0, 0, 0, 0)
+        delay_lay.setSpacing(6)
+        delay_lay.addWidget(self.monitor_delay_min_spin)
+        delay_lay.addWidget(BodyLabel("到", delay_holder))
+        delay_lay.addWidget(self.monitor_delay_max_spin)
+        delay_lay.addStretch(1)
+        r_delay = _SettingsRow(
+            "请求间隔（随机）",
+            "每次请求之间的随机等待区间，区间越宽越接近真实人工节奏",
+        )
+        r_delay.set_control(delay_holder)
+        rate_card.add_row(r_delay)
+
+        # ── 告警 ─────────────────────────────────────────────────────
+        alert_card = _SettingsCard(
+            "告警",
+            "排名跌出 Top-N 时弹出告警卡，引导一键生成对标内容",
+        )
+
+        self.monitor_top_n_spin = SpinBox(self)
+        self.monitor_top_n_spin.setRange(1, 50)
+        self.monitor_top_n_spin.setMinimumWidth(140)
+        self.monitor_top_n_spin.setValue(m.alert_top_n)
+        r_top = _SettingsRow("告警阈值 Top-N", "排名超出该位次即触发告警")
+        r_top.set_control(self.monitor_top_n_spin)
+        alert_card.add_row(r_top)
+
+        self.monitor_cooldown_spin = SpinBox(self)
+        self.monitor_cooldown_spin.setRange(1, 168)
+        self.monitor_cooldown_spin.setSuffix(" 小时")
+        self.monitor_cooldown_spin.setMinimumWidth(140)
+        self.monitor_cooldown_spin.setValue(m.alert_cooldown_hours)
+        r_cooldown = _SettingsRow(
+            "告警冷却时间", "同一任务再次触发告警的最短间隔，避免刷屏"
+        )
+        r_cooldown.set_control(self.monitor_cooldown_spin)
+        alert_card.add_row(r_cooldown)
+
+        # ── 浏览器兜底 ───────────────────────────────────────────────
+        browser_card = _SettingsCard(
+            "浏览器兜底",
+            "知乎主路径失败时启用 Chromium 兜底；复用本机已安装的 Chrome",
+        )
+
+        chrome_holder = QWidget(self)
+        chrome_lay = QHBoxLayout(chrome_holder)
+        chrome_lay.setContentsMargins(0, 0, 0, 0)
+        chrome_lay.setSpacing(6)
+        self.monitor_chrome_path_edit = LineEdit(chrome_holder)
+        self.monitor_chrome_path_edit.setText(m.chrome_path or "")
+        self.monitor_chrome_path_edit.setPlaceholderText("留空自动检测；如手动指定，例如 C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe")
+        chrome_lay.addWidget(self.monitor_chrome_path_edit, 1)
+        chrome_browse_btn = PushButton("选择…", chrome_holder)
+        chrome_browse_btn.clicked.connect(self._on_browse_chrome_path)
+        chrome_lay.addWidget(chrome_browse_btn)
+        r_chrome = _SettingsRow("Chrome 可执行文件", "DrissionPage 兜底使用")
+        r_chrome.set_control(chrome_holder)
+        browser_card.add_row(r_chrome)
+
+        # ── AI 联动 ──────────────────────────────────────────────────
+        ai_card = _SettingsCard(
+            "AI 联动",
+            "复用 CSM 现有的多 LLM 抽象，对监测结果做增值",
+        )
+
+        self.monitor_ai_summarize_switch = SwitchButton(self)
+        self.monitor_ai_summarize_switch.setChecked(m.ai_summarize_zhihu)
+        r_summarize = _SettingsRow(
+            "知乎 Top 回答 AI 摘要",
+            "每次任务完成后调用 LLM 生成竞品摘要，写入 Vault/_monitor_intel/",
+        )
+        r_summarize.set_control(self.monitor_ai_summarize_switch)
+        ai_card.add_row(r_summarize)
+
+        self.monitor_ai_classify_switch = SwitchButton(self)
+        self.monitor_ai_classify_switch.setChecked(m.ai_classify_comments)
+        r_classify = _SettingsRow(
+            "评论情感/相关度分析",
+            "对采集到的评论调用 LLM 做情感分类；会消耗少量 token",
+        )
+        r_classify.set_control(self.monitor_ai_classify_switch)
+        ai_card.add_row(r_classify)
+
+        # ── Cookie 管理 ──────────────────────────────────────────────
+        cookie_card = _SettingsCard(
+            "Cookie 管理",
+            "为四个平台单独维护 Cookie 池；连续失败 5 次将自动停用",
+        )
+        cookie_btn = PushButton(FluentIcon.CERTIFICATE, "打开 Cookie 管理…", self)
+        cookie_btn.clicked.connect(self._on_open_cookie_manager)
+        r_cookie = _SettingsRow("多平台 Cookie", "知乎 / B 站 / 抖音 / 快手")
+        r_cookie.set_control(cookie_btn)
+        cookie_card.add_row(r_cookie)
+
+        return self._wrap_group(rate_card, alert_card, browser_card, ai_card, cookie_card)
+
+    def _on_browse_chrome_path(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 Chrome 可执行文件",
+            self.monitor_chrome_path_edit.text() or "",
+            "可执行文件 (*.exe);;所有文件 (*)",
+        )
+        if path:
+            self.monitor_chrome_path_edit.setText(path)
+
+    def _on_open_cookie_manager(self) -> None:
+        # Lazy import — the dialog reaches into csm_core.monitor.storage
+        # which depends on the monitor.db being initialized. By the time
+        # the user clicks this button MainWindow has already done that,
+        # so we don't need to repeat the init here.
+        from csm_gui.widgets.cookie_manager_dialog import CookieManagerDialog
+        dlg = CookieManagerDialog(self.window())
+        dlg.exec()
+
     def _build_account(self) -> QWidget:
         card = _SettingsCard(
             "账号",
@@ -1421,6 +1573,28 @@ class SettingsPage(QWidget):
             dedup_history_last_built=self._config.dedup_history_last_built,
             dedup_vault_last_built=self._config.dedup_vault_last_built,
             update_repo=self.update_repo_edit.text().strip(),
+            # Monitor module: knobs live on this page now too. Cookies
+            # are managed via the side dialog and persisted directly to
+            # sqlite, so they don't appear here. Delay min/max are
+            # swapped if the user inverted them — RequestPacer would
+            # otherwise raise on apply_config and crash the save.
+            monitor=MonitorConfig(
+                enabled=self._config.monitor.enabled,
+                concurrency_per_platform=self.monitor_concurrency_spin.value(),
+                request_delay_min=min(
+                    float(self.monitor_delay_min_spin.value()),
+                    float(self.monitor_delay_max_spin.value()),
+                ),
+                request_delay_max=max(
+                    float(self.monitor_delay_min_spin.value()),
+                    float(self.monitor_delay_max_spin.value()),
+                ),
+                alert_top_n=self.monitor_top_n_spin.value(),
+                alert_cooldown_hours=self.monitor_cooldown_spin.value(),
+                chrome_path=self.monitor_chrome_path_edit.text().strip(),
+                ai_summarize_zhihu=self.monitor_ai_summarize_switch.isChecked(),
+                ai_classify_comments=self.monitor_ai_classify_switch.isChecked(),
+            ),
         )
         self._config = new_cfg
         self._on_save(new_cfg)

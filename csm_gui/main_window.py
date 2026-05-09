@@ -19,6 +19,9 @@ from .recent_docs import append_export, load_recent
 from .controllers.article_controller import ArticleController
 from .controllers.batch_controller import BatchController
 from .pages.batch_result_page import BatchResultPage
+from .pages.monitor_page import MonitorPage
+from .controllers.monitor_controller import MonitorController
+from csm_core.monitor import storage as monitor_storage
 from csm_core.dedup.analyzer import DedupAnalyzer
 from .workers.dedup_worker import DedupAnalyzeWorker, DedupBuildWorker
 from .widgets.dedup_drill_dialog import DedupDrillDialog
@@ -54,6 +57,18 @@ class MainWindow(FluentWindow):
         self._config_path = self.config_dir / "settings.json"
         self.config: AppConfig = load_config(self._config_path)
         self._current_result = None
+        # Monitor module storage lives in a sibling sqlite db; init eagerly
+        # so the first MonitorPage refresh doesn't have to handle a
+        # half-built schema. Failures here are logged but not fatal —
+        # the app can still run without the monitor module if e.g. the
+        # config dir is read-only on a misconfigured machine.
+        try:
+            monitor_storage.init_db(self.config_dir / "monitor.db")
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "monitor storage init failed; the 监测中心 page will be inert"
+            )
         self.resize(1280, 820)
         # Intentionally leave window title empty and hide the title-bar
         # icon / title label — the FluentWindow's left nav carries the
@@ -158,12 +173,26 @@ class MainWindow(FluentWindow):
         self.home.set_recents(load_recent(self.config_dir))
         self.settings = SettingsPage(config=self.config, on_save=self._on_settings_save)
 
+        # Monitor center: controller owns the QTimer + QThread workers,
+        # MonitorPage is the visual surface. Both live for the lifetime
+        # of the window so background polling continues even when the
+        # user is on a different page.
+        self.monitor_controller = MonitorController(self.config, parent=self)
+        self.monitor = MonitorPage(self.monitor_controller, parent=self)
+        # Alert -> generate flow: MonitorPage emits prefill payload, we
+        # navigate to ArticlePage and surface an InfoBar with the
+        # keyword + competitor snippet so the user can confirm before
+        # generation. Auto-running batch on alert was rejected as too
+        # likely to burn LLM tokens on false positives.
+        self.monitor.generate_requested.connect(self._on_monitor_generate)
+
         # Brand header at the very top of the sidebar — replaces the default
         # back / hamburger row with the CSM identity per the design.
         self._build_brand_header()
 
         self.addSubInterface(self.home, FluentIcon.HOME, "主页")
         self.addSubInterface(self.article, FluentIcon.DOCUMENT, "创作区")
+        self.addSubInterface(self.monitor, FluentIcon.SEARCH, "监测中心")
         self.navigationInterface.addSeparator()
         self.addSubInterface(self.template_manager, FluentIcon.LIBRARY, "模板库")
         self.addSubInterface(self.skills, FluentIcon.DICTIONARY, "Skill 库")
@@ -335,6 +364,9 @@ class MainWindow(FluentWindow):
         self.skills.apply_config(new_cfg)
         self.batch_controller.apply_config(new_cfg)
         self.article_controller.apply_config(new_cfg)
+        # Monitor controller picks up new pacing/concurrency knobs.
+        if hasattr(self, "monitor_controller"):
+            self.monitor_controller.apply_config(new_cfg)
         # 同步托盘可见性（用户可能切换了 close_action）
         if self.tray.is_available():
             if new_cfg.close_action == "minimize_to_tray":
@@ -405,6 +437,29 @@ class MainWindow(FluentWindow):
         """Bypass closeEvent — true exit."""
         self.tray.hide()
         QApplication.instance().quit()
+
+    def _on_monitor_generate(self, prefill: dict) -> None:
+        """MonitorPage asked us to seed an article from an alert payload.
+
+        We deliberately do NOT auto-run the generation here — the user
+        confirmed during planning that they want a manual confirmation
+        step, both to avoid wasted LLM tokens on a rank-fell-out false
+        positive and to let them tweak the keyword before generating.
+        Instead, switch to ArticlePage and surface the keyword + a
+        short summary of the competitor snippets via InfoBar.
+        """
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        keyword = (prefill or {}).get("keyword", "") or "—"
+        note = (prefill or {}).get("context_note", "")
+        snippet_count = len((prefill or {}).get("competitor_snippets", []))
+        self.switchTo(self.article)
+        InfoBar.info(
+            f"监测线索：{keyword}",
+            (note or "") + (f"（已采集 {snippet_count} 条竞品摘要）" if snippet_count else ""),
+            duration=8000,
+            position=InfoBarPosition.TOP,
+            parent=self,
+        )
 
     def _on_request_generate(self, payload: dict) -> None:
         ok = self.article_controller.request_generate(payload)
