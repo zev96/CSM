@@ -12,6 +12,17 @@ dependencies = [
     "anthropic>=0.39",
     "datasketch>=1.6",
     "python-docx>=1.0",
+    # Monitor module: Zhihu fast path uses curl_cffi to impersonate a real
+    # Chrome TLS handshake (avoids being instantly fingerprinted as bot
+    # traffic). DrissionPage is the fall-back driver when curl_cffi gets
+    # rate-limited — it reuses the user's locally-installed Chrome instead
+    # of bundling a Chromium, keeping onedir size sane.
+    "curl_cffi>=0.7",
+    "DrissionPage>=4.1",
+    "beautifulsoup4>=4.12",
+    # openpyxl powers the monitor module's Excel batch-import flow. Tiny
+    # (~300KB) and pure-python, so onedir packaging cost is negligible.
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
