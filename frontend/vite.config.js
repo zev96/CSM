@@ -1,0 +1,33 @@
+import { fileURLToPath, URL } from "node:url";
+import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+// Tauri sets these in env when running through `tauri dev` / `tauri build`.
+var host = process.env.TAURI_DEV_HOST;
+export default defineConfig({
+    plugins: [vue()],
+    resolve: {
+        alias: {
+            "@": fileURLToPath(new URL("./src", import.meta.url)),
+        },
+    },
+    // Tauri expects a fixed port + no auto-clear in dev. Falling back gracefully
+    // for plain `npm run dev` (browser-only) too.
+    clearScreen: false,
+    server: {
+        port: 5173,
+        strictPort: true,
+        host: host || false,
+        hmr: host
+            ? { protocol: "ws", host: host, port: 5174 }
+            : undefined,
+        watch: {
+            ignored: ["**/src-tauri/**"],
+        },
+    },
+    envPrefix: ["VITE_", "TAURI_ENV_*"],
+    build: {
+        target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
+        minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
+        sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    },
+});

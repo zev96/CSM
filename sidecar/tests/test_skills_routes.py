@@ -1,0 +1,91 @@
+"""Tests for /api/skills and /api/skills/{id}."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+
+def _write_skill(p: Path, *, name: str, desc: str = "", tone: str = "", body: str = "") -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fm_lines = ["---", f"name: {name}"]
+    if desc:
+        fm_lines.append(f"desc: {desc}")
+    if tone:
+        fm_lines.append(f"tone: {tone}")
+    fm_lines.append("---")
+    fm_lines.append(body)
+    p.write_text("\n".join(fm_lines), encoding="utf-8")
+
+
+def test_list_skills_returns_empty_when_dir_unset(client: TestClient):
+    resp = client.get("/api/skills")
+    assert resp.status_code == 200
+    assert resp.json() == {"count": 0, "skills": []}
+
+
+def test_list_skills_returns_empty_when_dir_missing(client: TestClient, tmp_path):
+    client.patch("/api/config", json={"skill_dir": str(tmp_path / "does-not-exist")})
+    resp = client.get("/api/skills")
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+
+
+def test_list_skills_parses_frontmatter(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    _write_skill(skill_dir / "rational.md",
+                 name="克制理性", desc="短句、低饱和", tone="rational",
+                 body="prompt body here")
+    _write_skill(skill_dir / "warm.md",
+                 name="温暖感性", body="another body")  # no desc/tone
+
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+
+    resp = client.get("/api/skills")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    by_id = {s["id"]: s for s in data["skills"]}
+    assert by_id["rational"]["name"] == "克制理性"
+    assert by_id["rational"]["desc"] == "短句、低饱和"
+    assert by_id["rational"]["tone"] == "rational"
+    assert by_id["rational"]["uses"] == 0  # always 0 per A2 decision
+    # Body is NOT included in list response (避免列表返回过大)
+    assert "body" not in by_id["rational"]
+    # Falls back to id when name missing — but we set name, so check warm fallback.
+    assert by_id["warm"]["name"] == "温暖感性"
+    assert by_id["warm"]["desc"] == ""
+
+
+def test_get_single_skill_includes_body(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    _write_skill(skill_dir / "rational.md", name="克制理性", body="this is the prompt fragment")
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+
+    resp = client.get("/api/skills/rational")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == "rational"
+    assert data["name"] == "克制理性"
+    assert "this is the prompt fragment" in data["body"]
+
+
+def test_get_single_skill_404(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    skill_dir.mkdir()
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+
+    resp = client.get("/api/skills/nope")
+    assert resp.status_code == 404
+
+
+def test_skill_falls_back_to_filename_when_name_missing(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    skill_dir.mkdir()
+    # Write a file with NO frontmatter at all — name should fall back to stem.
+    (skill_dir / "anonymous.md").write_text("just markdown, no frontmatter", encoding="utf-8")
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+
+    resp = client.get("/api/skills/anonymous")
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "anonymous"

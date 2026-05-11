@@ -1,0 +1,171 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens — ported verbatim from CSM-RE1（V1）/index.html. The Tweaks
+   panel mutates --primary / data-density / data-radius at runtime; CSS
+   variables here are the canonical source. */
+:root {
+  --bg-outer: #d9d1bd;
+  --bg-inner: #f1ebde;
+  --card: #fbf7ec;
+  --card-2: #f6f0e1;
+  --card-white: #ffffff;
+  --ink: #1c1a17;
+  --ink-2: #4d4943;
+  --ink-3: #7a7569;
+  --ink-4: #a89f8d;
+  --line: rgba(28, 26, 23, 0.08);
+  --line-2: rgba(28, 26, 23, 0.14);
+  --primary: #ee6a2a;
+  --primary-soft: #f7d5be;
+  --primary-deep: #c9521f;
+  --yellow: #f5c042;
+  --yellow-soft: #fbe7a3;
+  --green: #7a9b5e;
+  --red: #d85a48;
+  --dark: #1c1a17;
+  --dark-2: #2a2622;
+  --radius-card: 22px;
+  --radius-inner: 14px;
+  --radius-pill: 999px;
+  --density-pad: 22px;
+  --density-gap: 16px;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+html,
+body {
+  /* The Tauri window itself has transparent:true. Body background must
+     also be transparent so the rounded card corners show through to
+     the desktop instead of revealing the body fill. */
+  background: transparent;
+}
+
+body {
+  margin: 0;
+  font-family: "Plus Jakarta Sans", "Noto Sans SC", ui-sans-serif, system-ui,
+    sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.font-display {
+  font-family: "Plus Jakarta Sans", "Noto Sans SC", sans-serif;
+  letter-spacing: -0.02em;
+}
+.font-serif-cn {
+  font-family: "Noto Serif SC", serif;
+}
+.font-mono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(28, 26, 23, 0.14);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(28, 26, 23, 0.24);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.anim-up {
+  animation: fadeUp 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.anim-in {
+  animation: fadeIn 0.3s ease both;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Soft blurred decoration blobs — used by the home hero card to recreate
+   the warm yellow/orange wash from the V1 prototype. The blob is a solid
+   round div; the heavy blur turns it into a glow. */
+.blur-blob {
+  filter: blur(40px);
+  pointer-events: none;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+body[data-density="compact"] {
+  --density-pad: 16px;
+  --density-gap: 12px;
+}
+body[data-density="cozy"] {
+  --density-pad: 22px;
+  --density-gap: 16px;
+}
+body[data-density="loose"] {
+  --density-pad: 30px;
+  --density-gap: 22px;
+}
+
+body[data-radius="tight"] {
+  --radius-card: 14px;
+  --radius-inner: 10px;
+}
+body[data-radius="medium"] {
+  --radius-card: 22px;
+  --radius-inner: 14px;
+}
+body[data-radius="bold"] {
+  --radius-card: 32px;
+  --radius-inner: 20px;
+}
+
+.pad-d {
+  padding: var(--density-pad);
+}
+.gap-d {
+  gap: var(--density-gap);
+}

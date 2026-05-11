@@ -1,0 +1,181 @@
+"""Persistent user settings — single source of truth for both PyQt GUI (legacy)
+and the upcoming Tauri+sidecar architecture.
+
+Migration note: this module was moved here from ``csm_gui.config`` so the
+sidecar can own configuration without depending on PyQt. ``csm_gui.config``
+remains as a thin re-export shim during the transition window — see
+docs/migration/feature-ui-mapping.md and the migration plan.
+"""
+from __future__ import annotations
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Literal
+from pydantic import BaseModel, Field, ValidationError
+
+logger = logging.getLogger(__name__)
+
+Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen"]
+CloseAction = Literal["minimize_to_tray", "quit"]
+
+
+class MonitorConfig(BaseModel):
+    """Settings for the monitor module (Zhihu question / multi-platform comments).
+
+    Lives as a sub-model on AppConfig so it round-trips through the same
+    JSON file as the rest of the user's settings. The actual monitor data
+    (tasks, results, credentials) goes into a separate sqlite db under
+    ``<config_dir>/monitor.db`` — this model only carries small,
+    user-facing knobs.
+    """
+
+    enabled: bool = False
+    alert_top_n: int = 5
+    concurrency_per_platform: int = 2
+    request_delay_min: float = 5.0
+    request_delay_max: float = 15.0
+    alert_cooldown_hours: int = 24
+    chrome_path: str = ""
+    ai_summarize_zhihu: bool = False
+    ai_classify_comments: bool = False
+
+
+class AppConfig(BaseModel):
+    user_name: str | None = None
+    user_product: str | None = None
+    vault_root: str | None = None
+    out_dir: str | None = None
+    default_provider: Provider = "mock"
+    # TODO(task-2): move api_keys to OS keyring (keyring package) — plaintext on disk is below user expectations.
+    # Tracked for sidecar migration: see csm_core.config.keyring_store below for the new code path.
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    default_template: str | None = None
+    skill_dir: str | None = None
+    last_seed: int = 0
+    default_model: dict[str, str] = Field(default_factory=dict)
+    base_urls: dict[str, str] = Field(default_factory=dict)
+    provider_test_signatures: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: int = 180
+    concurrency: int = 3
+    upload_training_hints: bool = False
+    export_format: Literal["markdown", "docx"] = "markdown"
+    close_action: CloseAction = "minimize_to_tray"
+    tray_first_minimize_shown: bool = False
+
+    # ── Dedup detection ────────────────────────────────────────────────
+    dedup_enabled: bool = False
+    dedup_history_dir: str = ""
+    dedup_threshold_green: int = 15           # %
+    dedup_threshold_yellow: int = 30          # %
+    dedup_history_last_built: str = ""        # ISO timestamp
+    dedup_vault_last_built: str = ""
+
+    # ── Update / hot-upgrade ───────────────────────────────────────────
+    update_repo: str = ""    # GitHub "owner/name", 留空 = 不检查更新
+
+    # ── Monitor (Zhihu / comment-platforms) ────────────────────────────
+    monitor: MonitorConfig = Field(default_factory=MonitorConfig)
+
+
+def load_config(path: Path) -> AppConfig:
+    path = Path(path)
+    if not path.exists():
+        logger.debug("settings file not found at %s — using defaults", path)
+        return AppConfig()
+    try:
+        return AppConfig.model_validate_json(path.read_text(encoding="utf-8"))
+    except (ValueError, ValidationError, UnicodeDecodeError, OSError) as e:
+        logger.warning("Failed to load settings from %s (%s) — using defaults", path, e)
+        return AppConfig()
+
+
+def save_config(cfg: AppConfig, path: Path) -> None:
+    """Atomic write: tmp file + os.replace prevents truncation on crash."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(cfg.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def default_config_dir() -> Path:
+    """Resolve the per-user config directory without depending on Qt.
+
+    Replaces the QStandardPaths-based path used by the legacy GUI shell.
+    Picks the first matching strategy:
+
+    * Windows: ``%LOCALAPPDATA%/CSM/CSM``
+    * macOS:   ``~/Library/Application Support/CSM/CSM``
+    * Linux:   ``$XDG_CONFIG_HOME/CSM`` (fallback ``~/.config/CSM``)
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "CSM" / "CSM"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "CSM" / "CSM"
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "CSM"
+
+
+def default_config_path() -> Path:
+    return default_config_dir() / "settings.json"
+
+
+# ── Keyring migration scaffold ──────────────────────────────────────────────
+# Filled in during sidecar phase A3 — see migration plan. Kept as a stub so
+# both GUI and sidecar already import the same symbol; switching the storage
+# backend later won't ripple through callers.
+
+_KEYRING_SERVICE = "CSM"
+
+
+def get_secret(provider: str) -> str | None:
+    """Read an API key for *provider* from the OS credential store.
+
+    During the transition window callers should fall back to ``AppConfig.api_keys``
+    if this returns ``None``. Once all writes go through ``set_secret``, the
+    plaintext field can be deleted.
+    """
+    try:
+        import keyring  # type: ignore
+    except ImportError:
+        return None
+    try:
+        return keyring.get_password(_KEYRING_SERVICE, provider)
+    except Exception as e:  # pragma: no cover — keyring backend errors vary by OS
+        logger.warning("keyring read failed for %s: %s", provider, e)
+        return None
+
+
+def set_secret(provider: str, value: str) -> bool:
+    """Persist an API key for *provider* in the OS credential store.
+
+    Returns True on success, False if the keyring backend is unavailable.
+    """
+    try:
+        import keyring  # type: ignore
+    except ImportError:
+        return False
+    try:
+        keyring.set_password(_KEYRING_SERVICE, provider, value)
+        return True
+    except Exception as e:  # pragma: no cover
+        logger.warning("keyring write failed for %s: %s", provider, e)
+        return False
+
+
+def delete_secret(provider: str) -> bool:
+    try:
+        import keyring  # type: ignore
+        from keyring.errors import PasswordDeleteError  # type: ignore
+    except ImportError:
+        return False
+    try:
+        keyring.delete_password(_KEYRING_SERVICE, provider)
+        return True
+    except PasswordDeleteError:
+        return False
+    except Exception as e:  # pragma: no cover
+        logger.warning("keyring delete failed for %s: %s", provider, e)
+        return False
