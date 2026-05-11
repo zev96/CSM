@@ -17,3 +17,8 @@ templates/.trash/
 .idea/
 
 csm_core/updater_client/_token.py
+
+# scripts/dev.ps1 写入的运行时状态（sidecar/vite PID + 日志）
+.csm-dev/
+# scripts/dev.ps1 每次运行重新生成 handshake，不进 VCS
+frontend/.env.local
