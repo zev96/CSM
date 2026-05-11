@@ -441,6 +441,58 @@ function rebuildIndex(kind: "history" | "vault") {
 // ── 关于：版本号从 package 版本里读 ────────────────────────────
 const APP_VERSION = "0.4.0";
 
+// 检查更新 ——
+//   1. /api/updater/check 拿 has_update + info（含 expected_sha256，sidecar
+//      已经顺便 fetch manifest.json 帮我们拿到）
+//   2. 没更新 / 出错 → toast
+//   3. 有更新 → 调 updateAlert() 弹品牌同款 modal，用户选「立即更新」时
+//      启动 /api/updater/download，并 toast 通知开始下载
+//      （SSE 进度条 + 下载完的 install/restart 留给单独的迭代）
+const updaterChecking = ref(false);
+async function checkForUpdate() {
+  if (updaterChecking.value) return;
+  updaterChecking.value = true;
+  try {
+    const { updaterCheck, updaterDownload } = await import("@/api/client");
+    const { updateAlert } = await import("@/composables/useUpdateAlert");
+    const r = await updaterCheck();
+    if (r.error) {
+      toast.warn(`更新检查未完成：${r.error}`);
+      return;
+    }
+    if (!r.has_update || !r.info) {
+      toast.info(`已是最新版本（${r.current_version}）`);
+      return;
+    }
+    const choice = await updateAlert({
+      info: r.info,
+      currentVersion: r.current_version,
+    });
+    if (choice !== "update") return;
+
+    // 用户同意更新：把 zip 启动下载任务交给 sidecar。后端会用 thread pool
+    // 跑 download_with_verification（流式 + SHA256 校验），SSE 推进度。
+    // 这一步我们只**发起**任务 —— 进度条/完成提示是下一波 commit。
+    try {
+      const { job_id } = await updaterDownload(
+        r.info.zip_url,
+        r.info.expected_sha256,
+      );
+      toast.success(`下载已开始（job ${job_id.slice(0, 8)}），可在通知中心查看进度`);
+    } catch (e: any) {
+      toast.error(
+        `启动下载失败：${e?.response?.data?.detail ?? e?.message ?? e}`,
+      );
+    }
+  } catch (e: any) {
+    toast.error(
+      `检查更新失败：${e?.response?.data?.detail ?? e?.message ?? e}`,
+    );
+  } finally {
+    updaterChecking.value = false;
+  }
+}
+
 // ── Cookie 管理器：监测 section 内打开的弹窗 ─────────────────
 const cookieMgrOpen = ref(false);
 
@@ -1147,9 +1199,15 @@ async function saveAccountEdit() {
               检查的唯一入口。
             -->
             <SettingsRow label="检查更新" hint="手动触发一次更新检查" last>
-              <Btn variant="ghost" small disabled>
-                <Icon name="refresh" :size="13" />
-                <span>检查</span>
+              <Btn
+                variant="ghost"
+                small
+                :disabled="updaterChecking"
+                @click="checkForUpdate"
+              >
+                <Spinner v-if="updaterChecking" :size="12" />
+                <Icon v-else name="refresh" :size="13" />
+                <span>{{ updaterChecking ? "检查中…" : "检查" }}</span>
               </Btn>
             </SettingsRow>
           </template>

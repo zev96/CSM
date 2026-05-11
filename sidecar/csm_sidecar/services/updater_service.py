@@ -1,11 +1,14 @@
 """Update check + download orchestration."""
 from __future__ import annotations
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from csm_core.updater_client.checker import check_for_update
 from csm_core.updater_client.downloader import (
@@ -22,7 +25,17 @@ _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="updater")
 
 
 def check() -> dict[str, Any]:
-    """Return JSON-friendly CheckResult. Empty repo = "no update repo configured"."""
+    """Return JSON-friendly CheckResult. Empty repo = "no update repo configured".
+
+    On has_update we additionally fetch manifest.json (a release asset) so
+    ``info.expected_sha256`` is filled in. The download endpoint requires
+    sha256 — without this side-fetch the frontend would only see metadata
+    but not be able to start a verified download.
+
+    Manifest fetch failure is non-fatal: we still surface the update info
+    to the UI; the user just won't be able to start the download until the
+    release publishes a valid manifest.json.
+    """
     cfg = config_service.load()
     if not cfg.update_repo:
         return {
@@ -37,12 +50,50 @@ def check() -> dict[str, Any]:
         current_version=__version__,
         timeout=5.0,
     )
+    info_dict: dict[str, Any] | None = None
+    if result.info:
+        info_dict = asdict(result.info)
+        # 拉一次 manifest.json 拿 sha256，让前端 modal 的「更新」按钮能
+        # 直接走 /api/updater/download（download body 必须带 64 字符 sha）。
+        sha = _try_fetch_sha256(result.info.manifest_url)
+        info_dict["expected_sha256"] = sha or ""
     return {
         "has_update": result.has_update,
-        "info": asdict(result.info) if result.info else None,
+        "info": info_dict,
         "error": result.error,
         "current_version": __version__,
     }
+
+
+def _try_fetch_sha256(manifest_url: str) -> str | None:
+    """Fetch a release asset's manifest.json and return its ``sha256`` field.
+
+    Returns None (without raising) on any failure — manifest unavailable
+    shouldn't break the update-check UX, just disable the download path.
+    Expected manifest shape: ``{"sha256": "<64 hex chars>", ...}``.
+    """
+    try:
+        # API URL needs Accept: application/octet-stream to get the asset
+        # bytes; browser_download_url works with default Accept.
+        headers = {"Accept": "application/octet-stream"}
+        resp = httpx.get(
+            manifest_url, headers=headers, timeout=5.0, follow_redirects=True,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                "manifest fetch returned HTTP %s for %s",
+                resp.status_code, manifest_url,
+            )
+            return None
+        payload = json.loads(resp.text)
+        sha = payload.get("sha256", "")
+        if isinstance(sha, str) and len(sha) == 64:
+            return sha
+        logger.warning("manifest.json has missing/invalid sha256")
+        return None
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        logger.warning("manifest fetch failed: %s", e)
+        return None
 
 
 def submit_download(*, url: str, expected_sha256: str, target: Path | None = None) -> str:

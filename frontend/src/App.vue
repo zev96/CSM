@@ -17,6 +17,7 @@ import LeftNav from "./components/LeftNav.vue";
 import ToastContainer from "./components/ui/ToastContainer.vue";
 import ConfirmModal from "./components/ui/ConfirmModal.vue";
 import FailureAlertModal from "./components/ui/FailureAlertModal.vue";
+import UpdateAvailableModal from "./components/ui/UpdateAvailableModal.vue";
 import NotificationDropdown from "./components/ui/NotificationDropdown.vue";
 import OnboardingFlow from "./components/OnboardingFlow.vue";
 import WindowControls from "./components/WindowControls.vue";
@@ -236,6 +237,8 @@ onMounted(async () => {
     <ConfirmModal />
     <!-- Global failure alert — singleton, driven by useFailureAlert.ts. -->
     <FailureAlertModal />
+    <!-- 发现新版本弹窗 — singleton, driven by useUpdateAlert.ts. -->
+    <UpdateAvailableModal />
     <!--
       首次启动引导（4 步：欢迎 / Vault / 模型 / Skill）。Teleport 到
       body，z-index 100，覆盖所有 view。完成或跳过后 dismissed=true，

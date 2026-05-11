@@ -73,3 +73,58 @@ sidecar.bootstrap().catch((err) => {
 });
 
 app.mount("#app");
+
+// ── Dev-only 全局测试入口 ──────────────────────────────────────────
+// 当 update_repo 没配 / 网络挂 / release 还没出时，没法触发真实的"发现
+// 新版本"弹窗。下面这俩 helper 让开发可以在 DevTools 控制台一行点出
+// UpdateAvailableModal 看视觉对不对：
+//
+//   __csm_test_updateAlert()         // 默认 mock 数据
+//   __csm_test_updateAlert({...})    // 自己填 info 字段
+//
+// 仅 dev 环境注入。生产 build 里 import.meta.env.DEV 为 false，整块代码
+// 会被 vite 摇掉。
+if (import.meta.env.DEV) {
+  import("./composables/useUpdateAlert").then(({ updateAlert }) => {
+    const win = window as any;
+    win.__csm_test_updateAlert = async (
+      overrides: Record<string, any> = {},
+    ) => {
+      const choice = await updateAlert({
+        currentVersion: "0.4.0",
+        info: {
+          version: "0.5.0",
+          tag_name: "v0.5.0",
+          zip_url: "https://example.com/csm-0.5.0.zip",
+          manifest_url: "https://example.com/manifest.json",
+          published_at: new Date().toISOString(),
+          asset_size: 23 * 1024 * 1024, // 23 MB
+          expected_sha256: "a".repeat(64), // 占位，64 字符让按钮可点
+          changelog: [
+            "## 0.5.0 — 测试用更新说明",
+            "",
+            "### 新增",
+            "- 监测中心支持小红书评论抓取",
+            "- 创作区右栏新增「质检报告」面板",
+            "",
+            "### 修复",
+            "- 修复刷新页面后账号/模型设置丢失（store 静默吞错误）",
+            "- 修复浏览器 dev 模式下 WindowControls 抛 alert",
+            "",
+            "### 改进",
+            "- API Key 输入框保存后显示掩码而非清空",
+            "- 一键开发脚本 scripts/dev.ps1",
+          ].join("\n"),
+          ...overrides,
+        } as any,
+      });
+      // eslint-disable-next-line no-console
+      console.log("[CSM test] updateAlert choice =", choice);
+      return choice;
+    };
+    // eslint-disable-next-line no-console
+    console.info(
+      "[CSM dev] 测试更新弹窗：在控制台跑 __csm_test_updateAlert()",
+    );
+  });
+}

@@ -105,6 +105,12 @@ export interface UpdaterCheckResult {
     changelog: string;
     published_at: string;
     asset_size: number;
+    /**
+     * 64 字符的 sha256，由 sidecar 在 check 时单独 fetch manifest.json 获取。
+     * 如果 manifest 不可达（release 没附 manifest.json / 临时网络抖动），
+     * 这里是空字符串 —— 下载入口需先检测，否则 download 路由会 422 拒绝。
+     */
+    expected_sha256: string;
   } | null;
 }
 
