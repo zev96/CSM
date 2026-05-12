@@ -101,10 +101,31 @@ function pillStyle(status: Status) {
   return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
 }
 
-function openDoc(_d: Doc) {
-  // 示例文档（demo-）就跳到创作区让用户起一篇真的；真文档先也跳创作区，
-  // 之后接 ArticleView 的 "open existing" 入口（v2 路线再细化）。
-  router.push({ name: "article" });
+async function openDoc(d: Doc) {
+  // 点击 = 用系统默认应用打开 md（VS Code / Typora / Notepad）。
+  // 应用内"打开历史文章"是单独的迭代（涉及 article store 改造）。
+  // 兜底：没有 path 字段（不应出现 — 当前所有 docs 都来自 /api/recent）→ 跳创作区。
+  if (!d.path) {
+    router.push({ name: "article" });
+    return;
+  }
+  try {
+    const isTauri =
+      typeof window !== "undefined" &&
+      // @ts-expect-error — ambient Tauri global
+      Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
+    if (!isTauri) {
+      // dev 浏览器模式没有 plugin-shell — 至少把路径显出来。
+      const { useToast } = await import("@/composables/useToast");
+      useToast().info(`文件位置：${d.path}`);
+      return;
+    }
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(d.path);
+  } catch (e: any) {
+    const { useToast } = await import("@/composables/useToast");
+    useToast().error(`打开失败：${e?.message ?? e}`);
+  }
 }
 </script>
 
