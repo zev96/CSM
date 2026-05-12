@@ -24,13 +24,13 @@ logger = logging.getLogger(__name__)
 
 # ── Recent docs (home screen) ──────────────────────────────────────────────
 def list_recent(*, limit: int = 5, days: int = 7) -> dict[str, Any]:
-    """Return recent .md/.docx files under ``out_dir``, newest first."""
-    out_dir = _resolve_out_dir()
-    if out_dir is None or not out_dir.exists():
+    """Return recent .md files under ``dedup_history_dir``, newest first."""
+    history_dir = _resolve_history_dir()
+    if history_dir is None or not history_dir.exists():
         return {"count": 0, "documents": []}
     cutoff = datetime.now() - timedelta(days=days)
     items: list[dict[str, Any]] = []
-    for f in _iter_exported(out_dir):
+    for f in _iter_exported(history_dir):
         try:
             mtime = datetime.fromtimestamp(f.stat().st_mtime)
         except OSError:
@@ -107,11 +107,11 @@ def calendar_for_month(year: int, month: int) -> dict[str, Any]:
     module yet (A2 alignment table item 1, kept for UI but not yet
     backed). Filled in when the v2 排期 feature lands.
     """
-    out_dir = _resolve_out_dir()
+    history_dir = _resolve_history_dir()
     days_in_month = _calendar.monthrange(year, month)[1]
     done_per_day = [0] * days_in_month  # 0-indexed
-    if out_dir is not None and out_dir.exists():
-        for f in _iter_exported(out_dir):
+    if history_dir is not None and history_dir.exists():
+        for f in _iter_exported(history_dir):
             try:
                 mtime = datetime.fromtimestamp(f.stat().st_mtime)
             except OSError:
@@ -139,11 +139,11 @@ def words_for_range(range_: str) -> dict[str, Any]:
         start = today - timedelta(days=today.weekday())
         end_exclusive = today + timedelta(days=1)
 
-    out_dir = _resolve_out_dir()
+    history_dir = _resolve_history_dir()
     by_day: dict[date, int] = {}
     total = 0
-    if out_dir is not None and out_dir.exists():
-        for f in _iter_exported(out_dir):
+    if history_dir is not None and history_dir.exists():
+        for f in _iter_exported(history_dir):
             try:
                 fdate = datetime.fromtimestamp(f.stat().st_mtime).date()
             except OSError:
@@ -174,15 +174,25 @@ def words_for_range(range_: str) -> dict[str, Any]:
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
-def _resolve_out_dir() -> Path | None:
+def _resolve_history_dir() -> Path | None:
+    """Source-of-truth folder for 'recent docs' / calendar / words stats.
+
+    Switched from ``out_dir`` to ``dedup_history_dir`` in 0.5.0 — the
+    history dir holds .md mirrors of every export and is the only place
+    the home screen needs to scan. See:
+    docs/superpowers/specs/2026-05-12-recent-history-and-vault-attrs-design.md
+    """
     cfg = config_service.load()
-    return Path(cfg.out_dir) if cfg.out_dir else None
+    return Path(cfg.dedup_history_dir) if cfg.dedup_history_dir else None
 
 
-def _iter_exported(out_dir: Path):
-    """Yield every .md / .docx under ``out_dir`` (recursive). Skips hidden files."""
-    for ext in ("*.md", "*.docx"):
-        for p in out_dir.rglob(ext):
-            if p.name.startswith("."):
-                continue
-            yield p
+def _iter_exported(history_dir: Path):
+    """Yield every .md under ``history_dir`` (recursive). Skips hidden files.
+
+    History dir mirrors are .md only; we deliberately ignore .docx so a
+    stray docx the user dropped in there doesn't pollute aggregations.
+    """
+    for p in history_dir.rglob("*.md"):
+        if p.name.startswith("."):
+            continue
+        yield p
