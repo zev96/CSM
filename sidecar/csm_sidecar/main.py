@@ -53,6 +53,12 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "tauri://localhost",
+        # 历史：Tauri 2 Windows 默认 https://tauri.localhost，但混合
+        # 内容（HTTPS → HTTP sidecar）会被 WebView2 拦截。我们改成
+        # dangerousUseHttpScheme:true (tauri.conf.json) 让前端走
+        # http://tauri.localhost，跟 sidecar 同协议，preflight + 实际
+        # 请求都不再被 mixed-content 阻断。
+        "http://tauri.localhost",
         "https://tauri.localhost",
     ],
     allow_credentials=True,

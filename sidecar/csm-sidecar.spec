@@ -1,10 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for the CSM sidecar.
 
-Built into ``--onedir`` mode (faster cold start than --onefile and avoids
-the temp-extract step that historically tripped antivirus on Windows).
-The whole produced folder ships as Tauri's `externalBin` / `resources`
-entry — see frontend/src-tauri/tauri.conf.json.
+Built into ``--onefile`` mode (single self-extracting .exe).
+
+NB: 历史上跑过 --onedir，原因是冷启动快 + 不走临时解压步骤。但 Tauri 2
+的 ``externalBin`` 只 bundle 单文件，部署 onedir 需要把 ``_internal/``
+单独走 ``bundle.resources`` 拷过去，落到 install root 跟 exe 同级 ——
+这条路 NSIS 安装器经常漏拷文件夹，release 装出来 sidecar.exe 一启
+动就 ImportError 闪退，整个 Tauri shell 等不到 handshake。
+
+切回 onefile 后单 exe ~130 MB 自解压到 %TEMP%\\_MEI*，启动慢 2-3 秒，
+但 Tauri externalBin 直接吃单文件，零配置。Windows Defender 历史上对
+onefile 解压敏感（memory 里有记录），如果再出问题考虑用 collect_data 把
+_internal 分开 + Tauri resources 映射 —— 但那条路工程量大得多。
 
 Per the migration plan + memory's PyQt6/PyInstaller rules:
   * UPX is OFF — produced binaries broke under UPX historically.
@@ -224,8 +232,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,         # onefile: 所有 binaries 直接打进单 exe
+    a.datas,            # onefile: datas 同上
     [],
-    exclude_binaries=True,
     name="csm-sidecar",
     debug=False,
     bootloader_ignore_signals=False,
@@ -238,12 +247,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="csm-sidecar",
-)
+# 注意：onefile 模式不需要 COLLECT —— 所有内容已在 EXE() 里。
+# 这里**不**再做 COLLECT，否则会同时产出一个 dist 目录干扰 build_sidecar.py
+# 的 onedir 假设。build_sidecar.py 也要相应改成"找单个 .exe"而非"找 dir"。

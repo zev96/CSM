@@ -21,11 +21,13 @@
         "fullscreen": false,
         "decorations": false,
         "transparent": true,
-        "shadow": false
+        "shadow": false,
+        "useHttpsScheme": false,
+        "devtools": true
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: https://ipc.localhost; img-src 'self' data: asset: https://asset.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ipc: http://127.0.0.1:* http://localhost:*"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:*"
     }
   },
   "bundle": {

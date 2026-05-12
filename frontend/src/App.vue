@@ -18,6 +18,7 @@ import ToastContainer from "./components/ui/ToastContainer.vue";
 import ConfirmModal from "./components/ui/ConfirmModal.vue";
 import FailureAlertModal from "./components/ui/FailureAlertModal.vue";
 import UpdateAvailableModal from "./components/ui/UpdateAvailableModal.vue";
+import Spinner from "./components/ui/Spinner.vue";
 import NotificationDropdown from "./components/ui/NotificationDropdown.vue";
 import OnboardingFlow from "./components/OnboardingFlow.vue";
 import WindowControls from "./components/WindowControls.vue";
@@ -92,21 +93,25 @@ onMounted(async () => {
       /* 真起不来时静默 —— view 各自的 whenReady + cfg.load 会再试 */
     }
   }
-  // 静默迁移：老安装（v0.4 之前已经用过的本地账号）user_name 已经有
-  // 值但 localStorage flag 没设过 —— 帮他写一次 flag，下次启动不会
-  // 弹 onboarding。只在 boot 时检查一次，不挂 watcher（不然第 1 步
-  // submit 完会被自动 dismiss）。
-  if (
-    !onboardingDismissed.value &&
-    cfg.data &&
-    (cfg.data.user_name as string | undefined)?.trim()
-  ) {
-    try {
-      localStorage.setItem(ONBOARDED_KEY, "1");
-    } catch {
-      /* private-mode — fall back to in-memory only */
-    }
+  // 双向同步 dismissed flag 与 cfg.data.user_name —— 解决两个边角：
+  //
+  //   A) 老安装升级：user_name 已经在 settings.json 但 localStorage 没
+  //      flag → 帮他写 flag，避免再弹 onboarding 烦他。
+  //   B) WebView2 localStorage 残留：用户卸载 + 重装后磁盘 settings.json
+  //      被清，但 Tauri 的 EBWebView 数据目录不动，老 flag 还在 → 必须
+  //      清掉，否则新装的 app 不弹 onboarding。
+  //
+  // 只在 boot 时检查一次，不挂 watcher（避免第 1 步 submit 完 user_name
+  // 一变就把整个 OnboardingFlow unmount，第 2 步永远进不去）。
+  const userName = (cfg.data?.user_name as string | undefined)?.trim();
+  if (cfg.data && userName && !onboardingDismissed.value) {
+    // 情况 A：补 flag
+    try { localStorage.setItem(ONBOARDED_KEY, "1"); } catch { /* private-mode */ }
     onboardingDismissed.value = true;
+  } else if (cfg.data && !userName && onboardingDismissed.value) {
+    // 情况 B：清掉 stale flag
+    try { localStorage.removeItem(ONBOARDED_KEY); } catch { /* private-mode */ }
+    onboardingDismissed.value = false;
   }
   configReady.value = true;
 });
@@ -144,7 +149,25 @@ onMounted(async () => {
       :style="{ height: '44px' }"
     />
     <WindowControls />
-    <LeftNav />
+
+    <!--
+      在 cfg.load 完成（configReady=true）之前，**不渲染** LeftNav + main。
+      之前的做法是先把空主界面闪一下、cfg 加载完再让 OnboardingFlow 盖
+      上去 —— 视觉上是"主页 2 秒 → 切换到登录"，用户觉得不对。
+      改成: configReady 之前显示一个居中的 spinner（splash），configReady
+      之后再渲染主壳；如果 user_name 是空则 OnboardingFlow 直接覆盖。
+      用户看到的就只剩"splash → 登录页"或"splash → 主页"两种情况之一。
+    -->
+    <div
+      v-if="!configReady"
+      class="absolute inset-0 z-20 flex items-center justify-center"
+      :style="{ background: 'var(--bg-inner)', paddingTop: '44px' }"
+    >
+      <Spinner :size="22" />
+    </div>
+
+    <template v-else>
+      <LeftNav />
 
       <!--
         main 自身不滚 —— overflow-hidden + flex column。把 utility row
@@ -230,6 +253,7 @@ onMounted(async () => {
       <router-view />
     </div>
       </main>
+    </template>
 
     <!-- Global toast layer — Teleports to body, sits above everything. -->
     <ToastContainer />

@@ -20,7 +20,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# devtools 在 release 也开 —— 还在 0.4 阶段，让用户能 F12 看真实
+# 控制台 / 网络错误，比闭眼盲调成本低很多。等 GA 时再砍掉。
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"

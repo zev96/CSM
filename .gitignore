@@ -25,3 +25,8 @@ csm_core/updater_client/_token.py
 # 不会被 `npm run tauri build` 的 vite production 模式烙进 release JS。
 frontend/.env.local
 frontend/.env.development.local
+
+# vue-tsc 增量编译缓存 —— 每次 typecheck 都会被覆盖，不进 VCS
+frontend/*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
