@@ -21,4 +21,7 @@ csm_core/updater_client/_token.py
 # scripts/dev.ps1 写入的运行时状态（sidecar/vite PID + 日志）
 .csm-dev/
 # scripts/dev.ps1 每次运行重新生成 handshake，不进 VCS
+# 用 .env.development.local 而非 .env.local —— 前者只在 dev mode 加载，
+# 不会被 `npm run tauri build` 的 vite production 模式烙进 release JS。
 frontend/.env.local
+frontend/.env.development.local

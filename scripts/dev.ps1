@@ -46,7 +46,11 @@ if (-not (Test-Path "$RepoRoot/sidecar/csm_sidecar")) {
 }
 
 $FrontendDir = Join-Path $RepoRoot "frontend"
-$EnvLocal    = Join-Path $FrontendDir ".env.local"
+# ⚠ 用 .env.development.local 而不是 .env.local —— Vite 只在 dev 模式
+# 加载前者；如果用 .env.local，npm run tauri build (mode=production) 会
+# 把这里的 dev URL/token 烙进 release JS bundle，导致 release app 在
+# Tauri sidecar handshake 异常时 fallback 到一个早就死掉的开发机地址。
+$EnvLocal    = Join-Path $FrontendDir ".env.development.local"
 $StateDir    = Join-Path $RepoRoot ".csm-dev"
 $PidsFile    = Join-Path $StateDir "pids.json"
 $SidecarLog  = Join-Path $StateDir "sidecar.log"

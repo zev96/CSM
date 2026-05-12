@@ -70,6 +70,8 @@ export const useSidecar = defineStore("sidecar", {
   },
   actions: {
     async bootstrap(): Promise<void> {
+      const inTauri = await isTauriEnv();
+
       // Path 1: synchronously injected by Tauri Rust shell.
       if (typeof window !== "undefined" && window.__SIDECAR__) {
         this.applyHandshake(window.__SIDECAR__);
@@ -78,7 +80,7 @@ export const useSidecar = defineStore("sidecar", {
       }
 
       // Path 2: Tauri but injection hasn't landed — invoke the Rust command.
-      if (await isTauriEnv()) {
+      if (inTauri) {
         try {
           const { invoke } = await import("@tauri-apps/api/core");
           const handshake = await invoke<SidecarHandshake>("get_sidecar");
@@ -86,11 +88,20 @@ export const useSidecar = defineStore("sidecar", {
           this.mode = "tauri";
           return;
         } catch (e) {
+          // ⚠ 关键：在 Tauri 环境下，绝不 fallback 到 VITE_* env 变量。
+          // 之前是 fall-through 到 Path 3，那条路径用的是 .env.local 里
+          // 的开发模式 URL/token —— vite build 会把这两个变量烙进 release
+          // JS bundle，于是 release app 在 Tauri invoke 任何超时/异常时
+          // 都会偷偷把请求发到开发机的 dev sidecar 地址，导致 PATCH 等
+          // 写操作在用户那边静默失败（"为什么 onboarding 下一步没反应"）。
           this.error = `Tauri sidecar invoke failed: ${e}`;
+          return;
         }
       }
 
       // Path 3: plain browser — read env vars.
+      // 仅当 *不在* Tauri 环境时才允许这条路径，避免 release 安装包不
+      // 小心走到这里。
       const url = import.meta.env.VITE_SIDECAR_URL;
       const token = import.meta.env.VITE_SIDECAR_TOKEN;
       if (url && token) {
