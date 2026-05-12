@@ -681,7 +681,17 @@ async function saveAccountEdit() {
                 @update="(v) => setField('out_dir', v)"
               />
             </SettingsRow>
-            <SettingsRow label="默认模板目录" hint="模板 .json 所在文件夹">
+            <SettingsRow
+              label="历史索引目录"
+              hint="成稿镜像 / 最近文档 / 查重历史 — 三合一目录，首次启动已自动建好"
+            >
+              <PathField
+                :value="get('dedup_history_dir') ?? ''"
+                title="选择历史索引目录"
+                @update="(v) => setField('dedup_history_dir', v)"
+              />
+            </SettingsRow>
+            <SettingsRow label="默认模板目录" hint="模板 .json 所在文件夹 — 首次启动已自动建好，可改位置">
               <PathField
                 :value="get('default_template') ?? ''"
                 title="选择模板目录"
@@ -690,7 +700,7 @@ async function saveAccountEdit() {
             </SettingsRow>
             <SettingsRow
               label="Skills 目录"
-              hint="Skill .md 目录 — 决定润色风格选项"
+              hint="Skill .md 目录 — 首次启动已自动建好，可改位置"
               last
             >
               <PathField
@@ -970,13 +980,19 @@ async function saveAccountEdit() {
             </div>
             <SettingsRow
               label="历史索引目录"
-              hint="历史成稿所在文件夹 — 用于「撞稿」检测"
+              hint="位置在「存储路径」section 修改"
             >
-              <PathField
-                :value="get('dedup_history_dir') ?? ''"
-                title="选择历史索引目录"
-                @update="(v) => setField('dedup_history_dir', v)"
-              />
+              <span
+                class="font-mono truncate text-[11px]"
+                :style="{
+                  color: 'var(--ink-3)',
+                  maxWidth: '340px',
+                  display: 'inline-block',
+                }"
+                :title="get('dedup_history_dir') ?? ''"
+              >
+                {{ get('dedup_history_dir') || '— 未设置 —' }}
+              </span>
             </SettingsRow>
             <SettingsRow
               label="历史索引重建"
