@@ -120,10 +120,21 @@ async function openLocation(d: Doc) {
   }
 }
 
-function openDoc(_d: Doc) {
-  // 跟 RecentDocsCard 同样的占位行为 —— v2 路线再接 ArticleView 的
-  // "open existing" 真实入口（带 path 参数 + store 拉文件内容）。
-  router.push({ name: "article" });
+async function openDoc(d: Doc) {
+  try {
+    const isTauri =
+      typeof window !== "undefined" &&
+      // @ts-expect-error — ambient Tauri global
+      Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
+    if (!isTauri) {
+      toast.info(`文件位置：${d.path}`);
+      return;
+    }
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(d.path);
+  } catch (e: any) {
+    toast.error(`打开失败：${e?.message ?? e}`);
+  }
 }
 
 async function clearAll() {
@@ -293,7 +304,7 @@ onMounted(reload);
             </Btn>
             <Btn variant="ghost" small @click="openDoc(d)">
               <Icon name="edit" :size="12" />
-              <span>打开</span>
+              <span>用默认应用打开</span>
             </Btn>
           </div>
         </div>

@@ -122,6 +122,26 @@ def default_config_path() -> Path:
     return default_config_dir() / "settings.json"
 
 
+def default_templates_dir() -> Path:
+    """Per-user templates folder. Created on first sidecar startup if missing.
+
+    Lives alongside settings.json so it survives app reinstall and stays
+    writable even when the app is installed to Program Files.
+    """
+    return default_config_dir() / "Templates"
+
+
+def default_skills_dir() -> Path:
+    """Per-user Skills folder. Same rationale as default_templates_dir."""
+    return default_config_dir() / "Skills"
+
+
+def default_history_dir() -> Path:
+    """Per-user history index folder — exports auto-mirror a .md copy here,
+    and the home-screen 最近文档 list reads from this dir."""
+    return default_config_dir() / "History"
+
+
 # ── Keyring migration scaffold ──────────────────────────────────────────────
 # Filled in during sidecar phase A3 — see migration plan. Kept as a stub so
 # both GUI and sidecar already import the same symbol; switching the storage

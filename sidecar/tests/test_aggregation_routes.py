@@ -27,20 +27,20 @@ def _write_doc(p: Path, *, content: str = "", mtime: datetime | None = None,
 
 
 # ── /api/recent ─────────────────────────────────────────────────────────────
-def test_recent_empty_when_out_dir_unset(client: TestClient):
+def test_recent_empty_when_history_unset(client: TestClient):
     resp = client.get("/api/recent")
     assert resp.status_code == 200
     assert resp.json() == {"count": 0, "documents": []}
 
 
 def test_recent_lists_files_newest_first(client: TestClient, tmp_path: Path):
-    out = tmp_path / "out"
-    client.patch("/api/config", json={"out_dir": str(out)})
+    history = tmp_path / "history"
+    client.patch("/api/config", json={"dedup_history_dir": str(history)})
 
     now = datetime.now()
-    _write_doc(out / "old.md", content="x" * 50, mtime=now - timedelta(days=2),
+    _write_doc(history / "old.md", content="x" * 50, mtime=now - timedelta(days=2),
                title="old article")
-    _write_doc(out / "new.md", content="y" * 50, mtime=now - timedelta(hours=1),
+    _write_doc(history / "new.md", content="y" * 50, mtime=now - timedelta(hours=1),
                title="new article")
 
     data = client.get("/api/recent").json()
@@ -52,11 +52,11 @@ def test_recent_lists_files_newest_first(client: TestClient, tmp_path: Path):
 
 
 def test_recent_drops_files_outside_window(client: TestClient, tmp_path: Path):
-    out = tmp_path / "out"
-    client.patch("/api/config", json={"out_dir": str(out)})
+    history = tmp_path / "history"
+    client.patch("/api/config", json={"dedup_history_dir": str(history)})
     now = datetime.now()
-    _write_doc(out / "fresh.md", mtime=now - timedelta(days=2))
-    _write_doc(out / "stale.md", mtime=now - timedelta(days=30))
+    _write_doc(history / "fresh.md", mtime=now - timedelta(days=2))
+    _write_doc(history / "stale.md", mtime=now - timedelta(days=30))
 
     data = client.get("/api/recent", params={"days": 7}).json()
     assert data["count"] == 1
@@ -64,18 +64,29 @@ def test_recent_drops_files_outside_window(client: TestClient, tmp_path: Path):
 
 
 def test_recent_limit_respected(client: TestClient, tmp_path: Path):
-    out = tmp_path / "out"
-    client.patch("/api/config", json={"out_dir": str(out)})
+    history = tmp_path / "history"
+    client.patch("/api/config", json={"dedup_history_dir": str(history)})
     now = datetime.now()
     for i in range(8):
-        _write_doc(out / f"d{i}.md", mtime=now - timedelta(hours=i))
+        _write_doc(history / f"d{i}.md", mtime=now - timedelta(hours=i))
     data = client.get("/api/recent", params={"limit": 3}).json()
     assert data["count"] == 3
 
 
+def test_recent_only_lists_markdown(client: TestClient, tmp_path: Path):
+    """History dir holds .md mirrors only — any stray .docx must be ignored."""
+    history = tmp_path / "history"
+    client.patch("/api/config", json={"dedup_history_dir": str(history)})
+    _write_doc(history / "yes.md", title="md only")
+    (history / "no.docx").write_bytes(b"not really a docx")
+    data = client.get("/api/recent").json()
+    assert data["count"] == 1
+    assert data["documents"][0]["filename"] == "yes.md"
+
+
 # ── /api/calendar ───────────────────────────────────────────────────────────
 def test_calendar_returns_zeros_when_no_files(client: TestClient, tmp_path: Path):
-    client.patch("/api/config", json={"out_dir": str(tmp_path / "out")})
+    client.patch("/api/config", json={"dedup_history_dir": str(tmp_path / "history")})
     today = date.today()
     data = client.get("/api/calendar").json()
     assert data["year"] == today.year
@@ -87,8 +98,8 @@ def test_calendar_returns_zeros_when_no_files(client: TestClient, tmp_path: Path
 
 
 def test_calendar_counts_per_day(client: TestClient, tmp_path: Path):
-    out = tmp_path / "out"
-    client.patch("/api/config", json={"out_dir": str(out)})
+    history = tmp_path / "history"
+    client.patch("/api/config", json={"dedup_history_dir": str(history)})
     # Drop two articles on day 5, one on day 10 of *this* month.
     now = date.today()
     if now.day < 11:
@@ -97,9 +108,9 @@ def test_calendar_counts_per_day(client: TestClient, tmp_path: Path):
         target_month = (now.replace(day=1) - timedelta(days=1)).month
     else:
         target_year, target_month = now.year, now.month
-    _write_doc(out / "a.md", mtime=datetime(target_year, target_month, 5, 12, 0))
-    _write_doc(out / "b.md", mtime=datetime(target_year, target_month, 5, 13, 0))
-    _write_doc(out / "c.md", mtime=datetime(target_year, target_month, 10, 9, 0))
+    _write_doc(history / "a.md", mtime=datetime(target_year, target_month, 5, 12, 0))
+    _write_doc(history / "b.md", mtime=datetime(target_year, target_month, 5, 13, 0))
+    _write_doc(history / "c.md", mtime=datetime(target_year, target_month, 10, 9, 0))
 
     resp = client.get(
         "/api/calendar", params={"month": f"{target_year}-{target_month:02d}"}
@@ -120,11 +131,11 @@ def test_calendar_invalid_month_number_400(client: TestClient):
 
 # ── /api/stats/words ────────────────────────────────────────────────────────
 def test_stats_words_returns_per_day_breakdown(client: TestClient, tmp_path: Path):
-    out = tmp_path / "out"
-    client.patch("/api/config", json={"out_dir": str(out)})
+    history = tmp_path / "history"
+    client.patch("/api/config", json={"dedup_history_dir": str(history)})
     today = datetime.now()
     # Plain content (no frontmatter so wordcount only counts the body).
-    _write_doc(out / "today.md", content="一二三四五" * 10, mtime=today,
+    _write_doc(history / "today.md", content="一二三四五" * 10, mtime=today,
                with_frontmatter=False)
 
     data = client.get("/api/stats/words", params={"range": "this-week"}).json()
@@ -141,10 +152,10 @@ def test_stats_words_returns_per_day_breakdown(client: TestClient, tmp_path: Pat
 
 
 def test_stats_words_yesterday_counts_yesterday(client: TestClient, tmp_path: Path):
-    out = tmp_path / "out"
-    client.patch("/api/config", json={"out_dir": str(out)})
+    history = tmp_path / "history"
+    client.patch("/api/config", json={"dedup_history_dir": str(history)})
     yesterday = datetime.now() - timedelta(days=1)
-    _write_doc(out / "y.md", content="一" * 30, mtime=yesterday,
+    _write_doc(history / "y.md", content="一" * 30, mtime=yesterday,
                with_frontmatter=False)
 
     data = client.get("/api/stats/words", params={"range": "yesterday"}).json()
@@ -157,7 +168,7 @@ def test_stats_words_invalid_range_400(client: TestClient):
     assert resp.status_code == 400
 
 
-def test_stats_words_no_out_dir_returns_zeros(client: TestClient):
+def test_stats_words_no_history_returns_zeros(client: TestClient):
     data = client.get("/api/stats/words", params={"range": "this-week"}).json()
     assert data["total_words"] == 0
     assert all(b["words"] == 0 for b in data["by_day"])

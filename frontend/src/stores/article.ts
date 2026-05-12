@@ -279,6 +279,10 @@ export const useArticle = defineStore("article", {
         keyword: this.lastRequest.keyword,
         final_text: this.finalText,
         include_dedup_report: opts.include_dedup_report ?? false,
+        // 历史索引镜像的 frontmatter 需要"哪个模板"——直接透传当前模板 id，
+        // 后端 aggregation_service 读 `template` 字段渲染首页"最近文档"
+        // 的「模板」列。
+        template_name: this.lastRequest.template_id ?? null,
       });
       this.documentPath = resp.data.document ?? this.documentPath;
       this.format = resp.data.format ?? this.format;

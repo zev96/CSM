@@ -1,6 +1,7 @@
 """Startup / shutdown helpers — port allocation, token mint, stdout handshake."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -48,6 +49,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     In production (non-pytest) we additionally:
 
+    * Bootstrap default Templates/Skills/History directories on first run
+      and seed the bundled samples.
+    * Kick off a background vault scan so BlockEditor 属性下拉在用户登
+      陆首屏前就准备好（fire-and-forget — 扫描失败/超时不阻塞 sidecar）。
     * Initialise the monitor sqlite db at ``<config_dir>/monitor.db``
     * Start the APScheduler-driven :class:`MonitorLoop`
 
@@ -60,7 +65,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if auth._TOKEN is None:
         auth.generate_token()
     started_monitor = False
+    auto_scan_task: asyncio.Task | None = None
     if not _is_test_run():
+        try:
+            from .services import startup_dirs
+            startup_dirs.ensure_default_dirs()
+        except Exception:
+            logger.exception("ensure_default_dirs failed; continuing")
+        # Fire-and-forget background vault scan. Hold a reference locally so
+        # the task isn't GC'd while pending (asyncio docs warn about this);
+        # cancel it in finally so a slow scan doesn't leak past shutdown.
+        auto_scan_task = asyncio.create_task(_auto_scan_vault())
         try:
             # Local import so test-only imports don't pull in apscheduler.
             from .services import monitor_lifecycle
@@ -73,9 +88,42 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        if auto_scan_task is not None and not auto_scan_task.done():
+            auto_scan_task.cancel()
+            try:
+                await asyncio.wait_for(auto_scan_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.exception("auto vault scan task raised during shutdown; ignoring")
         if started_monitor:
             try:
                 from .services import monitor_lifecycle
                 monitor_lifecycle.stop()
             except Exception:
                 logger.exception("MonitorLoop shutdown raised; ignoring")
+
+
+async def _auto_scan_vault() -> None:
+    """Background vault scan on startup — fire-and-forget.
+
+    Reads ``AppConfig.vault_root`` and walks the tree once so cold-start
+    requests to ``/api/vault/attributes`` already see a cached index. The
+    BlockEditor still has a 409 self-heal fallback so this task missing or
+    crashing degrades gracefully.
+    """
+    try:
+        from pathlib import Path
+        from fastapi.concurrency import run_in_threadpool
+        from .services import config_service, vault_service
+
+        cfg = config_service.load()
+        if not cfg.vault_root:
+            return
+        root = Path(cfg.vault_root)
+        if not root.is_dir():
+            return
+        await run_in_threadpool(vault_service.scan, root)
+        logger.info("auto vault scan completed: %s", root)
+    except Exception as e:
+        logger.warning("auto vault scan failed: %s", e)
