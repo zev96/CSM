@@ -118,23 +118,20 @@ function rowsFromBlock(b: any): FilterRow[] {
   }));
 }
 
-// 监听整个 block 的引用切换（点不同块）+ source.filter 变化时同步本地。
+// 只 watch 区块切换，不 watch source.filter —— 本地编辑时 filter 是
+// commitFilters 的**输出**，不该再倒灌回 filterRows。否则：用户先选 key
+// → commitFilters 因为 value 为空跳过这行 → source.filter = {} → watch
+// 把这行从 UI 抹掉，用户感觉"点了 key 就消失"。
+//
+// 历史上这里有个 same 检查试图避免抹除，但它依赖 incoming.length ===
+// filterRows.length，而"用户刚选 key 但 value 还空"恰好就是 length
+// 不等的场景，所以 same 永远 false，本地状态被吃掉。
 watch(
-  () => [block.value?.id, block.value?.source?.filter],
+  () => block.value?.id,
   () => {
-    const incoming = rowsFromBlock(block.value);
-    // 不要无脑覆盖 —— 如果 incoming 跟现有 row 在 key/value 上一致，
-    // 留着用户当前编辑中的空行；只有真的不同才重置。
-    const same =
-      incoming.length === filterRows.value.length &&
-      incoming.every(
-        (r, i) =>
-          r.key === filterRows.value[i].key &&
-          r.value === filterRows.value[i].value,
-      );
-    if (!same) filterRows.value = incoming;
+    filterRows.value = rowsFromBlock(block.value);
   },
-  { immediate: true, deep: false },
+  { immediate: true },
 );
 
 function commitFilters() {
