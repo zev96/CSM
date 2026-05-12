@@ -27,6 +27,7 @@ import FormInput from "@/components/forms/FormInput.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 import Icon from "@/components/ui/Icon.vue";
 import CascadePicker from "./CascadePicker.vue";
+import MultiValuePicker from "./MultiValuePicker.vue";
 import { useSidecar } from "@/stores/sidecar";
 
 const props = defineProps<{
@@ -208,24 +209,51 @@ function valueHintFor(key: string): string {
   return `如：${head}`;
 }
 
+const VALUE_OPTIONS_THRESHOLD = 20;
+
+function valueOptionsFor(key: string): string[] {
+  const meta = vaultAttrs.value.find((a) => a.key === key);
+  if (!meta) return [];
+  // 后端已经把 sample_values 截到 20；这里只是双保险确认。
+  if (meta.value_count > VALUE_OPTIONS_THRESHOLD) return [];
+  return meta.sample_values ?? [];
+}
+
+async function fetchAttrsRaw(): Promise<VaultAttribute[]> {
+  const moduleScope: string | undefined = block.value?.source?.module;
+  const r = await sidecar.client.get("/api/vault/attributes", {
+    params: moduleScope ? { module: moduleScope } : {},
+  });
+  return r.data?.attributes ?? [];
+}
+
 async function loadVaultAttrs() {
   attrsLoading.value = true;
   attrsError.value = null;
   try {
-    const moduleScope: string | undefined = block.value?.source?.module;
-    const r = await sidecar.client.get("/api/vault/attributes", {
-      params: moduleScope ? { module: moduleScope } : {},
-    });
-    vaultAttrs.value = r.data?.attributes ?? [];
+    vaultAttrs.value = await fetchAttrsRaw();
   } catch (e: any) {
-    // 409 = vault 还没扫描过；这是合理状态，不当错误展示，downgrade
-    // 成空列表 + 错误文案（UI 那边显示提示）。
     if (e?.response?.status === 409) {
-      attrsError.value = "尚未扫描素材库 — 在设置里指定 Vault 后重试";
+      // 409 = sidecar 还没有 vault 索引（lifespan 自动扫挂了 / 还没起来 /
+      // 用户首次配置 vault 后还没重启）。主动触发一次 scan + retry。
+      try {
+        await sidecar.client.post("/api/vault/scan", {});
+        vaultAttrs.value = await fetchAttrsRaw();
+      } catch (inner: any) {
+        const status = inner?.response?.status;
+        if (status === 400) {
+          attrsError.value = "尚未配置素材库 — 请在设置中指定 Vault";
+        } else if (status === 404) {
+          attrsError.value = "素材库目录不存在 — 请检查设置中的 Vault 路径";
+        } else {
+          attrsError.value = inner?.message ?? String(inner);
+        }
+        vaultAttrs.value = [];
+      }
     } else {
       attrsError.value = e?.message ?? String(e);
+      vaultAttrs.value = [];
     }
-    vaultAttrs.value = [];
   } finally {
     attrsLoading.value = false;
   }
@@ -586,17 +614,14 @@ function insertKeyword(field: "text") {
                 @update:model-value="(v) => updateFilterRow(i, { key: String(v) })"
               />
             </div>
-            <input
-              :value="row.value"
-              :placeholder="valueHintFor(row.key)"
-              class="bg-card-2 flex-[3] px-3 py-2 text-[12.5px] outline-none"
-              :style="{
-                borderRadius: 'var(--radius-inner)',
-                border: '1px solid var(--line)',
-                minWidth: '0',
-              }"
-              @blur="(e) => updateFilterRow(i, { value: (e.target as HTMLInputElement).value })"
-            />
+            <div class="flex-[3]" :style="{ minWidth: '0' }">
+              <MultiValuePicker
+                :model-value="row.value"
+                :options="valueOptionsFor(row.key)"
+                :placeholder="valueHintFor(row.key)"
+                @update:model-value="(v) => updateFilterRow(i, { value: v })"
+              />
+            </div>
             <button
               type="button"
               class="inline-flex h-7 w-7 items-center justify-center"
