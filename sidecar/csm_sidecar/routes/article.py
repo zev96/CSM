@@ -57,6 +57,7 @@ class ExportBody(BaseModel):
     final_text: str = Field(min_length=1)
     out_dir: str | None = None
     include_dedup_report: bool = False
+    template_name: str | None = None
 
 
 @router.post("/api/export/{fmt}")
