@@ -78,7 +78,6 @@ def test_recent_only_lists_markdown(client: TestClient, tmp_path: Path):
     history = tmp_path / "history"
     client.patch("/api/config", json={"dedup_history_dir": str(history)})
     _write_doc(history / "yes.md", title="md only")
-    history.mkdir(parents=True, exist_ok=True)
     (history / "no.docx").write_bytes(b"not really a docx")
     data = client.get("/api/recent").json()
     assert data["count"] == 1

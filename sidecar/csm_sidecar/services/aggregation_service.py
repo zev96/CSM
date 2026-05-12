@@ -1,9 +1,9 @@
 """Aggregation views — sidecar-only adapters that turn the contents of
-``out_dir`` into the shapes the prototype's home screen expects.
+``dedup_history_dir`` into the shapes the prototype's home screen expects.
 
 These don't belong in csm_core because they're UI-shaped (calendar grids,
 "this-week" buckets, recent-doc cards) — the underlying data is just the
-exported markdown / docx files on disk.
+exported markdown mirrors on disk (see export_service._mirror_to_history).
 """
 from __future__ import annotations
 
