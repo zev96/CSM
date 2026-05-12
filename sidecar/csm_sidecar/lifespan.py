@@ -48,6 +48,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     In production (non-pytest) we additionally:
 
+    * Bootstrap default Templates/Skills/History directories on first run
+      and seed the bundled samples.
+    * Kick off a background vault scan so BlockEditor 属性下拉在用户登
+      陆首屏前就准备好（fire-and-forget — 扫描失败/超时不阻塞 sidecar）。
     * Initialise the monitor sqlite db at ``<config_dir>/monitor.db``
     * Start the APScheduler-driven :class:`MonitorLoop`
 
@@ -61,6 +65,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         auth.generate_token()
     started_monitor = False
     if not _is_test_run():
+        try:
+            from .services import startup_dirs
+            startup_dirs.ensure_default_dirs()
+        except Exception:
+            logger.exception("ensure_default_dirs failed; continuing")
+        try:
+            import asyncio
+            asyncio.create_task(_auto_scan_vault())
+        except Exception:
+            logger.exception("auto_scan_vault task scheduling failed; continuing")
         try:
             # Local import so test-only imports don't pull in apscheduler.
             from .services import monitor_lifecycle
@@ -79,3 +93,28 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 monitor_lifecycle.stop()
             except Exception:
                 logger.exception("MonitorLoop shutdown raised; ignoring")
+
+
+async def _auto_scan_vault() -> None:
+    """Background vault scan on startup — fire-and-forget.
+
+    Reads ``AppConfig.vault_root`` and walks the tree once so cold-start
+    requests to ``/api/vault/attributes`` already see a cached index. The
+    BlockEditor still has a 409 self-heal fallback so this task missing or
+    crashing degrades gracefully.
+    """
+    try:
+        from pathlib import Path
+        from fastapi.concurrency import run_in_threadpool
+        from .services import config_service, vault_service
+
+        cfg = config_service.load()
+        if not cfg.vault_root:
+            return
+        root = Path(cfg.vault_root)
+        if not root.is_dir():
+            return
+        await run_in_threadpool(vault_service.scan, root)
+        logger.info("auto vault scan completed: %s", root)
+    except Exception as e:
+        logger.warning("auto vault scan failed: %s", e)

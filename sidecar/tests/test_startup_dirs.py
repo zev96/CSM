@@ -91,3 +91,51 @@ def test_does_not_re_seed_when_target_already_has_files(cfg_path: Path, tmp_path
     # Seed must NOT copy demo.json because Templates dir is non-empty.
     assert not (user_dir / "Templates" / "demo.json").exists()
     assert (user_dir / "Templates" / "user_made.json").is_file()
+
+
+def test_lifespan_calls_ensure_default_dirs_in_production(cfg_path: Path, tmp_path: Path, monkeypatch):
+    """In non-test mode, lifespan should run ensure_default_dirs."""
+    import asyncio
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("CSM_SIDECAR_TESTING", raising=False)
+
+    called: list[bool] = []
+    monkeypatch.setattr(startup_dirs, "ensure_default_dirs", lambda: called.append(True))
+
+    # Stub out MonitorLoop so we don't actually spin up apscheduler threads
+    # for what is effectively a unit test of the lifespan glue.
+    from csm_sidecar.services import monitor_lifecycle
+    monkeypatch.setattr(monitor_lifecycle, "start", lambda: None)
+    monkeypatch.setattr(monitor_lifecycle, "stop", lambda: None)
+
+    from fastapi import FastAPI
+    from csm_sidecar import lifespan as _lifespan
+
+    async def run() -> None:
+        async with _lifespan.lifespan(FastAPI()):
+            pass
+
+    asyncio.run(run())
+    assert called == [True]
+
+
+def test_lifespan_skips_dirs_in_test_mode(cfg_path: Path, monkeypatch):
+    """In pytest mode, ensure_default_dirs should NOT be called to avoid
+    writing to the real user config dir from test runs."""
+    import asyncio
+
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
+
+    called: list[bool] = []
+    monkeypatch.setattr(startup_dirs, "ensure_default_dirs", lambda: called.append(True))
+
+    from fastapi import FastAPI
+    from csm_sidecar import lifespan as _lifespan
+
+    async def run() -> None:
+        async with _lifespan.lifespan(FastAPI()):
+            pass
+
+    asyncio.run(run())
+    assert called == []
