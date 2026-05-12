@@ -97,62 +97,10 @@ interface SampleBlock {
   draft?: string;
   polished?: string;
 }
-const SAMPLE_BLOCKS: SampleBlock[] = [
-  { id: "a1", kind: "heading", label: "标题", hint: "H1 · 主标题", status: "polished", words: 22, content: "宠物家庭吸尘器推荐：5 款无毛发缠绕实测" },
-  {
-    id: "a2",
-    kind: "paragraph",
-    label: "开篇·痛点",
-    hint: "≈220 字 · 引出场景",
-    status: "polished",
-    words: 220,
-    draft: "家里养了两只猫一只柯基的人都知道，毛发在地毯、沙发缝里能\"钻\"出宇宙级的存在感。普通吸尘器吸一会儿就被毛缠成绳，用一次得拆一次刷头，谁顶得住。",
-    polished: "养两只猫加一只柯基的家庭都明白，毛发能从地毯钻进沙发缝里，存在感堪称宇宙级。普通吸尘器吸不到几分钟就被缠成一团，每次都得拆刷头清理，没人能长期忍受。",
-  },
-  {
-    id: "a3",
-    kind: "paragraph",
-    label: "过渡",
-    hint: "≈140 字",
-    status: "polished",
-    words: 138,
-    draft: "这次我把市面上声称\"无毛发缠绕\"的 5 款机器搬回家，按真实的家庭场景跑了两周，把那些数据卡上不会写的细节先讲清楚。",
-    polished: "这次把市面上号称「无毛发缠绕」的 5 款机器搬回家，按真实场景跑了两周，先把数据卡里看不到的细节摊开讲清楚。",
-  },
-  {
-    id: "a4",
-    kind: "numbered_list",
-    label: "选购维度",
-    hint: "3 条 · 各 80–120 字",
-    status: "draft",
-    words: 280,
-    draft: "在动手测之前，先把选购的核心拎出来：刷头是否真的不缠毛、续航能否覆盖一次完整清洁、噪声是否吵到宠物炸毛。其它的什么 HEPA、附件多不多，只是锦上添花。",
-    polished: "动手测之前，先把核心拎出来：1) 刷头真的不缠毛；2) 续航能否覆盖一次完整清洁；3) 噪声是否吵到宠物。HEPA、附件这些只是锦上添花。",
-  },
-  {
-    id: "a5",
-    kind: "competitor_pool",
-    label: "产品池",
-    hint: "5 款 · 自动配对素材",
-    status: "draft",
-    words: 60,
-    draft: "本次入选 5 款：戴森 V12、追觅 V20、小米 G20、莱克 M12、添可 ONE。",
-    polished: "本次入选共 5 款 —— 戴森 V12、追觅 V20、小米 G20、莱克 M12 与添可 ONE，覆盖 1.5k 至 5k 价位段。",
-  },
-  {
-    id: "a6",
-    kind: "test_framework",
-    label: "实测·五款横评",
-    hint: "hero_brand × 5",
-    status: "polished",
-    words: 480,
-    draft: "评测分四个维度跑：刷头缠毛率、续航实测、噪声分贝、拆洗便利度。每款机器都跑了一周以上 —— 别看一些短视频测评里的瞬时数据。",
-    polished: "评测分四个维度：刷头缠毛率、续航实测、噪声分贝、拆洗便利度。每款机器跑了一周以上 —— 短视频里的瞬时数据并不可信。",
-  },
-  { id: "a7", kind: "hero_brand", label: "主推款", hint: "植入位 · 1 款", status: "empty", words: 0 },
-  { id: "a8", kind: "paragraph", label: "避坑·反例", hint: "≈260 字", status: "empty", words: 0 },
-  { id: "a9", kind: "literal", label: "收口", hint: "原文照写 · 不重写", status: "empty", words: 0 },
-];
+// V1 设计稿示例 articleBlocks / assembledBlocks，发布前清空保留空状态 ——
+// 模板没选时显示「选择模板后这里会显示组装预览」，选了模板还没采样时显示
+// 「点击开始采样填充内容」，等真实 plan.results 回来再渲染 AssemblyTree。
+const SAMPLE_BLOCKS: SampleBlock[] = [];
 
 // kind → icon name + display label + accent color。V1 的 KIND_META。
 const KIND_META: Record<string, { i: string; l: string; c: string }> = {
@@ -171,119 +119,42 @@ const selectedSlot = ref<string>("a2");
 // 已采样个数（status !== empty）—— 头部的 6/9 已采样
 const sampledCount = computed(() => SAMPLE_BLOCKS.filter((b) => b.status !== "empty").length);
 
-// 拼合示例正文 —— 用于初稿/成稿在没真实数据时的占位内容。
-// 跳过 heading（标题在编辑器内由 H1 单独承担，下面 withTitle 会拼）。
-const SAMPLE_DRAFT_TEXT = SAMPLE_BLOCKS.filter((b) => b.kind !== "heading" && b.draft)
-  .map((b) => b.draft)
-  .join("\n\n");
-const SAMPLE_FINAL_TEXT = SAMPLE_BLOCKS.filter((b) => b.kind !== "heading" && b.polished)
-  .map((b) => b.polished)
-  .join("\n\n");
-// 起飞前/未生成标题时用的占位标题 —— 用 SAMPLE_BLOCKS 里 heading 的 content
-const SAMPLE_TITLE =
-  SAMPLE_BLOCKS.find((b) => b.kind === "heading")?.content ?? "未命名文章";
+// SAMPLE_BLOCKS 已清空：原本由 SAMPLE_BLOCKS 拼出的 SAMPLE_DRAFT_TEXT /
+// SAMPLE_FINAL_TEXT 都是空串，直接删掉；占位标题给一个通用值即可。
+const SAMPLE_TITLE = "未命名文章";
 
-// ── 三套示例正文（重新随机时循环切换）──────────────────────────
-// 每套都是独立的 (draft, final) 组合，让用户能直观看到"重随"产生
-// 不同口吻/侧重的草稿。第 0 套就是顶端 SAMPLE_BLOCKS 拼出来的那版。
+// ── 示例正文 / 标题候选 / 查重 / 密度 ────────────────────────
+// V1 设计稿示例数据，发布前清空保留空状态 —— 用户起飞后由真实 article store
+// 接管；演示按钮（生成标题候选 / 查重 / 关键词密度）在 isDemoMode 下不再
+// 注入假数据。SAMPLE_VARIATIONS 保留一项空占位，避免下游模板访问
+// SAMPLE_VARIATIONS[sampleIndex] 时下标越界。
 const SAMPLE_VARIATIONS: { title: string; draft: string; final: string }[] = [
-  {
-    title: SAMPLE_TITLE,
-    draft: SAMPLE_DRAFT_TEXT,
-    final: SAMPLE_FINAL_TEXT,
-  },
-  {
-    title: "猫狗家庭必看：5 款宠物吸尘器两周实测",
-    draft: [
-      "毛孩子在家里晃一圈，地板沙发就成了毛发收容所。普通吸尘器开两分钟就被缠住，每次都要拆刷头清理，体验拉胯。",
-      "为了给同样苦恼的家庭一个答案，这次我把市面上号称\"无缠绕\"的 5 款吸尘器全部搬回家，按真实使用场景跑了 14 天。",
-      "选购吸尘器的核心其实只看三件事：刷头会不会被毛发卡死、续航够不够覆盖一次完整清洁、噪声会不会吓到宠物。其它都是加分项。",
-      "本轮实测款型：戴森 V12 Detect、追觅 V20 Pro、小米 G20、莱克 M12 Pro、添可 ONE 智能。覆盖 1.5k–5k 主流价位段。",
-      "测试维度统一为四项：刷头缠毛率、续航实测、A 计权噪声、拆洗便利度。每款连续使用 7 天以上，避免短视频里那种一次性峰值数据的误导。",
-    ].join("\n\n"),
-    final: [
-      "毛孩子在家走一圈，地板和沙发就被毛发覆盖。普通吸尘器开不到两分钟就缠死，每次都要停下拆刷头，谁都难以坚持。",
-      "为了给同样头疼的家庭一份直接答案，本期把 5 款主打「无缠绕」的吸尘器全搬回家，连续 14 天跑真实场景。",
-      "选购的关键只看三点：1) 刷头会不会被毛发卡住；2) 续航够不够一次清洁；3) 噪声会不会惊到宠物。其余都是锦上添花。",
-      "本轮入选 5 款 —— 戴森 V12 Detect / 追觅 V20 Pro / 小米 G20 / 莱克 M12 Pro / 添可 ONE 智能，覆盖 1.5k–5k 主流价位。",
-      "评测维度：刷头缠毛率、续航实测、A 计权噪声、拆洗便利度。每款连用 7 天以上，规避短视频测评里的瞬时数据。",
-    ].join("\n\n"),
-  },
-  {
-    title: "5 款宠物吸尘器横评：戴森 / 追觅 / 小米 / 莱克 / 添可谁更扛缠绕",
-    draft: [
-      "如果你家有掉毛的猫狗，肯定经历过吸尘器吸两下就被毛发缠住、不得不拆头清理的崩溃时刻。",
-      "本次横评聚焦「无毛发缠绕」这一件事，我把宣传里把这个点喊得最响的 5 款机器拉到一起，按家庭场景跑了两个礼拜。",
-      "判定一台宠物吸尘器是否合格，核心维度只有三个：刷头是否真的不缠毛、续航是否够整间屋子、噪声是否能在宠物在场时使用。",
-      "实测机型：戴森 V12 / 追觅 V20 / 小米 G20 / 莱克 M12 / 添可 ONE。同价位段的硬碰硬，最贵不到最便宜的 4 倍。",
-      "我们用四个数据来比较：刷头缠毛率、单电池续航、最大档位 A 计权噪声、整机拆洗时间。每个数据都跑了 7 天以上的均值。",
-    ].join("\n\n"),
-    final: [
-      "如果家里养掉毛的猫狗，吸尘器开两下就被毛缠住的体验你一定不陌生 —— 本期专门解决这件事。",
-      "横评只盯着「无毛发缠绕」一项，把宣传声量最大的 5 款机器集中拉来，按家庭场景跑了两周。",
-      "宠物吸尘器合格与否，只看三点：刷头不缠毛、续航够整屋、噪声不惊宠。其它都不是关键。",
-      "本轮实测：戴森 V12 / 追觅 V20 / 小米 G20 / 莱克 M12 / 添可 ONE，1.5k–5k 主流段位的硬碰硬。",
-      "比较的四组数据 —— 刷头缠毛率、单电池续航、最大档 A 计权噪声、整机拆洗时间，全部取 7 天均值，避免极值误导。",
-    ].join("\n\n"),
-  },
+  { title: SAMPLE_TITLE, draft: "", final: "" },
 ];
 
-// ── 标题候选示例 ────────────────────────────────────────────
-const SAMPLE_TITLE_CANDIDATES = [
-  "宠物家庭吸尘器推荐：5 款无毛发缠绕实测",
-  "猫狗家庭别买错！5 款主流吸尘器实测对比",
-  "养宠必看：5 款宠物吸尘器两周深度评测",
-  "毛孩子家庭吸尘器全测：戴森/追觅/小米/莱克/添可怎么选",
-  "5 款宠物吸尘器实测：续航 / 噪声 / 拆洗一次讲清",
-];
+const SAMPLE_TITLE_CANDIDATES: string[] = [];
 
-// ── 查重报告示例 ────────────────────────────────────────────
 const SAMPLE_DEDUP_REPORT = {
-  duplicate_ratio: 0.124,
-  duplicate_chars: 263,
-  text_length: 2112,
-  top_matches: [
-    {
-      source_path: "/vault/notes/dyson-v12-review-2024.md",
-      source_title: "戴森 V12 评测：续航与刷头解读",
-      overlap_chars: 96,
-      overlap_ratio: 0.045,
-    },
-    {
-      source_path: "/vault/notes/pet-vacuum-roundup.md",
-      source_title: "宠物吸尘器选购十问",
-      overlap_chars: 78,
-      overlap_ratio: 0.037,
-    },
-    {
-      source_path: "/vault/notes/v20-tineco-comparison.md",
-      source_title: "追觅 V20 vs 添可 ONE 对比",
-      overlap_chars: 54,
-      overlap_ratio: 0.026,
-    },
-  ],
-  hits: [
-    {
-      start: 142,
-      end: 198,
-      source_path: "/vault/notes/dyson-v12-review-2024.md",
-      source_title: "戴森 V12 评测",
-      text: "刷头是否真的不缠毛、续航能否覆盖一次完整清洁、噪声是否吵到宠物炸毛",
-      source_excerpt: "评测的核心在三个点：刷头缠毛率、续航覆盖度、噪声分贝",
-    },
-    {
-      start: 240,
-      end: 290,
-      source_path: "/vault/notes/pet-vacuum-roundup.md",
-      source_title: "宠物吸尘器选购十问",
-      text: "本次入选 5 款：戴森 V12、追觅 V20、小米 G20、莱克 M12、添可 ONE",
-      source_excerpt: "市售主流型号包括戴森 V12 / 追觅 V20 / 小米 G20",
-    },
-  ],
+  duplicate_ratio: 0,
+  duplicate_chars: 0,
+  text_length: 0,
+  top_matches: [] as Array<{
+    source_path: string;
+    source_title: string;
+    overlap_chars: number;
+    overlap_ratio: number;
+  }>,
+  hits: [] as Array<{
+    start: number;
+    end: number;
+    source_path: string;
+    source_title: string;
+    text: string;
+    source_excerpt: string;
+  }>,
 };
 
-// ── 关键词密度示例 ───────────────────────────────────────────
-const SAMPLE_DENSITY = { count: 32, density: 0.028 };
+const SAMPLE_DENSITY = { count: 0, density: 0 };
 
 // V1 顺序：组装 → 初稿 → 成稿。和 V1 的 segmented control 一致。
 type Tab = "assembly" | "draft" | "final";
@@ -875,6 +746,23 @@ const tabSectionLabel = computed(() => {
             <template v-if="article.plan?.results?.length">
               <div class="min-h-0 flex-1 overflow-y-auto" :style="{ padding: '20px' }">
                 <AssemblyTree :results="article.plan.results" />
+              </div>
+            </template>
+            <!--
+              SAMPLE_BLOCKS 已清空 —— 还没起飞的首次启动状态下显示空态文案，
+              提示用户先选模板再起飞，避免把 V1 设计稿假数据当成产品默认行为。
+            -->
+            <template v-else-if="SAMPLE_BLOCKS.length === 0">
+              <div
+                class="flex min-h-0 flex-1 flex-col items-center justify-center text-center"
+                :style="{ padding: '40px 24px', color: 'var(--ink-3)' }"
+              >
+                <div class="font-display text-[16px] font-semibold" :style="{ color: 'var(--ink)' }">
+                  {{ templateId ? "点击开始采样填充内容" : "选择模板后这里会显示组装预览" }}
+                </div>
+                <div class="mt-2 max-w-[420px] text-[12.5px]">
+                  在顶部输入关键词并选择模板/Skill，点击「开始生成」后会在这里逐块展示组装预览。
+                </div>
               </div>
             </template>
             <template v-else>

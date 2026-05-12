@@ -28,90 +28,9 @@ interface Doc {
   path?: string;
 }
 
-// V1 设计稿同款 fallback —— /api/recent 没数据时撑场。给 10 条让卡片
-// 内部的下拉条真的有用武之地（少于卡片可见高度时不会出现 scrollbar）。
-const FALLBACK_DOCS: Doc[] = [
-  {
-    id: "demo-d1",
-    title: "宠物家庭吸尘器推荐：5 款无毛发缠绕实测",
-    tpl: "导购 · 场景人群",
-    words: 2380,
-    when: "2 小时前",
-    status: "已发布",
-  },
-  {
-    id: "demo-d2",
-    title: "无线吸尘器值不值得换？三年用户的真心话",
-    tpl: "测评 · 长期使用",
-    words: 1820,
-    when: "今天 09:14",
-    status: "草稿",
-  },
-  {
-    id: "demo-d3",
-    title: "投影仪选购：客厅 vs 卧室的两套方案",
-    tpl: "导购 · 科普物品",
-    words: 2150,
-    when: "昨天",
-    status: "已发布",
-  },
-  {
-    id: "demo-d4",
-    title: "扫地机和拖地机怎么选？一篇讲清",
-    tpl: "导购 · 场景人群",
-    words: 1640,
-    when: "昨天",
-    status: "草稿",
-  },
-  {
-    id: "demo-d5",
-    title: "母婴家庭加湿器避坑指南",
-    tpl: "测评 · 安全合规",
-    words: 1450,
-    when: "5 月 6 日",
-    status: "归档",
-  },
-  {
-    id: "demo-d6",
-    title: "千元价位降噪耳机横评：地铁 / 飞机 / 办公场景",
-    tpl: "测评 · 横评",
-    words: 2780,
-    when: "5 月 5 日",
-    status: "已发布",
-  },
-  {
-    id: "demo-d7",
-    title: "电动牙刷预算 300：值得入手的 4 款",
-    tpl: "导购 · 科普物品",
-    words: 1920,
-    when: "5 月 4 日",
-    status: "已发布",
-  },
-  {
-    id: "demo-d8",
-    title: "蒸汽拖把怎么选？厨房 / 客厅 / 木地板分场景",
-    tpl: "导购 · 场景人群",
-    words: 1680,
-    when: "5 月 3 日",
-    status: "草稿",
-  },
-  {
-    id: "demo-d9",
-    title: "扫地机器人 800 元档：哪些功能可以砍掉",
-    tpl: "测评 · 长期使用",
-    words: 2050,
-    when: "5 月 2 日",
-    status: "已发布",
-  },
-  {
-    id: "demo-d10",
-    title: "母婴温度计选购：水银 / 红外 / 耳温的取舍",
-    tpl: "测评 · 安全合规",
-    words: 1380,
-    when: "5 月 1 日",
-    status: "归档",
-  },
-];
+// V1 设计稿示例数据，发布前清空保留空状态 —— 新装机 /api/recent 没数据
+// 时不再用十条假文章撑场，改为渲染一个友好的空状态（参考 home 其它卡）。
+const FALLBACK_DOCS: Doc[] = [];
 
 const router = useRouter();
 const { whenReady } = useSidecarReady();
@@ -250,7 +169,23 @@ function openDoc(_d: Doc) {
       卡片宽 ≥ 1100px 时切双列，每条最多展示 ~520px 内容空间。
       flex-1 + overflow-y-auto 让超出高度只在卡片内部出现滚动条。
     -->
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto xl:grid-cols-2">
+    <!-- 空状态：新装机 / 还没起飞过文章时 docs 为空 -->
+    <div
+      v-if="loaded && docs.length === 0"
+      class="flex min-h-0 flex-1 flex-col items-center justify-center py-8 text-center"
+      :style="{ color: 'var(--ink-3)' }"
+    >
+      <Icon name="fileText" :size="22" :style="{ color: 'var(--ink-4)' }" />
+      <div class="mt-2 text-[12.5px]">暂无文档</div>
+      <div class="mt-1 text-[10.5px]" :style="{ color: 'var(--ink-4)' }">
+        起飞一篇试试 · 完成后会出现在这里
+      </div>
+    </div>
+
+    <div
+      v-else
+      class="grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto xl:grid-cols-2"
+    >
       <div
         v-for="d in docs"
         :key="d.id"

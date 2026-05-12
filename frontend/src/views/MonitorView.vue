@@ -103,22 +103,13 @@ interface SampleZhihu {
   /** 知乎问题原 URL，详情卡的「问题链接」按钮跳到这里。 */
   targetUrl: string;
 }
-const SAMPLE_ZHIHU: SampleZhihu[] = [
-  { id: "s-z1", kw: "无线吸尘器哪款好用", type: "知乎问题", lastRank: 3, prevRank: 5, lastCheck: "12 分钟前", status: "ok", delta: 2, targetUrl: "https://www.zhihu.com/question/22276688" },
-  { id: "s-z2", kw: "宠物家庭吸尘器", type: "知乎问题", lastRank: 1, prevRank: 1, lastCheck: "12 分钟前", status: "ok", delta: 0, targetUrl: "https://www.zhihu.com/question/268351510" },
-  { id: "s-z3", kw: "母婴加湿器推荐", type: "知乎问题", lastRank: 12, prevRank: 7, lastCheck: "1 小时前", status: "warn", delta: -5, targetUrl: "https://www.zhihu.com/question/348270218" },
-  { id: "s-z4", kw: "投影仪客厅家用", type: "B 站评论", lastRank: null, prevRank: 9, lastCheck: "1 小时前", status: "alert", delta: -99, targetUrl: "https://www.zhihu.com/question/304138006" },
-  { id: "s-z5", kw: "降噪耳机通勤", type: "知乎问题", lastRank: 6, prevRank: 8, lastCheck: "3 小时前", status: "ok", delta: 2, targetUrl: "https://www.zhihu.com/question/29372245" },
-  { id: "s-z6", kw: "扫地机器人 800 元", type: "抖音评论", lastRank: 4, prevRank: 4, lastCheck: "今天 08:00", status: "ok", delta: 0, targetUrl: "https://www.zhihu.com/question/27093566" },
-];
+// V1 设计稿示例数据，发布前清空保留空状态 —— 首次启动监测中心应显示
+// 「暂无监测任务」而不是假的产品/排名/抢占者数据。
+const SAMPLE_ZHIHU: SampleZhihu[] = [];
 
-const SAMPLE_TOP3 = [
-  { who: "@家电搭子", title: "投影仪客厅怎么选 一篇就够", rank: 1 },
-  { who: "@小白测评派", title: "客厅 100 寸投影避坑实测", rank: 2 },
-  { who: "@光影工坊", title: "白天客厅亮度问题这样解", rank: 3 },
-];
+const SAMPLE_TOP3: Array<{ who: string; title: string; rank: number }> = [];
 
-const SAMPLE_SPARK_RANK = [1, 1, 2, 1, 3, 2, 3, 5, 4, 6, 7, 9, 12, 12];
+const SAMPLE_SPARK_RANK: number[] = [];
 
 interface SampleComment {
   id: string;
@@ -129,17 +120,15 @@ interface SampleComment {
   delta: number;
   status: "ok" | "warn" | "alert";
 }
+// V1 设计稿示例数据，发布前清空保留空状态 —— 三个平台默认全空，
+// SAMPLE_COMMENTS[platform].length === 0 时模板会渲染"还没有监测任务"。
 const SAMPLE_COMMENTS: Record<CommentPlatform, SampleComment[]> = {
-  bilibili: [
-    { id: "s-b1", kw: "客厅投影仪 100 寸", lastChecked: "2 小时前", retained: 8, total: 14, delta: -3, status: "alert" },
-    { id: "s-b2", kw: "宠物吸尘器无线", lastChecked: "4 小时前", retained: 12, total: 12, delta: 0, status: "warn" },
-    { id: "s-b3", kw: "加湿器除菌", lastChecked: "6 小时前", retained: 5, total: 5, delta: 0, status: "ok" },
-  ],
+  bilibili: [],
   douyin: [],
   kuaishou: [],
 };
 
-const SAMPLE_RETENTION = [14, 14, 13, 12, 11, 10, 8];
+const SAMPLE_RETENTION: number[] = [];
 
 // 评论 tab 的三级导航数据结构：任务 → 视频列表 → 单视频详情。
 // 一级（SAMPLE_COMMENTS）：任务名 / 留存 / 变化 / 状态
@@ -164,24 +153,9 @@ interface VideoEntry {
   /** 视频评论区的总评论数（仅展示用）。 */
   totalComments: number;
 }
-const SAMPLE_VIDEOS: Record<string, VideoEntry[]> = {
-  "s-b1": [
-    { id: "v-b1-1", url: "https://www.bilibili.com/video/BV1xx411c7AB", title: "客厅 100 寸投影实测 — 一个月使用心得", myComment: "用了三个月，客厅 100 寸投影画面真的很震撼，色彩还原稳定，白天也够用，强烈推荐这款。", rank: 1, status: "deleted", postedAt: "5 月 7 日 14:20", totalComments: 286 },
-    { id: "v-b1-2", url: "https://www.bilibili.com/video/BV1ab123c4DE", title: "投影仪选购指南：客厅党必看的 6 个参数", myComment: "亲测这台投影仪在白天也够亮，色彩稳定，HDR 支持也不错，2000 档真没什么对手。", rank: 4, status: "ok", postedAt: "5 月 6 日 11:00", totalComments: 152 },
-    { id: "v-b1-3", url: "https://www.bilibili.com/video/BV1cd456e7FG", title: "100 寸幕布 vs 120 寸幕布客厅对比", myComment: "客厅 2.8 米墙距，100 寸刚好不挡视线；要再大就得吊顶遮光帘配套上了。", rank: 2, status: "folded", postedAt: "5 月 5 日 18:30", totalComments: 198 },
-    { id: "v-b1-4", url: "https://www.bilibili.com/video/BV1ef789g8HI", title: "投影仪 + 幕布全套升级方案", myComment: "搭配硬幕效果提升明显，对比度上来了，白天也能看；之前用墙皮真的浪费亮度。", rank: 7, status: "deleted", postedAt: "5 月 4 日 09:45", totalComments: 88 },
-    { id: "v-b1-5", url: "https://www.bilibili.com/video/BV1gh012i3JK", title: "投影 vs 电视：哪个更适合客厅", myComment: "投影沉浸感更强，但要看预算和环境；纯白天追剧还是电视稳。", rank: 5, status: "ok", postedAt: "5 月 3 日 20:10", totalComments: 112 },
-  ],
-  "s-b2": [
-    { id: "v-b2-1", url: "https://www.bilibili.com/video/BV1yy411d8CD", title: "宠物吸尘器无线评测 — 三月真实使用", myComment: "用了三个月，吸毛能力确实强，比有线的好用太多，关键是没线缠脚。", rank: 1, status: "ok", postedAt: "5 月 8 日 10:15", totalComments: 312 },
-    { id: "v-b2-2", url: "https://www.bilibili.com/video/BV1jk345l6MN", title: "无线 vs 有线吸尘器：宠物家庭怎么选", myComment: "宠物家庭无线绝对真香，没有线缠脚，整理速度快很多。", rank: 3, status: "ok", postedAt: "5 月 7 日 14:00", totalComments: 198 },
-    { id: "v-b2-3", url: "https://www.bilibili.com/video/BV1op678q9RS", title: "猫毛狗毛终结者：5 款无线吸尘器横评", myComment: "里面这台第一名我也用过，吸力的确强；电池续航 60 分钟，日常够用。", rank: 2, status: "ok", postedAt: "5 月 6 日 16:45", totalComments: 224 },
-  ],
-  "s-b3": [
-    { id: "v-b3-1", url: "https://www.bilibili.com/video/BV1zz411e9EF", title: "加湿器除菌实测 — 冬天必备好物", myComment: "冬天必备，亲测除菌效果，开了一周喉咙不再干。", rank: 1, status: "ok", postedAt: "5 月 5 日 11:00", totalComments: 188 },
-    { id: "v-b3-2", url: "https://www.bilibili.com/video/BV1tu901v0WX", title: "5 款加湿器横评：到底哪个适合宝宝房", myComment: "宝宝房用了俩月安心，夜间档基本听不见声音；水箱可拆洗很方便。", rank: 2, status: "ok", postedAt: "5 月 4 日 22:00", totalComments: 142 },
-  ],
-};
+// V1 设计稿示例数据，发布前清空保留空状态 —— 任务列表为空时下面这些
+// 视频明细自然进不到，发布版本里全部清掉。
+const SAMPLE_VIDEOS: Record<string, VideoEntry[]> = {};
 
 function truncate15(s: string): string {
   return s.length > 15 ? `${s.slice(0, 15)}…` : s;
@@ -259,21 +233,14 @@ function changeSchedule(scope: "zhihu" | "comment", id: string, v: string) {
   toast.success(`监测频率：${scheduleLabel(v)}`);
 }
 
-const SAMPLE_DELETED = [
-  { tag: "被删", who: "@家电小王", date: "5 月 7 日", tone: "alert" as const },
-  { tag: "被删", who: "@电器搭子", date: "5 月 6 日", tone: "alert" as const },
-  { tag: "折叠", who: "@测评派", date: "5 月 5 日", tone: "warn" as const },
-];
+// V1 设计稿示例数据，发布前清空保留空状态。
+const SAMPLE_DELETED: Array<{ tag: string; who: string; date: string; tone: "alert" | "warn" }> = [];
 
-const SAMPLE_REPORTS = [
-  { id: "r1", n: "周报 · 第 19 周", scope: "知乎 4 + B 站 1", t: "5 月 9 日", abn: 2 },
-  { id: "r2", n: "日报 · 5 月 8 日", scope: "全部 5 项", t: "5 月 8 日", abn: 1 },
-  { id: "r3", n: "日报 · 5 月 7 日", scope: "全部 5 项", t: "5 月 7 日", abn: 0 },
-  { id: "r4", n: "周报 · 第 18 周", scope: "知乎 4 + B 站 1", t: "5 月 2 日", abn: 3 },
-];
+const SAMPLE_REPORTS: Array<{ id: string; n: string; scope: string; t: string; abn: number }> = [];
 
+// 平台 chip 计数清零 —— V1 设计稿示例任务已清空，发布前保留空状态。
 const PLATFORMS: Array<{ k: CommentPlatform; l: string; color: string; count: number }> = [
-  { k: "bilibili", l: "B 站", color: "#ee6a2a", count: 1 },
+  { k: "bilibili", l: "B 站", color: "#ee6a2a", count: 0 },
   { k: "douyin", l: "抖音", color: "#1e1c19", count: 0 },
   { k: "kuaishou", l: "快手", color: "#f5c042", count: 0 },
 ];
@@ -344,15 +311,9 @@ interface HeroAlert {
   headline: string;
   subtitle: string;
 }
-const zhihuAlerts: HeroAlert[] = [
-  { keyword: "投影仪客厅家用", headline: "已掉出前 10", subtitle: "上次第 9 名 · 1 小时前的快照" },
-  { keyword: "无线吸尘器哪款好用", headline: "下滑至第 7", subtitle: "上次第 3 名 · 2 小时前的快照" },
-  { keyword: "母婴加湿器推荐", headline: "已掉出前 15", subtitle: "上次第 12 名 · 3 小时前的快照" },
-];
-const commentAlerts: HeroAlert[] = [
-  { keyword: "客厅投影仪 100 寸", headline: "评论被删 6 条 · 留存跌至 57%", subtitle: "近 2 小时 · 14 条 → 8 条 · 历史峰值 14" },
-  { keyword: "降噪耳机通勤", headline: "评论被折叠 4 条 · 留存跌至 72%", subtitle: "近 6 小时 · 18 条 → 13 条 · 历史峰值 18" },
-];
+// V1 设计稿示例告警，发布前清空保留空状态 —— 真正触发告警时由后端填充。
+const zhihuAlerts: HeroAlert[] = [];
+const commentAlerts: HeroAlert[] = [];
 const zhihuAlertIdx = ref(0);
 const commentAlertIdx = ref(0);
 const currentZhihuAlert = computed(() => zhihuAlerts[zhihuAlertIdx.value]);
@@ -384,7 +345,8 @@ function onAlertAction(a: "rescue" | "repost" | "close") {
   if (a === "rescue") {
     router.push({ name: "article" });
   } else if (a === "repost") {
-    const sample = "用了三个月，客厅 100 寸投影画面真的很震撼，色彩还原稳定，亮度白天也够用，强烈推荐。";
+    // 真实告警接入后由后端给出推荐补发文案；空示例阶段给出一句通用占位。
+    const sample = "在此处粘贴你针对本条告警准备的补发文案。";
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       navigator.clipboard.writeText(sample).then(
         () => toast.success("已复制示例补发文案到剪贴板"),
@@ -474,9 +436,9 @@ const selectedTask = computed(() =>
   tasks.value.find((t) => t.id === selectedTaskId.value) ?? null,
 );
 
-// 演示模式下的当前 zhihu 任务（用于详情卡片）。默认取第三条「母婴加湿器推荐」
-// — 和 V1 设计稿里高亮选中那一行一致。
-const sampleSelectedZhihu = ref<SampleZhihu>(SAMPLE_ZHIHU[2]);
+// 演示模式下的当前 zhihu 任务（用于详情卡片）。SAMPLE_ZHIHU 发布前已清空，
+// 这里改为可空 ref；模板里详情卡用 v-if 守卫，没有示例数据就显示空状态。
+const sampleSelectedZhihu = ref<SampleZhihu | null>(SAMPLE_ZHIHU[0] ?? null);
 
 // 评论 tab 三级导航：
 //   selectedCommentTaskId  —— 一级 → 二级（左列从任务列表换成视频列表）
@@ -643,7 +605,11 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         更暗的「影子」卡，形成卡片堆叠的视觉；点右上角的 ‹ › 切换上一
         条 / 下一条。1 条时 hasNav=false，影子和按钮一起隐藏。
       -->
-      <div class="relative flex-shrink-0" :style="{ paddingBottom: zhihuAlerts.length > 1 ? '14px' : '0' }">
+      <div
+        v-if="zhihuAlerts.length > 0 && currentZhihuAlert"
+        class="relative flex-shrink-0"
+        :style="{ paddingBottom: zhihuAlerts.length > 1 ? '14px' : '0' }"
+      >
         <!-- 影子卡片 #1 (2nd) — 比 hero 窄 16px，下偏 6px，更暗 -->
         <div
           v-if="zhihuAlerts.length > 1"
@@ -881,15 +847,25 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
             <div>问题名字</div><div>类型</div><div>上次</div><div>变化</div><div>状态</div>
           </div>
 
+          <!-- demo empty state — SAMPLE_ZHIHU 发布前已清空，首次启动展示空态 -->
+          <template v-if="demoMode && SAMPLE_ZHIHU.length === 0">
+            <div
+              class="py-10 text-center text-[12.5px]"
+              :style="{ color: 'var(--ink-3)' }"
+            >
+              暂无监测任务 · 点击「新增任务」开始监测
+            </div>
+          </template>
+
           <!-- demo rows -->
-          <template v-if="demoMode">
+          <template v-else-if="demoMode">
             <div
               v-for="(t, i) in SAMPLE_ZHIHU"
               :key="t.id"
               class="grid cursor-pointer items-center transition"
               :style="{
                 gridTemplateColumns: '1.6fr .8fr .6fr .6fr .6fr',
-                background: sampleSelectedZhihu.id === t.id ? 'var(--card-2)' : 'transparent',
+                background: sampleSelectedZhihu?.id === t.id ? 'var(--card-2)' : 'transparent',
                 borderBottom: i < SAMPLE_ZHIHU.length - 1 ? '1px solid var(--line)' : 'none',
                 padding: '14px 8px',
                 borderRadius: '10px',
@@ -977,7 +953,12 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
             padding: '22px',
           }"
         >
-          <template v-if="demoMode">
+          <template v-if="demoMode && !sampleSelectedZhihu">
+            <div class="py-6 text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
+              点击左侧任意任务查看详情。
+            </div>
+          </template>
+          <template v-else-if="demoMode && sampleSelectedZhihu">
             <div class="flex items-start justify-between gap-2">
               <div class="min-w-0">
                 <div class="font-display text-[14px] font-semibold">
@@ -1114,7 +1095,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                   :model-value="ensureZhihuState(sampleSelectedZhihu.id).schedule"
                   :options="SCHEDULE_OPTIONS"
                   width="140"
-                  @update:model-value="(v) => changeSchedule('zhihu', sampleSelectedZhihu.id, String(v))"
+                  @update:model-value="(v) => changeSchedule('zhihu', sampleSelectedZhihu!.id, String(v))"
                 />
               </div>
             </div>
@@ -1156,7 +1137,11 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
     <!-- ── 平台评论 ─────────────────────────────────────────────── -->
     <template v-else-if="activeTab === 'comment'">
       <!-- alert hero (stacked when commentAlerts.length > 1) -->
-      <div class="relative flex-shrink-0" :style="{ paddingBottom: commentAlerts.length > 1 ? '14px' : '0' }">
+      <div
+        v-if="commentAlerts.length > 0 && currentCommentAlert"
+        class="relative flex-shrink-0"
+        :style="{ paddingBottom: commentAlerts.length > 1 ? '14px' : '0' }"
+      >
         <div
           v-if="commentAlerts.length > 1"
           aria-hidden="true"
@@ -1945,7 +1930,15 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
           <div>报告</div><div>覆盖</div><div>时间</div><div>异动</div><div></div>
         </div>
 
-        <template v-if="demoMode || !reports.length">
+        <template v-if="(demoMode || !reports.length) && SAMPLE_REPORTS.length === 0">
+          <div
+            class="py-10 text-center text-[12.5px]"
+            :style="{ color: 'var(--ink-3)' }"
+          >
+            暂无历史报告 · 监测任务跑起来后会生成日报 / 周报
+          </div>
+        </template>
+        <template v-else-if="demoMode || !reports.length">
           <div
             v-for="(r, i) in SAMPLE_REPORTS"
             :key="r.id"

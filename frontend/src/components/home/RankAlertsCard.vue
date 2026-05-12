@@ -34,33 +34,8 @@ interface AlertRow {
   kind: "warn" | "vault";
 }
 
-// V1 设计稿同款 fallback —— sidecar 监测模块没起 / 没任务时撑场。
-const FALLBACK_ALERTS: AlertRow[] = [
-  {
-    id: "demo-1",
-    kw: "投影仪客厅家用",
-    body: "已掉出前 10 — 上次第 9 名",
-    when: "1 小时前",
-    level: "alert",
-    kind: "warn",
-  },
-  {
-    id: "demo-2",
-    kw: "母婴加湿器推荐",
-    body: "下滑 5 名 — 当前第 12 名",
-    when: "1 小时前",
-    level: "warn",
-    kind: "warn",
-  },
-  {
-    id: "demo-3",
-    kw: "vault 索引",
-    body: "新增 14 个素材片段已入索引",
-    when: "今天 08:00",
-    level: "info",
-    kind: "vault",
-  },
-];
+// V1 设计稿示例数据，发布前清空保留空状态 —— 首次启动不再撑场假告警。
+const FALLBACK_ALERTS: AlertRow[] = [];
 
 interface ZhihuTask {
   id: number;
@@ -214,8 +189,16 @@ function badgeStyle(level: Level) {
     <!--
       异动列表 —— 自适应布局：默认单列；卡片足够宽（视口 ≥ xl=1280px
       时，每张卡 ≈ 600px）切换成双列展示，让用户一眼看更多告警。
+      rows 为空时显示友好的空状态占位，等真实告警进来再覆盖。
     -->
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto xl:grid-cols-2">
+    <div
+      v-if="rows.length === 0"
+      class="flex min-h-0 flex-1 items-center justify-center text-center text-[12px]"
+      :style="{ color: 'var(--ink-3)' }"
+    >
+      暂无告警 · 监测任务还没有触发掉名
+    </div>
+    <div v-else class="grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto xl:grid-cols-2">
       <div
         v-for="a in rows"
         :key="a.id"

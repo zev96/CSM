@@ -29,13 +29,9 @@ interface Row {
   delta: number; // 负数=下滑，0=持平
 }
 
-// V1 设计稿同款示例数据。
-const FALLBACK_ROWS: Row[] = [
-  { key: "bilibili", label: "B 站", color: "var(--primary)", retained: 8, total: 14, delta: -3 },
-  { key: "douyin", label: "抖音", color: "#1e1c19", retained: 12, total: 12, delta: 0 },
-  { key: "kuaishou", label: "快手", color: "var(--yellow)", retained: 5, total: 5, delta: 0 },
-];
-const FALLBACK_SPARK = [100, 98, 96, 90, 86, 82, 81];
+// V1 设计稿示例数据，发布前清空保留空状态 —— 没接入监测时不再撑场假数据。
+const FALLBACK_ROWS: Row[] = [];
+const FALLBACK_SPARK: number[] = [];
 
 interface PlatformView {
   task_count: number;
@@ -173,47 +169,62 @@ function rowBarColor(r: Row) {
       >
         评论留存率
       </div>
-      <div
-        class="font-display font-bold"
-        :style="{ fontSize: '24px', letterSpacing: '-0.5px', lineHeight: 1 }"
-      >
-        {{ pct }}%
-      </div>
-      <span
-        v-if="pct < 100"
-        class="inline-flex h-5 items-center gap-1 rounded-full px-2 text-[10.5px] font-medium"
-        :style="{ background: '#f3d3cd', color: '#a3382a' }"
-      >
-        <Icon name="arrowDown" :size="10" />
-        −{{ overallDelta }}%
-      </span>
-      <span
-        v-else
-        class="inline-flex h-5 items-center gap-1 rounded-full px-2 text-[10.5px] font-medium"
-        :style="{ background: '#dde7d2', color: '#4d6b2f' }"
-      >
-        持平
-      </span>
-      <div class="ml-auto self-end">
-        <Sparkline
-          :points="FALLBACK_SPARK"
-          :width="120"
-          :height="22"
-          stroke="var(--red)"
-          :show-last="false"
-        />
-      </div>
+      <template v-if="rows.length > 0">
+        <div
+          class="font-display font-bold"
+          :style="{ fontSize: '24px', letterSpacing: '-0.5px', lineHeight: 1 }"
+        >
+          {{ pct }}%
+        </div>
+        <span
+          v-if="pct < 100"
+          class="inline-flex h-5 items-center gap-1 rounded-full px-2 text-[10.5px] font-medium"
+          :style="{ background: '#f3d3cd', color: '#a3382a' }"
+        >
+          <Icon name="arrowDown" :size="10" />
+          −{{ overallDelta }}%
+        </span>
+        <span
+          v-else
+          class="inline-flex h-5 items-center gap-1 rounded-full px-2 text-[10.5px] font-medium"
+          :style="{ background: '#dde7d2', color: '#4d6b2f' }"
+        >
+          持平
+        </span>
+        <!-- spark 为空时 Sparkline 不渲染 — 没数据没必要画一条直线。 -->
+        <div v-if="FALLBACK_SPARK.length > 0" class="ml-auto self-end">
+          <Sparkline
+            :points="FALLBACK_SPARK"
+            :width="120"
+            :height="22"
+            stroke="var(--red)"
+            :show-last="false"
+          />
+        </div>
+      </template>
     </div>
 
-    <div class="mb-2 flex-shrink-0 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+    <div
+      v-if="rows.length > 0"
+      class="mb-2 flex-shrink-0 text-[11px]"
+      :style="{ color: 'var(--ink-3)' }"
+    >
       近 7 天 · {{ totalRetained }}/{{ totalAll }} 条可见
     </div>
 
     <!--
       三个平台 —— 卡片省出来的高度全给这里。不再切两列，单列每行高 36，
       三个平台 (B站 / 抖音 / 快手) 全部一屏看完，不需要内部滚动。
+      rows 为空时显示空状态文案，接入监测后会自动覆盖。
     -->
-    <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+    <div
+      v-if="rows.length === 0"
+      class="flex min-h-0 flex-1 items-center justify-center text-center text-[12px]"
+      :style="{ color: 'var(--ink-3)' }"
+    >
+      暂无评论留存数据 · 接入监测后会自动统计
+    </div>
+    <div v-else class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
       <div
         v-for="r in rows"
         :key="r.key"

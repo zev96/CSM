@@ -26,17 +26,13 @@ interface Chip {
   name: string;
 }
 
-// Fallback 占位 chip — 在 sidecar 还没起或者用户没建模板/Skill 时用，
-// 这样 UI 始终有 3 个模板 + 3 个风格可选，跟设计稿对齐。
+// V1 设计稿示例 chip 发布前精简到单一中性占位 —— 真实数据从 /api/templates、
+// /api/skills 回来后会自动覆盖（_demo_ 前缀的 id 在 takeoff() 里会被识别成"未指定"）。
 const FALLBACK_TEMPLATES: Chip[] = [
-  { id: "_demo_t1", name: "导购 · 场景人群" },
-  { id: "_demo_t2", name: "导购 · 科普物品" },
-  { id: "_demo_t3", name: "测评 · 长期使用" },
+  { id: "_demo_default", name: "默认模板" },
 ];
 const FALLBACK_SKILLS: Chip[] = [
-  { id: "_demo_s1", name: "克制 · 克制" },
-  { id: "_demo_s2", name: "测评 · 真心话" },
-  { id: "_demo_s3", name: "母婴 · 温柔" },
+  { id: "_demo_default", name: "默认 Skill" },
 ];
 
 const router = useRouter();
@@ -181,7 +177,7 @@ const QUICK_TILES = [
           <Icon name="search" :size="16" class="opacity-60" />
           <input
             v-model="keyword"
-            placeholder="例如：宠物家庭吸尘器推荐"
+            placeholder="例如：你的产品关键词"
             class="hero-input flex-1 bg-transparent px-3 outline-none"
             :style="{ fontSize: '14.5px', color: 'var(--ink)', height: '40px' }"
             @keyup.enter="takeoff"

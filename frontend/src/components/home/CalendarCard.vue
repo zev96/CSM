@@ -24,10 +24,10 @@ import Icon from "@/components/ui/Icon.vue";
 import { getCalendar } from "@/api/client";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 
-// V1 设计稿同款示例 — sidecar 的 /api/calendar 现在 done 全 0、scheduled
-// 也全 0（"v2 排期模块还没落地"），有真实数据时下面的 set 自动覆盖。
-const FALLBACK_DONE = [1, 2, 3, 4, 5, 7, 8];
-const FALLBACK_SCHEDULED = [14, 17, 19, 23, 28];
+// V1 设计稿示例数据，发布前清空保留空状态 —— 新装机日历干净无圆点，
+// 等真实数据从 /api/calendar 回来填充。
+const FALLBACK_DONE: number[] = [];
+const FALLBACK_SCHEDULED: number[] = [];
 
 // ── 月历骨架（本地计算，不依赖网络）────────────────────────────────────
 const now = new Date();

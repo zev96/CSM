@@ -199,11 +199,12 @@ const skillDetail = ref<{ body: string; name: string } | null>(null);
 const loaded = ref(false);
 const loading = ref(false);
 
-// 没有真实模板时（包括尚未加载完成、或后端就是空的）一律退到示例
-// 数据，保证 router 切换回来这一帧网格永远不会是空白。等真实模板回来
-// 后 templates.value 非空会自动接管。
-const demoTemplates = computed(() => templates.value.length === 0);
-const demoSkills = computed(() => skills.value.length === 0);
+// V1 设计稿示例数据，发布前默认不展示 —— 用户主动「加载示例」时才翻到 true，
+// 自动 fallback 关掉后，没有真实模板就走真实数据的空态（让用户去新建），
+// 而不是塞一屏假数据让人误以为已经预置了模板。FALLBACK_* 数组保留下来给
+// 「加载示例」按钮使用。
+const demoTemplates = ref(false);
+const demoSkills = ref(false);
 
 const displayTemplates = computed<Template[]>(() =>
   demoTemplates.value ? FALLBACK_TEMPLATES : templates.value,
