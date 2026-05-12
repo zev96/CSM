@@ -1,6 +1,7 @@
 """Startup / shutdown helpers — port allocation, token mint, stdout handshake."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -64,17 +65,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if auth._TOKEN is None:
         auth.generate_token()
     started_monitor = False
+    auto_scan_task: asyncio.Task | None = None
     if not _is_test_run():
         try:
             from .services import startup_dirs
             startup_dirs.ensure_default_dirs()
         except Exception:
             logger.exception("ensure_default_dirs failed; continuing")
-        try:
-            import asyncio
-            asyncio.create_task(_auto_scan_vault())
-        except Exception:
-            logger.exception("auto_scan_vault task scheduling failed; continuing")
+        # Fire-and-forget background vault scan. Hold a reference locally so
+        # the task isn't GC'd while pending (asyncio docs warn about this);
+        # cancel it in finally so a slow scan doesn't leak past shutdown.
+        auto_scan_task = asyncio.create_task(_auto_scan_vault())
         try:
             # Local import so test-only imports don't pull in apscheduler.
             from .services import monitor_lifecycle
@@ -87,6 +88,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        if auto_scan_task is not None and not auto_scan_task.done():
+            auto_scan_task.cancel()
+            try:
+                await asyncio.wait_for(auto_scan_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.exception("auto vault scan task raised during shutdown; ignoring")
         if started_monitor:
             try:
                 from .services import monitor_lifecycle
