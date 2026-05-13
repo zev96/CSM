@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -129,10 +129,30 @@ def init_db(db_path: Path) -> None:
 def _migrate(conn: sqlite3.Connection) -> None:
     for stmt in _DDL_V1:
         conn.execute(stmt)
+    # v2: 加 cooldown_until 给多账号轮换用。失败到一定程度的 cookie 不能
+    # 立刻丢回池里复用 —— 风控冷却期内继续打反而把整条 cookie 彻底烧死。
+    # 这里加列而不是新建表，因为现网用户库里已经有手动加好的 cookie，
+    # 重建表会丢数据。ALTER ADD COLUMN 在 sqlite 上是 metadata-only，
+    # 老行的新列默认 0（= 不在冷却）。
+    _ensure_column(conn, "platform_credentials", "cooldown_until", "INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),
     )
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, col: str, decl: str) -> None:
+    """Idempotently add a column. Safe to call on fresh + migrated DBs.
+
+    sqlite3 没有 ``ALTER TABLE ADD COLUMN IF NOT EXISTS``，所以拉
+    ``PRAGMA table_info`` 自己判断列存不存在。这种 helper 比写一堆
+    try/except sqlite3.OperationalError 干净。
+    """
+    # PRAGMA returns: (cid, name, type, notnull, dflt, pk). 索引 1 = name。
+    # 这里走的是 init 路径，conn 还没设 row_factory，所以用位置而不是 key。
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if col not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
 def get_conn() -> sqlite3.Connection:
@@ -346,15 +366,51 @@ def add_credential(platform: str, cookies_text: str, label: str = "", user_agent
     return int(cur.fetchone()[0])
 
 
-def list_credentials(platform: str, enabled_only: bool = True) -> list[dict[str, Any]]:
+def list_credentials(
+    platform: str,
+    enabled_only: bool = True,
+    *,
+    skip_cooldown: bool = False,
+) -> list[dict[str, Any]]:
+    """List credentials for ``platform``.
+
+    Args:
+        enabled_only: drop rows where enabled=0 (auto-disabled by failure).
+        skip_cooldown: also drop rows whose ``cooldown_until`` is in the future.
+            Used by the rotation picker so a cookie that just hit /unhuman
+            stays out of rotation for the configured cool-off window.
+            Default False keeps the UI listing path showing every cookie
+            (with cooldown shown as a status hint).
+    """
+    import time as _time
     conn = get_conn()
     sql = "SELECT * FROM platform_credentials WHERE platform=?"
     args: list[Any] = [platform]
     if enabled_only:
         sql += " AND enabled=1"
+    if skip_cooldown:
+        sql += " AND COALESCE(cooldown_until, 0) <= ?"
+        args.append(int(_time.time()))
     sql += " ORDER BY fail_count ASC, last_used_at ASC NULLS FIRST"
     rows = conn.execute(sql, args).fetchall()
     return [dict(r) for r in rows]
+
+
+def set_credential_cooldown(cred_id: int, cooldown_seconds: int) -> None:
+    """Mark a credential as unusable until ``now + cooldown_seconds``.
+
+    Called by CookieStore when a fetch hits /unhuman, 403, or signin —
+    those are zhihu's risk-control responses that mean "this account is
+    flagged right now; keep using it and you'll torch it permanently".
+    Pause N minutes lets the server-side throttle window slide off.
+    """
+    import time as _time
+    until = int(_time.time()) + max(0, int(cooldown_seconds))
+    conn = get_conn()
+    conn.execute(
+        "UPDATE platform_credentials SET cooldown_until=? WHERE id=?",
+        (until, cred_id),
+    )
 
 
 def mark_credential_used(cred_id: int, success: bool) -> None:

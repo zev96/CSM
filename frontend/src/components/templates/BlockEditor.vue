@@ -300,7 +300,14 @@ function toggleRange(on: boolean) {
   setPick({ range: on, min: pickMin.value, max: Math.max(pickMin.value + 1, pickMax.value) });
 }
 
-// ── 高级 · 子素材 / 不重复（paragraph only） ────────────────────────────
+// ── 高级 · 子素材 / 不重复（paragraph + numbered_list + competitor_pool） ────
+// 三种块都从 notes_query 抽笔记，共用同一套"每篇抽几个变体 + 同池不重复"
+// 语义。schema 上 numbered_list / competitor_pool 默认 constraints=
+// ["unique_notes"] + pick_variants_per_note=1，与历史 sampler 里的硬编码
+// 行为一致；UI 上把这两个开关暴露出来允许调整。
+const supportsSubMaterial = computed(() =>
+  ["paragraph", "numbered_list", "competitor_pool"].includes(block.value.kind),
+);
 const uniqueNotes = computed(() =>
   (block.value.constraints ?? []).includes("unique_notes"),
 );
@@ -684,8 +691,8 @@ function insertKeyword(field: "text") {
         </template>
       </div>
 
-      <!-- ── 子素材 + 不重复（paragraph only） ─────────────────────── -->
-      <template v-if="block.kind === 'paragraph'">
+      <!-- ── 子素材 + 不重复（paragraph + numbered_list） ─────────── -->
+      <template v-if="supportsSubMaterial">
         <div class="flex flex-wrap items-center gap-3 text-[12.5px]">
           <span :style="{ color: 'var(--ink-2)' }">子素材随机数量：</span>
           <FormInput
@@ -703,7 +710,11 @@ function insertKeyword(field: "text") {
           />
           <span>不重复素材</span>
           <span class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-            （父子段落不复用同一素材）
+            {{
+              block.kind === 'numbered_list' ? '（同列表内不抽中重复笔记）'
+              : block.kind === 'competitor_pool' ? '（同对比池内不抽中重复竞品）'
+              : '（父子段落不复用同一素材）'
+            }}
           </span>
         </label>
       </template>

@@ -41,6 +41,13 @@ datas += collect_data_files("anthropic")
 datas += collect_data_files("curl_cffi")
 datas += collect_data_files("DrissionPage", include_py_files=False)
 datas += collect_data_files("frontmatter")
+# patchright ships its Node driver under <pkg>/driver/ — `node.exe` plus a
+# `package/` folder of JS that the sync API spawns as a subprocess. Without
+# these the bundled exe imports patchright fine but start() fails with
+# FileNotFoundError(2) when subprocess_exec tries to launch node.
+# include_py_files=False keeps the bundle slim — patchright's .py is already
+# picked up by collect_submodules below.
+datas += collect_data_files("patchright", include_py_files=False)
 # CSM Skill / template defaults shipped with the app (read-only).
 datas += [("../templates", "templates"), ("../examples", "examples")]
 
@@ -99,11 +106,17 @@ hiddenimports: list[str] = [
     "csm_core.monitor.platforms.bilibili_comment",
     "csm_core.monitor.platforms.douyin_comment",
     "csm_core.monitor.platforms.kuaishou_comment",
-    # Drivers (cookie store + http session)
+    # Drivers (cookie store + http session + browser engines)
     "csm_core.monitor.drivers",
     "csm_core.monitor.drivers.cookie_store",
     "csm_core.monitor.drivers.http",
     "csm_core.monitor.drivers.browser",
+    "csm_core.monitor.drivers.browser_driver",
+    "csm_core.monitor.drivers.patchright_pool",
+    "csm_core.monitor.drivers.patchright_driver",
+    "csm_core.monitor.drivers.drission_pool",
+    "csm_core.monitor.drivers.drission_driver",
+    "csm_core.monitor.drivers.interactive_login",
     # Template + vault
     "csm_core.template",
     "csm_core.template.loader",
@@ -174,6 +187,19 @@ hiddenimports: list[str] = [
     "curl_cffi",
     "curl_cffi.requests",
     "DrissionPage",
+    # Patchright stealth Playwright fork — sync_api is imported inside
+    # patchright_pool.get_page(), list explicitly so the static analyzer
+    # bundles the full package (driver/ data files come in via collect_data_files).
+    "patchright",
+    "patchright.sync_api",
+    "patchright._impl",
+    # psutil powers cross-thread Chromium tree kill in patchright_pool —
+    # imported lazily inside _kill_process_tree(), so list explicitly.
+    "psutil",
+    # openpyxl: monitor module's Excel batch import.
+    "openpyxl",
+    # beautifulsoup4: HTML parsing fallback for zhihu_question.
+    "bs4",
     "fastapi",
     "uvicorn",
     "uvicorn.logging",
@@ -199,6 +225,7 @@ hiddenimports += collect_submodules("datasketch")
 hiddenimports += collect_submodules("curl_cffi")
 hiddenimports += collect_submodules("DrissionPage")
 hiddenimports += collect_submodules("uvicorn")
+hiddenimports += collect_submodules("patchright")
 
 
 # ── PyInstaller graph ──────────────────────────────────────────────────────

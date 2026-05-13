@@ -40,6 +40,25 @@ class MonitorConfig(BaseModel):
     ai_summarize_zhihu: bool = False
     ai_classify_comments: bool = False
 
+    # ── 浏览器引擎选择 ───────────────────────────────────────────
+    # patchright = Playwright + stealth patches，开箱反爬通过率高（推荐）
+    # drission = 老路径，留作兜底；patchright 装不上或者本机 Chrome 已经
+    #            被绑定到调试端口跑不起来时切到这条
+    browser_engine: Literal["patchright", "drission"] = "patchright"
+
+    # ── 多账号轮换 ───────────────────────────────────────────────
+    # 用户在 Cookie 池里有 2+ 条同平台 cookie 时才有意义。关闭时
+    # 永远用 pick() 返回的第一条（最久没用 + fail_count 最低）。
+    multi_account_rotation: bool = False
+    # 每个 cookie 连续承担 N 个任务后强制切下一条。1 = 每个任务都换。
+    # 2-3 是经验上的安全档：太小流量太碎 cookie 看起来不像真人，太大
+    # 又起不到分摊作用。
+    tasks_per_account: int = 2
+    # 命中 unhuman / 403 / signin 时给当前 cookie 加多久冷却（分钟）。
+    # 30 分钟够 zhihu 反爬 token 自动 refresh 一轮；用户也能在 UI
+    # 看到这条 cookie 暂时不可用，去 Cookie 池手动重抓。
+    cookie_cooldown_minutes: int = 30
+
 
 class AppConfig(BaseModel):
     user_name: str | None = None

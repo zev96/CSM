@@ -140,6 +140,97 @@ async def delete_cookie(cred_id: int) -> None:
     monitor_service.delete_cookie(cred_id)
 
 
+# ── Interactive cookie capture ─────────────────────────────────────────────
+class CookieLoginBody(BaseModel):
+    """Body for ``POST /api/monitor/cookies/{platform}/login``.
+
+    Triggers an interactive Patchright window that the user logs into
+    manually. Cookies harvested from that window are saved as a new
+    pool entry — fingerprint-consistent with the scraping path that
+    will later reuse them.
+    """
+    label: str = ""
+    timeout_s: float = Field(default=300.0, ge=10, le=900)
+
+
+@router.post("/api/monitor/cookies/{platform}/login", status_code=201)
+def login_capture(platform: str, body: CookieLoginBody) -> dict[str, Any]:
+    """Open a Patchright window, wait for user login, save cookies.
+
+    Why ``def`` not ``async def``: this endpoint blocks for up to
+    ``timeout_s`` seconds while the user logs in. Declaring it sync
+    makes FastAPI run it in its threadpool, which keeps the asyncio
+    event loop free to handle other requests (SSE feeds, the monitor
+    tick scheduler, etc.) while this one waits. An ``async def`` that
+    called the sync ``capture_cookies_via_login`` directly would pin
+    the event loop for 5 minutes — every other request would hang.
+
+    Errors:
+        400 — unknown platform name.
+        503 — Patchright not installed / Chromium binary missing.
+        200 with success=False — user gave up (window closed or
+            timeout). Distinct from infrastructure failure: the UI
+            shows "登录超时" rather than "系统错误".
+    """
+    import logging as _logging
+    _route_log = _logging.getLogger(__name__)
+    _route_log.info(
+        "interactive login request: platform=%s label=%r timeout=%.0fs",
+        platform, body.label, body.timeout_s,
+    )
+    _require_storage()
+    try:
+        from csm_core.monitor.drivers import interactive_login
+    except Exception as e:
+        # An ImportError here means the bundled sidecar is missing the
+        # interactive_login module or one of its transitive deps
+        # (typically patchright when the spec didn't include it). Without
+        # this branch the route would 500 with no detail and the frontend
+        # would show "Network Error" — surface the cause instead.
+        _route_log.exception("interactive login: import failed")
+        raise HTTPException(
+            status_code=503,
+            detail=f"interactive login unavailable: {e!r}",
+        ) from e
+
+    try:
+        result = interactive_login.capture_cookies_via_login(
+            platform=platform,
+            label=body.label,
+            timeout_s=body.timeout_s,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        # Patchright missing / Chromium not installed. Status 503 =
+        # "service-side dependency unavailable" — the UI tells the
+        # user to install Chromium rather than retry.
+        _route_log.warning("interactive login: runtime error: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        # Catch-all: anything else (FileNotFoundError from pw.start(),
+        # PermissionError on user_data_dir, Playwright launch timeout,
+        # cookie serialization failure, …) used to bubble up as a bare
+        # 500 with no body — axios then shows "Network Error" which is
+        # actively misleading. Funnel into a 500 with the exception repr
+        # so the UI toast tells the user what actually broke.
+        _route_log.exception("interactive login: unexpected failure")
+        raise HTTPException(
+            status_code=500,
+            detail=f"login_capture crashed: {type(e).__name__}: {e}",
+        ) from e
+
+    return {
+        "success": result.success,
+        "id": result.cred_id,
+        "platform": platform,
+        "label": body.label,
+        "cookie_count": result.cookie_count,
+        "cookies_preview": result.cookies_preview,
+        "error": result.error,
+    }
+
+
 # ── Summary + reports ──────────────────────────────────────────────────────
 @router.get("/api/monitor/summary")
 async def get_summary() -> dict[str, Any]:

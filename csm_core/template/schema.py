@@ -88,6 +88,13 @@ class NumberedListBlock(BaseModel):
     label: str = ""
     source: SourceT
     pick_notes: PickNotes = 3
+    # 每篇笔记抽几个变体（同 paragraph）。历史 sampler 里硬编码 1，把它
+    # 显式暴露出来后用户可以在 BlockEditor 里调，旧模板没声明就走默认 1。
+    pick_variants_per_note: int = 1
+    # 历史 sampler 给 numbered_list 强制塞了 ["unique_notes"]；保留这个
+    # 默认（旧模板没填 constraints 就吃这条），同时让 UI 可以取消勾选改
+    # 成允许重复素材。
+    constraints: list[str] = Field(default_factory=lambda: ["unique_notes"])
     number_style: NumberStyle = "1."
     item_separator: str = "\n\n"
 
@@ -105,6 +112,11 @@ class CompetitorPoolBlock(BaseModel):
     id: str
     source: SourceT
     pick_notes: PickNotes = 2
+    # 同 NumberedListBlock — 把历史 sampler 里硬编码的 1 / unique_notes
+    # 暴露出来，让 BlockEditor 上的「子素材随机数量 / 不重复素材」开关
+    # 也能控制对比池。旧模板没填这两个字段就走默认，与历史行为一致。
+    pick_variants_per_note: int = 1
+    constraints: list[str] = Field(default_factory=lambda: ["unique_notes"])
     reason_label: str = "推荐理由："
 
 
