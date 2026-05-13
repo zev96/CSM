@@ -142,6 +142,22 @@ const toast = useToast();
 const notifs = useNotifications();
 const sidecar = useSidecar();
 const route = useRoute();
+const { pick: pickPath } = usePathPicker();
+
+// Chrome 路径选择 —— directory=false 走文件选择器；Windows 过滤 .exe，
+// macOS chrome.app 是个 bundle（目录），所以 mac 上不限扩展名让用户选 bundle
+// 内的 Chromium 可执行；Linux 一般在 /usr/bin/google-chrome，不限制。
+async function pickChromePath() {
+  const isWin = typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
+  const current = (cfg.data as any)?.monitor?.chrome_path || "";
+  const v = await pickPath({
+    title: "选择 Chrome 可执行文件",
+    directory: false,
+    defaultPath: current || undefined,
+    extensions: isWin ? ["exe"] : undefined,
+  });
+  if (v) setField("monitor.chrome_path", v);
+}
 
 // ── 9 个 section ────────────────────────────────────────────
 interface SectionDef {
@@ -1090,20 +1106,120 @@ async function saveAccountEdit() {
               和「生成成功 / 排名异动 / 评论异动 / 导出完成」并列，集中
               在通用页配置更直观。
             -->
-            <SettingsRow label="Chrome 路径" hint="抓取知乎 / B 站时使用">
-              <input
-                :value="get('monitor.chrome_path') ?? ''"
-                placeholder="留空走系统默认"
-                class="font-mono bg-card-white px-3 outline-none"
+            <!--
+              浏览器引擎选择 —— Patchright 是默认；DrissionPage 兜底。
+              切换后需要重启 sidecar 才生效（旧引擎的 Chrome 进程不能热切）。
+            -->
+            <SettingsRow
+              label="浏览器引擎"
+              hint="Patchright = 反爬通过率高（推荐，首次跑会下载 Chromium ~170MB）；DrissionPage = 复用本机 Chrome 兜底。切换后请重启 sidecar。"
+            >
+              <select
+                :value="get('monitor.browser_engine') ?? 'patchright'"
+                class="bg-card-white px-3 text-[12.5px] outline-none"
                 :style="{
-                  width: '300px',
                   height: '34px',
                   borderRadius: '10px',
                   border: '1px solid var(--line)',
-                  fontSize: '11.5px',
+                  minWidth: '160px',
                 }"
-                @change="(e) => setField('monitor.chrome_path', (e.target as HTMLInputElement).value)"
+                @change="(e) => setField('monitor.browser_engine', (e.target as HTMLSelectElement).value)"
+              >
+                <option value="patchright">Patchright（推荐）</option>
+                <option value="drission">DrissionPage（兜底）</option>
+              </select>
+            </SettingsRow>
+            <!--
+              多账号轮换：用户在 Cookie 池里放 2+ 条同平台 cookie 时启用；
+              tasks_per_account 控制每条 cookie 连续承担几个 task。
+            -->
+            <SettingsRow
+              label="多账号轮换"
+              hint="Cookie 池有 2+ 条时启用 —— 每条连续抓 N 个任务后自动切下一条；命中风控立即切并冷却 30 分钟"
+            >
+              <FormToggle
+                :model-value="get('monitor.multi_account_rotation') ?? false"
+                @update:model-value="(v) => setField('monitor.multi_account_rotation', v)"
               />
+            </SettingsRow>
+            <SettingsRow
+              label="每账号任务数"
+              hint="开启「多账号轮换」时生效；推荐 2~3，太小流量太碎、太大起不到分摊作用"
+            >
+              <input
+                :value="get('monitor.tasks_per_account') ?? 2"
+                type="number"
+                min="1"
+                max="10"
+                :disabled="!(get('monitor.multi_account_rotation') ?? false)"
+                class="bg-card-white px-3 text-[12.5px] outline-none disabled:opacity-50"
+                :style="{
+                  width: '70px',
+                  height: '34px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--line)',
+                }"
+                @change="(e) => setField('monitor.tasks_per_account', Number((e.target as HTMLInputElement).value))"
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Cookie 冷却（分钟）"
+              hint="命中 /unhuman / 登录墙时当前 cookie 暂停使用的时长。30 分钟够 zhihu 反爬窗口滑过去"
+            >
+              <input
+                :value="get('monitor.cookie_cooldown_minutes') ?? 30"
+                type="number"
+                min="0"
+                max="240"
+                class="bg-card-white px-3 text-[12.5px] outline-none"
+                :style="{
+                  width: '70px',
+                  height: '34px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--line)',
+                }"
+                @change="(e) => setField('monitor.cookie_cooldown_minutes', Number((e.target as HTMLInputElement).value))"
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Chrome 路径"
+              hint="DrissionPage 引擎下使用；留空 = 自动检测。Patchright 引擎用自己下载的 Chromium，不受此项影响"
+            >
+              <div class="flex items-center" :style="{ gap: '6px' }">
+                <input
+                  :value="get('monitor.chrome_path') ?? ''"
+                  placeholder="留空走自动检测"
+                  class="font-mono bg-card-white px-3 outline-none"
+                  :style="{
+                    width: '300px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                    fontSize: '11.5px',
+                  }"
+                  @change="(e) => setField('monitor.chrome_path', (e.target as HTMLInputElement).value)"
+                />
+                <button
+                  type="button"
+                  title="选择 chrome.exe"
+                  class="inline-flex items-center justify-center"
+                  :style="{
+                    height: '34px',
+                    padding: '0 12px',
+                    borderRadius: '10px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--ink-2)',
+                    cursor: 'pointer',
+                    fontSize: '11.5px',
+                    gap: '5px',
+                  }"
+                  @click="pickChromePath"
+                >
+                  <Icon name="folder" :size="13" />
+                  <span>选择</span>
+                </button>
+              </div>
             </SettingsRow>
             <SettingsRow label="AI 摘要 · 知乎" hint="对回答自动摘要">
               <FormToggle

@@ -14,11 +14,26 @@ dependencies = [
     "python-docx>=1.0",
     # Monitor module: Zhihu fast path uses curl_cffi to impersonate a real
     # Chrome TLS handshake (avoids being instantly fingerprinted as bot
-    # traffic). DrissionPage is the fall-back driver when curl_cffi gets
-    # rate-limited — it reuses the user's locally-installed Chrome instead
-    # of bundling a Chromium, keeping onedir size sane.
+    # traffic). When the API returns risk-control HTML we fall through to
+    # a real Chromium:
+    #   - patchright (preferred) — Playwright fork with stealth patches
+    #     baked into the bundled Chromium. Ships its own ~170MB binary
+    #     downloaded via `patchright install chromium`. Onedir packagers
+    #     should NOT bundle that binary; it's downloaded post-install.
+    #   - DrissionPage (legacy fallback) — reuses the user's local Chrome.
+    #     Kept on the dependency list so the engine setting can fall back
+    #     without a re-install when Patchright misbehaves.
     "curl_cffi>=0.7",
+    "patchright>=1.40",
     "DrissionPage>=4.1",
+    # psutil powers cross-thread cleanup of Patchright's Chromium tree.
+    # ``patchright_pool._kill_process_tree`` walks the Node subprocess
+    # to terminate orphaned Chromium descendants — without it the idle
+    # reaper logs "closing to free RAM" but the actual processes leak.
+    # Already transitively pulled by DrissionPage, but stated explicitly
+    # so PyInstaller hooks pick it up and a future Drission removal
+    # doesn't silently break cleanup.
+    "psutil>=5.9",
     "beautifulsoup4>=4.12",
     # openpyxl powers the monitor module's Excel batch-import flow. Tiny
     # (~300KB) and pure-python, so onedir packaging cost is negligible.

@@ -144,3 +144,33 @@ class TestCredentials:
         rows = storage.list_credentials("zhihu_question")
         # The one with fewer failures should sort first.
         assert rows[0]["id"] == b
+
+    def test_cooldown_filter_skips_cooled_rows(self, fresh_db: Path):
+        """list_credentials(skip_cooldown=True) excludes rows whose
+        ``cooldown_until`` is in the future. Used by the rotation picker
+        to keep failing cookies out of the rotation for the configured
+        cool-off window."""
+        import time as _time
+        a = storage.add_credential("zhihu_question", "AAA", label="acc1")
+        b = storage.add_credential("zhihu_question", "BBB", label="acc2")
+        # Cool down `a` 1 hour into the future.
+        storage.set_credential_cooldown(a, 3600)
+
+        # Default (skip_cooldown=False) returns both — UI listing path.
+        rows_all = storage.list_credentials("zhihu_question")
+        assert {r["id"] for r in rows_all} == {a, b}
+
+        # Picker path filters out `a`.
+        rows_eligible = storage.list_credentials(
+            "zhihu_question", skip_cooldown=True,
+        )
+        assert {r["id"] for r in rows_eligible} == {b}
+
+    def test_cooldown_expires_via_past_timestamp(self, fresh_db: Path):
+        """Setting cooldown_seconds=0 (or a past-now value via the
+        column directly) should make the cookie immediately eligible."""
+        a = storage.add_credential("zhihu_question", "AAA")
+        # Cool 1 second in the future, sleep past it.
+        storage.set_credential_cooldown(a, 0)
+        rows = storage.list_credentials("zhihu_question", skip_cooldown=True)
+        assert rows and rows[0]["id"] == a

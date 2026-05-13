@@ -25,8 +25,8 @@ from urllib.parse import urlparse
 
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
 from ..rate_limit import get_pacer, get_breaker
-from ..drivers import drission_pool
-from ..drivers.cookie_store import CookieStore
+from ..drivers import browser_driver
+from ..drivers.cookie_store import CookieStore, DEFAULT_COOLDOWN_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,46 @@ class ZhihuQuestionAdapter:
     platform: str = "zhihu_question"
 
     def __init__(self) -> None:
+        # CookieStore is rebuilt by ``apply_settings`` whenever the user
+        # toggles multi-account mode or changes the rotation N. Default
+        # construction matches the legacy behavior so tests + isolated
+        # callers don't have to wire settings up.
         self._cookies = CookieStore(self.platform)
         self._ua_idx = 0
         self._pacer = get_pacer(self.platform)
         self._breaker = get_breaker(self.platform)
+        # Engine name, mutated by ``apply_settings``. Default = patchright
+        # so a sidecar that never loads settings still picks the recommended
+        # engine; previously this hardcoded DrissionPage at the import level.
+        self._engine: str = "patchright"
+
+    def apply_settings(
+        self,
+        *,
+        engine: str = "patchright",
+        rotation_enabled: bool = False,
+        tasks_per_account: int = 2,
+        cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,
+    ) -> None:
+        """Re-bind the adapter to current user settings.
+
+        Called from ``monitor_lifecycle.start`` (and again on settings
+        save). Rebuilding the CookieStore is cheap — it's just an object
+        with two counters; the underlying DB rows are unchanged.
+
+        Why not read settings inline on every fetch: the adapter is a
+        module-level singleton shared by all in-flight tasks, and reading
+        settings from disk per fetch would either need a cache or eat
+        the JSON parse cost. Push the settings in on save → adapter
+        reads its own fields → zero per-fetch overhead.
+        """
+        self._engine = engine if engine in ("patchright", "drission") else "patchright"
+        self._cookies = CookieStore(
+            self.platform,
+            rotation_enabled=rotation_enabled,
+            tasks_per_account=tasks_per_account,
+            cooldown_seconds=cooldown_seconds,
+        )
 
     # ── Public API ──────────────────────────────────────────────────────────
     def fetch(self, task: MonitorTask) -> MonitorResult:
@@ -83,7 +119,10 @@ class ZhihuQuestionAdapter:
             )
 
         target_brand = (task.config.get("target_brand") or "").strip()
-        top_n = int(task.config.get("top_n") or 10)
+        # Top-N 上限 40：超过这个数答案 noise 多、抓取慢，UI 也展示不下；
+        # 下限 1。用户在 UI 上设了 50/100 这里 silent clamp，不报错。
+        raw_top_n = int(task.config.get("top_n") or 10)
+        top_n = max(1, min(40, raw_top_n))
         if not target_brand:
             return MonitorResult(
                 task_id=task.id or 0,
@@ -100,7 +139,8 @@ class ZhihuQuestionAdapter:
         # we update the breaker so it can decide whether to open.
         answers, source = self._fetch_fast(qid)
         if answers is None:
-            answers, source = self._fetch_browser(task.target_url, qid)
+            # browser fallback 现在按 top_n 滚动到加载够；早期版本固定切 20。
+            answers, source = self._fetch_browser(task.target_url, qid, top_n=top_n)
         if answers is None:
             self._breaker.record_failure()
             return MonitorResult(
@@ -113,16 +153,22 @@ class ZhihuQuestionAdapter:
             )
 
         self._breaker.record_success()
-        rank, snapshot = self._rank_brand(answers, target_brand, top_n)
+        first_rank, matched_ranks, snapshot = self._rank_brand(
+            answers, target_brand, top_n,
+        )
         return MonitorResult(
             task_id=task.id or 0,
             checked_at=datetime.utcnow(),
             status="ok",
-            rank=rank,
+            # `rank` 保留首条命中位置，给 sparkline + 旧 UI 兼容
+            rank=first_rank,
             metric={
                 "source": source,
                 "target_brand": target_brand,
                 "top_n": top_n,
+                # 命中数 + 全部位置：用户在 UI 上主要看这个
+                "matched_count": len(matched_ranks),
+                "matched_ranks": matched_ranks,
                 "answers": snapshot,
                 "question_id": qid,
             },
@@ -208,10 +254,14 @@ class ZhihuQuestionAdapter:
         for item in data:
             try:
                 author = (item.get("author") or {}).get("name", "")
+                # 保留完整答案文本 —— zhihu 答案常 2k-30k 字，目标品牌词
+                # 可能出现在任意位置。匹配用全文（_rank_brand 里做 in 查找），
+                # UI 展示的 200 字预览在 _rank_brand 里另外截。500 字硬截会
+                # 漏掉 80% 内容里的命中（实测见日志）。
                 content = self._strip_tags(item.get("content") or item.get("excerpt") or "")
                 answers.append({
                     "author": author,
-                    "content": content[:500],
+                    "content": content,
                     "voteup_count": int(item.get("voteup_count") or 0),
                     "comment_count": int(item.get("comment_count") or 0),
                     "url": item.get("url") or "",
@@ -221,52 +271,229 @@ class ZhihuQuestionAdapter:
                 continue
         return answers, "curl_cffi"
 
-    # ── Fallback: DrissionPage ─────────────────────────────────────────────
-    def _fetch_browser(self, url: str, qid: str) -> tuple[list[dict[str, Any]] | None, str]:
+    # ── Fallback: real browser (Patchright by default, Drission fallback) ────
+    def _fetch_browser(
+        self, url: str, qid: str, top_n: int = 20,
+    ) -> tuple[list[dict[str, Any]] | None, str]:
+        """Render question page in a real Chromium and scrape AnswerItem cards.
+
+        Engine is chosen via ``self._engine`` ("patchright" | "drission")
+        — see ``browser_driver`` for the abstraction. Adapter logic is
+        identical regardless of engine; only the JS calls and selector
+        queries go through ``driver.evaluate_js`` / ``driver.query_count``.
+
+        知乎问题页是**懒加载**：初始 HTML 通常只渲染 5-10 条答案，剩下的
+        要下滑触发 lazy mount。所以这里不能简单 `query_count >= top_n`
+        切完事 —— 必须 scroll 到底 → 等新卡 → 重复，直到至少有
+        ``top_n`` 张 card 或卷动了 N 次还没增加。
+
+        Args:
+            top_n: 目标答案数（来自 task.config.top_n，已经在 fetch() clamp 到 1-40）。
+        """
         try:
-            page = drission_pool.get_page()
+            driver = browser_driver.get_driver(self._engine)
         except RuntimeError as e:
-            logger.warning("zhihu browser fallback unavailable: %s", e)
-            return None, "browser_unavailable"
+            logger.warning(
+                "zhihu browser fallback unavailable (engine=%s): %s",
+                self._engine, e,
+            )
+            return None, f"browser_unavailable_{self._engine}"
+
+        # 注入 cookie —— browser 的 user-data-dir 跨进程持久化，上次跑
+        # 留下的 cookie（甚至跑出 /unhuman 时存的"游客"cookie）会干扰
+        # 这次注入。流程：
+        #   1. 先 navigate 到 zhihu 空白页（建立域上下文，DrissionPage 必需）
+        #   2. clear 掉 zhihu 域所有旧 cookie（防止跟新 cookie 冲突）
+        #   3. 只注一次 .zhihu.com（Playwright 不归一化前缀点，注两次
+        #      会变成两套；DrissionPage 也只需要一个）
+        #   4. 回读 cookie 列表，日志里确认 z_c0 等关键字真的进去了
+        # 旧版本同时注 ".zhihu.com" 和 "zhihu.com" 是为了兼容 DrissionPage
+        # 不同小版本对前缀点的处理差异 —— 实测 Patchright 下会变成两套
+        # 不同的 cookie 同时发送，zhihu 后端拒识别 → 永远登录页。
+        cred = self._cookies.pick()
+        if cred and cred.cookies_text:
+            try:
+                parsed_keys = [
+                    p.split("=", 1)[0].strip()
+                    for p in cred.cookies_text.split(";")
+                    if "=" in p
+                ]
+                # Patchright: 跳过前置 navigate —— Playwright 不需要先有域上
+                # 下文也能 add_cookies。原本的 navigate("https://www.zhihu.com/")
+                # 等于用空 cookie 状态打一次 zhihu 首页，zhihu 会回一堆游客
+                # cookie 还顺带在反爬端登记一次"新会话"。直接 inject 然后
+                # navigate 到目标 question URL，第一次 HTTP 请求就带着我们
+                # 的 z_c0 等关键 cookie。
+                # DrissionPage: 仍需前置 navigate（set.cookies 要求域上下文）。
+                if self._engine == "drission":
+                    driver.navigate("https://www.zhihu.com/")
+                # 清掉 user-data-dir 里上次跑剩的 zhihu cookie（关键修复，
+                # 否则跟新 cookie 同名/同域 → Playwright 不 dedup，发请求
+                # 时 Cookie header 里会出现两份 z_c0 server 端拒识别）。
+                driver.clear_cookies("zhihu")
+                driver.inject_cookies(".zhihu.com", cred.cookies_text)
+                landed_names = driver.read_cookie_names("zhihu")
+                critical = ["z_c0", "q_c1", "d_c0", "_zap"]
+                missing_critical = [k for k in critical if k not in landed_names]
+                # 算出"输入里有 / 落地里没"的那些 —— Playwright 偶尔会因为
+                # cookie value 含未 escape 的特殊字符（如 `;` `,`）静默 drop。
+                # 把丢的那条记到日志，反推是 value 问题还是 attrs 问题。
+                input_set = set(parsed_keys)
+                landed_set = set(landed_names)
+                dropped = sorted(input_set - landed_set)
+                logger.info(
+                    "zhihu browser cookie injected: engine=%s label=%r "
+                    "input=%d landed=%d (z_c0_in_input=%s, z_c0_landed=%s, "
+                    "missing_critical=%s, dropped_by_browser=%s)",
+                    self._engine,
+                    cred.label,
+                    len(parsed_keys),
+                    len(landed_names),
+                    "yes" if "z_c0" in parsed_keys else "MISSING_FROM_INPUT",
+                    "yes" if "z_c0" in landed_names else "DROPPED_BY_BROWSER",
+                    missing_critical or "none",
+                    dropped or "none",
+                )
+            except Exception as e:
+                logger.warning("zhihu browser cookie inject failed: %s", e)
+        else:
+            logger.warning(
+                "zhihu browser fallback has no cookie; will likely hit login redirect. "
+                "Add a Cookie via Cookie Manager."
+            )
 
         try:
-            page.get(url)
-            # Wait for at least one answer card to render. We poll
-            # rather than fixed-sleep so cold caches don't time us out
-            # but warm pages don't waste seconds.
-            deadline = time.monotonic() + 12.0
-            while time.monotonic() < deadline:
-                if page.eles(".AnswerItem", timeout=0.3):
+            driver.navigate(url)
+            landed = driver.current_url()
+            if "signin" in landed or "login" in landed:
+                logger.warning(
+                    "zhihu browser landed on login page (%s) — cookie likely "
+                    "expired or invalid; will likely abort with 0 cards",
+                    landed,
+                )
+                # 立即把当前 cred 标失败并冷却 —— 下一个 task 切下一条 cookie。
+                if cred:
+                    self._cookies.mark_failed(cred)
+            elif "unhuman" in landed or "/account/unhuman" in landed:
+                logger.warning(
+                    "zhihu hit anti-bot wall (%s) — re-grab cookie or wait "
+                    "and retry. Sometimes triggers even with valid cookies.",
+                    landed,
+                )
+                if cred:
+                    self._cookies.mark_failed(cred)
+            # 注 CSS 缩短每条答案高度 + 隐藏图片占位 + 隐藏侧边栏。
+            # 答案默认每条占 800-1500px 高，把每条压到 200px 上限 → 滚 2-3
+            # 次就到底，触发懒加载快得多。CSS 只影响 viewport 渲染，不影响
+            # DOM 节点（querySelector 仍然找得到 .AnswerItem 和子选择器）。
+            driver.evaluate_js("""
+                const css = `
+                    .AnswerItem { max-height: 200px !important; overflow: hidden !important; }
+                    .AnswerItem .RichContent { max-height: 100px !important; overflow: hidden !important; }
+                    img, picture, video, figure { display: none !important; }
+                    .Question-sideColumn, .Question-main .QuestionRichText,
+                    .css-1qyytj7, .HotQuestions, .Pc-card { display: none !important; }
+                `;
+                const s = document.createElement('style');
+                s.textContent = css;
+                document.head.appendChild(s);
+            """)
+
+            # 等首批 card 渲染（冷缓存 5-10s，热路径秒级）
+            driver.wait_for_any(".AnswerItem", timeout_s=15.0)
+
+            # 滚动加载策略（按用户实测）：
+            #   1. scroll 到 body 底
+            #   2. 往上回弹一点（-200px）—— 知乎的 IntersectionObserver 监听
+            #      底部 sentinel；停在精确底部时 observer 可能因为 "出 viewport"
+            #      没触发，回弹一点让 sentinel 重新进入 viewport
+            #   3. 等 2s 让新 card mount
+            # 每轮 ≈ 2.5s。max_rounds=20 够拉 top_n=40 的极端情况。
+            prev_count = 0
+            stagnant_rounds = 0
+            max_rounds = 20
+            for round_i in range(max_rounds):
+                cur_count = driver.query_count(".AnswerItem")
+                if cur_count >= top_n:
                     break
-                time.sleep(0.5)
-            cards = page.eles(".AnswerItem")[:20]
+                if cur_count == prev_count and round_i > 0:
+                    stagnant_rounds += 1
+                    if stagnant_rounds >= 3:
+                        break
+                else:
+                    stagnant_rounds = 0
+                prev_count = cur_count
+                driver.evaluate_js("""
+                    window.scrollTo(0, document.body.scrollHeight);
+                    setTimeout(() => window.scrollBy(0, -200), 300);
+                """)
+                time.sleep(2.0)
+
+            all_count = driver.query_count(".AnswerItem")
+            logger.info(
+                "zhihu browser fetch: engine=%s rendered %d cards total, "
+                "taking top %d (landed url=%s)",
+                self._engine, all_count, min(all_count, top_n),
+                landed[:120] if landed else "?",
+            )
         except Exception as e:
             logger.warning("zhihu browser fetch raised: %s", e)
             return None, "browser_exception"
 
-        if not cards:
+        if all_count == 0:
+            logger.warning(
+                "zhihu browser fetch: 0 AnswerItem cards — likely login wall "
+                "or anti-bot. Last landed URL: %s",
+                landed[:200] if landed else "?",
+            )
             return None, "browser_no_cards"
 
+        # 用一次 JS 调用批量抽全 cards 的内容 —— 关键是用 `textContent` 而
+        # 不是 `innerText`：
+        #   - innerText 只给可见文本，zhihu 的"阅读全文"折叠 + 我们注的
+        #     `overflow:hidden` 都会让 innerText 漏掉后半段
+        #   - textContent 直接读 DOM 文本，无视 CSS / display:none
+        # 还能少 N 次跨语言 round trip。
+        raw = driver.evaluate_js(
+            """
+            const limit = args[0];
+            const cards = Array.from(document.querySelectorAll('.AnswerItem')).slice(0, limit);
+            return cards.map(card => {
+                const authorEl = card.querySelector('.AuthorInfo-name');
+                const contentEl = card.querySelector('.RichContent-inner')
+                               || card.querySelector('.RichContent');
+                const voteEl = card.querySelector('.VoteButton--up');
+                return {
+                    author: authorEl ? authorEl.textContent.trim() : '',
+                    content: contentEl ? contentEl.textContent.trim() : '',
+                    voteup_text: voteEl ? voteEl.textContent.trim() : '0',
+                };
+            });
+            """,
+            top_n,
+        )
+
         answers: list[dict[str, Any]] = []
-        for card in cards:
+        for item in raw or []:
             try:
-                author_el = card.ele(".AuthorInfo-name", timeout=0.2)
-                content_el = card.ele(".RichContent-inner", timeout=0.2)
-                vote_el = card.ele(".VoteButton--up", timeout=0.2)
-                author = author_el.text if author_el else ""
-                content = content_el.text if content_el else ""
-                vote_text = vote_el.text if vote_el else "0"
+                # 不截断 content：_rank_brand 用全文匹配品牌词，UI 预览
+                # 200 字在 _rank_brand 里另外截。详见 fast path 里的同款注释。
                 answers.append({
-                    "author": author,
-                    "content": content[:500],
-                    "voteup_count": _parse_count(vote_text),
+                    "author": str(item.get("author") or ""),
+                    "content": str(item.get("content") or ""),
+                    "voteup_count": _parse_count(str(item.get("voteup_text") or "0")),
                     "comment_count": 0,
                     "url": "",
                     "created_time": None,
                 })
             except Exception:
                 continue
-        return (answers if answers else None), "browser"
+
+        # 浏览器拿到结果，给当前 cookie 记一次成功（轮换计数器在 pick() 里
+        # 已经 +1，这里只更新 last_used_at + 清 fail_count）。
+        if answers and cred:
+            self._cookies.mark_ok(cred)
+        return (answers if answers else None), f"browser_{self._engine}"
 
     # ── Helpers ────────────────────────────────────────────────────────────
     def _next_ua(self) -> str:
@@ -296,10 +523,18 @@ class ZhihuQuestionAdapter:
         answers: list[dict[str, Any]],
         brand: str,
         top_n: int,
-    ) -> tuple[int, list[dict[str, Any]]]:
-        """Return (1-based rank, top-N snapshot). Rank=-1 if absent."""
+    ) -> tuple[int, list[int], list[dict[str, Any]]]:
+        """Return (first_rank, all_matched_ranks, top-N snapshot).
+
+        - ``first_rank``: 首个命中的 1-based 位置；全部未命中 → -1。保留这
+          个字段是为了 sparkline 的"首条排名走势"和向后兼容旧 result 行。
+        - ``all_matched_ranks``: 所有命中位置（1-based）。`len(...)` 就是
+          用户最关心的"前 N 条里有几条是我"。
+        - ``snapshot``: 前 N 个答案的元数据；每条带 ``matches_brand`` 旗，
+          前端在详情列表里据此高亮自家答案。
+        """
         brand_lc = brand.lower()
-        rank = -1
+        matched_ranks: list[int] = []
         snapshot: list[dict[str, Any]] = []
         for i, ans in enumerate(answers[:top_n], start=1):
             content = (ans.get("content") or "").lower()
@@ -312,9 +547,10 @@ class ZhihuQuestionAdapter:
                 "voteup_count": ans.get("voteup_count", 0),
                 "matches_brand": hit,
             })
-            if hit and rank == -1:
-                rank = i
-        return rank, snapshot
+            if hit:
+                matched_ranks.append(i)
+        first_rank = matched_ranks[0] if matched_ranks else -1
+        return first_rank, matched_ranks, snapshot
 
 
 def _parse_count(text: str) -> int:

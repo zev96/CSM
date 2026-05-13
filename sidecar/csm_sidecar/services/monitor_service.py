@@ -92,14 +92,53 @@ def list_cookies(platform: str, *, enabled_only: bool = False) -> list[dict[str,
 
 
 def _safe_cred(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a credential row into the JSON shape the UI consumes.
+
+    Strips ``cookies_text`` + ``user_agent`` (sensitive — once stored
+    we never echo them back to the frontend, full stop). Computes
+    ``cooldown_seconds_remaining`` and a derived ``status`` so the UI
+    can render badges without re-deriving the same logic in JS.
+    """
+    import time as _time
+    from csm_core.monitor.drivers.cookie_store import (
+        AUTO_DISABLE_FAIL_COUNT, COOLDOWN_FAIL_THRESHOLD,
+    )
+
+    now = int(_time.time())
+    cooldown_until = int(row.get("cooldown_until") or 0)
+    cooldown_remaining = max(0, cooldown_until - now)
+    fail_count = int(row["fail_count"])
+    enabled = bool(row["enabled"])
+
+    # Derive a single status string for UI pill rendering. Priority:
+    # disabled > cooldown > stale > ok. "stale" means the cookie is
+    # accumulating failures but hasn't hit the auto-disable threshold
+    # yet — UI suggests "重新登录" while still letting the user opt to
+    # keep trying.
+    if not enabled:
+        status = "disabled"
+    elif cooldown_remaining > 0:
+        status = "cooldown"
+    elif fail_count >= COOLDOWN_FAIL_THRESHOLD:
+        # >=3 consecutive failures = likely server-side dead (or zhihu
+        # risk-control flagged this token). User should re-login via
+        # the built-in browser flow.
+        status = "stale"
+    else:
+        status = "ok"
+
     return {
         "id": row["id"],
         "platform": row["platform"],
         "label": row["label"],
-        "enabled": bool(row["enabled"]),
+        "enabled": enabled,
         "last_used_at": row.get("last_used_at"),
-        "fail_count": row["fail_count"],
+        "fail_count": fail_count,
         "created_at": row.get("created_at"),
+        "cooldown_until": cooldown_until,
+        "cooldown_seconds_remaining": cooldown_remaining,
+        "status": status,
+        "auto_disable_threshold": AUTO_DISABLE_FAIL_COUNT,
         # NB: cookies_text + user_agent intentionally omitted.
     }
 

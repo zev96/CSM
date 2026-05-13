@@ -128,6 +128,11 @@ function blankBlock(kind: string): any {
         label: "列表",
         source: { type: "notes_query", module: "", filter: {} },
         pick_notes: 3,
+        pick_variants_per_note: 1,
+        // 编号列表默认勾上"不重复素材"——历史行为是 sampler 里硬编码
+        // constraints=["unique_notes"]，现在把它显式放进 block，UI 才能
+        // 暴露开关同时保持兼容。
+        constraints: ["unique_notes"],
         number_style: "1.",
         item_separator: "\n\n",
       };
@@ -142,11 +147,19 @@ function blankBlock(kind: string): any {
         number_style: "1.",
       };
     case "competitor_pool":
+      // 历史默认是 brand_pool，但 sampler 里 competitor_pool 只接受
+      // notes_query（assert isinstance(source, NotesQuerySource)），导致用户
+      // 加完块直接生成会撞 AssertionError。BlockEditor 也只暴露目录/筛选/
+      // 取值三个 notes_query 字段，所以默认就改成 notes_query 才能一路走通。
       return {
         kind,
         id,
-        source: { type: "brand_pool", exclude_brands: [] },
+        source: { type: "notes_query", module: "", filter: {} },
         pick_notes: 2,
+        pick_variants_per_note: 1,
+        // 同 numbered_list — 显式暴露 schema 里新加的 constraints，保持
+        // 历史默认 unique_notes（同一池子里不抽中两次同一篇竞品笔记）。
+        constraints: ["unique_notes"],
         reason_label: "推荐理由：",
       };
     case "test_framework":

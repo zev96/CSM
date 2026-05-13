@@ -135,8 +135,9 @@ def sample_block(
         assert isinstance(block.source, NotesQuerySource), \
             f"numbered_list block '{block.id}' only supports notes_query source"
         picks = _sample_notes_source(
-            block.id, block.source, constraints=["unique_notes"],
-            pick_notes=block.pick_notes, pick_variants_per_note=1,
+            block.id, block.source, constraints=block.constraints,
+            pick_notes=block.pick_notes,
+            pick_variants_per_note=block.pick_variants_per_note,
             index=index, rng=rng, user_config=user_config,
         )
         return BlockResult(
@@ -151,8 +152,9 @@ def sample_block(
         assert isinstance(block.source, NotesQuerySource), \
             f"competitor_pool block '{block.id}' only supports notes_query source"
         picks = _sample_notes_source(
-            block.id, block.source, constraints=["unique_notes"],
-            pick_notes=block.pick_notes, pick_variants_per_note=1,
+            block.id, block.source, constraints=block.constraints,
+            pick_notes=block.pick_notes,
+            pick_variants_per_note=block.pick_variants_per_note,
             index=index, rng=rng, user_config=user_config,
         )
         enriched: list[PickedVariant] = []
