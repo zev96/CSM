@@ -1,0 +1,242 @@
+{
+  "id": "导购·吸尘器·三品-r2j7",
+  "name": "导购·吸尘器·三品",
+  "product": "无线吸尘器",
+  "template_type": "导购文",
+  "default_skill_id": "家电科普博主",
+  "blocks": [
+    {
+      "kind": "paragraph",
+      "id": "paragraph_k5ez",
+      "label": "痛点",
+      "source": {
+        "type": "notes_query",
+        "module": "引言模块/吸尘器/痛点共鸣",
+        "filter": {
+          "素材类型": "引言痛点"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_kfu3",
+      "label": "人设",
+      "source": {
+        "type": "notes_query",
+        "module": "引言模块/吸尘器/人设引入",
+        "filter": {
+          "素材类型": "引言人设"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "heading",
+      "id": "heading_kpaz",
+      "level": 2,
+      "index": "一、",
+      "text": "{keyword}怎么选"
+    },
+    {
+      "kind": "numbered_list",
+      "id": "numbered_list_kywj",
+      "label": "科普",
+      "source": {
+        "type": "notes_query",
+        "module": "科普模块/吸尘器/挑选攻略",
+        "filter": {
+          "素材类型": "科普选购"
+        }
+      },
+      "pick_notes": 3,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "number_style": "1.",
+      "item_separator": "\n\n"
+    },
+    {
+      "kind": "heading",
+      "id": "heading_lpgj",
+      "level": 2,
+      "index": "二、",
+      "text": "{keyword}品牌推荐"
+    },
+    {
+      "kind": "hero_brand",
+      "id": "hero_brand_m13f",
+      "title": "CEWEY DS18 ",
+      "reason_label": "推荐理由：",
+      "number_style": "1."
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_mnwr",
+      "label": "CEWEY品牌",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+        "filter": {
+          "素材类型": "品牌定位"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_nkbj",
+      "label": "CEWEY品牌认证",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+        "filter": {
+          "素材类型": "权威认证"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_omnk",
+      "label": "CEWEY海外",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/品牌背书",
+        "filter": {
+          "素材类型": "海外口碑"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_ovz7",
+      "label": "CEWEY 核心",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/核心技术",
+        "filter": {
+          "素材类型": "动力系统"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_penk",
+      "label": "CEWEY核心2",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/核心技术",
+        "filter": {
+          "素材类型": "过滤技术"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_p86r",
+      "label": "CEWEY次要",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/希喂推荐内容/次要技术",
+        "filter": {
+          "素材类型": "次要技术"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "depends_on": [],
+      "children": []
+    },
+    {
+      "kind": "competitor_pool",
+      "id": "competitor_pool_6uua",
+      "source": {
+        "type": "notes_query",
+        "module": "产品模块/吸尘器/竞品推荐内容",
+        "filter": {
+          "素材类型": "竞品推荐理由"
+        }
+      },
+      "pick_notes": 2,
+      "pick_variants_per_note": 1,
+      "constraints": [
+        "unique_notes"
+      ],
+      "reason_label": "推荐理由："
+    },
+    {
+      "kind": "heading",
+      "id": "heading_pv3o",
+      "level": 2,
+      "index": "三",
+      "text": "写在最后"
+    },
+    {
+      "kind": "paragraph",
+      "id": "paragraph_qdpn",
+      "label": "总结",
+      "source": {
+        "type": "notes_query",
+        "module": "总结模块/吸尘器",
+        "filter": {
+          "核心关键词": "通用导流"
+        }
+      },
+      "pick_notes": 1,
+      "pick_variants_per_note": 1,
+      "constraints": [],
+      "depends_on": [],
+      "children": []
+    }
+  ]
+}
