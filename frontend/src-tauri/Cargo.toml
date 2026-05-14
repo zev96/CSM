@@ -1,6 +1,6 @@
 [package]
 name = "csm-tauri"
-version = "0.4.0"
+version = "0.4.1"
 description = "CSM — Tauri shell for the Vue frontend + Python sidecar"
 authors = ["CSM"]
 edition = "2021"

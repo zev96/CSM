@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CSM",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "identifier": "com.csm.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -32,7 +32,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "category": "Productivity",
     "shortDescription": "SEO 内容自动化工具",
     "longDescription": "Tauri + Vue 3 frontend + Python (FastAPI) sidecar.",
@@ -43,8 +45,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/csm-sidecar"],
-    "resources": ["binaries/updater.exe"]
+    "externalBin": [
+      "binaries/csm-sidecar"
+    ],
+    "resources": [
+      "binaries/updater.exe"
+    ]
   },
   "plugins": {}
 }
