@@ -21,11 +21,19 @@ from . import config_service
 
 logger = logging.getLogger(__name__)
 
+# 官方发布仓库 —— 普通用户不应该需要配 settings.json 才能检查更新。
+# 内测分叉 / 私有分发场景仍可在 settings.json 里覆写 update_repo。
+DEFAULT_UPDATE_REPO = "zev96/CSM"
+
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="updater")
 
 
 def check() -> dict[str, Any]:
-    """Return JSON-friendly CheckResult. Empty repo = "no update repo configured".
+    """Return JSON-friendly CheckResult.
+
+    Uses ``cfg.update_repo`` if set, otherwise falls back to
+    :data:`DEFAULT_UPDATE_REPO` so out-of-the-box installs can check
+    updates without any configuration.
 
     On has_update we additionally fetch manifest.json (a release asset) so
     ``info.expected_sha256`` is filled in. The download endpoint requires
@@ -37,15 +45,9 @@ def check() -> dict[str, Any]:
     release publishes a valid manifest.json.
     """
     cfg = config_service.load()
-    if not cfg.update_repo:
-        return {
-            "has_update": False,
-            "info": None,
-            "error": "no update_repo configured",
-            "current_version": __version__,
-        }
+    repo = cfg.update_repo or DEFAULT_UPDATE_REPO
     result = check_for_update(
-        repo=cfg.update_repo,
+        repo=repo,
         token="",  # public-repo only for v1; auth tokens come later
         current_version=__version__,
         timeout=5.0,

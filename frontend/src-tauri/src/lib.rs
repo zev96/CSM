@@ -3,6 +3,7 @@
 //! what the Tauri 2 mobile templates expect.
 mod sidecar;
 mod tray;
+mod updater;
 
 use sidecar::SidecarState;
 use tauri::{Manager, WindowEvent};
@@ -44,7 +45,10 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![sidecar::get_sidecar])
+        .invoke_handler(tauri::generate_handler![
+            sidecar::get_sidecar,
+            updater::install_and_restart,
+        ])
         .on_window_event(|window, event| match event {
             // Intercept the X-button so closing the window minimises to
             // tray instead of exiting. User must use Tray → 退出 to fully

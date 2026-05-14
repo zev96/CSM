@@ -44,7 +44,7 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/csm-sidecar"],
-    "resources": []
+    "resources": ["binaries/updater.exe"]
   },
   "plugins": {}
 }

@@ -39,13 +39,29 @@ def _wait_for_job_done(job_id: str, timeout: float = 5.0) -> dict | None:
 
 
 # ── /api/updater/check ──────────────────────────────────────────────────────
-def test_check_with_no_repo_returns_no_update(client: TestClient):
+def test_check_uses_default_repo_when_unset(client: TestClient, monkeypatch):
+    """No update_repo configured → fall back to DEFAULT_UPDATE_REPO.
+
+    Out-of-the-box users shouldn't need to edit settings.json to get
+    update checks. We verify by intercepting the underlying client call
+    and asserting the default constant was passed through.
+    """
+    seen: dict[str, str] = {}
+    from csm_core.updater_client.checker import CheckResult
+
+    def fake_check(*, repo, token, current_version, timeout):
+        seen["repo"] = repo
+        return CheckResult(False, None, None)
+
+    monkeypatch.setattr("csm_sidecar.services.updater_service.check_for_update", fake_check)
     resp = client.get("/api/updater/check")
     assert resp.status_code == 200
     data = resp.json()
     assert data["has_update"] is False
-    assert "no update_repo" in data["error"]
+    assert data["error"] is None
     assert data["current_version"]  # comes from csm_sidecar.__version__
+    # default constant lives in updater_service — match by content not import
+    assert seen["repo"] == "zev96/CSM"
 
 
 def test_check_propagates_github_failure(client: TestClient, monkeypatch):
