@@ -9,20 +9,19 @@
  * 数据流保持原貌：
  *   /api/monitor/tasks?type=...        → 任务列表
  *   /api/monitor/results?task_id=X     → 任务历史（sparkline）
- *   /api/monitor/reports?period=daily  → 历史报告分桶
  *   /api/monitor/cookies?platform=...  → cookie 池（按钮入口）
  *   /api/monitor/tasks/{id}/run-now    → 强制立刻派发
  *   /api/monitor/events SSE            → 实时刷新
  *
  * sidecar 没启动 / 表里没数据时，沿用 ArticleView 的演示模式：把 V1
- * 设计稿里的 mock 任务 / 抢占者 / 留存趋势 / 历史报告条目铺出来，让用户
+ * 设计稿里的 mock 任务 / 抢占者 / 留存趋势铺出来，让用户
  * 一眼看到这页能呈现什么。演示行不挂"立刻跑/删除"按钮（id 是负数标记，
  * 不应该误调真实接口）。
  *
  * Cookie + 新增任务按钮按用户要求收进左侧任务卡的标题行右侧，避免和
  * 顶部 pivot 抢视线。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
@@ -35,6 +34,8 @@ import AlertDetailModal from "@/components/monitor/AlertDetailModal.vue";
 import BatchImportTaskModal from "@/components/monitor/BatchImportTaskModal.vue";
 import CookieManagerModal from "@/components/monitor/CookieManagerModal.vue";
 import EditBatchModal from "@/components/monitor/EditBatchModal.vue";
+import RetentionPage from "@/components/monitor/history/RetentionPage.vue";
+import ZhihuRankingPage from "@/components/monitor/history/ZhihuRankingPage.vue";
 
 import { subscribe } from "@/api/client";
 import { useConfig } from "@/stores/config";
@@ -73,6 +74,9 @@ const PLATFORM_TYPE: Record<CommentPlatform, string> = {
 };
 const commentSubtab = ref<CommentPlatform>("bilibili");
 
+type HistorySubtab = "retention" | "zhihu";
+const historySubtab = ref<HistorySubtab>("retention");
+
 interface Task {
   id: number;
   type: string;
@@ -86,8 +90,6 @@ interface Task {
 const tasks = ref<Task[]>([]);
 const selectedTaskId = ref<number | null>(null);
 const taskResults = ref<Array<{ checked_at: string; status: string; rank: number; metric: any }>>([]);
-
-const reports = ref<Array<{ period: string; total_checks: number; alert_count: number; by_status: Record<string, number> }>>([]);
 
 const loading = ref(false);
 const failed = ref(false);
@@ -238,8 +240,6 @@ function changeSchedule(scope: "zhihu" | "comment", id: string, v: string) {
 // V1 设计稿示例数据，发布前清空保留空状态。
 const SAMPLE_DELETED: Array<{ tag: string; who: string; date: string; tone: "alert" | "warn" }> = [];
 
-const SAMPLE_REPORTS: Array<{ id: string; n: string; scope: string; t: string; abn: number }> = [];
-
 // 平台 chip 计数清零 —— V1 设计稿示例任务已清空，发布前保留空状态。
 const PLATFORMS: Array<{ k: CommentPlatform; l: string; color: string; count: number }> = [
   { k: "bilibili", l: "B 站", color: "#ee6a2a", count: 0 },
@@ -284,18 +284,6 @@ async function loadResults(taskId: number) {
   }
 }
 
-async function loadReports() {
-  try {
-    const r = await sidecar.client.get("/api/monitor/reports", {
-      params: { period: "daily", limit: 30 },
-    });
-    reports.value = r.data.items ?? [];
-  } catch (e: any) {
-    if (e?.response?.status === 503) failed.value = true;
-    reports.value = [];
-  }
-}
-
 // ── Comment snapshots（每个 task 最近两次 result）─────────────────────
 //
 // 评论 tab 的 rich UI（留存 8/14 / 变化 -3 / 被删评论列表 / 留存趋势 sparkline）
@@ -315,7 +303,7 @@ interface TaskSnapshot {
   rank: number;
   /** 评论：用户填的"理想排名上限"。知乎：用户填的 top_n（前几条答案要扫描） */
   alert_top_n: number;
-  /** 评论后台实际扫描范围（默认 150）。rank=-1 时区分"丢失"vs"150 以外" */
+  /** 评论后台实际扫描范围（默认 150）。rank=-1 时区分"丢失"vs"无" */
   scrape_top_n: number;
   /** 评论：本次实际比对了多少条 hot 评论；知乎不用 */
   scope_total: number;
@@ -404,28 +392,47 @@ async function loadTaskSnapshots() {
   await Promise.all(tasks.value.map((t) => _fetchSnapshotPair(t.id)));
 }
 
-// 平台 chip 计数 —— B 站 / 抖音 / 快手三个 chip 上的数字。loadTasks 只
-// 加载当前 subtab 的 tasks，所以另外两个平台的计数得单独问后端。三个
-// 并行请求，失败的回 0。切到评论 tab 时拉一次；批量导入 / 删除任务也
-// 会变，但触发点不多，目前只在 tab/subtab 切换时刷。
-const commentTaskCounts = ref<Record<CommentPlatform, number>>({
-  bilibili: 0,
-  douyin: 0,
-  kuaishou: 0,
-});
-async function loadCommentTaskCounts() {
-  const platforms: CommentPlatform[] = ["bilibili", "douyin", "kuaishou"];
-  const results = await Promise.all(
-    platforms.map((p) =>
-      sidecar.client
-        .get("/api/monitor/tasks", { params: { type: PLATFORM_TYPE[p] } })
-        .then((r) => [p, (r.data?.count as number | undefined) ?? (r.data?.tasks?.length ?? 0)] as const)
-        .catch(() => [p, 0] as const),
-    ),
-  );
-  const next: Record<CommentPlatform, number> = { bilibili: 0, douyin: 0, kuaishou: 0 };
-  for (const [p, c] of results) next[p] = c;
-  commentTaskCounts.value = next;
+// 原子加载平台任务 + snapshots：把新平台 tasks 与每条 task 的近两条 result
+// snapshot 全部静默拉到临时对象，最后一次性赋给 reactive state。早期实现
+// 在 watch 里先 ``taskSnapshots.value = {}`` 同步清空再 ``await loadTasks``，
+// 期间旧 tasks 拿不到 snapshot 会全部回落到 ``matched=false / rank=-1`` 渲
+// 染（视觉上是「整列瞬间变成无 / 未找到」的明显闪动），切平台、切顶级
+// tab 都触发。原子赋值后中间态被消除，UI 直接从旧终态跳到新终态。
+async function loadTasksAndSnapshotsAtomic(typeKey: string): Promise<void> {
+  loading.value = true;
+  failed.value = false;
+  try {
+    const r = await sidecar.client.get("/api/monitor/tasks", { params: { type: typeKey } });
+    const newTasks: Task[] = r.data?.tasks ?? [];
+    const pairs: Record<number, TaskSnapshotPair> = {};
+    await Promise.all(newTasks.map(async (t) => {
+      try {
+        const rr = await sidecar.client.get("/api/monitor/results", {
+          params: { task_id: t.id, limit: 2 },
+        });
+        const rows: any[] = rr.data?.results ?? [];
+        pairs[t.id] = {
+          latest: _resultToSnapshot(rows[0] ?? null),
+          prev: _resultToSnapshot(rows[1] ?? null),
+        };
+      } catch {
+        // 单任务 snapshot 失败保持空 pair，让 UI 对该行显示 "—"，
+        // 不阻塞整批切换。
+      }
+    }));
+    tasks.value = newTasks;
+    taskSnapshots.value = pairs;
+    if (newTasks.length > 0 && (!selectedTaskId.value || !newTasks.find((t) => t.id === selectedTaskId.value))) {
+      selectedTaskId.value = newTasks[0].id;
+    }
+  } catch (e: any) {
+    failed.value = true;
+    tasks.value = [];
+    taskSnapshots.value = {};
+    if (e?.response?.status !== 503) toast.error(`加载失败：${e?.message ?? e}`);
+  } finally {
+    loading.value = false;
+  }
 }
 
 const showAddTask = ref(false);
@@ -453,11 +460,7 @@ function clearEditOnClose() {
 async function onTaskMutatedReload() {
   const typeKey = activeTab.value === "zhihu" ? "zhihu_question" : PLATFORM_TYPE[commentSubtab.value];
   await loadTasks(typeKey);
-  if (activeTab.value === "comment") {
-    await Promise.all([loadTaskSnapshots(), loadCommentTaskCounts()]);
-  } else {
-    await loadTaskSnapshots();
-  }
+  await loadTaskSnapshots();
 }
 
 // 评论批次：根据 batchName 拢到子 task 列表，打开编辑 modal
@@ -500,29 +503,14 @@ async function deleteBatch(batchName: string) {
     selectedVideoId.value = null;
   }
   await loadTasks(PLATFORM_TYPE[commentSubtab.value]);
-  await Promise.all([loadTaskSnapshots(), loadCommentTaskCounts()]);
+  await loadTaskSnapshots();
 }
 const showCookieMgr = ref(false);
 
-// 紧急告警 / 历史报告详情 modal —— 三种语义共用一张面板。模态本身不
-// 抓数据，全部由 MonitorView 在打开时算好塞进 alertDetail / selectedReport。
+// 紧急告警详情 modal —— 两种语义共用一张面板。模态本身不
+// 抓数据，全部由 MonitorView 在打开时算好塞进 alertDetail。
 const showAlertModal = ref(false);
-const alertKind = ref<"zhihu_alert" | "comment_alert" | "history_report">("zhihu_alert");
-// history_report modal 用 —— 形状对齐 AlertDetailModal.HistoryReportProps。
-// 旧 4 字段 (n/scope/t/abn) 是必填的"显示门面"，后面 total_checks /
-// alert_count / task_count / by_status 是从后端真实 item 透传过来供
-// modal 详情区渲染的统计字段（缺失时 modal 内部会显示 "—"）。
-const selectedReport = ref<{
-  n: string;
-  scope: string;
-  t: string;
-  abn: number;
-  total_checks?: number;
-  alert_count?: number;
-  task_count?: number;
-  by_status?: Record<string, number>;
-  by_platform?: Record<string, { checks: number; alerts: number; task_count: number }>;
-} | null>(null);
+const alertKind = ref<"zhihu_alert" | "comment_alert">("zhihu_alert");
 
 // 告警详情 modal 用的真实数据（zhihu / comment 两套），openZhihuAlert /
 // openCommentAlert 时同步算好。Null = 没数据，模态展示空态。
@@ -777,7 +765,6 @@ function _buildCommentAlertData(batchName: string, alert: HeroAlert): CommentAle
 
 async function openZhihuAlert(alert?: HeroAlert) {
   alertKind.value = "zhihu_alert";
-  selectedReport.value = null;
   commentAlertData.value = null;
   zhihuAlertData.value = null;
   showAlertModal.value = true;
@@ -789,7 +776,6 @@ async function openZhihuAlert(alert?: HeroAlert) {
 }
 function openCommentAlert(alert?: HeroAlert) {
   alertKind.value = "comment_alert";
-  selectedReport.value = null;
   zhihuAlertData.value = null;
   commentAlertData.value = null;
   showAlertModal.value = true;
@@ -797,11 +783,6 @@ function openCommentAlert(alert?: HeroAlert) {
   if (a?.batchName) {
     commentAlertData.value = _buildCommentAlertData(a.batchName, a);
   }
-}
-function openReport(r: NonNullable<typeof selectedReport.value>) {
-  alertKind.value = "history_report";
-  selectedReport.value = r;
-  showAlertModal.value = true;
 }
 function onAlertAction(a: "rescue" | "repost" | "close") {
   showAlertModal.value = false;
@@ -867,6 +848,75 @@ async function runNow(taskId: number) {
   }
 }
 
+// L1 批次批量派发：取该批次下所有子 task，并行 POST run-now。
+// 后端有 per-platform Semaphore（默认 2 并发）+ pacer，前端一次性
+// fire N 个不会冲风控；SSE finished 事件已经会对每个子任务调
+// _fetchSnapshotPair，L1 行的留存/变化跟着自动刷，这里不重复 reload。
+async function runBatch(batchName: string) {
+  const child = tasks.value.filter((t) => parseBatchName(t.name) === batchName);
+  if (!child.length) return;
+  // 乐观先标 —— 按钮立刻切到 disabled "监测中…"，避免连点。
+  child.forEach((t) => markRunning(t.id));
+  const results = await Promise.allSettled(
+    child.map((t) => sidecar.client.post(`/api/monitor/tasks/${t.id}/run-now`)),
+  );
+  const fails = results.filter((r) => r.status === "rejected");
+  if (fails.length === 0) {
+    toast.info(`已派发 ${child.length} 个任务`);
+  } else if (fails.length === child.length) {
+    // 全部失败 —— 这些任务永远不会有 SSE 事件进来清 spinner，手动清。
+    child.forEach((t) => clearRunning(t.id));
+    toast.error(`派发失败：${fails.length}/${child.length}`);
+  } else {
+    // 部分失败：只清掉失败那部分；成功的依然依赖 SSE 自然完成。
+    results.forEach((r, i) => {
+      if (r.status === "rejected") clearRunning(child[i].id);
+    });
+    toast.warn(`派发 ${child.length - fails.length}/${child.length}，${fails.length} 失败`);
+  }
+}
+
+// 历史报告 drill-down 跳转 ── RetentionPage 行点击 emit navigate({platform, batchName, taskId}) → 这里。
+// 切到平台评论 tab、平台 chip、批次 L2、视频 L3。靠 nextTick 等
+// watch(activeTab) / watch(commentSubtab) 的 atomic-load 跑完
+// 再设 selectedCommentTaskId/selectedVideoId，否则 atomic-load
+// 内部的「selectedTaskId.value = newTasks[0].id」会盖掉我们的设置。
+async function goToCommentTask(payload: {
+  platform: "bilibili_comment" | "douyin_comment" | "kuaishou_comment";
+  batchName: string;
+  taskId: number;
+}) {
+  const subtabKey: CommentPlatform =
+    payload.platform === "bilibili_comment" ? "bilibili"
+    : payload.platform === "douyin_comment" ? "douyin"
+    : "kuaishou";
+  activeTab.value = "comment";
+  commentSubtab.value = subtabKey;
+  await nextTick();
+  await nextTick();  // 一个 tick 不够；watch handler 是 async，等两 tick 让 atomic load 跑完
+  selectedCommentTaskId.value = payload.batchName;
+  selectedVideoId.value = `task-${payload.taskId}`;
+}
+
+async function goToZhihuTask(payload: { taskId: number }) {
+  activeTab.value = "zhihu";
+  await nextTick();
+  await nextTick();
+  selectedTaskId.value = payload.taskId;
+}
+
+// 批次按钮文案 / 禁用态。点击瞬间 markRunning 把所有子 task 全部
+// 标为 running → 显示"监测中…"；SSE finished 逐个清除 → 数字递增
+// 显示"监测中 1/5"、"监测中 2/5"…；归零后回到"立刻监测"。
+function batchRunState(batchName: string): { label: string; disabled: boolean } {
+  const child = tasks.value.filter((t) => parseBatchName(t.name) === batchName);
+  const total = child.length;
+  const runningCount = child.filter((t) => runningTaskIds.value[t.id]).length;
+  if (runningCount === 0) return { label: "立刻监测", disabled: false };
+  if (runningCount === total) return { label: "监测中…", disabled: true };
+  return { label: `监测中 ${total - runningCount}/${total}`, disabled: true };
+}
+
 let stopMonitorBus: (() => void) | null = null;
 function startMonitorBus() {
   stopMonitorBus = subscribe("/api/monitor/events", {
@@ -914,25 +964,16 @@ const sparkPoints = computed(() => {
 
 watch(activeTab, async (t) => {
   if (t === "zhihu") {
-    taskSnapshots.value = {}; // 切 tab 清旧 platform 的 snapshot
-    await loadTasks("zhihu_question");
-    await loadTaskSnapshots();
+    await loadTasksAndSnapshotsAtomic("zhihu_question");
   } else if (t === "comment") {
-    taskSnapshots.value = {};
-    await loadTasks(PLATFORM_TYPE[commentSubtab.value]);
-    await Promise.all([loadTaskSnapshots(), loadCommentTaskCounts()]);
-  } else {
-    await loadReports();
+    await loadTasksAndSnapshotsAtomic(PLATFORM_TYPE[commentSubtab.value]);
   }
+  // 历史报告 sub-page self-loads via RetentionPage / ZhihuRankingPage onMounted
 });
 
 watch(commentSubtab, async (s) => {
-  if (activeTab.value === "comment") {
-    // 切平台先清掉 snapshot，避免上一个平台的 task 残留显示
-    taskSnapshots.value = {};
-    await loadTasks(PLATFORM_TYPE[s]);
-    await Promise.all([loadTaskSnapshots(), loadCommentTaskCounts()]);
-  }
+  if (activeTab.value !== "comment") return;
+  await loadTasksAndSnapshotsAtomic(PLATFORM_TYPE[s]);
 });
 
 watch(selectedTaskId, async (id) => {
@@ -1075,7 +1116,7 @@ const realCommentRows = computed<SampleComment[]>(() => {
 // 状态规则（与后端 alert_top_n / scrape_top_n 拆分对齐）：
 //   matched && rank <= alert_top_n → "ok"      在显且在理想范围内
 //   matched && rank >  alert_top_n → "folded"  在显但跌出理想（前端文案"跌出 #N"）
-//   !matched                        → "deleted" 150 以外或丢失
+//   !matched                        → "deleted" 没在前 scrape_top_n 条命中（被删 / 折叠 / 没爬到均落此态，UI 显示"无 / 未找到"）
 const realVideosByBatchId = computed<Record<string, VideoEntry[]>>(() => {
   if (demoMode.value) return {};
   const map: Record<string, VideoEntry[]> = {};
@@ -1319,10 +1360,9 @@ onMounted(async () => {
       await loadTaskSnapshots();
     } else if (activeTab.value === "comment") {
       await loadTasks(PLATFORM_TYPE[commentSubtab.value]);
-      await Promise.all([loadTaskSnapshots(), loadCommentTaskCounts()]);
-    } else {
-      await loadReports();
+      await loadTaskSnapshots();
     }
+    // 历史报告 sub-page self-loads via RetentionPage / ZhihuRankingPage onMounted
     startMonitorBus();
   } catch {
     /* sidecar already toasted; demoMode 会接管显示 */
@@ -2444,15 +2484,6 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
               }"
             />
             <span>{{ p.l }}</span>
-            <span
-              class="text-[10.5px]"
-              :style="{
-                color: commentSubtab === p.k ? 'rgba(255,255,255,0.5)' : 'var(--ink-3)',
-                background: commentSubtab === p.k ? 'rgba(255,255,255,0.08)' : 'var(--card-2)',
-                borderRadius: '999px',
-                padding: '1px 7px',
-              }"
-            >{{ commentTaskCounts[p.k] }}</span>
           </button>
         </div>
         <!--
@@ -2649,7 +2680,27 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                     <Pill v-if="t.status === 'ok'" tone="ok">正常</Pill>
                     <Pill v-else-if="t.status === 'warn'" tone="warn">关注</Pill>
                     <Pill v-else tone="alert">评论丢失</Pill>
-                    <div v-if="!demoMode" class="ml-auto flex flex-shrink-0 items-center gap-0.5">
+                    <!--
+                      批量「立刻监测」—— 一次派发该批次下所有子任务。``ml-auto``
+                      挂在它身上，把它和后面的 edit/delete 按钮组一起推到行尾，
+                      跟 pill 之间留空白。文案/disabled 从 batchRunState 拿，
+                      跑起来后随 SSE finished 事件递进显示进度 N/M。
+                    -->
+                    <button
+                      v-if="!demoMode"
+                      type="button"
+                      class="ml-auto whitespace-nowrap text-[11px]"
+                      :style="{
+                        padding: '4px 10px',
+                        borderRadius: '999px',
+                        color: batchRunState(t.id).disabled ? 'var(--ink-3)' : 'var(--primary-deep)',
+                        cursor: batchRunState(t.id).disabled ? 'not-allowed' : 'pointer',
+                      }"
+                      :disabled="batchRunState(t.id).disabled"
+                      :title="`批量派发该批次下所有视频任务（共 ${tasks.filter((x) => parseBatchName(x.name) === t.id).length} 条）`"
+                      @click.stop="runBatch(t.id)"
+                    >{{ batchRunState(t.id).label }}</button>
+                    <div v-if="!demoMode" class="flex flex-shrink-0 items-center gap-0.5">
                       <button
                         type="button"
                         class="inline-flex h-7 w-7 items-center justify-center"
@@ -2756,7 +2807,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                     </div>
                   </div>
                   <div>
-                    <!-- rank=0 (即 backend rank=-1) 不显示 # 号，而是 "150+/丢失" -->
+                    <!-- rank=0 (即 backend rank=-1) = 未在前 scrape_top_n 条命中，显示 "无" 与右侧 "未找到" pill 语义对齐 -->
                     <span
                       v-if="v.rank > 0"
                       class="font-display text-[14px] font-bold"
@@ -2766,7 +2817,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                       v-else
                       class="text-[11.5px]"
                       :style="{ color: 'var(--red, #d85a48)' }"
-                    >150 以外</span>
+                    >无</span>
                   </div>
                   <div>
                     <Pill v-if="v.status === 'ok'" tone="ok">在显</Pill>
@@ -2794,7 +2845,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                 <div class="min-w-0">
                   <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
                     <template v-if="selectedVideo.rank > 0">视频 #{{ selectedVideo.rank }} 详情</template>
-                    <template v-else>视频详情（评论 150 以外）</template>
+                    <template v-else>视频详情（评论未找到）</template>
                   </div>
                   <div
                     class="font-display mt-0.5 font-bold"
@@ -2841,7 +2892,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                     }"
                   >
                     <template v-if="selectedVideo.rank > 0">#{{ selectedVideo.rank }}</template>
-                    <span v-else :style="{ fontSize: '14px' }">150 以外</span>
+                    <span v-else :style="{ fontSize: '14px' }">无</span>
                   </div>
                 </div>
                 <div
@@ -3076,7 +3127,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
       -->
     </template>
 
-    <!-- ── 历史报告 ─────────────────────────────────────────────── -->
+    <!-- ── 历史报告（重构后：sub-pivot + 两个子页）──────────────────── -->
     <template v-else>
       <section
         class="flex min-h-0 flex-1 flex-col"
@@ -3087,109 +3138,37 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
           padding: '22px',
         }"
       >
-        <div class="mb-3 flex-shrink-0">
-          <div class="font-display text-[14px] font-semibold">历史监测报告</div>
-          <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-            按时间倒序，最近 30 天
+        <!-- sub-pivot：评论留存率 / 知乎排名 -->
+        <div class="mb-3 flex-shrink-0 flex justify-between items-center">
+          <div>
+            <div class="font-display text-[14px] font-semibold">历史监测报告</div>
+            <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              按业务拆分：评论平台留存率 / 知乎品牌排名分析
+            </div>
           </div>
-        </div>
-        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div
-          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-          :style="{
-            gridTemplateColumns: '1.4fr 1fr .8fr .8fr .6fr',
-            letterSpacing: '1.2px',
-            color: 'var(--ink-3)',
-            borderBottom: '1px solid var(--line)',
-          }"
-        >
-          <div>报告</div><div>覆盖</div><div>时间</div><div>异动</div><div></div>
+          <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card-2)', border: '1px solid var(--line)' }">
+            <button
+              @click="historySubtab = 'retention'"
+              class="px-4 py-1.5 rounded-full text-[12.5px] font-medium"
+              :style="{
+                background: historySubtab === 'retention' ? 'var(--dark)' : 'transparent',
+                color: historySubtab === 'retention' ? 'var(--card)' : 'var(--ink-3)',
+              }"
+            >评论留存率</button>
+            <button
+              @click="historySubtab = 'zhihu'"
+              class="px-4 py-1.5 rounded-full text-[12.5px] font-medium"
+              :style="{
+                background: historySubtab === 'zhihu' ? 'var(--dark)' : 'transparent',
+                color: historySubtab === 'zhihu' ? 'var(--card)' : 'var(--ink-3)',
+              }"
+            >知乎排名</button>
+          </div>
         </div>
 
-        <template v-if="(demoMode || !reports.length) && SAMPLE_REPORTS.length === 0">
-          <div
-            class="py-10 text-center text-[12.5px]"
-            :style="{ color: 'var(--ink-3)' }"
-          >
-            暂无历史报告 · 监测任务跑起来后会生成日报 / 周报
-          </div>
-        </template>
-        <template v-else-if="demoMode || !reports.length">
-          <div
-            v-for="(r, i) in SAMPLE_REPORTS"
-            :key="r.id"
-            class="grid items-center"
-            :style="{
-              gridTemplateColumns: '1.4fr 1fr .8fr .8fr .6fr',
-              borderBottom: i < SAMPLE_REPORTS.length - 1 ? '1px solid var(--line)' : 'none',
-              padding: '14px 8px',
-            }"
-          >
-            <div class="flex items-center gap-2">
-              <Icon name="fileText" :size="13" class="opacity-50" />
-              <span class="text-[13px] font-medium">{{ r.n }}</span>
-            </div>
-            <div class="text-[12px]" :style="{ color: 'var(--ink-2)' }">{{ r.scope }}</div>
-            <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">{{ r.t }}</div>
-            <div>
-              <Pill v-if="r.abn > 0" tone="warn">{{ r.abn }} 个异动</Pill>
-              <Pill v-else tone="ok">无异常</Pill>
-            </div>
-            <div class="flex justify-end">
-              <button
-                type="button"
-                class="text-[11.5px]"
-                :style="{ color: 'var(--primary-deep)' }"
-                @click="openReport({ n: r.n, scope: r.scope, t: r.t, abn: r.abn })"
-              >查看 →</button>
-            </div>
-          </div>
-        </template>
-        <template v-else>
-          <div
-            v-for="(r, i) in reports"
-            :key="r.period"
-            class="grid items-center"
-            :style="{
-              gridTemplateColumns: '1.4fr 1fr .8fr .8fr .6fr',
-              borderBottom: i < reports.length - 1 ? '1px solid var(--line)' : 'none',
-              padding: '14px 8px',
-            }"
-          >
-            <div class="flex items-center gap-2">
-              <Icon name="fileText" :size="13" class="opacity-50" />
-              <span class="text-[13px] font-medium">{{ r.period }}</span>
-            </div>
-            <div class="text-[12px]" :style="{ color: 'var(--ink-2)' }">
-              {{ r.total_checks }} 次检查
-            </div>
-            <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">{{ r.period }}</div>
-            <div>
-              <Pill v-if="r.alert_count > 0" tone="warn">
-                {{ r.alert_count }} 告警
-              </Pill>
-              <Pill v-else tone="ok">无异常</Pill>
-            </div>
-            <div class="flex justify-end">
-              <button
-                type="button"
-                class="text-[11.5px]"
-                :style="{ color: 'var(--primary-deep)' }"
-                @click="openReport({
-                  n: r.period,
-                  scope: `${r.total_checks} 次检查`,
-                  t: r.period,
-                  abn: r.alert_count,
-                  total_checks: r.total_checks,
-                  alert_count: r.alert_count,
-                  task_count: r.task_count,
-                  by_status: r.by_status,
-                  by_platform: r.by_platform,
-                })"
-              >查看 →</button>
-            </div>
-          </div>
-        </template>
+        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <RetentionPage v-if="historySubtab === 'retention'" @navigate="goToCommentTask" />
+          <ZhihuRankingPage v-else @navigate="goToZhihuTask" />
         </div>
       </section>
     </template>
@@ -3245,7 +3224,6 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
     <AlertDetailModal
       v-model:open="showAlertModal"
       :kind="alertKind"
-      :report="selectedReport ?? undefined"
       :zhihu-data="zhihuAlertData ?? undefined"
       :comment-data="commentAlertData ?? undefined"
       @action="onAlertAction"

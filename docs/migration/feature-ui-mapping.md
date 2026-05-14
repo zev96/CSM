@@ -94,7 +94,7 @@
 | 「Top 3 抢占者」 | `MonitorResult.metric` 里是否含竞争对手列表 | ⚠️ 不确定，需 A3 写 sidecar 时实测一次 fetch 看 metric 字段 | ⚠️ | **推荐**：A3 阶段实测；若 metric 不含 → UI 改为只显示"目标当前排名 + 第 1 名链接" |
 | 平台评论 tab 子 tab（B/抖/快） + 留存率/被删评论 | `MonitorResult.metric` 形状 | 各 platform 自定 metric | 🔄 | sidecar 提供平台特定的响应 schema（按 type 分支） |
 | 平台评论"被删/折叠评论列表" | 详细文本快照 | 应在 metric 里 | ⚠️ | 同上，A3 实测 |
-| 历史报告 tab（日报/周报） | 聚合报表 | **无聚合报表生成器** | ❌ | **推荐砍历史报告 tab**，进 backlog；csm_core 当前只存原始 MonitorResult 不做聚合 |
+| 历史报告（重构）→ 拆分为「评论留存率」/「知乎排名」两个 sub-page；旧 /api/monitor/reports 端点已废弃，由 /api/monitor/history/comment-retention 与 .../zhihu-ranking 接管。 | — | — | ✅ | 已在 Task 7/8 落地；AlertDetailModal 的 history_report kind 分支同步删除。 |
 | Cookie 池状态（知乎/B站） | csm_core `drivers/cookie_store` | ✅ | ⚠️ | **推荐补**：sidecar 加 `GET /api/monitor/cookies` 查询 + `POST /api/monitor/cookies/{platform}` 更新 |
 | 桌面通知 | csm_core `monitor/notify.py` | ✅（应该有）| ⚠️ | sidecar 触发后通过 SSE → Tauri 端用 `tauri-plugin-notification` 显示 |
 
@@ -196,7 +196,7 @@
 | 3 | 告警 3 等级（alert/warn/info） | home + monitor | **不在 csm_core 加 level 字段**；前端把 `MonitorStatus` 复合映射为视觉 3 级（见 §四 字段重命名 ii） |
 | 4 | 单段落润色按钮（组装预览） | article | sidecar 新增 `POST /api/polish/block`，内部包装一次 LLM 调用，输入段落文本 + Skill prompt |
 | 7 | batch 段进度（5/8、1640/2400） | batch 英雄卡 | **软妥协**：不引入段级回调（pipeline 改动太大）。UI 改为「当前阶段 / 当前文档 N/M 篇」，前端在 6 阶段间做平滑过渡动画 |
-| 8 | 历史报告 tab（日报/周报） | monitor | sidecar 现场聚合 `monitor.db` 历史 MonitorResult。新端点 `GET /api/monitor/reports?period=daily\|weekly` |
+| 8 | 历史报告 tab（已重构）→ 拆分为 RetentionPage / ZhihuRankingPage 两个 sub-page | monitor | 旧 `GET /api/monitor/reports` 已废弃；新接口 `/api/monitor/history/comment-retention` + `.../zhihu-ranking` |
 
 ### ⚠️ 补到某屏的功能（A–F 全数采纳）
 
@@ -256,7 +256,7 @@
 21. `GET /api/stats/words?range=yesterday|this-week` —— 字数统计（保留 2）
 22. `POST /api/polish/block` —— 单段落润色（保留 4）
 23. `GET /api/monitor/summary` —— 平台留存率聚合（F）
-24. `GET /api/monitor/reports?period=daily|weekly` —— 历史报告聚合（保留 8）
+24. ~~`GET /api/monitor/reports?period=daily|weekly`~~ —— 已废弃；由 `/api/monitor/history/comment-retention` + `.../zhihu-ranking` 替代（Task 7/8）
 25. `GET /api/monitor/cookies` / `POST /api/monitor/cookies/{platform}` —— Cookie 池（E）
 26. `POST /api/keyword/density` —— 关键词密度（质检报告卡用）
 

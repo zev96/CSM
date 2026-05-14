@@ -12,7 +12,7 @@ from csm_core.monitor.base import MonitorTask, TaskType
 
 from ..auth import RequireToken
 from ..monitor_bus import monitor_bus
-from ..services import monitor_lifecycle, monitor_service
+from ..services import history_service, monitor_lifecycle, monitor_service
 
 router = APIRouter(tags=["monitor"], dependencies=[RequireToken])
 
@@ -231,21 +231,27 @@ def login_capture(platform: str, body: CookieLoginBody) -> dict[str, Any]:
     }
 
 
-# ── Summary + reports ──────────────────────────────────────────────────────
+# ── Summary + history aggregations ────────────────────────────────────────
 @router.get("/api/monitor/summary")
 async def get_summary() -> dict[str, Any]:
     _require_storage()
     return monitor_service.get_summary()
 
 
-@router.get("/api/monitor/reports")
-async def get_reports(
-    period: str = Query(default="daily"),
-    limit: int = Query(default=30, ge=1, le=200),
-) -> dict[str, Any]:
+@router.get("/api/monitor/history/comment-retention")
+async def get_comment_retention_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
     _require_storage()
     try:
-        return monitor_service.get_reports(period=period, limit=limit)
+        return history_service.get_comment_retention_history(range_str=range_str)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/api/monitor/history/zhihu-ranking")
+async def get_zhihu_ranking_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
+    _require_storage()
+    try:
+        return history_service.get_zhihu_ranking_history(range_str=range_str)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

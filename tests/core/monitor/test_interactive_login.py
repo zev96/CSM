@@ -32,9 +32,19 @@ class TestRegistry:
 
     def test_zhihu_spec_uses_z_c0_as_success_marker(self):
         spec = LOGIN_SPECS["zhihu_question"]
-        assert spec.success_cookie_name == "z_c0"
+        assert "z_c0" in spec.success_cookie_names
         assert spec.login_url.startswith("https://www.zhihu.com")
         assert "zhihu" in spec.cookie_domain
+
+    def test_kuaishou_accepts_multiple_post_login_cookies(self):
+        """快手 PC web 三种登录流（密码/SMS/QR 扫码）下发的 cookie 名
+        不一致——QR 扫码会先落 ``userId`` 再补 ``kuaishou.server.web_st``。
+        早期只盯 ``web_st`` 会让 QR 流跑成 5 分钟硬超时，体感是「登录
+        完了但网页一直停着」。三个候选必须都在 spec 里。"""
+        spec = LOGIN_SPECS["kuaishou_comment"]
+        assert "kuaishou.server.web_st" in spec.success_cookie_names
+        assert "userId" in spec.success_cookie_names
+        assert "passToken" in spec.success_cookie_names
 
     def test_each_spec_has_required_fields(self):
         """Defensive — if someone adds a new platform spec without all
@@ -42,7 +52,9 @@ class TestRegistry:
         documents the contract."""
         for name, spec in LOGIN_SPECS.items():
             assert spec.login_url.startswith("http"), name
-            assert spec.success_cookie_name, name
+            assert spec.success_cookie_names, name
+            assert isinstance(spec.success_cookie_names, tuple), name
+            assert all(spec.success_cookie_names), name
             assert spec.cookie_domain, name
             assert spec.display_name, name
 

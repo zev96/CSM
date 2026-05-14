@@ -224,41 +224,6 @@ def test_summary_includes_latest_result(client: TestClient, monitor_db: Path):
     assert bili["tasks"][0]["latest"]["metric"]["retained"] == 8
 
 
-# ── Reports ────────────────────────────────────────────────────────────────
-def test_reports_empty_returns_no_items(client: TestClient, monitor_db: Path):
-    resp = client.get("/api/monitor/reports")
-    assert resp.status_code == 200
-    assert resp.json() == {"period": "daily", "items": []}
-
-
-def test_reports_groups_by_day(client: TestClient, monitor_db: Path):
-    tid = _seed_task(client)
-    today = datetime.now()
-    yesterday = today - timedelta(days=1)
-    storage.save_result(MonitorResult(
-        task_id=tid, checked_at=today, status="ok", rank=10,
-    ), alert_triggered=True)
-    storage.save_result(MonitorResult(
-        task_id=tid, checked_at=yesterday, status="ok", rank=12,
-    ), alert_triggered=True)
-    storage.save_result(MonitorResult(
-        task_id=tid, checked_at=today, status="ok", rank=3,
-    ))
-
-    data = client.get("/api/monitor/reports").json()
-    assert data["period"] == "daily"
-    # Two day buckets.
-    assert len(data["items"]) == 2
-    today_bucket = next(b for b in data["items"] if b["period"] == today.strftime("%Y-%m-%d"))
-    assert today_bucket["total_checks"] == 2
-    assert today_bucket["alert_count"] == 1
-
-
-def test_reports_invalid_period_400(client: TestClient, monitor_db: Path):
-    resp = client.get("/api/monitor/reports", params={"period": "yearly"})
-    assert resp.status_code == 400
-
-
 # ── Auth ────────────────────────────────────────────────────────────────────
 def test_monitor_routes_require_auth(monitor_db: Path):
     from csm_sidecar.main import app
