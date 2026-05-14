@@ -9,13 +9,12 @@
  * 数据流保持原貌：
  *   /api/monitor/tasks?type=...        → 任务列表
  *   /api/monitor/results?task_id=X     → 任务历史（sparkline）
- *   /api/monitor/reports?period=daily  → 历史报告分桶
  *   /api/monitor/cookies?platform=...  → cookie 池（按钮入口）
  *   /api/monitor/tasks/{id}/run-now    → 强制立刻派发
  *   /api/monitor/events SSE            → 实时刷新
  *
  * sidecar 没启动 / 表里没数据时，沿用 ArticleView 的演示模式：把 V1
- * 设计稿里的 mock 任务 / 抢占者 / 留存趋势 / 历史报告条目铺出来，让用户
+ * 设计稿里的 mock 任务 / 抢占者 / 留存趋势铺出来，让用户
  * 一眼看到这页能呈现什么。演示行不挂"立刻跑/删除"按钮（id 是负数标记，
  * 不应该误调真实接口）。
  *
@@ -91,8 +90,6 @@ interface Task {
 const tasks = ref<Task[]>([]);
 const selectedTaskId = ref<number | null>(null);
 const taskResults = ref<Array<{ checked_at: string; status: string; rank: number; metric: any }>>([]);
-
-const reports = ref<Array<{ period: string; total_checks: number; alert_count: number; by_status: Record<string, number> }>>([]);
 
 const loading = ref(false);
 const failed = ref(false);
@@ -243,8 +240,6 @@ function changeSchedule(scope: "zhihu" | "comment", id: string, v: string) {
 // V1 设计稿示例数据，发布前清空保留空状态。
 const SAMPLE_DELETED: Array<{ tag: string; who: string; date: string; tone: "alert" | "warn" }> = [];
 
-const SAMPLE_REPORTS: Array<{ id: string; n: string; scope: string; t: string; abn: number }> = [];
-
 // 平台 chip 计数清零 —— V1 设计稿示例任务已清空，发布前保留空状态。
 const PLATFORMS: Array<{ k: CommentPlatform; l: string; color: string; count: number }> = [
   { k: "bilibili", l: "B 站", color: "#ee6a2a", count: 0 },
@@ -286,18 +281,6 @@ async function loadResults(taskId: number) {
     taskResults.value = r.data.results ?? [];
   } catch {
     taskResults.value = [];
-  }
-}
-
-async function loadReports() {
-  try {
-    const r = await sidecar.client.get("/api/monitor/reports", {
-      params: { period: "daily", limit: 30 },
-    });
-    reports.value = r.data.items ?? [];
-  } catch (e: any) {
-    if (e?.response?.status === 503) failed.value = true;
-    reports.value = [];
   }
 }
 
@@ -524,25 +507,10 @@ async function deleteBatch(batchName: string) {
 }
 const showCookieMgr = ref(false);
 
-// 紧急告警 / 历史报告详情 modal —— 三种语义共用一张面板。模态本身不
-// 抓数据，全部由 MonitorView 在打开时算好塞进 alertDetail / selectedReport。
+// 紧急告警详情 modal —— 两种语义共用一张面板。模态本身不
+// 抓数据，全部由 MonitorView 在打开时算好塞进 alertDetail。
 const showAlertModal = ref(false);
-const alertKind = ref<"zhihu_alert" | "comment_alert" | "history_report">("zhihu_alert");
-// history_report modal 用 —— 形状对齐 AlertDetailModal.HistoryReportProps。
-// 旧 4 字段 (n/scope/t/abn) 是必填的"显示门面"，后面 total_checks /
-// alert_count / task_count / by_status 是从后端真实 item 透传过来供
-// modal 详情区渲染的统计字段（缺失时 modal 内部会显示 "—"）。
-const selectedReport = ref<{
-  n: string;
-  scope: string;
-  t: string;
-  abn: number;
-  total_checks?: number;
-  alert_count?: number;
-  task_count?: number;
-  by_status?: Record<string, number>;
-  by_platform?: Record<string, { checks: number; alerts: number; task_count: number }>;
-} | null>(null);
+const alertKind = ref<"zhihu_alert" | "comment_alert">("zhihu_alert");
 
 // 告警详情 modal 用的真实数据（zhihu / comment 两套），openZhihuAlert /
 // openCommentAlert 时同步算好。Null = 没数据，模态展示空态。
@@ -797,7 +765,6 @@ function _buildCommentAlertData(batchName: string, alert: HeroAlert): CommentAle
 
 async function openZhihuAlert(alert?: HeroAlert) {
   alertKind.value = "zhihu_alert";
-  selectedReport.value = null;
   commentAlertData.value = null;
   zhihuAlertData.value = null;
   showAlertModal.value = true;
@@ -809,7 +776,6 @@ async function openZhihuAlert(alert?: HeroAlert) {
 }
 function openCommentAlert(alert?: HeroAlert) {
   alertKind.value = "comment_alert";
-  selectedReport.value = null;
   zhihuAlertData.value = null;
   commentAlertData.value = null;
   showAlertModal.value = true;
@@ -817,11 +783,6 @@ function openCommentAlert(alert?: HeroAlert) {
   if (a?.batchName) {
     commentAlertData.value = _buildCommentAlertData(a.batchName, a);
   }
-}
-function openReport(r: NonNullable<typeof selectedReport.value>) {
-  alertKind.value = "history_report";
-  selectedReport.value = r;
-  showAlertModal.value = true;
 }
 function onAlertAction(a: "rescue" | "repost" | "close") {
   showAlertModal.value = false;
@@ -1006,9 +967,8 @@ watch(activeTab, async (t) => {
     await loadTasksAndSnapshotsAtomic("zhihu_question");
   } else if (t === "comment") {
     await loadTasksAndSnapshotsAtomic(PLATFORM_TYPE[commentSubtab.value]);
-  } else {
-    await loadReports();
   }
+  // 历史报告 sub-page self-loads via RetentionPage / ZhihuRankingPage onMounted
 });
 
 watch(commentSubtab, async (s) => {
@@ -1401,9 +1361,8 @@ onMounted(async () => {
     } else if (activeTab.value === "comment") {
       await loadTasks(PLATFORM_TYPE[commentSubtab.value]);
       await loadTaskSnapshots();
-    } else {
-      await loadReports();
     }
+    // 历史报告 sub-page self-loads via RetentionPage / ZhihuRankingPage onMounted
     startMonitorBus();
   } catch {
     /* sidecar already toasted; demoMode 会接管显示 */
@@ -3265,7 +3224,6 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
     <AlertDetailModal
       v-model:open="showAlertModal"
       :kind="alertKind"
-      :report="selectedReport ?? undefined"
       :zhihu-data="zhihuAlertData ?? undefined"
       :comment-data="commentAlertData ?? undefined"
       @action="onAlertAction"
