@@ -101,7 +101,7 @@ function close() {
 // 已经手动改过；编辑模式 hydrate 会覆盖这里）。
 watch(
   () => type.value,
-  (next, prev) => {
+  (next) => {
     if (isEdit.value) return;
     const knownDefaults = new Set([5, 10]);
     if (knownDefaults.has(topN.value)) {

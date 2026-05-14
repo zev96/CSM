@@ -32,7 +32,6 @@ import ProgressBar from "@/components/ui/ProgressBar.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 import TiptapEditor from "@/components/article/TiptapEditor.vue";
-import AssemblyTree from "@/components/article/AssemblyTree.vue";
 
 import { useArticle } from "@/stores/article";
 import { useConfig } from "@/stores/config";
@@ -81,26 +80,9 @@ async function loadLookups() {
   }
 }
 
-// ── V1 设计稿示例数据 ────────────────────────────────────────
-// 起飞前 / 没有真实 plan 的状态下，组装/初稿/成稿三栏都用这套
-// 示例顶住，让 UI 不至于空白。等 article.plan 真有数据时，组装
-// 会切到真实 AssemblyTree，编辑器用 article.draftText / finalText。
-type SampleStatus = "polished" | "draft" | "empty";
-interface SampleBlock {
-  id: string;
-  kind: "heading" | "paragraph" | "numbered_list" | "competitor_pool" | "test_framework" | "hero_brand" | "literal";
-  label: string;
-  hint: string;
-  status: SampleStatus;
-  words: number;
-  content?: string;
-  draft?: string;
-  polished?: string;
-}
-// V1 设计稿示例 articleBlocks / assembledBlocks，发布前清空保留空状态 ——
-// 模板没选时显示「选择模板后这里会显示组装预览」，选了模板还没采样时显示
-// 「点击开始采样填充内容」，等真实 plan.results 回来再渲染 AssemblyTree。
-const SAMPLE_BLOCKS: SampleBlock[] = [];
+// V1 设计稿示例 articleBlocks / assembledBlocks / SampleBlock interface 都已
+// 清空 —— 模板没选时显示「选择模板后这里会显示组装预览」，选了模板还没采
+// 样时显示「点击开始采样填充内容」，等真实 plan.results 回来再渲染。
 
 // kind → icon name + display label + accent color。V1 的 KIND_META。
 const KIND_META: Record<string, { i: string; l: string; c: string }> = {
