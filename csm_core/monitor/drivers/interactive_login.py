@@ -60,14 +60,22 @@ logger = logging.getLogger(__name__)
 class PlatformLoginSpec:
     """Per-platform knobs for the interactive login flow."""
     login_url: str
-    #: Cookie name that, once present, means "user has finished logging in".
-    #: We block until we see this name in the context jar.
-    success_cookie_name: str
+    #: Cookie names whose presence (any one of them) means "user has finished
+    #: logging in". Tuple instead of a single string because some platforms
+    #: surface login state under different names depending on the login flow
+    #: (e.g. 快手 QR scan drops ``userId`` first and ``kuaishou.server.web_st``
+    #: a beat later — both should trip success detection).
+    success_cookie_names: tuple[str, ...]
     #: Cookie domain to harvest (substring match — ``"zhihu"`` matches
     #: ``.zhihu.com`` and ``zhihu.com``).
     cookie_domain: str
     #: Human-friendly platform name for log/UI messages.
     display_name: str
+    #: Best-effort selector clicked right after navigation to pop the
+    #: platform's login modal. Empty = no auto-click (page is expected to
+    #: show the login form on landing). Failure is swallowed — user can
+    #: always click 登录 manually. Used for homepage-based login URLs.
+    auto_click_selector: str = ""
 
 
 # Registry of supported platforms. Add a new entry to enable login
@@ -77,13 +85,13 @@ LOGIN_SPECS: dict[str, PlatformLoginSpec] = {
         # /signin lands the user directly on the username/password tab.
         # zhihu also accepts QR code + phone-SMS from this same page.
         login_url="https://www.zhihu.com/signin",
-        success_cookie_name="z_c0",
+        success_cookie_names=("z_c0",),
         cookie_domain="zhihu",
         display_name="知乎",
     ),
     "bilibili_comment": PlatformLoginSpec(
         login_url="https://passport.bilibili.com/login",
-        success_cookie_name="SESSDATA",
+        success_cookie_names=("SESSDATA",),
         cookie_domain="bilibili",
         display_name="B 站",
     ),
@@ -91,15 +99,32 @@ LOGIN_SPECS: dict[str, PlatformLoginSpec] = {
         # 抖音首页右上「登录」会弹出 modal —— 我们直接落首页让用户点
         # 登录按钮，比构造嵌套 modal URL 稳。检测到 sessionid 即成功。
         login_url="https://www.douyin.com/",
-        success_cookie_name="sessionid",
+        success_cookie_names=("sessionid", "sessionid_ss"),
         cookie_domain="douyin",
         display_name="抖音",
     ),
     "kuaishou_comment": PlatformLoginSpec(
+        # 快手首页不会自动弹登录浮窗，必须点右上「登录」按钮。我们尽力
+        # 帮用户点一下；点不上也无所谓，用户手点即可。
+        #
+        # API-gating cookie 名字踩过两次坑：
+        # 1) 最早盯的是 ``kuaishou.server.web_st`` —— 那是历史名，当前
+        #    PC web 登录已经不再下发，会导致检测永远超时；
+        # 2) 现在实际下发的是 ``kuaishou.server.webday7_st``（``day7``
+        #    后缀表示 7 天有效期的新版会话）。
+        # ``userId`` / ``passToken`` 留作冗余 —— QR 扫码流偶尔比主
+        # session 早 1-2 秒出现，让登录窗口能稍早关闭；后续 1.5s
+        # follow-up wait 仍会等到 ``webday7_st`` 落入再保存。
         login_url="https://www.kuaishou.com/",
-        success_cookie_name="kuaishou.server.web_st",
+        success_cookie_names=(
+            "kuaishou.server.webday7_st",
+            "kuaishou.server.web_st",
+            "userId",
+            "passToken",
+        ),
         cookie_domain="kuaishou",
         display_name="快手",
+        auto_click_selector="text=登录",
     ),
 }
 
@@ -239,6 +264,26 @@ def capture_cookies_via_login(
         page.goto(spec.login_url, wait_until="domcontentloaded", timeout=30000)
         _emit(progress_callback, "navigated")
 
+        # Best-effort: pop the platform's login modal so the user doesn't
+        # have to hunt for the 登录 button. Failure is fine — the modal
+        # may already be open, or 快手 may have changed its markup; either
+        # way the user can click it themselves. We swallow exceptions
+        # rather than abort because falling back to manual click is
+        # strictly better than failing the whole login flow.
+        if spec.auto_click_selector:
+            try:
+                page.locator(spec.auto_click_selector).first.click(timeout=3000)
+                logger.info(
+                    "interactive login: auto-clicked %r to open login modal",
+                    spec.auto_click_selector,
+                )
+            except Exception as e:
+                logger.info(
+                    "interactive login: auto-click %r failed (%s); "
+                    "user will need to click 登录 manually",
+                    spec.auto_click_selector, type(e).__name__,
+                )
+
         logger.info(
             "interactive login: opened %s for %s (label=%r), waiting up to %.0fs",
             spec.login_url, spec.display_name, label, timeout_s,
@@ -263,7 +308,7 @@ def capture_cookies_via_login(
 
             cookies_in_jar = context.cookies()
             success_seen = any(
-                c.get("name") == spec.success_cookie_name
+                c.get("name") in spec.success_cookie_names
                 and spec.cookie_domain in (c.get("domain") or "")
                 for c in cookies_in_jar
             )
@@ -272,9 +317,9 @@ def capture_cookies_via_login(
                     login_detected_at = time.monotonic()
                     _emit(progress_callback, "login_detected")
                     logger.info(
-                        "interactive login: %s cookie detected, "
+                        "interactive login: success cookie (any of %s) detected, "
                         "waiting 1.5s for follow-up cookies",
-                        spec.success_cookie_name,
+                        spec.success_cookie_names,
                     )
                 # Wait a beat for follow-up Set-Cookie headers (zhihu
                 # sets z_c0 first, then drops d_c0 / q_c1 / __zse_ck in
@@ -285,7 +330,23 @@ def capture_cookies_via_login(
                     break
             time.sleep(1.0)
         else:
-            logger.info("interactive login: timed out after %.0fs", timeout_s)
+            # Dump what we *did* see so future bug reports include the
+            # actual cookie names the platform dropped. Most "stuck on
+            # the login page" reports turn out to be a renamed cookie or
+            # an unexpected login flow (e.g. 快手 QR scan vs SMS), and
+            # without this log it's a wild guess.
+            seen_names = sorted({
+                (c.get("name") or "")
+                for c in context.cookies()
+                if spec.cookie_domain in (c.get("domain") or "")
+            } - {""})
+            logger.info(
+                "interactive login: timed out after %.0fs; "
+                "expected any of %s, saw %d %s-domain cookies: %s",
+                timeout_s, spec.success_cookie_names,
+                len(seen_names), spec.display_name,
+                ", ".join(seen_names) if seen_names else "(none)",
+            )
             return LoginResult(
                 success=False, cred_id=None, cookie_count=0,
                 cookies_preview="", error="timeout",
@@ -322,10 +383,21 @@ def capture_cookies_via_login(
             label=label,
             user_agent=ua,
         )
+        # Log captured cookie NAMES (not values — they're tokens) so post-
+        # mortem on "登录完了但抓不到数据" cases can confirm whether the
+        # API-gating cookie actually landed. 快手 specifically requires
+        # ``kuaishou.server.web_st`` for the GraphQL endpoint; if that
+        # name is missing from this log line, the harvested row will hit
+        # 400/empty on every fetch and the user will see "未找到" across
+        # the board.
+        captured_names = sorted({
+            (c.get("name") or "") for c in platform_cookies
+        } - {""})
         logger.info(
             "interactive login: saved cookie row id=%d platform=%s label=%r "
-            "cookies=%d ua=%r",
-            cred_id, platform, label, len(platform_cookies), ua[:60],
+            "cookies=%d names=[%s] ua=%r",
+            cred_id, platform, label, len(platform_cookies),
+            ", ".join(captured_names), ua[:60],
         )
         _emit(progress_callback, "saved")
         return LoginResult(
