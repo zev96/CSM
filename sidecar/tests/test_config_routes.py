@@ -8,7 +8,7 @@ def test_get_config_returns_defaults(client: TestClient):
     resp = client.get("/api/config")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["default_provider"] == "mock"
+    assert data["default_provider"] is None
     assert data["concurrency"] == 3
     assert data["monitor"]["enabled"] is False
 

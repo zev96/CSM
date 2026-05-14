@@ -6,7 +6,7 @@ def test_appconfig_defaults():
     cfg = AppConfig()
     assert cfg.vault_root is None
     assert cfg.out_dir is None
-    assert cfg.default_provider == "mock"
+    assert cfg.default_provider is None
     assert cfg.api_keys == {}
     assert cfg.default_template is None
     assert cfg.skill_dir is None

@@ -38,7 +38,10 @@ interface PlatformView {
   tasks: Array<{
     id: number;
     name: string;
-    latest: { metric: Record<string, any> } | null;
+    latest: {
+      status: string;
+      metric: Record<string, any>;
+    } | null;
   }>;
 }
 const summary = ref<Record<string, PlatformView>>({});
@@ -50,23 +53,29 @@ const PLATFORM_MAP = [
   { key: "kuaishou_comment", label: "快手", color: "var(--yellow)" },
 ];
 
+// 后端 metric 形状见 csm_core/monitor/platforms/_comment_common.py:70
+// 每个 task 监控 1 条用户评论 —— matched=true 表示评论仍在评论区
+// hot 区里（留存），matched=false 表示被删 / 被折叠 / 沉到 alert_top_n
+// 之外（流失）。所以 retained = matched 为 true 的 task 数，total = 跑
+// 成功且回了 metric 的 task 数（status="ok"）。
+//
+// 不计入 total 的情况：
+//   - latest=null（任务还没跑过第一次）
+//   - status != "ok"（failed / risk_control —— 抓取本身有问题，没法判
+//     定留存与否，强行算流失会误导）
 function aggregate(p: PlatformView | undefined) {
   if (!p || !p.tasks.length) return null;
   let retained = 0;
   let total = 0;
-  let counted = 0;
   for (const t of p.tasks) {
-    const m = t.latest?.metric;
+    if (!t.latest) continue;
+    if (t.latest.status !== "ok") continue;
+    const m = t.latest.metric;
     if (!m) continue;
-    const r = Number(m.retained ?? m.alive_count);
-    const tt = Number(m.total ?? m.posted_count);
-    if (Number.isFinite(r) && Number.isFinite(tt) && tt > 0) {
-      retained += r;
-      total += tt;
-      counted++;
-    }
+    total += 1;
+    if (m.matched === true) retained += 1;
   }
-  if (!counted) return null;
+  if (total === 0) return null;
   return { retained, total };
 }
 

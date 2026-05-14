@@ -159,7 +159,7 @@ const QUICK_TILES = [
           class="font-display mt-1.5 font-bold leading-snug"
           :style="{ fontSize: '22px', letterSpacing: '-0.5px' }"
         >
-          输入一个关键词，让 CSM 帮你起一篇。
+          输入关键词，立刻生成一篇文章。
         </div>
 
         <!-- 一体胶囊输入条：搜索图标 + 输入 + 黑色按钮 -->

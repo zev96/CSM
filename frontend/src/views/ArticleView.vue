@@ -113,11 +113,137 @@ const KIND_META: Record<string, { i: string; l: string; c: string }> = {
   test_framework: { i: "library", l: "测评框架", c: "#2e7d4d" },
 };
 
-// 选中的左侧 slot —— 默认开篇·痛点（V1 同款）
-const selectedSlot = ref<string>("a2");
+// 选中的左侧 slot
+const selectedSlot = ref<string>("");
 
-// 已采样个数（status !== empty）—— 头部的 6/9 已采样
-const sampledCount = computed(() => SAMPLE_BLOCKS.filter((b) => b.status !== "empty").length);
+// ── 真实 plan + template 组合成"V1 双栏"渲染所需的行数据 ────────────
+// 形状刻意对齐 SampleBlock，这样下面 v-for 模板可以原样复用，无需为
+// 真实数据另写一份。label 从 template.blocks 按 block_id join 取；
+// template 还没加载完时回退到 KIND_META 的 kind 名，保证至少能渲染。
+interface AssemblyRow {
+  id: string;
+  kind: string;
+  label: string;
+  hint: string;
+  status: "polished" | "draft" | "empty";
+  words: number;
+  content?: string;
+  draft?: string;
+  rerollable: boolean;
+}
+
+// 哪些 kind 是可重新随机的（与 csm_core.assembler.reroll 的 source map
+// 保持一致：只有从 vault 采样的 kind 才有候选池可换；heading/literal/
+// hero_brand/test_framework 是模板/数据库里硬编码的，重随无意义）。
+const REROLLABLE_KINDS = new Set<string>([
+  "paragraph",
+  "numbered_list",
+  "competitor_pool",
+]);
+
+const assemblyRows = computed<AssemblyRow[]>(() => {
+  const results = (article.plan?.results ?? []) as any[];
+  if (!Array.isArray(results) || results.length === 0) return [];
+
+  // template.blocks 按 id 索引出 label（递归进 children）。
+  const labelById = new Map<string, string>();
+  function indexTplBlocks(blocks: any[]): void {
+    for (const b of blocks) {
+      // ParagraphBlock/NumberedListBlock/CompetitorPoolBlock/TestFrameworkBlock
+      // 有 label；HeadingBlock 用 text；HeroBrandBlock 用 title；LiteralBlock 用 text。
+      const l = b.label || b.text || b.title || "";
+      if (b.id) labelById.set(b.id, l);
+      if (Array.isArray(b.children)) indexTplBlocks(b.children);
+    }
+  }
+  indexTplBlocks((article.template?.blocks ?? []) as any[]);
+
+  // plan.results 扁平化（含 children），保持顺序。
+  function flatten(rs: any[]): any[] {
+    const out: any[] = [];
+    for (const r of rs) {
+      out.push(r);
+      if (Array.isArray(r.children) && r.children.length) {
+        out.push(...flatten(r.children));
+      }
+    }
+    return out;
+  }
+
+  return flatten(results).map((r) => {
+    let content = "";
+    if (typeof r.text === "string" && r.text) {
+      content = r.text;
+    } else if (Array.isArray(r.picks) && r.picks.length) {
+      content = r.picks
+        .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join("\n\n");
+    }
+    const words = content.length;
+    const status: AssemblyRow["status"] = content ? "draft" : "empty";
+    const fallbackLabel = KIND_META[r.kind]?.l ?? r.kind;
+    return {
+      id: r.block_id,
+      kind: r.kind,
+      label: labelById.get(r.block_id) || fallbackLabel,
+      hint: "尚未采样",
+      status,
+      words,
+      content,
+      draft: content,
+      rerollable: REROLLABLE_KINDS.has(r.kind),
+    };
+  });
+});
+
+// 当前正在重随的 slot id —— 用于按钮 loading 态 + 全局互斥（同一时间
+// 只允许一个 slot 在重随，避免后端 plan 状态被并发覆盖）。
+const rerollingSlot = ref<string | null>(null);
+
+async function rerollSlot(blockId: string) {
+  if (rerollingSlot.value) return;  // 互斥
+  rerollingSlot.value = blockId;
+  try {
+    const ok = await article.rerollSlot(blockId);
+    if (ok) {
+      toast.success("已重随这一段");
+    } else {
+      toast.warn("没有可重随的候选");
+    }
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("exhausted") || msg.includes("no more candidates")) {
+      toast.warn("候选池已抽干 — 没有更多变体可换");
+    } else if (msg.includes("unknown job_id")) {
+      toast.warn("生成记录已过期 — 请先重新起飞");
+    } else {
+      toast.error(`重随失败：${msg}`);
+    }
+  } finally {
+    rerollingSlot.value = null;
+  }
+}
+
+// 已采样个数（status !== empty）—— 头部 "x/y 已采样"
+const sampledCount = computed(
+  () => assemblyRows.value.filter((b) => b.status !== "empty").length,
+);
+
+// selectedSlot 自动跟随 —— assemblyRows 第一次有数据 / 当前选中失效时，
+// 默认选第一行的第一个非 heading slot（heading 在右侧预览里被 filter
+// 掉，选中它没意义）。
+watch(
+  () => assemblyRows.value.map((r) => r.id).join("|"),
+  (joinedIds) => {
+    const ids = joinedIds ? joinedIds.split("|") : [];
+    if (ids.length === 0) return;
+    if (ids.includes(selectedSlot.value)) return;
+    const firstNonHeading = assemblyRows.value.find((r) => r.kind !== "heading");
+    selectedSlot.value = firstNonHeading?.id ?? ids[0];
+  },
+  { immediate: true },
+);
 
 // SAMPLE_BLOCKS 已清空：原本由 SAMPLE_BLOCKS 拼出的 SAMPLE_DRAFT_TEXT /
 // SAMPLE_FINAL_TEXT 都是空串，直接删掉；占位标题给一个通用值即可。
@@ -166,12 +292,18 @@ async function takeoff() {
     toast.warn("请选择模板");
     return;
   }
+  // 起飞 = 只做"随机组装出初稿"。AI 整篇润色由用户在初稿 tab 手动点
+  // "整篇润色"触发，避免一把梭直接出成稿、绕过用户检查环节。
   await article.submit({
     keyword: keyword.value.trim(),
     template_id: templateId.value,
     skill_id: skillId.value || undefined,
     seed: seed.value,
+    draft_only: true,
   });
+  // 顺便用 AI 拉一组标题候选，让用户在初稿 tab 里就能挑标题。这是
+  // 整个流程里第一次 LLM 调用。失败不影响初稿展示，仅 toast 提示。
+  article.fetchTitleCandidates().catch(() => {});
 }
 
 // ── Demo 模式状态 ──────────────────────────────────────────
@@ -217,12 +349,17 @@ async function polishAll() {
   polishProgress.value = 0;
   polishStage.value = POLISH_STAGES[0];
 
-  if (article.lastRequest && article.finalText.trim()) {
-    // 真实模式：跑 sidecar 的 polish_whole
+  if (article.lastRequest && article.draftText.trim()) {
+    // 真实模式：把组装好的初稿（draftText）整篇喂给 LLM 润色，
+    // 结果写入 finalText 作为成稿。这是整个流程的第二次（也是
+    // 整篇润色环节的唯一一次）LLM 调用。
     try {
-      const out = await article.polishWhole(article.finalText);
+      const out = await article.polishWhole(article.draftText);
       if (out) {
         article.setFinalText(out);
+        // 润色完成才把视图切到成稿 tab —— 配合 watch(article.status)
+        // 里 done → "draft" 的语义，组成完整的「初稿 → 润色 → 成稿」流。
+        activeTab.value = "final";
         toast.success("整篇润色完成");
       } else {
         toast.error("润色失败，未返回结果");
@@ -271,6 +408,44 @@ async function polishAll() {
   polishStage.value = "";
   toast.success("演示：整篇润色完成");
 }
+
+// ── 全局进度（4 段流程）──────────────────────────────────────────
+// 把 sidecar generate job 的进度（仅覆盖"组装"环节）和"整篇润色"
+// 这一步 拼成一条 0-100% 的"整篇文章流程"进度。原本进度卡只看
+// article.status，draft_only 模式下 generate job 一完成进度就跳
+// 100% —— 但其实只完成了 1/4 流程（组装），用户看着以为成稿就绪
+// 实际还得点润色。这里改成：
+//   0-50%   组装中（generate job 跑 stage 0-3）
+//   50%     组装完成、初稿就绪（status=done, finalText 还空）
+//   50-90%  整篇润色中（无可靠 polishProgress，固定 75% 占位）
+//   100%    成稿完成（finalText 有值）
+const overallProgress = computed<number>(() => {
+  if (article.status === "idle" || article.status === "error") return 0;
+  if (article.status === "running") return article.progress * 50;
+  // status === "done"
+  if (polishing.value) return 75;
+  if (article.finalText.trim()) return 100;
+  return 50;  // 初稿就绪、等待润色
+});
+
+const overallLabel = computed<string>(() => {
+  if (article.status === "idle") return "暂无生成任务";
+  if (article.status === "error") return article.error ?? "生成失败";
+  if (article.status === "running") return article.currentStage ?? "排队中…";
+  if (polishing.value) return polishStage.value || "AI 润色中…";
+  if (article.finalText.trim()) return "已完成";
+  return "初稿就绪 · 待润色";
+});
+
+// 右上角的 "x / 4" 步骤计数。step 取值含义：
+//   1 组装中 / 2 初稿就绪 / 3 润色中 / 4 成稿完成
+const overallStep = computed<number | null>(() => {
+  if (article.status === "idle" || article.status === "error") return null;
+  if (article.status === "running") return 1;
+  if (polishing.value) return 3;
+  if (article.finalText.trim()) return 4;
+  return 2;
+});
 
 /**
  * 质检报告卡的视图模式 —— 默认 "checks" 渲染六项检查；点击底部
@@ -591,7 +766,11 @@ onUnmounted(() => {
 watch(
   () => article.status,
   async (s, prev) => {
-    if (s === "done") activeTab.value = "final";
+    // done 时停在初稿 tab —— 让用户先检查组装出来的 draft，再手动
+    // 点"整篇润色"。完成后由 polishAll 在润色成功时把 tab 切到 final。
+    // 不直接跳 final 是因为 draft_only=true 模式下 finalText 是空的，
+    // 跳过去用户只会看到空白成稿，体验更差。
+    if (s === "done") activeTab.value = "draft";
     // 失败时不在创作区里显示红条；直接弹全局失败 modal + 回首页。
     // 注意 prev !== "error" 是去重：watcher 在 reactive 重置时也可
     // 能再触发一次 (status 重新等于 "error")，防止弹两次。
@@ -743,26 +922,39 @@ const tabSectionLabel = computed(() => {
             组装预览块卡片，让用户在起飞前就能看到成品形态。
           -->
           <div v-if="activeTab === 'assembly'" class="flex min-h-0 flex-1">
-            <template v-if="article.plan?.results?.length">
-              <div class="min-h-0 flex-1 overflow-y-auto" :style="{ padding: '20px' }">
-                <AssemblyTree :results="article.plan.results" />
-              </div>
-            </template>
             <!--
-              SAMPLE_BLOCKS 已清空 —— 还没起飞的首次启动状态下显示空态文案，
-              提示用户先选模板再起飞，避免把 V1 设计稿假数据当成产品默认行为。
+              真实 plan 存在 → 复用下面的 V1 双栏样式（左 slot 列表 + 右组装预览）。
+              数据来自 assemblyRows（已把 plan.results 和 template.blocks 关联好）。
+              旧的简化版 AssemblyTree 已下线，AssemblyTree.vue 组件保留供其他视图
+              使用，本视图不再引用。
             -->
-            <template v-else-if="SAMPLE_BLOCKS.length === 0">
+            <template v-if="assemblyRows.length === 0">
               <div
                 class="flex min-h-0 flex-1 flex-col items-center justify-center text-center"
                 :style="{ padding: '40px 24px', color: 'var(--ink-3)' }"
               >
-                <div class="font-display text-[16px] font-semibold" :style="{ color: 'var(--ink)' }">
-                  {{ templateId ? "点击开始采样填充内容" : "选择模板后这里会显示组装预览" }}
-                </div>
-                <div class="mt-2 max-w-[420px] text-[12.5px]">
-                  在顶部输入关键词并选择模板/Skill，点击「开始生成」后会在这里逐块展示组装预览。
-                </div>
+                <!--
+                  正在跑 vault scan + assemble_plan（耗时 5-10s 不等）：显示
+                  loading 而不是"点击开始采样填充内容"的占位文案。否则用户点完
+                  "开始生成"会以为按钮没响应。
+                -->
+                <template v-if="article.isRunning">
+                  <Spinner />
+                  <div class="mt-3 font-display text-[14px] font-semibold" :style="{ color: 'var(--ink)' }">
+                    {{ article.currentStage ?? "正在采样组装…" }}
+                  </div>
+                  <div class="mt-1 max-w-[420px] text-[12.5px]">
+                    扫描资料库 → 加载模板 → 采样 blocks → 组装预览。完成后这里会展示组装结果。
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="font-display text-[16px] font-semibold" :style="{ color: 'var(--ink)' }">
+                    {{ templateId ? "点击开始采样填充内容" : "选择模板后这里会显示组装预览" }}
+                  </div>
+                  <div class="mt-2 max-w-[420px] text-[12.5px]">
+                    在顶部输入关键词并选择模板/Skill，点击「开始生成」后会在这里逐块展示组装预览。
+                  </div>
+                </template>
               </div>
             </template>
             <template v-else>
@@ -782,9 +974,9 @@ const tabSectionLabel = computed(() => {
                   模板框架
                 </div>
                 <div class="flex items-center gap-2 mb-3">
-                  <Pill>{{ templateName || "导购·场景人群" }}</Pill>
+                  <Pill>{{ templateName || "未选模板" }}</Pill>
                   <span class="text-[10.5px]" :style="{ color: 'var(--ink-4, var(--ink-3))' }">
-                    {{ SAMPLE_BLOCKS.length }} 个槽位
+                    {{ assemblyRows.length }} 个槽位
                   </span>
                 </div>
                 <!--
@@ -793,7 +985,7 @@ const tabSectionLabel = computed(() => {
                 -->
                 <div class="flex flex-col gap-1">
                   <button
-                    v-for="(b, i) in SAMPLE_BLOCKS"
+                    v-for="(b, i) in assemblyRows"
                     :key="b.id"
                     type="button"
                     class="text-left flex items-center gap-2 transition"
@@ -844,10 +1036,20 @@ const tabSectionLabel = computed(() => {
                       组装预览
                     </div>
                     <div class="text-[12px] mt-0.5" :style="{ color: 'var(--ink-2)' }">
-                      {{ sampledCount }}/{{ SAMPLE_BLOCKS.length }} 已采样 · 点击各段可润色或重随
+                      {{ sampledCount }}/{{ assemblyRows.length }} 已采样 · 点击各段可润色或重随
                     </div>
                   </div>
-                  <Btn variant="ghost" small>
+                  <!--
+                    "全部重采"：换一套全新组装（等价于右下角的"重新随机"，
+                    走 article.rerun → seed+1 重新走 /api/generate）。运行中
+                    或正在 reroll 单个 slot 时禁用，避免并发覆盖 plan。
+                  -->
+                  <Btn
+                    variant="ghost"
+                    small
+                    :disabled="article.isRunning || rerollingSlot !== null"
+                    @click="article.rerun()"
+                  >
                     <Icon name="refresh" :size="11" />
                     全部重采
                   </Btn>
@@ -861,7 +1063,7 @@ const tabSectionLabel = computed(() => {
                   -->
                   <div class="flex flex-col gap-3">
                     <div
-                      v-for="b in SAMPLE_BLOCKS.filter((x) => x.kind !== 'heading')"
+                      v-for="b in assemblyRows.filter((x) => x.kind !== 'heading')"
                       :key="b.id"
                       class="transition cursor-pointer"
                       :style="{
@@ -912,9 +1114,11 @@ const tabSectionLabel = computed(() => {
                             <Icon name="wand" :size="12" />
                           </button>
                           <button
+                            v-if="b.rerollable"
                             type="button"
-                            title="重随"
-                            class="inline-flex items-center justify-center transition hover:brightness-95"
+                            :title="rerollingSlot === b.id ? '正在重随…' : '重随'"
+                            :disabled="rerollingSlot !== null"
+                            class="inline-flex items-center justify-center transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
                             :style="{
                               width: '26px',
                               height: '26px',
@@ -923,9 +1127,10 @@ const tabSectionLabel = computed(() => {
                               color: 'var(--ink-2)',
                               border: '1px solid var(--line)',
                             }"
-                            @click.stop
+                            @click.stop="rerollSlot(b.id)"
                           >
-                            <Icon name="refresh" :size="12" />
+                            <Spinner v-if="rerollingSlot === b.id" :size="11" />
+                            <Icon v-else name="refresh" :size="12" />
                           </button>
                         </div>
                       </div>
@@ -1121,11 +1326,11 @@ const tabSectionLabel = computed(() => {
                   height: '28px',
                   borderRadius: '9px',
                   background:
-                    article.status === 'running'
+                    overallStep !== null && overallStep < 4
                       ? 'rgba(238,106,42,0.12)'
                       : 'var(--card-2)',
                   color:
-                    article.status === 'running'
+                    overallStep !== null && overallStep < 4
                       ? 'var(--primary)'
                       : 'var(--ink-3)',
                 }"
@@ -1138,38 +1343,24 @@ const tabSectionLabel = computed(() => {
                   class="text-[10.5px] truncate"
                   :style="{ color: 'var(--ink-3)' }"
                 >
-                  <template v-if="article.status === 'running'">
-                    {{ article.currentStage ?? "排队中…" }}
-                  </template>
-                  <template v-else-if="article.status === 'done'">
-                    已完成
-                  </template>
-                  <template v-else>暂无生成任务</template>
+                  {{ overallLabel }}
                 </div>
               </div>
               <span
-                v-if="article.status === 'running'"
+                v-if="overallStep !== null"
                 class="font-mono tabular-nums text-[11px]"
                 :style="{ color: 'var(--ink-3)' }"
               >
-                {{ Math.min(article.stageIndex + 1, 6) }} / 6
+                {{ overallStep }} / 4
               </span>
             </div>
             <div class="mt-3">
               <!--
-                idle / done 状态显示一条灰色 0% / 100% 进度条占位，结构
-                跟运行态一致，视觉重量稳定。ProgressBar 内部对 0/100 都
-                有合理渲染（0 = 空槽底色）。
+                进度条值由 overallProgress 计算 —— 4 段流程的合成进度，
+                而不是 generate job 的 6-stage 内部进度。draft_only=true
+                模式下 generate 完成只占 50%，剩下 50% 留给整篇润色。
               -->
-              <ProgressBar
-                :value="
-                  article.status === 'running'
-                    ? article.progress
-                    : article.status === 'done'
-                      ? 100
-                      : 0
-                "
-              />
+              <ProgressBar :value="overallProgress" />
             </div>
           </div>
         </Card>
@@ -1513,7 +1704,7 @@ const tabSectionLabel = computed(() => {
                 color: '#fff',
                 border: '1px solid var(--primary)',
               }"
-              :disabled="!article.finalText.trim() || polishing"
+              :disabled="!article.draftText.trim() || polishing"
               @click="polishAll"
             >
               <Spinner v-if="polishing" :size="13" />

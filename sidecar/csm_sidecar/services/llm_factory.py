@@ -35,6 +35,9 @@ def build_client(
     cfg = config_service.load()
     p = provider or cfg.default_provider
 
+    if p is None:
+        raise LLMConfigError("尚未选择默认 provider，请先在 设置 中配置")
+
     if p == "mock":
         return make_client(provider="mock")
 
