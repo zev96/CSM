@@ -231,23 +231,11 @@ def login_capture(platform: str, body: CookieLoginBody) -> dict[str, Any]:
     }
 
 
-# ── Summary + reports ──────────────────────────────────────────────────────
+# ── Summary + history aggregations ────────────────────────────────────────
 @router.get("/api/monitor/summary")
 async def get_summary() -> dict[str, Any]:
     _require_storage()
     return monitor_service.get_summary()
-
-
-@router.get("/api/monitor/reports")
-async def get_reports(
-    period: str = Query(default="daily"),
-    limit: int = Query(default=30, ge=1, le=200),
-) -> dict[str, Any]:
-    _require_storage()
-    try:
-        return monitor_service.get_reports(period=period, limit=limit)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/api/monitor/history/comment-retention")
