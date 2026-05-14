@@ -28,6 +28,25 @@ DEFAULT_UPDATE_REPO = "zev96/CSM"
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="updater")
 
 
+def _read_release_token() -> str:
+    """Pull the PAT out of csm_core.updater_client._token.
+
+    The real ``_token.py`` is gitignored and either:
+      - injected by CI on release builds (release.yml `Inject PAT` step)
+      - copy-pasted by a dev from ``_token.py.example`` for local testing
+
+    Returns "" when the file isn't present — that's the dev default and
+    public-repo case. With an empty token, GitHub's anonymous rate limit
+    (60 req/h per IP) applies; that's fine for "Check updates" being a
+    user-triggered button, not a poll.
+    """
+    try:
+        from csm_core.updater_client._token import TOKEN
+    except ImportError:
+        return ""
+    return TOKEN if isinstance(TOKEN, str) else ""
+
+
 def check() -> dict[str, Any]:
     """Return JSON-friendly CheckResult.
 
@@ -48,7 +67,7 @@ def check() -> dict[str, Any]:
     repo = cfg.update_repo or DEFAULT_UPDATE_REPO
     result = check_for_update(
         repo=repo,
-        token="",  # public-repo only for v1; auth tokens come later
+        token=_read_release_token(),
         current_version=__version__,
         timeout=5.0,
     )
@@ -78,6 +97,12 @@ def _try_fetch_sha256(manifest_url: str) -> str | None:
         # API URL needs Accept: application/octet-stream to get the asset
         # bytes; browser_download_url works with default Accept.
         headers = {"Accept": "application/octet-stream"}
+        # 私有仓库需要带 token —— 没 token 时 anonymous GET 会 404。
+        # 详见 GitHub Releases asset download docs：private repo asset
+        # 不暴露给公网，必须 Bearer auth。
+        tok = _read_release_token()
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
         resp = httpx.get(
             manifest_url, headers=headers, timeout=5.0, follow_redirects=True,
         )
@@ -123,12 +148,21 @@ def _run_download(job_id: str, url: str, expected_sha256: str, target: Path) -> 
             percent=round(percent * 100, 1),
         )
 
+    # 私有仓库 asset 必须带 Authorization；Accept: octet-stream 让 GitHub API
+    # 直接返回二进制而不是 JSON 描述。token 缺失（public repo / dev 环境）就
+    # 不加 Authorization，走 anonymous 路径。
+    headers: dict[str, str] = {"Accept": "application/octet-stream"}
+    tok = _read_release_token()
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+
     try:
         sha = download_with_verification(
             url=url,
             target=target,
             expected_sha256=expected_sha256,
             progress_cb=_on_progress,
+            headers=headers,
         )
         bus.finish(job_id, target=str(target), sha256=sha)
     except DownloadCancelled:
