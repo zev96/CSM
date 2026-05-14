@@ -122,3 +122,104 @@ def test_comment_retention_invalid_range_400(client: TestClient, monitor_db: Pat
     resp = client.get("/api/monitor/history/comment-retention?range=2d")
     assert resp.status_code == 400
     assert "range" in resp.json()["detail"]
+
+
+# ── Zhihu ranking helpers ──────────────────────────────────────────────────
+
+def _seed_zhihu_result(task_id: int, *, checked_at: datetime, matched_count: int,
+                       best_rank: int = -1, top_n: int = 10):
+    """Insert a zhihu MonitorResult."""
+    storage.save_result(MonitorResult(
+        task_id=task_id,
+        checked_at=checked_at,
+        status="ok",
+        rank=best_rank if matched_count > 0 else -1,
+        metric={
+            "matched_count": matched_count,
+            "matched_ranks": list(range(1, matched_count + 1)),  # 简化，rank=1..N
+            "top_n": top_n,
+            "alert_top_n": 5,
+            "target_brand": "拾梧",
+        },
+        error_message="",
+    ))
+
+
+def test_zhihu_change_kind_down_when_match_count_drops(client: TestClient, monitor_db: Path):
+    """matched_count 减少 → change_kind=down。"""
+    tid = _seed_task(client, type="zhihu_question", name="Q1",
+                     target_url="https://www.zhihu.com/question/1",
+                     config={"target_brand": "拾梧", "top_n": 10})
+    now = datetime.now()
+    _seed_zhihu_result(tid, checked_at=now - timedelta(hours=2), matched_count=5)
+    _seed_zhihu_result(tid, checked_at=now, matched_count=3)
+    resp = client.get("/api/monitor/history/zhihu-ranking?range=7d")
+    assert resp.status_code == 200
+    q = next(q for q in resp.json()["questions"] if q["task_id"] == tid)
+    assert q["change_kind"] == "down"
+    assert q["matched_count"] == 3
+    assert q["matched_count_prev"] == 5
+
+
+def test_zhihu_change_kind_dropped_when_all_hits_gone(client: TestClient, monitor_db: Path):
+    """有命中 → 无命中 → dropped。"""
+    tid = _seed_task(client, type="zhihu_question", name="Q2",
+                     target_url="https://www.zhihu.com/question/2",
+                     config={"target_brand": "拾梧", "top_n": 10})
+    now = datetime.now()
+    _seed_zhihu_result(tid, checked_at=now - timedelta(hours=2), matched_count=2)
+    _seed_zhihu_result(tid, checked_at=now, matched_count=0)
+    q = next(q for q in client.get("/api/monitor/history/zhihu-ranking?range=7d").json()["questions"]
+             if q["task_id"] == tid)
+    assert q["change_kind"] == "dropped"
+
+
+def test_zhihu_change_kind_new_when_first_hit(client: TestClient, monitor_db: Path):
+    """无命中 → 有命中 → new。"""
+    tid = _seed_task(client, type="zhihu_question", name="Q3",
+                     target_url="https://www.zhihu.com/question/3",
+                     config={"target_brand": "拾梧", "top_n": 10})
+    now = datetime.now()
+    _seed_zhihu_result(tid, checked_at=now - timedelta(hours=2), matched_count=0)
+    _seed_zhihu_result(tid, checked_at=now, matched_count=2)
+    q = next(q for q in client.get("/api/monitor/history/zhihu-ranking?range=7d").json()["questions"]
+             if q["task_id"] == tid)
+    assert q["change_kind"] == "new"
+
+
+def test_zhihu_change_kind_flat_first_time_seen(client: TestClient, monitor_db: Path):
+    """只跑过一次（prev 不存在）→ flat。"""
+    tid = _seed_task(client, type="zhihu_question", name="Q4",
+                     target_url="https://www.zhihu.com/question/4",
+                     config={"target_brand": "拾梧", "top_n": 10})
+    _seed_zhihu_result(tid, checked_at=datetime.now(), matched_count=3)
+    q = next(q for q in client.get("/api/monitor/history/zhihu-ranking?range=7d").json()["questions"]
+             if q["task_id"] == tid)
+    assert q["change_kind"] == "flat"
+
+
+def test_zhihu_kpis_aggregate_across_questions(client: TestClient, monitor_db: Path):
+    """跨多个问题聚合：avg_share = ∑matched / ∑top_n，changed_count 统计。"""
+    now = datetime.now()
+    # Q1: 5/10 命中（旧）→ 3/10（新） — down
+    t1 = _seed_task(client, type="zhihu_question", name="Q1",
+                    target_url="https://www.zhihu.com/question/1",
+                    config={"target_brand": "拾梧", "top_n": 10})
+    _seed_zhihu_result(t1, checked_at=now - timedelta(hours=2), matched_count=5)
+    _seed_zhihu_result(t1, checked_at=now, matched_count=3)
+    # Q2: 0/10 → 2/10 — new (新上榜也算 up 类)
+    t2 = _seed_task(client, type="zhihu_question", name="Q2",
+                    target_url="https://www.zhihu.com/question/2",
+                    config={"target_brand": "拾梧", "top_n": 10})
+    _seed_zhihu_result(t2, checked_at=now - timedelta(hours=2), matched_count=0)
+    _seed_zhihu_result(t2, checked_at=now, matched_count=2)
+
+    body = client.get("/api/monitor/history/zhihu-ranking?range=7d").json()
+    k = body["kpis"]
+    assert k["monitored_questions"] == 2
+    # avg_share_today = (3+2) / (10+10) = 0.25
+    assert k["avg_share_today"] == pytest.approx(0.25)
+    # changed_questions = 2 (Q1 down + Q2 new)
+    assert k["changed_questions"] == 2
+    assert k["changed_down"] == 1
+    assert k["changed_up"] == 1  # "new" 也算 up 类（新增命中）

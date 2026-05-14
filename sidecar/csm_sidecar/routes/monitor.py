@@ -259,6 +259,15 @@ async def get_comment_retention_history(range_str: str = Query("7d", alias="rang
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@router.get("/api/monitor/history/zhihu-ranking")
+async def get_zhihu_ranking_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
+    _require_storage()
+    try:
+        return history_service.get_zhihu_ranking_history(range_str=range_str)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 # ── Live event stream ──────────────────────────────────────────────────────
 @router.get("/api/monitor/events")
 async def stream_events():

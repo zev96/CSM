@@ -127,6 +127,191 @@ def get_comment_retention_history(range_str: str) -> dict[str, Any]:
     return {"range": range_str, "platforms": platforms_out, "events": events}
 
 
+def get_zhihu_ranking_history(range_str: str) -> dict[str, Any]:
+    """KPI + 每日趋势 + 全量问题列表（前端按 change_kind 自行 filter）。
+
+    A question's ``change_kind`` is computed from its two most recent
+    successful results: ``current`` (latest) vs ``prev`` (second-to-latest):
+      - prev missing → "flat" (首次监测，无对比基准)
+      - prev.matched_count > 0 & curr.matched_count == 0 → "dropped"
+      - prev.matched_count == 0 & curr.matched_count > 0 → "new"
+      - tuple(curr.matched_count, -curr.best_rank) > tuple(prev...) → "up"
+      - 反向 → "down"
+      - 相等 → "flat"
+    """
+    range_days = _parse_range(range_str)
+    now = datetime.now()
+    conn = storage.get_conn()
+    rows = conn.execute(
+        """
+        SELECT r.task_id, r.checked_at, r.status, r.rank, r.metric_json,
+               t.id AS t_id, t.name AS task_name, t.config_json
+        FROM monitor_results r
+        JOIN monitor_tasks t ON t.id = r.task_id
+        WHERE t.type = 'zhihu_question'
+          AND t.enabled = 1
+          AND r.status = 'ok'
+        ORDER BY r.task_id ASC, r.checked_at DESC
+        """,
+    ).fetchall()
+    # Also need to enumerate tasks even if they have zero results yet, so
+    # monitored_questions count is right.
+    all_tasks = conn.execute(
+        "SELECT id, name, config_json FROM monitor_tasks "
+        "WHERE type='zhihu_question' AND enabled=1",
+    ).fetchall()
+
+    # Group results per task in checked_at DESC order; take top 2 for prev/curr.
+    per_task: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        m = json.loads(row["metric_json"] or "{}")
+        checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001
+        if not checked:
+            continue
+        per_task[row["task_id"]].append({
+            "checked_at": checked,
+            "matched_count": int(m.get("matched_count") or 0),
+            "matched_ranks": list(m.get("matched_ranks") or []),
+            "best_rank": int(min(m["matched_ranks"])) if m.get("matched_ranks") else -1,
+            "top_n": int(m.get("top_n") or m.get("alert_top_n") or 10),
+            "target_brand": m.get("target_brand", ""),
+            "task_name": row["task_name"],
+        })
+
+    questions = []
+    for t in all_tasks:
+        cfg = json.loads(t["config_json"] or "{}")
+        results = per_task.get(t["id"], [])
+        curr = results[0] if results else None
+        prev = results[1] if len(results) > 1 else None
+        kind, share = _classify_zhihu_change(curr, prev)
+        top_n = (curr or {}).get("top_n") or int(cfg.get("top_n") or 10)
+        target_brand = (curr or {}).get("target_brand") or cfg.get("target_brand", "")
+        questions.append({
+            "task_id": t["id"],
+            "title": t["name"],
+            "target_brand": target_brand,
+            "matched_count": (curr or {}).get("matched_count", 0),
+            "matched_count_prev": (prev or {}).get("matched_count", 0) if prev else None,
+            "top_n": top_n,
+            "matched_ranks": (curr or {}).get("matched_ranks", []),
+            "best_rank": (curr or {}).get("best_rank", -1),
+            "best_rank_prev": (prev or {}).get("best_rank", -1) if prev else None,
+            "change_kind": kind,
+            "checked_at": (curr["checked_at"].isoformat() if curr else None),
+        })
+
+    # KPIs aggregated across all questions
+    monitored = len(questions)
+    hit_count_total = sum(q["matched_count"] for q in questions)
+    topn_total = sum(q["top_n"] for q in questions)
+    avg_share_today = (hit_count_total / topn_total) if topn_total else 0.0
+    hit_count_prev = sum((q["matched_count_prev"] or 0) for q in questions if q["matched_count_prev"] is not None)
+    topn_prev_total = sum(q["top_n"] for q in questions if q["matched_count_prev"] is not None)
+    avg_share_prev = (hit_count_prev / topn_prev_total) if topn_prev_total else 0.0
+
+    changed_down = sum(1 for q in questions if q["change_kind"] in ("down", "dropped"))
+    changed_up = sum(1 for q in questions if q["change_kind"] in ("up", "new"))
+    changed_total = changed_down + changed_up
+
+    # Per-day series (just changed_count + avg_share for the line chart)
+    daily_series = _zhihu_daily_series(per_task, range_days=range_days, now=now)
+
+    return {
+        "range": range_str,
+        "kpis": {
+            "monitored_questions": monitored,
+            "questions_added_this_week": 0,  # v0 不算，避免再多一次查询
+            "brands_covered": len({q["target_brand"] for q in questions if q["target_brand"]}),
+            "avg_share_today": avg_share_today,
+            "avg_share_prev": avg_share_prev,
+            "hit_count_total": hit_count_total,
+            "topn_total": topn_total,
+            "changed_questions": changed_total,
+            "changed_up": changed_up,
+            "changed_down": changed_down,
+        },
+        "daily_series": daily_series,
+        "questions": questions,
+    }
+
+
+def _classify_zhihu_change(curr: dict | None, prev: dict | None) -> tuple[str, float]:
+    if curr is None:
+        return "flat", 0.0
+    if prev is None:
+        return "flat", curr["matched_count"] / max(curr["top_n"], 1)
+    if prev["matched_count"] > 0 and curr["matched_count"] == 0:
+        return "dropped", 0.0
+    if prev["matched_count"] == 0 and curr["matched_count"] > 0:
+        return "new", curr["matched_count"] / max(curr["top_n"], 1)
+    # Compare tuple (matched_count, -best_rank). Higher matched_count wins;
+    # tie-break: smaller best_rank (better) wins. -best_rank flips so larger
+    # is better in the natural tuple comparison. Handle -1 (no hits) sentinels.
+    def _score(r: dict) -> tuple[int, int]:
+        return r["matched_count"], -(r["best_rank"] if r["best_rank"] > 0 else 9999)
+    s_curr, s_prev = _score(curr), _score(prev)
+    share = curr["matched_count"] / max(curr["top_n"], 1)
+    if s_curr > s_prev:
+        return "up", share
+    if s_curr < s_prev:
+        return "down", share
+    return "flat", share
+
+
+def _zhihu_daily_series(
+    per_task: dict[int, list[dict]],
+    *,
+    range_days: int,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """For each day in range, compute avg_share + change counts.
+
+    Per-task per-day = the latest result whose ``checked_at < day_end`` —
+    i.e. the most recent observation on or before that day. Days before a
+    task's first observation contribute nothing; days after carry forward
+    the latest known state until the next observation lands. Aggregated
+    across tasks for each bucket.
+    """
+    series = []
+    for d in range(range_days):
+        day = (now - timedelta(days=range_days - 1 - d)).date()
+        day_start = datetime.combine(day, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        hits = 0
+        topn = 0
+        changed_up = changed_down = 0
+        for results in per_task.values():
+            # results is DESC; find first result whose checked_at < day_end
+            curr_on_day = next((r for r in results if r["checked_at"] < day_end), None)
+            if not curr_on_day:
+                continue
+            hits += curr_on_day["matched_count"]
+            topn += curr_on_day["top_n"]
+            # 当天的 prev：当天 day_start 之前最近一次。注意这跟 questions[]
+            # 列表里的 prev（取「倒数第二条 result」无视日期）语义不一样
+            # ——同一 task 当天跑了两次，daily_series 算 flat（午夜前无 prev）
+            # 而 questions[] 可能算 up/down。这是有意为之：日级别系列要稳定
+            # 反映「跨天的变化」，不被同一天的两次抓取扰动。
+            prev_for_day = next(
+                (r for r in results if r["checked_at"] < day_start),
+                None,
+            )
+            kind, _ = _classify_zhihu_change(curr_on_day, prev_for_day)
+            if kind in ("up", "new"):
+                changed_up += 1
+            elif kind in ("down", "dropped"):
+                changed_down += 1
+        series.append({
+            "date": day.strftime("%Y-%m-%d"),
+            "avg_share": (hits / topn) if topn else 0.0,
+            "changed_count": changed_up + changed_down,
+            "changed_up": changed_up,
+            "changed_down": changed_down,
+        })
+    return series
+
+
 def _collect_deletion_events(
     by_platform_date: dict[str, dict[str, dict[int, dict]]],
     *,
