@@ -33,9 +33,17 @@ _PATH_PATTERNS = [
     re.compile(r"/short-video/([a-zA-Z0-9_-]+)"),
     re.compile(r"/video/([a-zA-Z0-9_-]+)"),
     re.compile(r"photoId=([a-zA-Z0-9_-]+)"),
-    re.compile(r"/f/([a-zA-Z0-9_-]+)"),
+    # ``shareObjectId`` is what the share-redirected URL exposes — quicker
+    # than re-grepping the short-video path when both appear in the query
+    # string (and matches at the front because we want the *canonical*
+    # photoId, not the share token).
+    re.compile(r"shareObjectId=([a-zA-Z0-9_-]+)"),
     re.compile(r"/fw/photo/([a-zA-Z0-9_-]+)"),
     re.compile(r"photo/([a-zA-Z0-9_-]+)"),
+    # Note: ``/f/<slug>`` is a share-token redirect, NOT a photoId. It is
+    # intentionally NOT in this list — the expansion above turns
+    # ``/f/<token>`` into ``/short-video/<photoId>`` first; if that
+    # expansion fails the HTML fallback below can still recover.
 ]
 _HTML_FALLBACKS = [
     re.compile(r'"photoId"\s*:\s*"([a-zA-Z0-9]+)"'),
@@ -43,12 +51,29 @@ _HTML_FALLBACKS = [
     re.compile(r'data-photo-id="([a-zA-Z0-9]+)"'),
 ]
 
+# 快手 PC web 评论 GraphQL —— 关键点是 V1 (``rootComments``) 与 V2
+# (``rootCommentsV2``) 必须**都**请求。服务器对老查询保持 200 兼容，但只
+# 把数据塞进 V2 字段，老的 ``rootComments`` 一直回空数组、``commentCount``
+# 回 null —— 之前只查 V1 的版本会得到「HTTP 200 + 0 评论 + 似乎成功」的
+# 假阳结果，UI 全部显示"未找到"。快手自家 SPA 的判断（在
+# pc-vision/js/short-video.d18beb01.js 里）是 ``rootCommentsV2 !== null
+# ? V2 path : V1 path``，下面 ``_fetch_comments`` 对齐这个优先级。
 _GQL_QUERY = """
 query commentListQuery($photoId: String, $pcursor: String) {
   visionCommentList(photoId: $photoId, pcursor: $pcursor) {
     commentCount
+    commentCountV2
     pcursor
+    pcursorV2
     rootComments {
+      commentId
+      authorId
+      authorName
+      content
+      likedCount
+      timestamp
+    }
+    rootCommentsV2 {
       commentId
       authorId
       authorName
@@ -121,13 +146,27 @@ class KuaishouCommentAdapter:
                 return None, "no URL found in input"
             url = m.group(1).rstrip("，。！？、/")
 
-        if "v.kuaishou.com" in url:
+        # 快手有两种分享短链格式都会用 ``/f/<slug>``，slug 是 8~16 位的
+        # shareToken（如 ``X-7Ellfyy6sQUWfo``），不是 photoId。直接拿 slug
+        # 当 photoId 去查 GraphQL，快手会返回空 ``visionCommentList``
+        # （HTTP 200 + rootComments=[]），结果是 total_fetched=0、五条任
+        # 务全显示"未找到"的假阴性。这里把所有 ``/f/`` 形态都走一次
+        # follow-redirects 解析，让重定向后的 ``/short-video/<photoId>``
+        # 被下面的 _PATH_PATTERNS 第一条命中。
+        is_share_link = "v.kuaishou.com" in url or "kuaishou.com/f/" in url
+        if is_share_link:
             try:
                 resp = session.get(url, allow_redirects=True, timeout=15)
                 if resp.status_code == 200:
-                    url = str(resp.url)
+                    expanded = str(resp.url)
+                    if expanded != url:
+                        logger.info(
+                            "kuaishou share-link %s expanded to %s",
+                            url[:60], expanded[:120],
+                        )
+                    url = expanded
             except Exception as e:
-                logger.info("kuaishou short-link expansion failed: %s", e)
+                logger.info("kuaishou share-link expansion failed: %s", e)
 
         for pattern in _PATH_PATTERNS:
             m = pattern.search(url)
@@ -185,7 +224,10 @@ class KuaishouCommentAdapter:
                 return all_comments, False, f"GraphQL error: {msg}"
 
             vision = (data.get("data") or {}).get("visionCommentList") or {}
-            roots = vision.get("rootComments") or []
+            # 与快手 SPA 同步：V2 字段非空就走 V2，否则降级 V1。新 PC web
+            # 现在只填 V2；保留 V1 兜底是给未来变更或老版本兜底用。
+            roots_v2 = vision.get("rootCommentsV2")
+            roots = roots_v2 if roots_v2 else (vision.get("rootComments") or [])
             if not roots:
                 break
             for c in roots:
@@ -201,7 +243,9 @@ class KuaishouCommentAdapter:
                     "likes": int(c.get("likedCount") or 0),
                 })
 
-            new_pcursor = vision.get("pcursor") or ""
+            new_pcursor = (
+                vision.get("pcursorV2") if roots_v2 else vision.get("pcursor")
+            ) or ""
             if not new_pcursor or new_pcursor == "no_more" or new_pcursor == pcursor:
                 break
             pcursor = new_pcursor
