@@ -59,6 +59,11 @@ interface ArticleState {
   draftText: string;
   title: string;
   plan: Record<string, any> | null;
+  // 当前 plan 对应的 template 详情（blocks 列表 + 各块 label）。
+  // 组装 tab 的左侧 slot 列表渲染需要它 —— plan.results 里只有 block_id
+  // 和 kind，section 的中文名（"开篇·痛点 / 选购维度 / 主推款"）住在
+  // template.blocks[*].label / .text / .title 上。takeoff 时并行拉一次。
+  template: Record<string, any> | null;
   error: string | null;
   // Last submitted request — kept around so UI can re-run with tweaks.
   lastRequest: GenerateRequest | null;
@@ -86,6 +91,7 @@ export const useArticle = defineStore("article", {
     draftText: "",
     title: "",
     plan: null,
+    template: null,
     error: null,
     lastRequest: null,
     titleCandidates: [],
@@ -116,6 +122,7 @@ export const useArticle = defineStore("article", {
       this.documentPath = null;
       this.title = req.keyword;
       this.plan = null;
+      this.template = null;
 
       const sidecar = useSidecar();
       try {
@@ -127,6 +134,13 @@ export const useArticle = defineStore("article", {
         this.error = e?.response?.data?.detail ?? e?.message ?? String(e);
         return;
       }
+
+      // 并行拉 template 详情，给组装 tab 的左侧 slot 列表用。失败不阻塞
+      // SSE 流 —— 拿不到 template 时 UI 会 fallback 到 kind 名做 label。
+      sidecar.client
+        .get(`/api/templates/${encodeURIComponent(req.template_id)}`)
+        .then((r) => { this.template = r.data; })
+        .catch(() => { this.template = null; });
 
       this.stop = subscribe(`/api/events/${this.jobId}`, {
         stage: (d: any) => {
@@ -140,11 +154,22 @@ export const useArticle = defineStore("article", {
             if (i >= 0) this.stageIndex = i;
           }
         },
+        // 后端在"组装 prompt"阶段完成后立刻推 plan + draft，让组装 / 初稿
+        // 两个 tab 在 LLM 还在跑时就能显示真实内容（组装环节本来就不依赖
+        // LLM，不应让 UI 等到最终 done 才一次性刷新）。
+        assembly: (d: any) => {
+          this.plan = d.plan ?? null;
+          this.draftText = d.draft ?? "";
+        },
         done: (d: any) => {
           this.documentPath = d.document ?? null;
           this.format = d.format ?? null;
           this.title = d.title ?? this.title;
-          this.finalText = d.final_text ?? d.draft ?? "";
+          // 成稿（finalText）只在 LLM 整篇润色后才有值 —— draft_only 模式下
+          // d.final_text 是 undefined，这里**不再回退到 draft**，否则会让
+          // 成稿 tab 在用户还没点"整篇润色"前就显示初稿内容，破坏
+          // 「初稿 → 用户检查 → 整篇润色 → 成稿」的两步语义。
+          this.finalText = d.final_text ?? "";
           this.draftText = d.draft ?? "";
           this.plan = d.plan ?? null;
           this.stageIndex = STAGES.length;
@@ -257,6 +282,46 @@ export const useArticle = defineStore("article", {
         // Surface the original error so the caller can toast it cleanly.
         throw new Error(detail);
       }
+    },
+    /**
+     * 把一个 slot（block）里所有 picks 整体重新随机。后端只提供单
+     * pick 粒度的 reroll，所以这里串行调 N 次 —— numbered_list 这种
+     * 3 picks 的 block 会有 3 次往返，但 UX 上"重随这个 slot"是一个
+     * 原子操作，loading 在外层组件统一管。
+     *
+     * 找不到 block 或 block 没有可重随的 picks（文字块）时返回 false，
+     * 调用方应当先用 isRerollableKind() 过滤按钮显示。
+     */
+    async rerollSlot(blockId: string): Promise<boolean> {
+      if (!this.lastJobId || !this.plan) return false;
+      // 在 plan.results 里递归找到对应 block，拿 picks 长度
+      const findBlock = (rs: any[]): any | null => {
+        for (const r of rs) {
+          if (r.block_id === blockId) return r;
+          if (Array.isArray(r.children) && r.children.length) {
+            const found = findBlock(r.children);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      const block = findBlock(this.plan.results ?? []);
+      const pickCount = Array.isArray(block?.picks) ? block.picks.length : 0;
+      if (pickCount === 0) return false;
+      // 循环串行重随；只要任何一次成功就算成功。NoCandidates（409）的
+      // 单 pick 失败不阻断后续 picks —— 池子枯竭是常态，能换几个换几个。
+      let anyOk = false;
+      let lastErr: Error | null = null;
+      for (let i = 0; i < pickCount; i++) {
+        try {
+          const ok = await this.rerollPick(blockId, i);
+          if (ok) anyOk = true;
+        } catch (e: any) {
+          lastErr = e instanceof Error ? e : new Error(String(e));
+        }
+      }
+      if (!anyOk && lastErr) throw lastErr;
+      return anyOk;
     },
     async polishWhole(text: string): Promise<string | null> {
       const sidecar = useSidecar();

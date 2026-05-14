@@ -122,6 +122,15 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         bus.publish(job_id, "stage", stage="组装 prompt", index=3, total=6)
         draft = compose_draft(plan)
 
+        # 组装阶段产出的 plan + draft 立即推给前端 —— 这样用户在 LLM 阶段
+        # 还在跑时就能在 "组装" / "初稿" tab 里看到内容，而不是等到整个 job
+        # done 才一次性显示（组装本身不依赖 LLM，没必要让 UI 陪等）。
+        bus.publish(
+            job_id, "assembly",
+            plan=_plan_to_dict(plan),
+            draft=draft,
+        )
+
         if req.draft_only:
             bus.finish(
                 job_id,
@@ -159,6 +168,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             format=paths["format"],
             title=paths["title"],
             plan=_plan_to_dict(plan),
+            draft=draft,
             final_text=final_text,
         )
     except Exception as e:

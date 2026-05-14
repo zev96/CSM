@@ -75,7 +75,8 @@ def _is_essentially_empty_settings(path: Path) -> bool:
         not data.get("api_keys")
         and not data.get("vault_root")
         and not data.get("out_dir")
-        and data.get("default_provider", "mock") == "mock"
+        # 兼容两种"占位"形态：老默认值 "mock" 和新默认值 None（缺省字段或显式 null）
+        and data.get("default_provider") in (None, "mock")
     )
 
 

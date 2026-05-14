@@ -216,18 +216,35 @@ def get_reports(period: str = "daily", limit: int = 30) -> dict[str, Any]:
             "total_checks": 0,
             "alert_count": 0,
             "by_status": {},
+            "by_platform": {},
             "tasks_seen": set(),
+            # 平台 → set(task_id)，最后转 len 出 task_count
+            "_platform_tasks_seen": {},
         })
         b["total_checks"] += 1
         if row["alert_triggered"]:
             b["alert_count"] += 1
         b["by_status"][row["status"]] = b["by_status"].get(row["status"], 0) + 1
         b["tasks_seen"].add(row["task_id"])
+        # 按平台（task.type）拆分 —— 历史报告 modal 里要展示
+        # "知乎 X 次 / B站 Y 次 / 抖音 Z 次" 这样的明细。
+        ttype = row["task_type"]
+        pb = b["by_platform"].setdefault(ttype, {
+            "checks": 0, "alerts": 0, "task_count": 0,
+        })
+        pb["checks"] += 1
+        if row["alert_triggered"]:
+            pb["alerts"] += 1
+        b["_platform_tasks_seen"].setdefault(ttype, set()).add(row["task_id"])
 
     items = []
     for k in sorted(buckets.keys(), reverse=True)[:limit]:
         b = buckets[k]
         b["task_count"] = len(b.pop("tasks_seen"))
+        # 把 _platform_tasks_seen 收敛成 task_count 字段并落到 by_platform。
+        seen = b.pop("_platform_tasks_seen")
+        for ttype, ids in seen.items():
+            b["by_platform"][ttype]["task_count"] = len(ids)
         items.append(b)
     return {"period": period, "items": items}
 

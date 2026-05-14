@@ -65,7 +65,10 @@ class AppConfig(BaseModel):
     user_product: str | None = None
     vault_root: str | None = None
     out_dir: str | None = None
-    default_provider: Provider = "mock"
+    # None = 用户尚未选择默认 provider — sidecar 在收到生成请求时会拒绝并要求
+    # 用户先去设置页选一个。这避免了 "mock" 作为兜底导致用户拿到 "mock response"
+    # 占位结果还以为是真生成。
+    default_provider: Provider | None = None
     # TODO(task-2): move api_keys to OS keyring (keyring package) — plaintext on disk is below user expectations.
     # Tracked for sidecar migration: see csm_core.config.keyring_store below for the new code path.
     api_keys: dict[str, str] = Field(default_factory=dict)

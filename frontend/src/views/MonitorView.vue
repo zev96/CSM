@@ -508,7 +508,21 @@ const showCookieMgr = ref(false);
 // 抓数据，全部由 MonitorView 在打开时算好塞进 alertDetail / selectedReport。
 const showAlertModal = ref(false);
 const alertKind = ref<"zhihu_alert" | "comment_alert" | "history_report">("zhihu_alert");
-const selectedReport = ref<{ n: string; scope: string; t: string; abn: number } | null>(null);
+// history_report modal 用 —— 形状对齐 AlertDetailModal.HistoryReportProps。
+// 旧 4 字段 (n/scope/t/abn) 是必填的"显示门面"，后面 total_checks /
+// alert_count / task_count / by_status 是从后端真实 item 透传过来供
+// modal 详情区渲染的统计字段（缺失时 modal 内部会显示 "—"）。
+const selectedReport = ref<{
+  n: string;
+  scope: string;
+  t: string;
+  abn: number;
+  total_checks?: number;
+  alert_count?: number;
+  task_count?: number;
+  by_status?: Record<string, number>;
+  by_platform?: Record<string, { checks: number; alerts: number; task_count: number }>;
+} | null>(null);
 
 // 告警详情 modal 用的真实数据（zhihu / comment 两套），openZhihuAlert /
 // openCommentAlert 时同步算好。Null = 没数据，模态展示空态。
@@ -784,7 +798,7 @@ function openCommentAlert(alert?: HeroAlert) {
     commentAlertData.value = _buildCommentAlertData(a.batchName, a);
   }
 }
-function openReport(r: { n: string; scope: string; t: string; abn: number }) {
+function openReport(r: NonNullable<typeof selectedReport.value>) {
   alertKind.value = "history_report";
   selectedReport.value = r;
   showAlertModal.value = true;
@@ -1347,10 +1361,10 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         >
           {{
             activeTab === "zhihu"
-              ? "排名异动 & 评论留存"
+              ? "知乎问题 · 问题监控"
               : activeTab === "comment"
                 ? "平台评论 · 留存监控"
-                : "历史检测报告"
+                : "历史监测报告"
           }}
         </div>
         <div class="mt-1 text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
@@ -3074,7 +3088,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         }"
       >
         <div class="mb-3 flex-shrink-0">
-          <div class="font-display text-[14px] font-semibold">历史检测报告</div>
+          <div class="font-display text-[14px] font-semibold">历史监测报告</div>
           <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
             按时间倒序，最近 30 天
           </div>
@@ -3161,6 +3175,17 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                 type="button"
                 class="text-[11.5px]"
                 :style="{ color: 'var(--primary-deep)' }"
+                @click="openReport({
+                  n: r.period,
+                  scope: `${r.total_checks} 次检查`,
+                  t: r.period,
+                  abn: r.alert_count,
+                  total_checks: r.total_checks,
+                  alert_count: r.alert_count,
+                  task_count: r.task_count,
+                  by_status: r.by_status,
+                  by_platform: r.by_platform,
+                })"
               >查看 →</button>
             </div>
           </div>
