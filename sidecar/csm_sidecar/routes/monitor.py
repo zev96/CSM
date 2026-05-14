@@ -12,7 +12,7 @@ from csm_core.monitor.base import MonitorTask, TaskType
 
 from ..auth import RequireToken
 from ..monitor_bus import monitor_bus
-from ..services import monitor_lifecycle, monitor_service
+from ..services import history_service, monitor_lifecycle, monitor_service
 
 router = APIRouter(tags=["monitor"], dependencies=[RequireToken])
 
@@ -246,6 +246,15 @@ async def get_reports(
     _require_storage()
     try:
         return monitor_service.get_reports(period=period, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/api/monitor/history/comment-retention")
+async def get_comment_retention_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
+    _require_storage()
+    try:
+        return history_service.get_comment_retention_history(range_str=range_str)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
