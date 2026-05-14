@@ -120,8 +120,14 @@ jobs:
           }
           Write-Host "── Staged contents:"
           Get-ChildItem $stage -Recurse | Select-Object FullName | Format-Table -AutoSize
-          if (-not (Test-Path "$stage\CSM.exe")) {
-            Write-Error "Staging missing CSM.exe — NSIS install failed silently?"; exit 1
+          # 主 exe 的实际文件名来自 Cargo [[bin]].name (csm-tauri) 而非
+          # tauri.conf.json 的 productName "CSM"。这是 v0.4.1 release CI
+          # 第三跑摸出来的真实 NSIS 布局，跟我们最初的设计假设不一致。
+          if (-not (Test-Path "$stage\csm-tauri.exe")) {
+            Write-Error "Staging missing csm-tauri.exe — NSIS install failed silently?"; exit 1
+          }
+          if (-not (Test-Path "$stage\binaries\updater.exe")) {
+            Write-Error "Staging missing binaries\updater.exe — Tauri resources 未写入"; exit 1
           }
 
       - name: Package hot-update zip
