@@ -37,3 +37,7 @@ frontend/tsconfig.node.tsbuildinfo
 
 # scripts/build_sidecar.py 的 tee log（PyInstaller 跑完留下的诊断输出）
 build_sidecar.log
+
+# Superpowers brainstorming Visual Companion 运行时产物（mockup HTML
+# 文件 + 浏览器 server 状态），跨会话保留但不进 VCS。
+.superpowers/
