@@ -69,7 +69,10 @@ def main() -> int:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     target = DIST_DIR / "updater.exe"
     shutil.copy2(src, target)
-    print(f"[build_updater] copied → {target} ({target.stat().st_size:,} bytes)")
+    # ASCII arrow only — Windows CI runners default to cp1252 stdout encoding
+    # and `→` (U+2192) crashes with UnicodeEncodeError. Same caution applies
+    # to any other script that prints during the release.yml pipeline.
+    print(f"[build_updater] copied -> {target} ({target.stat().st_size:,} bytes)")
     return 0
 
 
