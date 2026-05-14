@@ -30,3 +30,10 @@ frontend/.env.development.local
 frontend/*.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
+
+# Claude Code agent worktrees —— 这些 git worktree 注册在主仓库下面，
+# 否则 git status 会把每个子 worktree 误报成 deleted/modified/untracked。
+.claude/worktrees/
+
+# scripts/build_sidecar.py 的 tee log（PyInstaller 跑完留下的诊断输出）
+build_sidecar.log
