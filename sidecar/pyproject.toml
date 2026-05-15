@@ -13,6 +13,9 @@ dependencies = [
     # Re-stated to make the sidecar a buildable PyInstaller target on its
     # own without importing the GUI optional-deps from the parent.
     "pydantic>=2.6",
+    "readability-lxml>=0.8.1",  # baidu 抓正文用
+    "lxml>=4.9",                # readability 依赖；显式列出便于 PyInstaller 打包
+    "curl-cffi>=0.7",           # 已在用，显式列以便 sidecar 单独可装
 ]
 
 [project.optional-dependencies]

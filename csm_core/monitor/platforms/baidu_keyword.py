@@ -130,6 +130,94 @@ def resolve_baidu_link(url: str) -> str:
         return url
 
 
+# 决定是否升级浏览器的最短正文阈值。少于这个字数说明 readability
+# 没真正提到内容（典型 SPA「请用 APP 打开」壳页），交给浏览器 fallback。
+_HTTP_MIN_CONTENT_CHARS = 200
+
+
+def fetch_article_http(url: str) -> dict[str, Any]:
+    """用 curl_cffi + readability 抓单篇文章，返回纯文本正文。
+
+    Returns:
+        dict 含:
+            content: str — 提取出的正文（失败时为 ""）
+            source: "http"
+            fetch_error: str | None — 失败原因
+            needs_browser_fallback: bool — adapter 据此判断是否升级到浏览器
+    """
+    try:
+        resp = _cc_get(
+            url,
+            impersonate="chrome120",
+            allow_redirects=True,
+            timeout=15,
+        )
+    except Exception as e:
+        return {
+            "content": "",
+            "source": "http",
+            "fetch_error": f"http request raised: {e!r}",
+            "needs_browser_fallback": True,
+        }
+
+    if resp.status_code >= 400:
+        return {
+            "content": "",
+            "source": "http",
+            "fetch_error": f"http {resp.status_code}",
+            "needs_browser_fallback": True,
+        }
+
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if "text/html" not in ctype and "application/xhtml" not in ctype:
+        return {
+            "content": "",
+            "source": "http",
+            "fetch_error": f"unexpected content-type: {ctype}",
+            "needs_browser_fallback": True,
+        }
+
+    raw = getattr(resp, "text", "") or ""
+    content = _extract_readable_text(raw)
+    if len(content) < _HTTP_MIN_CONTENT_CHARS:
+        return {
+            "content": content,
+            "source": "http",
+            "fetch_error": f"readable content too short ({len(content)} chars)",
+            "needs_browser_fallback": True,
+        }
+
+    return {
+        "content": content,
+        "source": "http",
+        "fetch_error": None,
+        "needs_browser_fallback": False,
+    }
+
+
+def _extract_readable_text(raw_html: str) -> str:
+    """readability-lxml 提正文。失败返回空串。"""
+    if not raw_html.strip():
+        return ""
+    try:
+        from readability import Document
+    except ImportError:
+        logger.warning("readability-lxml not installed; falling back to lxml text_content")
+        try:
+            doc = lxml_html.fromstring(raw_html)
+            return (doc.text_content() or "").strip()
+        except Exception:
+            return ""
+    try:
+        doc = Document(raw_html)
+        summary_html = doc.summary(html_partial=True)
+        text = lxml_html.fromstring(summary_html).text_content() if summary_html else ""
+        return (text or "").strip()
+    except Exception as e:
+        logger.info("readability summary raised: %s", e)
+        return ""
+
+
 class BaiduKeywordAdapter:
     """`BaseMonitorAdapter` 实现。完整 fetch 在后续任务里逐步加上。"""
 

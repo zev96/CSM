@@ -119,3 +119,76 @@ def test_resolve_baidu_link_returns_original_on_error(monkeypatch):
 
     original = "https://www.baidu.com/link?url=blob"
     assert baidu_keyword.resolve_baidu_link(original) == original
+
+
+# ── HTTP-first 抓正文 ────────────────────────────────────────────────────────
+class _FakeResp:
+    def __init__(self, *, text: str, status_code: int = 200,
+                 headers: dict | None = None):
+        self.text = text
+        self.status_code = status_code
+        self.headers = headers or {"content-type": "text/html; charset=utf-8"}
+
+
+def test_fetch_article_http_success(monkeypatch):
+    """正常 HTML，readability 提到正文 ≥ 200 字 → source=http, 拿到 preview。"""
+    long_content = (
+        "<html><body><article>"
+        + ("我用 Claude Code 写了一个 Tauri 应用。" * 20)
+        + "</article></body></html>"
+    )
+
+    monkeypatch.setattr(
+        baidu_keyword, "_cc_get",
+        lambda url, **kw: _FakeResp(text=long_content),
+    )
+    result = baidu_keyword.fetch_article_http("https://example.com/post")
+    assert result["source"] == "http"
+    assert result["fetch_error"] is None
+    assert "Claude Code" in result["content"]
+    assert len(result["content"]) >= 200
+
+
+def test_fetch_article_http_status_too_high_triggers_fallback(monkeypatch):
+    monkeypatch.setattr(
+        baidu_keyword, "_cc_get",
+        lambda url, **kw: _FakeResp(text="", status_code=403),
+    )
+    result = baidu_keyword.fetch_article_http("https://example.com/forbidden")
+    assert result["source"] == "http"
+    assert result["needs_browser_fallback"] is True
+    assert "403" in (result["fetch_error"] or "")
+
+
+def test_fetch_article_http_non_html_triggers_fallback(monkeypatch):
+    monkeypatch.setattr(
+        baidu_keyword, "_cc_get",
+        lambda url, **kw: _FakeResp(
+            text="{}",
+            headers={"content-type": "application/json"},
+        ),
+    )
+    result = baidu_keyword.fetch_article_http("https://example.com/api")
+    assert result["needs_browser_fallback"] is True
+    assert "content-type" in (result["fetch_error"] or "").lower()
+
+
+def test_fetch_article_http_too_short_triggers_fallback(monkeypatch):
+    """readability 提出来正文 < 200 字 → 视为 SPA 壳，要求浏览器 fallback。"""
+    short = "<html><body><div>请打开 APP 查看</div></body></html>"
+    monkeypatch.setattr(
+        baidu_keyword, "_cc_get",
+        lambda url, **kw: _FakeResp(text=short),
+    )
+    result = baidu_keyword.fetch_article_http("https://example.com/spa")
+    assert result["needs_browser_fallback"] is True
+
+
+def test_fetch_article_http_network_exception_triggers_fallback(monkeypatch):
+    def boom(url, **kw):
+        raise RuntimeError("dns nxdomain")
+
+    monkeypatch.setattr(baidu_keyword, "_cc_get", boom)
+    result = baidu_keyword.fetch_article_http("https://offline.example/")
+    assert result["needs_browser_fallback"] is True
+    assert "nxdomain" in (result["fetch_error"] or "").lower()
