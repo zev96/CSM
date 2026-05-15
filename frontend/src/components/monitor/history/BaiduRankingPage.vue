@@ -260,6 +260,10 @@ onMounted(loadTasks);
 watch(selectedId, (id) => {
   if (id !== null) loadHistory(id);
 });
+
+// Parent (MonitorView) calls this after a create/update from the shared
+// AddTaskModal so the new task shows up immediately without tab-switching.
+defineExpose({ reload: loadTasks });
 </script>
 
 <template>

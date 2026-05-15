@@ -459,10 +459,18 @@ function clearEditOnClose() {
 // 箭头函数时把 `Promise.all` 解析路径出错，运行时报
 // "Cannot read properties of undefined (reading 'all')"。抽到这里
 // setup 作用域里 `Promise` 是确定的全局引用。
+// Template ref to whichever BaiduRankingPage is currently mounted (top-level
+// baidu tab OR history sub-tab). Only one is mounted at a time, so the same
+// ref name is fine.
+const baiduPageRef = ref<{ reload: () => Promise<void> } | null>(null);
+
 async function onTaskMutatedReload() {
   const typeKey = activeTab.value === "zhihu" ? "zhihu_question" : PLATFORM_TYPE[commentSubtab.value];
   await loadTasks(typeKey);
   await loadTaskSnapshots();
+  // BaiduRankingPage maintains its own tasks list; ask it to refresh too
+  // so a baidu task just created/edited shows up without tab-switching.
+  await baiduPageRef.value?.reload?.();
 }
 
 // 评论批次：根据 batchName 拢到子 task 列表，打开编辑 modal
@@ -3154,6 +3162,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
     <!-- ── 百度关键词（顶级 tab，渲染同款 BaiduRankingPage）────────── -->
     <template v-else-if="activeTab === 'baidu'">
       <BaiduRankingPage
+        ref="baiduPageRef"
         @add-task="showAddTask = true"
         @batch-import="showBatchImport = true"
         @edit-task="(t) => { editingTask = t as any; showAddTask = true; }"
