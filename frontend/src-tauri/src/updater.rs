@@ -24,32 +24,49 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
-/// 查找 updater.exe。优先 resource_dir/updater.exe；如果 resource_dir
-/// 不存在或文件缺失，再退回 install_dir/updater.exe 作为兜底
-/// （updater 跟主 exe 装一起也合理）。两者都找不到就报 updater_not_found。
+/// 查找 updater.exe。
+///
+/// Tauri 2 + NSIS 实际布局（v0.4.1 release CI 实测）：
+///   <install>/csm-tauri.exe
+///   <install>/csm-sidecar.exe
+///   <install>/binaries/updater.exe   ← resources 配置成 "binaries/updater.exe"
+///                                       Tauri 保留相对路径
+///
+/// 所以**优先**找 `<install>/binaries/updater.exe`；如果找不到，再退回
+/// 直接同目录 `<install>/updater.exe` 兜底（dev 环境某些临时摆放方式）。
 fn locate_updater_exe(app: &AppHandle) -> Result<PathBuf, String> {
-    // 1. resource_dir 优先
+    let mut tried: Vec<PathBuf> = Vec::new();
+
+    // 1. resource_dir/binaries/updater.exe —— Tauri 2 NSIS 安装后实际位置
     if let Ok(rdir) = app.path().resource_dir() {
+        let candidate = rdir.join("binaries").join("updater.exe");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        tried.push(candidate);
+
+        // 2. resource_dir/updater.exe —— 备选（如果将来把 updater.exe 直接放根目录）
         let candidate = rdir.join("updater.exe");
         if candidate.exists() {
             return Ok(candidate);
         }
-        log::debug!("updater.exe not at resource_dir {candidate:?}");
+        tried.push(candidate);
     }
 
-    // 2. 跟主 exe 同目录兜底
+    // 3. 跟主 exe 同目录的 binaries/updater.exe（resource_dir 解析异常时兜底）
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("updater.exe");
+            let candidate = dir.join("binaries").join("updater.exe");
             if candidate.exists() {
                 return Ok(candidate);
             }
-            log::debug!("updater.exe not at exe dir {candidate:?}");
+            tried.push(candidate);
         }
     }
 
-    Err("updater_not_found: updater.exe missing in resources + install dir \
-         (dev 模式正常 — release 包才会内置)"
+    log::debug!("updater.exe lookup tried: {tried:?}");
+    Err("updater_not_found: updater.exe missing — checked binaries/ + root \
+         under resource_dir + install dir (dev 模式正常)"
         .to_string())
 }
 

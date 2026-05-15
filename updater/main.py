@@ -237,13 +237,19 @@ def main(argv: list[str]) -> int:
         except OSError as e:
             logger.warning("failed to clean zip: %s", e)
 
-    # Relaunch (whether new or old after rollback)
-    new_exe = args.target / "CSM.exe"
-    if new_exe.exists():
+    # Relaunch (whether new or old after rollback).
+    # 主 exe 实际名字是 csm-tauri.exe（Cargo [[bin]].name 决定的），不是
+    # productName "CSM"。保留 CSM.exe 兜底以防将来改 Cargo 名。
+    candidates = [args.target / "csm-tauri.exe", args.target / "CSM.exe"]
+    new_exe = next((c for c in candidates if c.exists()), None)
+    if new_exe is not None:
         logger.info("relaunching %s", new_exe)
         subprocess.Popen([str(new_exe)], close_fds=True)
     else:
-        logger.error("CSM.exe not found at %s — cannot relaunch", new_exe)
+        logger.error(
+            "no known main exe found in %s (tried %s) — cannot relaunch",
+            args.target, [c.name for c in candidates],
+        )
 
     # Keep window open if --keep-window OR if there was a failure (so user
     # can read the log).
