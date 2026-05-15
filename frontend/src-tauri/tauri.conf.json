@@ -50,7 +50,12 @@
     ],
     "resources": [
       "binaries/updater.exe"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./installer-hooks.nsh"
+      }
+    }
   },
   "plugins": {}
 }
