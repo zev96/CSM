@@ -1311,6 +1311,126 @@ async function saveAccountEdit() {
                 @update:model-value="(v) => setField('monitor.ai_classify_comments', v)"
               />
             </SettingsRow>
+
+            <!-- ── 百度关键词 子配置 ── -->
+            <div class="mb-3 mt-5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              百度关键词
+            </div>
+            <div
+              class="p-4"
+              :style="{
+                background: 'var(--card-2)',
+                border: '1px solid var(--line)',
+                borderRadius: '14px',
+              }"
+            >
+              <SettingsRow
+                label="默认 headless"
+                hint="勾选则后台跑浏览器；命中验证码会自动升级可见窗口。"
+              >
+                <FormToggle
+                  :model-value="get('monitor.baidu_keyword.headless_default') ?? true"
+                  @update:model-value="(v) => setField('monitor.baidu_keyword.headless_default', v)"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="验证码等待时长（秒）"
+                hint="出现验证码后等待用户手动过验证的最长时间。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.captcha_visible_timeout_s') ?? 90"
+                  type="number"
+                  min="30"
+                  max="300"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.captcha_visible_timeout_s', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="单任务最多升级次数"
+                hint="同一任务最多允许从 headless 切换到可见窗口的次数。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.captcha_max_promotions') ?? 1"
+                  type="number"
+                  min="0"
+                  max="3"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.captcha_max_promotions', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="SERP 节流（秒）"
+                hint="跨任务 SERP 最小间隔；实际抖动取 [N, 2N]。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.serp_pacing_seconds') ?? 5"
+                  type="number"
+                  min="1"
+                  max="60"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.serp_pacing_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="熔断失败阈值"
+                hint="连续失败达到此次数后触发熔断，暂停该平台的请求。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.breaker_failures') ?? 3"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.breaker_failures', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="熔断恢复时长（秒）"
+                hint="熔断后等待多少秒再重新放行请求。"
+                last
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.breaker_cooldown_seconds') ?? 600"
+                  type="number"
+                  min="60"
+                  max="3600"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.breaker_cooldown_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+            </div>
+
             <SettingsRow
               label="Cookie 池"
               hint="管理各平台登录态 — 知乎 / B 站 / 抖音 / 快手"
