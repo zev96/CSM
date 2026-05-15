@@ -952,6 +952,17 @@ function startMonitorBus() {
       const detail = d.error ? `：${String(d.error).split("\n")[0]}` : "";
       toast.error(`任务 #${d.task_id} 抓取失败${detail}`);
     },
+    captcha_required: (d: any) => {
+      toast.warn(
+        `任务 #${d.task_id} 百度要求验证码 — 浏览器已弹出，请在 90 秒内完成验证`,
+      );
+    },
+    captcha_resolved: (d: any) => {
+      toast.success(`任务 #${d.task_id} 已通过验证码，继续抓取`);
+    },
+    captcha_timeout: (d: any) => {
+      toast.error(`任务 #${d.task_id} 验证码等待超时，任务已标记为失败`);
+    },
   });
 }
 
