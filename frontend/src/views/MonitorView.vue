@@ -58,7 +58,7 @@ type CommentPlatform = "bilibili" | "douyin" | "kuaishou";
 
 function tabFromQuery(): Tab {
   const q = route.query.tab;
-  if (q === "zhihu" || q === "comment" || q === "report") return q;
+  if (q === "zhihu" || q === "comment" || q === "baidu" || q === "report") return q;
   return "zhihu";
 }
 const activeTab = ref<Tab>(tabFromQuery());
