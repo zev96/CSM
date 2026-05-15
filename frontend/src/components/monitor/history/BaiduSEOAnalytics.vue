@@ -34,11 +34,11 @@ interface DailyPoint {
   changed_up: number;
   changed_down: number;
 }
-interface Keyword {
+interface KeywordRow {
   task_id: number;
-  search_keyword: string;
   task_name: string;
-  target_brands: string[];
+  search_keyword: string;
+  target_brand: string;
   matched_count: number;
   matched_count_prev: number | null;
   top_n: number;
@@ -46,15 +46,13 @@ interface Keyword {
   best_rank: number;
   best_rank_prev: number | null;
   change_kind: ChangeKind;
-  news_present: boolean;
-  captcha_hit: boolean;
   checked_at: string | null;
 }
 interface BaiduResponse {
   range: Range;
   kpis: Kpis;
   daily_series: DailyPoint[];
-  keywords: Keyword[];
+  keywords: KeywordRow[];
 }
 
 const emit = defineEmits<{ navigate: [payload: { taskId: number }] }>();
@@ -81,7 +79,7 @@ async function load() {
 onMounted(load);
 watch(range, load);
 
-const filtered = computed<Keyword[]>(() => {
+const filtered = computed<KeywordRow[]>(() => {
   if (!data.value) return [];
   if (filter.value === "all") return data.value.keywords;
   return data.value.keywords.filter((k) => k.change_kind === filter.value);
@@ -115,7 +113,7 @@ function arrowFor(kind: ChangeKind): { glyph: string; color: string } {
   if (kind === "down" || kind === "dropped") return { glyph: "▼", color: "var(--red)" };
   return { glyph: "—", color: "#a89f8d" };
 }
-function rankChangeText(k: Keyword): { text: string; tone: "up" | "down" | "flat" } {
+function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "flat" } {
   if (k.change_kind === "dropped") return { text: `#${k.best_rank_prev} → 无`, tone: "down" };
   if (k.change_kind === "new") return { text: `无 → #${k.best_rank}`, tone: "up" };
   if (k.best_rank_prev == null) return { text: "首次", tone: "flat" };
@@ -264,13 +262,11 @@ function rankChangeText(k: Keyword): { text: string; tone: "up" | "down" | "flat
             <div class="text-[10.5px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
               target:
               <span
-                v-for="brand in k.target_brands" :key="brand"
                 class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10.5px] mr-0.5"
                 :style="{ background: 'rgba(37,99,235,0.10)', color: '#1d4ed8' }"
-              >{{ brand }}</span>
+              >{{ k.target_brand }}</span>
+              <span> · 任务: {{ k.task_name }}</span>
               <span v-if="k.matched_ranks.length"> · 命中位 {{ k.matched_ranks.map((r) => '#' + r).join(' ') }} ({{ k.matched_count }}/{{ k.top_n }})</span>
-              <span v-if="k.captcha_hit" class="ml-1" :style="{ color: '#c98a18' }">· 验证码</span>
-              <span v-if="k.news_present" class="ml-1" :style="{ color: '#5e7848' }">· 资讯</span>
             </div>
           </div>
           <div>
