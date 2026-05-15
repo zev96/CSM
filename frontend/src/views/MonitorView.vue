@@ -3153,20 +3153,11 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
 
     <!-- ── 百度关键词（顶级 tab，渲染同款 BaiduRankingPage）────────── -->
     <template v-else-if="activeTab === 'baidu'">
-      <section
-        class="flex min-h-0 flex-1 flex-col overflow-hidden"
-        :style="{
-          background: 'var(--card)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--radius-card)',
-        }"
-      >
-        <BaiduRankingPage
-          @add-task="showAddTask = true"
-          @batch-import="showBatchImport = true"
-          @edit-task="(t) => { editingTask = t as any; showAddTask = true; }"
-        />
-      </section>
+      <BaiduRankingPage
+        @add-task="showAddTask = true"
+        @batch-import="showBatchImport = true"
+        @edit-task="(t) => { editingTask = t as any; showAddTask = true; }"
+      />
     </template>
 
     <!-- ── 历史报告（重构后：sub-pivot + 两个子页）──────────────────── -->

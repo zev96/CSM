@@ -253,7 +253,7 @@ watch(selectedId, (id) => {
 </script>
 
 <template>
-  <div class="flex gap-3 min-h-0 h-full" style="padding: 22px;">
+  <div class="flex flex-1 gap-3 min-h-0 h-full">
 
     <!-- ═══════════════════════════════════════════════════════════
          LEFT CARD: 监测任务表
