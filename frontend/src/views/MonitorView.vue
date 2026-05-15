@@ -1401,7 +1401,7 @@ function pickSampleZhihu(row: SampleZhihu) {
 const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
   { k: "zhihu", l: "知乎问题", ic: "radar" },
   { k: "comment", l: "平台评论", ic: "warn" },
-  { k: "baidu", l: "百度关键词", ic: "search" },
+  { k: "baidu", l: "百度排名", ic: "search" },
   { k: "report", l: "历史报告", ic: "fileText" },
 ];
 </script>
@@ -1425,7 +1425,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
               : activeTab === "comment"
                 ? "平台评论 · 留存监控"
                 : activeTab === "baidu"
-                  ? "百度关键词 · 排名监控"
+                  ? "百度排名 · 关键词监控"
                   : "历史监测报告"
           }}
         </div>
@@ -3203,7 +3203,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                 background: historySubtab === 'baidu' ? 'var(--dark)' : 'transparent',
                 color: historySubtab === 'baidu' ? 'var(--card)' : 'var(--ink-3)',
               }"
-            >百度关键词</button>
+            >百度排名</button>
           </div>
         </div>
 

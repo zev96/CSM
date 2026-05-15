@@ -253,16 +253,14 @@ watch(selectedId, (id) => {
 </script>
 
 <template>
-  <div class="flex flex-1 gap-3 min-h-0 h-full">
+  <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr] h-full">
 
     <!-- ═══════════════════════════════════════════════════════════
          LEFT CARD: 监测任务表
     ════════════════════════════════════════════════════════════════ -->
     <section
-      class="flex flex-col"
+      class="flex min-h-0 flex-col"
       :style="{
-        flex: '1.5',
-        minWidth: 0,
         background: 'var(--card)',
         border: '1px solid var(--line)',
         borderRadius: 'var(--radius-card)',
@@ -460,10 +458,8 @@ watch(selectedId, (id) => {
          RIGHT CARD: 任务详情
     ════════════════════════════════════════════════════════════════ -->
     <section
-      class="flex flex-col overflow-y-auto"
+      class="flex min-h-0 flex-col overflow-y-auto"
       :style="{
-        flex: '1',
-        minWidth: 0,
         background: 'var(--card)',
         border: '1px solid var(--line)',
         borderRadius: 'var(--radius-card)',
