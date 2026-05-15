@@ -10,4 +10,4 @@ It's the source of truth for ``/api/system/version`` and the
 update modal shows to the user as "当前 vX.Y.Z".
 """
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
