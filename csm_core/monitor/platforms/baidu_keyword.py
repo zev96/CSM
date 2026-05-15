@@ -451,13 +451,17 @@ class BaiduKeywordAdapter:
                     "fetch_error": None,
                 }
 
-                # Navigate to SERP
+                # Navigate to SERP. 45s timeout — baidu 偶尔冷启慢，20s 不够。
                 try:
-                    page.goto(serp_url, wait_until="domcontentloaded", timeout=20000)
+                    page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
                 except TypeError:
                     # Test FakePage 不接受 kwargs
                     page.goto(serp_url)
                 except Exception as e:
+                    logger.warning(
+                        "baidu navigate failed (headless=%s, keyword=%r): %s",
+                        headless, keyword, e,
+                    )
                     kw_entry["fetch_error"] = f"serp navigate raised: {e!r}"
                     keyword_results.append(kw_entry)
                     continue

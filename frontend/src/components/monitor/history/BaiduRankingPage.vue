@@ -4,10 +4,11 @@
  * 左：富任务表（搜索关键词 / 上次 / 变化 / 状态 / 操作）
  * 右：3 KPI + sparkline + 每关键词折叠结果段
  */
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
+import { subscribe } from "@/api/client";
 import Sparkline from "@/components/ui/Sparkline.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -92,6 +93,26 @@ const history = ref<ResultItem[]>([]);
 const loadingTasks = ref(false);
 const loadingHistory = ref(false);
 const runningNow = ref(false);
+// Set of task IDs currently being fetched (driven by SSE started/finished
+// + optimistic local mark when user clicks 立刻监测).
+const runningTaskIds = ref<Set<number>>(new Set());
+
+function isRunning(taskId: number): boolean {
+  return runningTaskIds.value.has(taskId);
+}
+
+function markRunning(taskId: number): void {
+  const s = new Set(runningTaskIds.value);
+  s.add(taskId);
+  runningTaskIds.value = s;
+}
+
+function clearRunning(taskId: number): void {
+  if (!runningTaskIds.value.has(taskId)) return;
+  const s = new Set(runningTaskIds.value);
+  s.delete(taskId);
+  runningTaskIds.value = s;
+}
 
 // ──────────────────────────── derived ────────────────────────────
 
@@ -218,11 +239,13 @@ async function loadHistory(id: number) {
 async function runNow() {
   if (!selectedId.value || runningNow.value) return;
   runningNow.value = true;
+  markRunning(selectedId.value);
   try {
     await whenReady();
     await sidecar.client.post(`/api/monitor/tasks/${selectedId.value}/run-now`);
     toast.info("已派发，结果会通过 SSE 流推回");
   } catch (e: any) {
+    if (selectedId.value !== null) clearRunning(selectedId.value);
     toast.error(`派发失败: ${e?.message ?? e}`);
   } finally {
     runningNow.value = false;
@@ -255,7 +278,50 @@ function openEdit(task: TaskItem) {
 
 // ──────────────────────────── lifecycle ────────────────────────────
 
-onMounted(loadTasks);
+// ──────────────────────────── SSE bus ────────────────────────────
+// Listen to monitor events so the row shows 「监测中…」 spinner while a
+// task is actually fetching, and clears + reloads history on finish.
+
+let stopSse: (() => void) | null = null;
+
+function startSse(): void {
+  stopSse = subscribe("/api/monitor/events", {
+    started: (d: any) => {
+      if (typeof d.task_id === "number" && d.task_id > 0) markRunning(d.task_id);
+    },
+    finished: (d: any) => {
+      if (typeof d.task_id !== "number") return;
+      clearRunning(d.task_id);
+      // Find the task in our list, refresh its last_check_at/last_status
+      const t = tasks.value.find((x) => x.id === d.task_id);
+      if (t) {
+        t.last_check_at = d.at ?? t.last_check_at;
+        t.last_status = d.result?.status ?? t.last_status;
+      }
+      // If it's the selected task, reload its history so the detail card
+      // refreshes immediately.
+      if (selectedId.value === d.task_id) {
+        loadHistory(d.task_id);
+      }
+    },
+    failed: (d: any) => {
+      if (typeof d.task_id !== "number") return;
+      clearRunning(d.task_id);
+      const t = tasks.value.find((x) => x.id === d.task_id);
+      if (t) t.last_status = "failed";
+    },
+  });
+}
+
+onMounted(() => {
+  loadTasks();
+  startSse();
+});
+
+onUnmounted(() => {
+  if (stopSse) stopSse();
+  stopSse = null;
+});
 
 watch(selectedId, (id) => {
   if (id !== null) loadHistory(id);
@@ -433,7 +499,8 @@ defineExpose({ reload: loadTasks });
 
             <!-- 状态 -->
             <div>
-              <Pill :tone="taskRowState(t).tone">{{ taskRowState(t).statusLabel }}</Pill>
+              <Pill v-if="isRunning(t.id)" tone="info">监测中…</Pill>
+              <Pill v-else :tone="taskRowState(t).tone">{{ taskRowState(t).statusLabel }}</Pill>
             </div>
 
             <!-- 操作 -->
@@ -441,14 +508,16 @@ defineExpose({ reload: loadTasks });
               <button
                 type="button"
                 class="whitespace-nowrap text-[11px]"
+                :disabled="isRunning(t.id)"
                 :style="{
                   padding: '4px 10px',
                   borderRadius: '999px',
                   color: 'var(--primary-deep)',
-                  cursor: 'pointer',
+                  cursor: isRunning(t.id) ? 'not-allowed' : 'pointer',
+                  opacity: isRunning(t.id) ? 0.5 : 1,
                 }"
                 @click.stop="runNowTask(t.id)"
-              >立刻监测</button>
+              >{{ isRunning(t.id) ? '监测中…' : '立刻监测' }}</button>
               <button
                 type="button"
                 class="inline-flex h-7 w-7 items-center justify-center"

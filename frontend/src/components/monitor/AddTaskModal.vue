@@ -376,7 +376,11 @@ async function submit() {
                 }"
               >高级</summary>
               <div class="mt-2 flex flex-col gap-3">
-                <FormField label="默认 headless（取消勾选 = 可见窗口）" inline>
+                <FormField
+                  label="默认尝试隐藏窗口"
+                  hint="patchright 是反检测 stealth fork，部分环境下仍会弹窗。命中验证码会自动升级为可见。"
+                  inline
+                >
                   <FormToggle v-model="baiduHeadless" />
                 </FormField>
               </div>
