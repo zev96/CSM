@@ -55,6 +55,10 @@ _TYPE_LABEL_MAP: dict[str, TaskType] = {
     "快手": "kuaishou_comment",
     "kuaishou": "kuaishou_comment",
     "kuaishou_comment": "kuaishou_comment",
+    "百度关键词": "baidu_keyword",
+    "百度": "baidu_keyword",
+    "baidu": "baidu_keyword",
+    "baidu_keyword": "baidu_keyword",
 }
 
 # Canonical column headers we look for. The parser tolerates extra
@@ -77,6 +81,7 @@ TEMPLATE_SAMPLES = [
     ["B站评论", "B站-某视频评论留存", "https://www.bilibili.com/video/BV1xxxxx", "你这个测评太真实了", 20, "manual"],
     ["抖音评论", "抖音-某视频评论留存", "https://www.douyin.com/video/7300000000000000000", "支持博主", 10, "manual"],
     ["快手评论", "快手-某视频评论留存", "https://www.kuaishou.com/short-video/3xxxxxxxx", "已加购物车", 10, "manual"],
+    ["百度关键词", "百度-Claude教程", "search:Claude Code 教程", "Claude|Anthropic", 10, "09:00"],
 ]
 
 
@@ -223,8 +228,10 @@ def _row_to_task(row: list, header_idx: dict[str, int]) -> MonitorTask:
 
     if not url_raw:
         raise ValueError("URL 为空")
-    if not str(url_raw).startswith("http"):
-        raise ValueError("URL 需以 http(s) 开头")
+    url_text = str(url_raw).strip()
+    # Allow both http(s) URLs and baidu's "search:" prefix
+    if not (url_text.startswith("http") or url_text.startswith("search:")):
+        raise ValueError("URL 需以 http(s) 或 search: 开头")
     if not keyword_raw:
         raise ValueError("关键词/自发评论为空")
 
@@ -240,6 +247,30 @@ def _row_to_task(row: list, header_idx: dict[str, int]) -> MonitorTask:
     config: dict[str, object] = {"top_n": top_n}
     if ttype == "zhihu_question":
         config["target_brand"] = str(keyword_raw).strip()
+    elif ttype == "baidu_keyword":
+        # 百度：「关键词」列里放「BrandA|BrandB|...」，URL 列填 "search:实际搜索词"。
+        # adapter 内部 fetch 时从 config.search_keyword 拼真实 URL，
+        # 表里的 target_url 只是占位。
+        url_text = str(url_raw).strip()
+        if url_text.startswith("search:"):
+            search_keyword = url_text[len("search:"):].strip()
+        else:
+            search_keyword = url_text  # 容错：直接当关键词
+        if not search_keyword:
+            raise ValueError("百度任务的搜索关键词为空")
+        brands_raw = str(keyword_raw).strip()
+        brands = [b.strip() for b in brands_raw.split("|") if b.strip()]
+        if not brands:
+            raise ValueError("百度任务的目标品牌词为空")
+        from urllib.parse import quote as _quote
+        return MonitorTask(
+            type=ttype,
+            name=name,
+            target_url=f"https://www.baidu.com/s?wd={_quote(search_keyword)}",
+            config={"search_keyword": search_keyword, "target_brands": brands},
+            schedule_cron=schedule,
+            enabled=True,
+        )
     else:
         config["my_comment_text"] = str(keyword_raw).strip()
 
