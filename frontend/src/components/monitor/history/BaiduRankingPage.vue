@@ -59,6 +59,11 @@ interface ResultItem {
 
 // ──────────────────────────── store / composables ────────────────────────────
 
+const emit = defineEmits<{
+  (e: "add-task"): void;
+  (e: "batch-import"): void;
+}>();
+
 const sidecar = useSidecar();
 const { whenReady } = useSidecarReady();
 const toast = useToast();
@@ -240,7 +245,56 @@ watch(selectedId, (id) => {
 </script>
 
 <template>
-  <div class="flex gap-3 h-full min-h-0">
+  <div class="flex flex-col h-full min-h-0 gap-3" style="padding: 22px;">
+    <!-- ── Header: title + 新增任务/批量导入 ── -->
+    <div class="flex flex-shrink-0 items-end justify-between gap-3">
+      <div class="min-w-0">
+        <div class="font-display text-[14px] font-semibold">监测任务</div>
+        <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+          百度搜索关键词 · 默认 + 最新资讯 · 自家命中
+        </div>
+      </div>
+      <div class="flex flex-shrink-0 items-center gap-2">
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5"
+          :style="{
+            height: '32px',
+            padding: '0 14px',
+            fontSize: '12.5px',
+            fontWeight: 500,
+            color: 'var(--ink-2)',
+            background: 'transparent',
+            border: '1px solid var(--line)',
+            borderRadius: '999px',
+            cursor: 'pointer',
+          }"
+          @click="emit('batch-import')"
+        >
+          <span>批量导入</span>
+        </button>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5"
+          :style="{
+            height: '32px',
+            padding: '0 14px',
+            fontSize: '12.5px',
+            fontWeight: 500,
+            color: '#fff',
+            background: 'var(--primary-deep)',
+            border: 'none',
+            borderRadius: '999px',
+            cursor: 'pointer',
+          }"
+          @click="emit('add-task')"
+        >
+          <span>+ 新增任务</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="flex gap-3 flex-1 min-h-0">
     <!-- ── Left: task list ── -->
     <aside
       class="flex flex-col gap-1 flex-shrink-0 overflow-y-auto"
@@ -578,5 +632,6 @@ watch(selectedId, (id) => {
         </div>
       </template>
     </main>
+    </div>
   </div>
 </template>

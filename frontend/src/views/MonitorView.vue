@@ -3155,7 +3155,10 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
           borderRadius: 'var(--radius-card)',
         }"
       >
-        <BaiduRankingPage />
+        <BaiduRankingPage
+          @add-task="showAddTask = true"
+          @batch-import="showBatchImport = true"
+        />
       </section>
     </template>
 
@@ -3209,7 +3212,11 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <RetentionPage v-if="historySubtab === 'retention'" @navigate="goToCommentTask" />
           <ZhihuRankingPage v-else-if="historySubtab === 'zhihu'" @navigate="goToZhihuTask" />
-          <BaiduRankingPage v-else-if="historySubtab === 'baidu'" />
+          <BaiduRankingPage
+            v-else-if="historySubtab === 'baidu'"
+            @add-task="showAddTask = true"
+            @batch-import="showBatchImport = true"
+          />
         </div>
       </section>
     </template>
@@ -3221,11 +3228,13 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
       :default-type="
         activeTab === 'zhihu'
           ? 'zhihu_question'
-          : commentSubtab === 'bilibili'
-            ? 'bilibili_comment'
-            : commentSubtab === 'douyin'
-              ? 'douyin_comment'
-              : 'kuaishou_comment'
+          : activeTab === 'baidu' || (activeTab === 'report' && historySubtab === 'baidu')
+            ? 'baidu_keyword'
+            : commentSubtab === 'bilibili'
+              ? 'bilibili_comment'
+              : commentSubtab === 'douyin'
+                ? 'douyin_comment'
+                : 'kuaishou_comment'
       "
       @update:open="(v) => { showAddTask = v; clearEditOnClose(); }"
       @created="onTaskMutatedReload"
@@ -3242,11 +3251,13 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
       :default-type="
         activeTab === 'zhihu'
           ? 'zhihu_question'
-          : commentSubtab === 'bilibili'
-            ? 'bilibili_comment'
-            : commentSubtab === 'douyin'
-              ? 'douyin_comment'
-              : 'kuaishou_comment'
+          : activeTab === 'baidu' || (activeTab === 'report' && historySubtab === 'baidu')
+            ? 'baidu_keyword'
+            : commentSubtab === 'bilibili'
+              ? 'bilibili_comment'
+              : commentSubtab === 'douyin'
+                ? 'douyin_comment'
+                : 'kuaishou_comment'
       "
       @imported="loadTasks(activeTab === 'zhihu' ? 'zhihu_question' : PLATFORM_TYPE[commentSubtab])"
     />
