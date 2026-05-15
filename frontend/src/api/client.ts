@@ -82,6 +82,15 @@ export async function health() {
   return (await client().get("/health")).data as { status: string };
 }
 
+// ── /api/version ───────────────────────────────────────────────────────────
+// Sidecar 自报版本号，由 csm_sidecar.__version__ 决定，release.py 跟
+// tauri.conf.json / Cargo.toml 一起 bump。前端**不该**自己存常量版本号
+// （以前的 const APP_VERSION = "0.4.0" 就是因为没人记得 bump、显示成
+// 跟实际装的版本号差几号）。
+export async function getVersion() {
+  return (await client().get("/api/version")).data as { sidecar: string };
+}
+
 // ── /api/keyword/density ───────────────────────────────────────────────────
 export async function keywordDensity(keyword: string, text: string) {
   return (await client().post("/api/keyword/density", { keyword, text })).data as {

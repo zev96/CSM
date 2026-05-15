@@ -33,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TAURI_CONF = ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
 CARGO_TOML = ROOT / "frontend" / "src-tauri" / "Cargo.toml"
+SIDECAR_INIT = ROOT / "sidecar" / "csm_sidecar" / "__init__.py"
 CHANGELOG = ROOT / "CHANGELOG.md"
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-[\w.]+)?$")
@@ -104,6 +105,29 @@ def _bump_cargo_toml(new: str) -> None:
     CARGO_TOML.write_text(new_text, encoding="utf-8")
 
 
+def _bump_sidecar_init(new: str) -> None:
+    """Rewrite ``__version__ = "..."`` in sidecar/csm_sidecar/__init__.py.
+
+    Sidecar's ``__version__`` is the source of truth for the
+    ``current_version`` field returned by ``/api/updater/check``. If we
+    skip this bump, the update modal shows users a stale "当前 vX.Y.Z"
+    even after they upgrade.
+    """
+    text = SIDECAR_INIT.read_text(encoding="utf-8")
+    new_text, n = re.subn(
+        r'^__version__\s*=\s*"[^"]+"',
+        f'__version__ = "{new}"',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if n != 1:
+        print(f"ERROR: cannot find '__version__ = \"...\"' in {SIDECAR_INIT}",
+              file=sys.stderr)
+        sys.exit(1)
+    SIDECAR_INIT.write_text(new_text, encoding="utf-8")
+
+
 def _bump_changelog(new: str) -> None:
     text = CHANGELOG.read_text(encoding="utf-8")
     today = dt.date.today().isoformat()
@@ -159,7 +183,8 @@ def main(argv: list[str]) -> int:
     if args.dry_run:
         print(f"[dry-run] would write {TAURI_CONF} with version={new_version}")
         print(f"[dry-run] would write {CARGO_TOML} with version={new_version}")
-        print("[dry-run] would rewrite CHANGELOG.md (Unreleased → "
+        print(f"[dry-run] would write {SIDECAR_INIT} with __version__={new_version}")
+        print("[dry-run] would rewrite CHANGELOG.md (Unreleased -> "
               f"[{new_version}] - {dt.date.today().isoformat()})")
         print(f"[dry-run] would: git add -A && git commit -m 'release: v{new_version}'")
         print(f"[dry-run] would: git tag v{new_version}")
@@ -168,11 +193,13 @@ def main(argv: list[str]) -> int:
 
     _bump_tauri_conf(new_version)
     _bump_cargo_toml(new_version)
+    _bump_sidecar_init(new_version)
     _bump_changelog(new_version)
     subprocess.check_call(
         ["git", "add",
          "frontend/src-tauri/tauri.conf.json",
          "frontend/src-tauri/Cargo.toml",
+         "sidecar/csm_sidecar/__init__.py",
          "CHANGELOG.md"], cwd=ROOT,
     )
     subprocess.check_call(

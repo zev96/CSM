@@ -32,7 +32,7 @@ import { useToast } from "@/composables/useToast";
 import { usePathPicker } from "@/composables/usePathPicker";
 import { useNotifications } from "@/composables/useNotifications";
 import { useSidecar } from "@/stores/sidecar";
-import { keyringSet, keyringStatus } from "@/api/client";
+import { getVersion, keyringSet, keyringStatus } from "@/api/client";
 import { useRoute } from "vue-router";
 import { watch } from "vue";
 
@@ -454,8 +454,20 @@ function rebuildIndex(kind: "history" | "vault") {
   toast.info(`${kind === "history" ? "历史" : "Vault"} 索引重建：请到查重页操作`);
 }
 
-// ── 关于：版本号从 package 版本里读 ────────────────────────────
-const APP_VERSION = "0.4.0";
+// ── 关于：版本号从 sidecar 实时读 ───────────────────────────────
+// 之前是硬编码常量 `const APP_VERSION = "0.4.0"`，跟 sidecar 实际报的
+// 版本号容易脱节（v0.4.1 装好后用户看到 modal 弹"当前 v0.0.1"，因为
+// sidecar __init__.py 没被 release.py bump，前端又有自己的常量，两端
+// 都偏离了真版本）。改为启动时拉一次 /api/version；拉失败显示占位。
+const appVersion = ref("…");
+onMounted(async () => {
+  try {
+    const r = await getVersion();
+    appVersion.value = r.sidecar;
+  } catch {
+    appVersion.value = "?";
+  }
+});
 
 // 检查更新（完整闭环 prompt → downloading → ready → install_and_restart）：
 //   1. /api/updater/check 拿 has_update + info（含 expected_sha256）
@@ -1379,7 +1391,7 @@ async function saveAccountEdit() {
                   Content SEO Maker
                 </div>
                 <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">
-                  v {{ APP_VERSION }} · Tauri + Vue 3 + FastAPI sidecar
+                  v {{ appVersion }} · Tauri + Vue 3 + FastAPI sidecar
                 </div>
               </div>
             </div>
