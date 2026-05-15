@@ -17,6 +17,7 @@ import { onMounted } from "vue";
 import GreetingCard from "@/components/home/GreetingCard.vue";
 import KeywordHero from "@/components/home/KeywordHero.vue";
 import CalendarCard from "@/components/home/CalendarCard.vue";
+import BaiduSeoCard from "@/components/home/BaiduSeoCard.vue";
 import RankAlertsCard from "@/components/home/RankAlertsCard.vue";
 import CommentRetentionCard from "@/components/home/CommentRetentionCard.vue";
 import RecentDocsCard from "@/components/home/RecentDocsCard.vue";
@@ -69,9 +70,10 @@ onMounted(async () => {
     </div>
 
     <div
-      class="grid flex-shrink-0 grid-cols-1 lg:grid-cols-2"
+      class="grid flex-shrink-0 grid-cols-1 lg:grid-cols-3"
       :style="{ height: '220px', gap: '28px' }"
     >
+      <BaiduSeoCard />
       <RankAlertsCard />
       <CommentRetentionCard />
     </div>
