@@ -43,7 +43,10 @@ from csm_core.monitor.scheduler import select_due
 logger = logging.getLogger(__name__)
 
 
-EventKind = Literal["started", "finished", "alert", "failed", "tick"]
+EventKind = Literal[
+    "started", "finished", "alert", "failed", "tick",
+    "captcha_required", "captcha_resolved", "captcha_timeout",
+]
 
 
 @dataclass
