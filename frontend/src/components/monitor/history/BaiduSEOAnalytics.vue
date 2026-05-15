@@ -129,11 +129,7 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
   <div v-else-if="!data" class="py-10 text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">暂无数据</div>
   <div v-else class="flex flex-col gap-3">
     <!-- range picker -->
-    <div class="flex items-center justify-between flex-shrink-0">
-      <div>
-        <div class="font-display text-[14px] font-semibold">百度 SEO · 关键词排名分析</div>
-        <div class="text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">看品牌词在监测关键词里的命中变化、首条排名、异动</div>
-      </div>
+    <div class="flex items-center justify-end flex-shrink-0">
       <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">
         <button
           v-for="r in (['1d','7d','30d'] as Range[])" :key="r"

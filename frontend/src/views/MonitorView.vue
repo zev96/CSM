@@ -3180,12 +3180,15 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
           padding: '22px',
         }"
       >
-        <!-- sub-pivot：评论留存率 / 知乎排名 -->
+        <!-- sub-pivot：平台评论 / 知乎排名 / 百度排名 -->
         <div class="mb-3 flex-shrink-0 flex justify-between items-center">
           <div>
-            <div class="font-display text-[14px] font-semibold">历史监测报告</div>
-            <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              按业务拆分：评论平台留存率 / 知乎品牌排名分析
+            <div class="font-display text-[14px] font-semibold">
+              {{
+                historySubtab === 'retention' ? '评论平台 · 留存率分析'
+                : historySubtab === 'zhihu' ? '知乎排名 · 品牌占有率分析'
+                : '百度 SEO · 关键词排名分析'
+              }}
             </div>
           </div>
           <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card-2)', border: '1px solid var(--line)' }">
@@ -3196,7 +3199,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                 background: historySubtab === 'retention' ? 'var(--dark)' : 'transparent',
                 color: historySubtab === 'retention' ? 'var(--card)' : 'var(--ink-3)',
               }"
-            >评论留存率</button>
+            >平台评论</button>
             <button
               @click="historySubtab = 'zhihu'"
               class="px-4 py-1.5 rounded-full text-[12.5px] font-medium"
