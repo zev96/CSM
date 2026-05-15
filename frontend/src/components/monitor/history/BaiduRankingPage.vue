@@ -779,7 +779,6 @@ defineExpose({ reload: loadTasks });
                   borderBottom: i < (selectedTask?.config?.search_keywords?.length ?? 0) - 1 ? '1px solid var(--line)' : 'none',
                   padding: '12px 8px',
                   background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
-                  borderLeft: selectedKeywordIdx === i ? '3px solid var(--primary)' : '3px solid transparent',
                 }"
                 @click="selectedKeywordIdx = i"
                 @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
@@ -838,7 +837,6 @@ defineExpose({ reload: loadTasks });
                   borderBottom: i < latestMetric.keywords.length - 1 ? '1px solid var(--line)' : 'none',
                   padding: '12px 8px',
                   background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
-                  borderLeft: selectedKeywordIdx === i ? '3px solid var(--primary)' : '3px solid transparent',
                 }"
                 @click="selectedKeywordIdx = i"
                 @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
