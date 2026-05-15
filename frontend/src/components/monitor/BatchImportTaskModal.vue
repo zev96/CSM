@@ -624,9 +624,8 @@ async function submitAll() {
                 <span :style="{ color: 'var(--primary-deep)' }">评论原文</span>
               </template>
               <template v-else-if="platform === 'baidu_keyword'">
-                搜索词 ⇥ 目标 URL ⇥
-                <span :style="{ color: 'var(--primary-deep)' }">品牌列表</span>
-                ⇥ Top-N(可选)
+                任务名 ⇥ search:搜索关键词 ⇥
+                <span :style="{ color: 'var(--primary-deep)' }">品牌1|品牌2|...</span>
               </template>
               <template v-else>
                 问题名字 ⇥ 目标 URL ⇥
@@ -639,7 +638,7 @@ async function submitAll() {
                 只两列：视频链接 + 评论原文。任务名 / Top-N 在上方填一次即可应用到整批。支持 .xlsx / .csv 上传，也支持把抖音/B站「复制链接」整段分享文案直接粘进来（URL 会自动识别）。
               </template>
               <template v-else-if="platform === 'baidu_keyword'">
-                搜索词 + 目标 URL + 品牌（多个品牌用 | 分隔）。支持从 Excel 复制粘贴（TAB 分隔）、上传 .xlsx / .csv。
+                URL 列填 <code>search:</code> 加搜索关键词；品牌列用 <code>|</code> 分隔多个目标品牌词（命中任一即标"自家"）。支持从 Excel 复制粘贴（TAB 分隔）、上传 .xlsx / .csv。
               </template>
               <template v-else>
                 支持从 Excel 复制粘贴（TAB 分隔）、上传 .xlsx / .csv；只粘 URL 也行，任务名会从 URL 自动派生。
