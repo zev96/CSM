@@ -2,7 +2,7 @@
 /**
  * 百度关键词工作台 —— 与知乎问题工作台同款双卡布局。
  * 左：富任务表（搜索关键词 / 上次 / 变化 / 状态 / 操作）
- * 右：3 KPI + sparkline + 前 10 条结果 + 最新资讯
+ * 右：3 KPI + sparkline + 每关键词折叠结果段
  */
 import { ref, computed, onMounted, watch } from "vue";
 import { useSidecar } from "@/stores/sidecar";
@@ -26,9 +26,8 @@ interface BaiduResultRow {
   fetch_error: string | null;
 }
 
-interface BaiduMetric {
-  search_keyword: string;
-  target_brands: string[];
+interface BaiduPerKeyword {
+  keyword: string;
   serp_url: string;
   default_results: BaiduResultRow[];
   news_results: BaiduResultRow[];
@@ -36,16 +35,27 @@ interface BaiduMetric {
   default_first_rank: number;
   news_first_rank: number;
   news_present: boolean;
+  fetch_error: string | null;
+}
+
+interface BaiduMetric {
+  target_brand: string;
+  search_keywords: string[];
   engine: string;
   headless: boolean;
   captcha_hit: boolean;
+  keywords: BaiduPerKeyword[];
+  total_keywords: number;
+  matched_keywords: number;
+  total_default_matches: number;
+  best_default_first_rank: number;
 }
 
 interface TaskItem {
   id: number;
   name: string;
   type: string;
-  config: { search_keyword: string; target_brands: string[] };
+  config: { search_keywords: string[]; target_brand: string };
   last_check_at: string | null;
   last_status: string | null;
   schedule_cron?: string;
@@ -104,35 +114,28 @@ const prevMetric = computed<BaiduMetric | null>(
 // Trend chart: history is newest-first from API; reverse for chronological
 const chronoHistory = computed(() => [...history.value].reverse());
 
-// Sparkline: default_first_rank, replace -1/missing with null (line break)
+// Sparkline: matched_keywords over last 14 results (replace 0 with 0, non-data stays 0)
 const sparkPoints = computed<number[]>(() =>
   chronoHistory.value
     .slice(-14)
-    .map((r) => {
-      const v = r.metric?.default_first_rank ?? -1;
-      return v > 0 ? v : 0;
-    })
-    .filter((v) => v > 0),
+    .map((r) => r.metric?.matched_keywords ?? 0),
 );
 
 const sparkLabels = computed<string[]>(() => {
   const slice = chronoHistory.value.slice(-14);
   if (slice.length <= 6) return slice.map((r) => r.checked_at.slice(5, 10));
-  // Show ~4 evenly spaced labels
   const step = Math.floor(slice.length / 3);
   return [0, step, step * 2, slice.length - 1].map(
     (i) => slice[Math.min(i, slice.length - 1)].checked_at.slice(5, 10),
   );
 });
 
-// Delta for the selected task only
-const rankDelta = computed<number | null>(() => {
-  const cur = latestMetric.value?.default_first_rank ?? -1;
-  const prv = prevMetric.value?.default_first_rank ?? -1;
-  if (cur <= 0 && prv <= 0) return null;
-  if (cur <= 0) return null; // fell out
-  if (prv <= 0) return null; // first time
-  return prv - cur; // positive = improved rank (lower number = better)
+// Delta: total_default_matches between current and previous
+const matchesDelta = computed<number | null>(() => {
+  const cur = latestMetric.value?.total_default_matches ?? null;
+  const prv = prevMetric.value?.total_default_matches ?? null;
+  if (cur === null || prv === null) return null;
+  return cur - prv;
 });
 
 // ──────────────────────────── helpers ────────────────────────────
@@ -142,31 +145,38 @@ type PillTone = "ok" | "warn" | "alert" | "info";
 interface TaskRowState {
   statusLabel: string;
   tone: PillTone;
-  isFirst: boolean; // first-ever result (no prev)
 }
 
 function taskRowState(task: TaskItem): TaskRowState {
   const s = task.last_status;
-  if (!task.last_check_at || !s) return { statusLabel: "未跑", tone: "info", isFirst: false };
-  if (s === "captcha") return { statusLabel: "验证码", tone: "warn", isFirst: false };
-  if (s === "error" || s === "fail") return { statusLabel: "失败", tone: "alert", isFirst: false };
+  if (!task.last_check_at || !s) return { statusLabel: "未跑", tone: "info" };
+  if (s === "captcha") return { statusLabel: "验证码", tone: "warn" };
+  if (s === "error" || s === "fail") return { statusLabel: "失败", tone: "alert" };
   if (s === "ok") {
-    // Use history if this is the selected task, otherwise fall back to last_status only
     if (task.id === selectedId.value) {
       const m = latestMetric.value;
-      if (!m) return { statusLabel: "未跑", tone: "info", isFirst: false };
-      if (m.captcha_hit) return { statusLabel: "验证码", tone: "warn", isFirst: false };
-      if (m.default_matched_count > 0) return { statusLabel: "上榜", tone: "ok", isFirst: history.value.length <= 1 };
-      return { statusLabel: "未命中", tone: "warn", isFirst: history.value.length <= 1 };
+      if (!m) return { statusLabel: "未跑", tone: "info" };
+      if (m.captcha_hit) return { statusLabel: "验证码", tone: "warn" };
+      if (m.matched_keywords > 0) return { statusLabel: "上榜", tone: "ok" };
+      return { statusLabel: "未命中", tone: "warn" };
     }
-    return { statusLabel: "正常", tone: "ok", isFirst: false };
+    return { statusLabel: "正常", tone: "ok" };
   }
-  return { statusLabel: s, tone: "info", isFirst: false };
+  return { statusLabel: s, tone: "info" };
 }
 
 function scheduleLabel(cron?: string): string {
   if (!cron || cron === "manual") return "手动";
   return cron;
+}
+
+/** First keyword label with "(+N)" if more exist. */
+function keywordSummary(cfg: TaskItem["config"]): string {
+  const kws = cfg.search_keywords ?? [];
+  if (kws.length === 0) return "—";
+  const first = kws[0];
+  if (kws.length === 1) return first;
+  return `${first} (+${kws.length - 1})`;
 }
 
 // ──────────────────────────── data loading ────────────────────────────
@@ -359,52 +369,57 @@ watch(selectedId, (id) => {
             }"
             @click="selectedId = t.id"
           >
-            <!-- 搜索关键词 -->
+            <!-- 搜索关键词：首词 (+N) / 下方品牌词 -->
             <div class="min-w-0">
               <div class="truncate text-[13px] font-medium">{{ t.name }}</div>
               <div
                 class="truncate text-[11px] mt-0.5"
                 :style="{ color: 'var(--ink-3)' }"
-              >{{ t.config.search_keyword }}</div>
+              >{{ keywordSummary(t.config) }}</div>
+              <div
+                v-if="t.config.target_brand"
+                class="truncate text-[10.5px] mt-0.5"
+                :style="{ color: 'var(--ink-4)' }"
+              >品牌: {{ t.config.target_brand }}</div>
             </div>
 
             <!-- 类型 -->
             <div class="text-[12px]" :style="{ color: 'var(--ink-2)' }">百度关键词</div>
 
-            <!-- 上次：N/10 + 首条 #M (only for selected task with data) -->
+            <!-- 上次：matched_keywords/total_keywords + best_default_first_rank -->
             <div class="font-display text-[13px] font-bold">
               <template v-if="t.id === selectedId && latestMetric">
-                <span>{{ latestMetric.default_matched_count }}/10</span>
+                <span>{{ latestMetric.matched_keywords }}/{{ latestMetric.total_keywords }}</span>
                 <div
                   class="text-[10.5px] font-normal mt-0.5"
                   :style="{ color: 'var(--ink-3)' }"
                 >
                   首条
-                  {{ latestMetric.default_first_rank > 0 ? `#${latestMetric.default_first_rank}` : '—' }}
+                  {{ latestMetric.best_default_first_rank > 0 ? `#${latestMetric.best_default_first_rank}` : '—' }}
                 </div>
               </template>
               <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
             </div>
 
-            <!-- 变化 (only for selected task) -->
+            <!-- 变化：total_default_matches delta -->
             <div>
               <template v-if="t.id === selectedId && history.length > 0">
                 <template v-if="history.length === 1">
                   <Pill tone="info">首次</Pill>
                 </template>
-                <template v-else-if="rankDelta === null">
+                <template v-else-if="matchesDelta === null">
                   <span :style="{ color: 'var(--ink-3)' }">—</span>
                 </template>
-                <template v-else-if="rankDelta > 0">
+                <template v-else-if="matchesDelta > 0">
                   <Pill tone="ok">
                     <Icon name="arrowUp" :size="10" />
-                    +{{ rankDelta }}
+                    +{{ matchesDelta }}
                   </Pill>
                 </template>
-                <template v-else-if="rankDelta < 0">
+                <template v-else-if="matchesDelta < 0">
                   <Pill tone="warn">
                     <Icon name="arrowDown" :size="10" />
-                    {{ rankDelta }}
+                    {{ matchesDelta }}
                   </Pill>
                 </template>
                 <Pill v-else tone="info">持平</Pill>
@@ -500,9 +515,10 @@ watch(selectedId, (id) => {
               <Icon name="edit" :size="12" />
               <span>编辑</span>
             </button>
+            <!-- SERP link → first keyword's serp_url -->
             <a
-              v-if="latestMetric?.serp_url"
-              :href="latestMetric.serp_url"
+              v-if="latestMetric?.keywords?.length"
+              :href="latestMetric.keywords[0].serp_url"
               target="_blank"
               rel="noopener"
               class="inline-flex items-center gap-1 px-3 py-1.5 text-[11.5px]"
@@ -532,7 +548,7 @@ watch(selectedId, (id) => {
 
         <!-- KPI 三联 -->
         <div class="mt-3 grid grid-cols-3 gap-3">
-          <!-- 本次首条排名 -->
+          <!-- 本次命中关键词 -->
           <div
             :style="{
               padding: '12px',
@@ -541,19 +557,19 @@ watch(selectedId, (id) => {
               border: '1px solid var(--line)',
             }"
           >
-            <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">本次首条排名</div>
+            <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">本次命中关键词</div>
             <div class="font-display mt-1 font-bold" :style="{ fontSize: '18px' }">
               <template v-if="latestMetric">
-                {{ latestMetric.default_first_rank > 0 ? `#${latestMetric.default_first_rank}` : '—' }}
+                {{ latestMetric.matched_keywords }} / {{ latestMetric.total_keywords }}
                 <div class="mt-0.5 text-[10.5px] font-normal" :style="{ color: 'var(--ink-3)' }">
-                  命中 {{ latestMetric.default_matched_count }} 条 / 10
+                  共 {{ latestMetric.total_default_matches }} 条 / {{ latestMetric.total_keywords }}×10
                 </div>
               </template>
               <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
             </div>
           </div>
 
-          <!-- 上次首条排名 -->
+          <!-- 上次命中关键词 -->
           <div
             :style="{
               padding: '12px',
@@ -562,12 +578,12 @@ watch(selectedId, (id) => {
               border: '1px solid var(--line)',
             }"
           >
-            <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">上次首条排名</div>
+            <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">上次命中关键词</div>
             <div class="font-display mt-1 font-bold" :style="{ fontSize: '18px' }">
               <template v-if="prevMetric">
-                {{ prevMetric.default_first_rank > 0 ? `#${prevMetric.default_first_rank}` : '—' }}
+                {{ prevMetric.matched_keywords }} / {{ prevMetric.total_keywords }}
                 <div class="mt-0.5 text-[10.5px] font-normal" :style="{ color: 'var(--ink-3)' }">
-                  命中 {{ prevMetric.default_matched_count }} 条 / 10
+                  共 {{ prevMetric.total_default_matches }} 条 / {{ prevMetric.total_keywords }}×10
                 </div>
               </template>
               <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
@@ -590,11 +606,11 @@ watch(selectedId, (id) => {
           </div>
         </div>
 
-        <!-- Sparkline: 最近 14 次排名 -->
+        <!-- Sparkline: matched_keywords 最近 14 次 -->
         <div class="mt-5">
-          <div class="mb-2 text-[12px] font-semibold">最近 14 次排名</div>
+          <div class="mb-2 text-[12px] font-semibold">最近 14 次命中趋势</div>
           <Sparkline
-            v-if="sparkPoints.length > 1"
+            v-if="sparkPoints.filter(v => v > 0).length > 1"
             :points="sparkPoints"
             :width="380"
             :height="70"
@@ -616,145 +632,188 @@ watch(selectedId, (id) => {
           暂无检查记录
         </div>
 
-        <template v-if="latestMetric">
-          <!-- 前 10 条结果 -->
+        <!-- 每关键词折叠段 -->
+        <template v-if="latestMetric && latestMetric.keywords?.length">
           <div class="mt-4">
             <div class="mb-2 flex items-center justify-between">
-              <div class="text-[12px] font-semibold">前 10 条结果</div>
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                自家命中
-                <span :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">
-                  {{ latestMetric.default_matched_count }}
-                </span>
-                条
-              </div>
-            </div>
-            <template v-if="latestMetric.default_results.length">
-              <div
-                v-for="row in latestMetric.default_results"
-                :key="row.rank"
-                class="mb-1.5 flex items-start gap-3"
-                :style="{
-                  padding: '10px',
-                  borderRadius: '10px',
-                  background: row.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
-                  border: '1px solid ' + (row.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
-                }"
-              >
-                <!-- Rank pill -->
-                <span
-                  class="font-display text-[13px] font-bold flex-shrink-0"
-                  :style="{
-                    width: '22px',
-                    color: row.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
-                  }"
-                >#{{ row.rank }}</span>
-                <!-- Title + host row -->
-                <div class="min-w-0 flex-1">
-                  <a
-                    :href="row.url"
-                    target="_blank"
-                    rel="noopener"
-                    class="block text-[12.5px] font-medium leading-snug"
-                    :style="{
-                      color: 'var(--ink)',
-                      textDecoration: 'none',
-                      display: '-webkit-box',
-                      WebkitLineClamp: '2',
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
-                    }"
-                    :title="row.title"
-                  >{{ row.title }}</a>
-                  <div class="flex items-center gap-2 mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                    <span class="truncate">{{ row.host }}</span>
-                    <span
-                      v-if="row.matches_brand"
-                      class="flex-shrink-0 ml-auto"
-                      :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
-                    >自家 · {{ row.matched_brand }}</span>
-                  </div>
-                </div>
-              </div>
-            </template>
-            <div
-              v-else
-              class="py-4 text-center text-[11.5px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              无结果
-            </div>
-          </div>
-
-          <!-- 最新资讯 (only when news_present) -->
-          <div v-if="latestMetric.news_present" class="mt-4">
-            <div class="mb-2 flex items-center justify-between">
               <div class="text-[12px] font-semibold">
-                最新资讯
-                <span class="text-[11px] font-normal ml-1" :style="{ color: 'var(--ink-3)' }">
-                  （{{ latestMetric.news_results.length }} 条）
+                关键词结果
+                <span class="font-normal ml-1" :style="{ color: 'var(--ink-3)' }">
+                  ({{ latestMetric.total_keywords }} 个关键词 · 共命中 {{ latestMetric.total_default_matches }} 条)
                 </span>
-              </div>
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                <span v-if="latestMetric.news_first_rank > 0">
-                  首位 <b :style="{ color: 'var(--primary-deep)' }">#{{ latestMetric.news_first_rank }}</b>
-                </span>
-                <span v-else>未命中</span>
               </div>
             </div>
-            <template v-if="latestMetric.news_results.length">
-              <div
-                v-for="row in latestMetric.news_results"
-                :key="row.rank"
-                class="mb-1.5 flex items-start gap-3"
+
+            <details
+              v-for="(kw, idx) in latestMetric.keywords"
+              :key="kw.keyword"
+              :open="idx === 0"
+              class="mb-2"
+              :style="{
+                border: '1px solid var(--line)',
+                borderRadius: '10px',
+                overflow: 'hidden',
+              }"
+            >
+              <!-- Summary / header row -->
+              <summary
                 :style="{
-                  padding: '10px',
-                  borderRadius: '10px',
-                  background: row.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
-                  border: '1px solid ' + (row.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
+                  cursor: 'pointer',
+                  padding: '10px 12px',
+                  background: 'var(--card-2)',
+                  listStyle: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  userSelect: 'none',
                 }"
               >
-                <span
-                  class="font-display text-[13px] font-bold flex-shrink-0"
-                  :style="{
-                    width: '22px',
-                    color: row.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
-                  }"
-                >#{{ row.rank }}</span>
-                <div class="min-w-0 flex-1">
-                  <a
-                    :href="row.url"
-                    target="_blank"
-                    rel="noopener"
-                    class="block text-[12.5px] font-medium leading-snug"
+                <span class="flex-1 truncate text-[12.5px] font-semibold" :style="{ color: 'var(--ink)' }">
+                  {{ kw.keyword }}
+                </span>
+                <span class="flex-shrink-0 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                  <template v-if="kw.fetch_error">
+                    <span :style="{ color: 'var(--red)' }">抓取失败</span>
+                  </template>
+                  <template v-else-if="kw.default_matched_count > 0">
+                    命中 {{ kw.default_matched_count }}/10 · 首条
+                    {{ kw.default_first_rank > 0 ? `#${kw.default_first_rank}` : '—' }}
+                  </template>
+                  <template v-else>
+                    未命中
+                  </template>
+                </span>
+              </summary>
+
+              <!-- Body -->
+              <div :style="{ padding: '10px 12px' }">
+                <!-- Fetch error badge -->
+                <div
+                  v-if="kw.fetch_error"
+                  class="mb-2 rounded-lg px-2 py-1 text-[11px]"
+                  :style="{ background: 'rgba(216,90,72,0.08)', color: 'var(--red)' }"
+                >
+                  抓取失败: {{ kw.fetch_error.slice(0, 120) }}
+                </div>
+
+                <!-- Default results (top 10) -->
+                <template v-if="kw.default_results.length">
+                  <div
+                    v-for="row in kw.default_results"
+                    :key="row.rank"
+                    class="mb-1.5 flex items-start gap-3"
                     :style="{
-                      color: 'var(--ink)',
-                      textDecoration: 'none',
-                      display: '-webkit-box',
-                      WebkitLineClamp: '2',
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden',
+                      padding: '10px',
+                      borderRadius: '10px',
+                      background: row.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
+                      border: '1px solid ' + (row.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
                     }"
-                    :title="row.title"
-                  >{{ row.title }}</a>
-                  <div class="flex items-center gap-2 mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                    <span class="truncate">{{ row.host }}</span>
+                  >
                     <span
-                      v-if="row.matches_brand"
-                      class="flex-shrink-0 ml-auto"
-                      :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
-                    >自家 · {{ row.matched_brand }}</span>
+                      class="font-display text-[13px] font-bold flex-shrink-0"
+                      :style="{
+                        width: '22px',
+                        color: row.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
+                      }"
+                    >#{{ row.rank }}</span>
+                    <div class="min-w-0 flex-1">
+                      <a
+                        :href="row.url"
+                        target="_blank"
+                        rel="noopener"
+                        class="block text-[12.5px] font-medium leading-snug"
+                        :style="{
+                          color: 'var(--ink)',
+                          textDecoration: 'none',
+                          display: '-webkit-box',
+                          WebkitLineClamp: '2',
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }"
+                        :title="row.title"
+                      >{{ row.title }}</a>
+                      <div class="flex items-center gap-2 mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                        <span class="truncate">{{ row.host }}</span>
+                        <span
+                          v-if="row.matches_brand"
+                          class="flex-shrink-0 ml-auto"
+                          :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
+                        >自家 · {{ row.matched_brand }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <div
+                  v-else
+                  class="py-4 text-center text-[11.5px]"
+                  :style="{ color: 'var(--ink-3)' }"
+                >
+                  无结果
+                </div>
+
+                <!-- News results sub-section -->
+                <div v-if="kw.news_present" class="mt-3">
+                  <div class="mb-1.5 flex items-center justify-between">
+                    <div class="text-[11.5px] font-semibold">
+                      最新资讯
+                      <span class="text-[11px] font-normal ml-1" :style="{ color: 'var(--ink-3)' }">
+                        （{{ kw.news_results.length }} 条）
+                      </span>
+                    </div>
+                    <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                      <span v-if="kw.news_first_rank > 0">
+                        首位 <b :style="{ color: 'var(--primary-deep)' }">#{{ kw.news_first_rank }}</b>
+                      </span>
+                      <span v-else>未命中</span>
+                    </div>
+                  </div>
+                  <div
+                    v-for="row in kw.news_results"
+                    :key="row.rank"
+                    class="mb-1.5 flex items-start gap-3"
+                    :style="{
+                      padding: '10px',
+                      borderRadius: '10px',
+                      background: row.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
+                      border: '1px solid ' + (row.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
+                    }"
+                  >
+                    <span
+                      class="font-display text-[13px] font-bold flex-shrink-0"
+                      :style="{
+                        width: '22px',
+                        color: row.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
+                      }"
+                    >#{{ row.rank }}</span>
+                    <div class="min-w-0 flex-1">
+                      <a
+                        :href="row.url"
+                        target="_blank"
+                        rel="noopener"
+                        class="block text-[12.5px] font-medium leading-snug"
+                        :style="{
+                          color: 'var(--ink)',
+                          textDecoration: 'none',
+                          display: '-webkit-box',
+                          WebkitLineClamp: '2',
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }"
+                        :title="row.title"
+                      >{{ row.title }}</a>
+                      <div class="flex items-center gap-2 mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                        <span class="truncate">{{ row.host }}</span>
+                        <span
+                          v-if="row.matches_brand"
+                          class="flex-shrink-0 ml-auto"
+                          :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
+                        >自家 · {{ row.matched_brand }}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </template>
-            <div
-              v-else
-              class="py-4 text-center text-[11.5px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              无资讯结果
-            </div>
+            </details>
           </div>
         </template>
       </template>
