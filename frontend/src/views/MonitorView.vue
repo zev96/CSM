@@ -37,6 +37,7 @@ import EditBatchModal from "@/components/monitor/EditBatchModal.vue";
 import RetentionPage from "@/components/monitor/history/RetentionPage.vue";
 import ZhihuRankingPage from "@/components/monitor/history/ZhihuRankingPage.vue";
 import BaiduRankingPage from "@/components/monitor/history/BaiduRankingPage.vue";
+import BaiduSEOAnalytics from "@/components/monitor/history/BaiduSEOAnalytics.vue";
 
 import { subscribe } from "@/api/client";
 import { useConfig } from "@/stores/config";
@@ -904,6 +905,11 @@ async function goToZhihuTask(payload: { taskId: number }) {
   await nextTick();
   await nextTick();
   selectedTaskId.value = payload.taskId;
+}
+
+function goToBaiduTask(_payload: { taskId: number }) {
+  // MVP: switch to baidu workspace tab. User can then click the task row there.
+  activeTab.value = "baidu";
 }
 
 // 批次按钮文案 / 禁用态。点击瞬间 markRunning 把所有子 task 全部
@@ -3213,12 +3219,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <RetentionPage v-if="historySubtab === 'retention'" @navigate="goToCommentTask" />
           <ZhihuRankingPage v-else-if="historySubtab === 'zhihu'" @navigate="goToZhihuTask" />
-          <BaiduRankingPage
-            v-else-if="historySubtab === 'baidu'"
-            @add-task="showAddTask = true"
-            @batch-import="showBatchImport = true"
-            @edit-task="(t) => { editingTask = t as any; showAddTask = true; }"
-          />
+          <BaiduSEOAnalytics v-else-if="historySubtab === 'baidu'" @navigate="goToBaiduTask" />
         </div>
       </section>
     </template>
