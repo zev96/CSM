@@ -218,6 +218,54 @@ def _extract_readable_text(raw_html: str) -> str:
         return ""
 
 
+def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
+    """浏览器 fallback：用已有的 patchright Page 打开 URL，读 HTML 提正文。
+
+    跟 HTTP-first 函数返回结构一致，方便上游统一处理。
+
+    复用同一个 incognito context 的 Page —— SERP 抓完后，循环里
+    每条 URL 在同 page 上 goto 切走（不开新 tab，避免句柄爆炸）。
+    """
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+    except TypeError:
+        # FakePage 不接受关键字参数：测试场景
+        try:
+            page.goto(url)
+        except Exception as e:
+            return {
+                "content": "",
+                "source": "browser",
+                "fetch_error": f"page.goto raised: {e!r}",
+                "needs_browser_fallback": False,
+            }
+    except Exception as e:
+        return {
+            "content": "",
+            "source": "browser",
+            "fetch_error": f"page.goto raised: {e!r}",
+            "needs_browser_fallback": False,
+        }
+
+    try:
+        raw = page.content() or ""
+    except Exception as e:
+        return {
+            "content": "",
+            "source": "browser",
+            "fetch_error": f"page.content raised: {e!r}",
+            "needs_browser_fallback": False,
+        }
+
+    text = _extract_readable_text(raw)
+    return {
+        "content": text,
+        "source": "browser",
+        "fetch_error": None if text else "browser content empty after readability",
+        "needs_browser_fallback": False,
+    }
+
+
 class BaiduKeywordAdapter:
     """`BaseMonitorAdapter` 实现。完整 fetch 在后续任务里逐步加上。"""
 

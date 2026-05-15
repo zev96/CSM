@@ -192,3 +192,38 @@ def test_fetch_article_http_network_exception_triggers_fallback(monkeypatch):
     result = baidu_keyword.fetch_article_http("https://offline.example/")
     assert result["needs_browser_fallback"] is True
     assert "nxdomain" in (result["fetch_error"] or "").lower()
+
+
+# ── 浏览器 fallback ─────────────────────────────────────────────────────
+def test_fetch_article_browser_success():
+    """给一个 fake page，验证 fallback 抽到 content 并标 source=browser。"""
+    long_text = "  这里是浏览器 fallback 抓到的正文：" + ("Claude " * 30)
+
+    class FakePage:
+        def goto(self, url, **kw):
+            pass
+
+        def content(self):
+            return f"<html><body><article>{long_text}</article></body></html>"
+
+    result = baidu_keyword.fetch_article_browser(
+        FakePage(), "https://spa.example/post"
+    )
+    assert result["source"] == "browser"
+    assert result["fetch_error"] is None
+    assert "Claude" in result["content"]
+
+
+def test_fetch_article_browser_navigation_exception():
+    class FakePage:
+        def goto(self, url, **kw):
+            raise RuntimeError("navigation timeout")
+
+        def content(self):
+            return ""
+
+    result = baidu_keyword.fetch_article_browser(
+        FakePage(), "https://timeout.example/"
+    )
+    assert result["source"] == "browser"
+    assert "navigation timeout" in (result["fetch_error"] or "")
