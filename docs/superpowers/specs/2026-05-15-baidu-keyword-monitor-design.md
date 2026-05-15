@@ -73,6 +73,12 @@ frontend/src/
 
 ### 3.3 Adapter 内部分层
 
+**引擎选型**：`BaiduKeywordAdapter` 硬绑 `patchright` 引擎，不暴露 drission 选项。理由：
+
+- 无痕模式只在 patchright 上实现（`browser.new_context()` 走 BrowserContext API）
+- patchright 自带反检测补丁，百度反爬比知乎严
+- drission 用 `launch_persistent_context`，与"无痕"语义冲突
+
 `BaiduKeywordAdapter.fetch(task)` 流程：
 
 1. `_breaker.allow()` — 熔断检查（连续失败 3 次 → 熔断 10 分钟）
@@ -105,7 +111,7 @@ TaskType = Literal[
 
 ### 4.2 `MonitorTask`
 
-- `target_url` 复用，但语义变更：存 `https://www.baidu.com/s?wd=<encoded>`。如果用户填的是纯关键词，adapter 内部规范化前 task 行存 `"search:" + keyword`，避免改 schema。
+- `target_url` 复用，存 `https://www.baidu.com/s?wd=<urlencoded(keyword)>`。**单一真相源是 `config.search_keyword`**，`target_url` 在创建 / 更新任务时由 sidecar 路由层从 keyword 派生，避免两处脏写不一致。
 - `config`：
 
 ```json
