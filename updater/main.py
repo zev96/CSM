@@ -251,17 +251,21 @@ def main(argv: list[str]) -> int:
             args.target, [c.name for c in candidates],
         )
 
-    # Keep window open if --keep-window OR if there was a failure (so user
-    # can read the log).
-    if args.keep_window or not success:
+    # Keep window open if --keep-window AND we have a console attached.
+    # PyInstaller 'windowed' build (console=False) has no stdin — input()
+    # would block forever with no way to dismiss. Detect via sys.stdin
+    # being a real tty / non-null; on windowed builds Python sets stdin
+    # to a closed file-like that throws on read.
+    has_console = sys.stdin is not None and not sys.stdin.closed
+    if args.keep_window and has_console:
         logger.info("=" * 60)
-        if not success:
-            logger.error("UPDATE FAILED — see log above. Press Enter to close.")
-        else:
-            logger.info("Update succeeded — press Enter to close.")
+        logger.info(
+            "%s — press Enter to close.",
+            "Update succeeded" if success else "UPDATE FAILED — see log above",
+        )
         try:
             input()
-        except (EOFError, KeyboardInterrupt):
+        except (EOFError, KeyboardInterrupt, OSError):
             pass
 
     return 0 if success else 1

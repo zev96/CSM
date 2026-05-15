@@ -28,7 +28,13 @@ exe = EXE(
     strip=False,
     upx=False,
     runtime_tmpdir=None,
-    console=True,
+    # console=False → no black cmd window when the updater takes over.
+    # Output still goes to %TEMP%\csm_update\updater.log via the file
+    # handler in main._setup_logging. Errors are not surfaced to the
+    # user via UI — the app silently relaunches the old version on
+    # failure. To re-enable interactive error display, switch back to
+    # console=True and the input() prompt in main() will fire.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
