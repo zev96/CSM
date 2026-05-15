@@ -3158,6 +3158,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         <BaiduRankingPage
           @add-task="showAddTask = true"
           @batch-import="showBatchImport = true"
+          @edit-task="(t) => { editingTask = t as any; showAddTask = true; }"
         />
       </section>
     </template>
@@ -3216,6 +3217,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
             v-else-if="historySubtab === 'baidu'"
             @add-task="showAddTask = true"
             @batch-import="showBatchImport = true"
+            @edit-task="(t) => { editingTask = t as any; showAddTask = true; }"
           />
         </div>
       </section>
