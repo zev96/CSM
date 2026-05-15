@@ -77,6 +77,7 @@ const topN = ref(5);
 // Baidu-specific
 const searchKeywordsRaw = ref(""); // newline-separated string; split to list on submit
 const baiduHeadless = ref(true);
+const baiduIdealRank = ref<number>(5);
 // Schedule
 const scheduleMode = ref<"manual" | "daily">("manual");
 const dailyTime = ref("09:00");
@@ -101,6 +102,7 @@ function close() {
   searchKeywordsRaw.value = "";
   targetBrand.value = "";
   baiduHeadless.value = true;
+  baiduIdealRank.value = 5;
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
   enabled.value = true;
@@ -133,6 +135,7 @@ function hydrateFromTask(t: EditingTask) {
   const keywords: string[] = Array.isArray(cfg.search_keywords) ? cfg.search_keywords : [];
   searchKeywordsRaw.value = keywords.join("\n");
   baiduHeadless.value = cfg.headless !== false; // default true
+  baiduIdealRank.value = Number(cfg.ideal_rank ?? 5);
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
   } else if (/^\d{1,2}:\d{2}$/.test(t.schedule_cron)) {
@@ -217,6 +220,7 @@ async function submit() {
         search_keywords: keywords,
         target_brand: targetBrand.value.trim(),
         headless: baiduHeadless.value,
+        ideal_rank: baiduIdealRank.value,
       };
       // target_url 由第一个 search_keyword 派生 —— 后端要求非空
       computedTargetUrl = "https://www.baidu.com/s?wd=" + encodeURIComponent(keywords[0]);
@@ -363,6 +367,19 @@ async function submit() {
                 v-model="targetBrand"
                 placeholder="如：Claude Code"
                 debounce="live"
+              />
+            </FormField>
+
+            <FormField
+              label="理想排名（前 N 位）"
+              hint="排名进入前 N 位即视为「卡位成功」（首页一般 10 位）"
+              inline
+            >
+              <FormInput
+                type="number"
+                :model-value="baiduIdealRank"
+                :width="100"
+                @commit="(v) => (baiduIdealRank = Math.min(50, Math.max(1, Number(v) || 5)))"
               />
             </FormField>
 

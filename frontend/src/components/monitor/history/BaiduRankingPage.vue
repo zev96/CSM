@@ -89,6 +89,8 @@ const toast = useToast();
 
 const tasks = ref<TaskItem[]>([]);
 const selectedId = ref<number | null>(null);
+// Selected keyword index in Level 2 (for the per-keyword ranking detail panel)
+const selectedKeywordIdx = ref<number | null>(null);
 const history = ref<ResultItem[]>([]);
 const loadingTasks = ref(false);
 const loadingHistory = ref(false);
@@ -145,12 +147,13 @@ const prevMetric = computed<BaiduMetric | null>(
 // Trend chart: history is newest-first from API; reverse for chronological
 const chronoHistory = computed(() => [...history.value].reverse());
 
-// Sparkline: matched_keywords over last 14 results (replace 0 with 0, non-data stays 0)
-const sparkPoints = computed<number[]>(() =>
+// Sparkline: matched_keywords over last 14 results (kept for potential future use)
+const _sparkPoints = computed<number[]>(() =>
   chronoHistory.value
     .slice(-14)
     .map((r) => r.metric?.matched_keywords ?? 0),
 );
+void _sparkPoints; // suppress unused warning
 
 const sparkLabels = computed<string[]>(() => {
   const slice = chronoHistory.value.slice(-14);
@@ -159,6 +162,67 @@ const sparkLabels = computed<string[]>(() => {
   return [0, step, step * 2, slice.length - 1].map(
     (i) => slice[Math.min(i, slice.length - 1)].checked_at.slice(5, 10),
   );
+});
+
+// Get ideal_rank from selected task config (default 5)
+const idealRank = computed<number>(() => {
+  const v = (selectedTask.value?.config as any)?.ideal_rank;
+  return typeof v === 'number' && v > 0 ? v : 5;
+});
+
+// 本次卡位数量: how many keywords have default_first_rank within ideal_rank
+const placedCountCurrent = computed<number>(() => {
+  if (!latestMetric.value) return 0;
+  return latestMetric.value.keywords.filter(
+    (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
+  ).length;
+});
+
+const placedCountPrev = computed<number>(() => {
+  if (!prevMetric.value) return 0;
+  return prevMetric.value.keywords.filter(
+    (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
+  ).length;
+});
+void placedCountPrev; // suppress unused warning
+
+// 最新资讯卡位数量: across all keywords with news_present, count matches in news_results
+// Returns null if NO keyword has news_present (display as "无")
+const newsPlacedCount = computed<number | null>(() => {
+  if (!latestMetric.value) return null;
+  const newsKws = latestMetric.value.keywords.filter((kw) => kw.news_present);
+  if (newsKws.length === 0) return null;
+  return newsKws.reduce((sum, kw) => {
+    return sum + kw.news_results.filter((r) => r.matches_brand).length;
+  }, 0);
+});
+
+// 状态 pill tone + label based on current vs total
+const placementStatus = computed<{ label: string; tone: PillTone }>(() => {
+  const m = latestMetric.value;
+  if (!m) return { label: "未跑", tone: "info" };
+  if (m.captcha_hit) return { label: "验证码", tone: "warn" };
+  const placed = placedCountCurrent.value;
+  const total = m.total_keywords || 1;
+  if (placed === total && total > 0) return { label: "全部卡位", tone: "ok" };
+  if (placed > 0) return { label: `部分卡位 (${placed}/${total})`, tone: "warn" };
+  return { label: "未卡位", tone: "alert" };
+});
+
+// Sparkline: 卡位 count (not matched_keywords) over last 14 days
+const sparkPointsPlaced = computed<number[]>(() =>
+  chronoHistory.value.slice(-14).map((r) => {
+    if (!r.metric) return 0;
+    return r.metric.keywords.filter(
+      (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
+    ).length;
+  }),
+);
+
+// Currently selected keyword's details for the right panel detail section
+const currentKeyword = computed<BaiduPerKeyword | null>(() => {
+  if (!latestMetric.value || selectedKeywordIdx.value === null) return null;
+  return latestMetric.value.keywords[selectedKeywordIdx.value] ?? null;
 });
 
 // Delta: total_default_matches between current and previous
@@ -289,6 +353,7 @@ function openEdit(task: TaskItem) {
 
 function backToList(): void {
   selectedId.value = null;
+  selectedKeywordIdx.value = null;
 }
 
 // ──────────────────────────── lifecycle ────────────────────────────
@@ -340,6 +405,13 @@ onUnmounted(() => {
 
 watch(selectedId, (id) => {
   if (id !== null) loadHistory(id);
+});
+
+// Auto-select first keyword when entering Level 2
+watch(() => latestMetric.value?.keywords, (kws) => {
+  if (kws && kws.length > 0 && selectedKeywordIdx.value === null) {
+    selectedKeywordIdx.value = 0;
+  }
 });
 
 // Parent (MonitorView) calls this after a create/update from the shared
@@ -746,12 +818,17 @@ defineExpose({ reload: loadTasks });
               <div
                 v-for="(kw, i) in latestMetric.keywords"
                 :key="kw.keyword"
-                class="grid items-center"
+                class="grid items-center cursor-pointer transition"
                 :style="{
                   gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
                   borderBottom: i < latestMetric.keywords.length - 1 ? '1px solid var(--line)' : 'none',
                   padding: '12px 8px',
+                  background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
+                  borderLeft: selectedKeywordIdx === i ? '3px solid var(--primary)' : '3px solid transparent',
                 }"
+                @click="selectedKeywordIdx = i"
+                @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
+                @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
               >
                 <!-- 关键词 -->
                 <div class="min-w-0">
@@ -826,71 +903,45 @@ defineExpose({ reload: loadTasks });
           </div>
 
           <!-- KPI 三联 -->
-          <div class="grid grid-cols-3 gap-3 flex-shrink-0">
-            <!-- 本次命中关键词 -->
-            <div
-              :style="{
-                padding: '12px',
-                borderRadius: '12px',
-                background: 'var(--card-2)',
-                border: '1px solid var(--line)',
-              }"
-            >
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">本次命中关键词</div>
-              <div class="font-display mt-1 font-bold" :style="{ fontSize: '18px' }">
-                <template v-if="latestMetric">
-                  {{ latestMetric.matched_keywords }} / {{ latestMetric.total_keywords }}
-                  <div class="mt-0.5 text-[10.5px] font-normal" :style="{ color: 'var(--ink-3)' }">
-                    共 {{ latestMetric.total_default_matches }} 条 / {{ latestMetric.total_keywords }}×10
-                  </div>
-                </template>
-                <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+          <div class="mb-4 grid flex-shrink-0 grid-cols-3 gap-3">
+            <!-- KPI 1: 本次卡位数量 -->
+            <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">本次卡位数量</div>
+              <div class="font-display text-[20px] font-bold">{{ placedCountCurrent }}</div>
+              <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">
+                共 {{ latestMetric?.total_keywords ?? 0 }} 个关键词
               </div>
             </div>
 
-            <!-- 上次命中关键词 -->
-            <div
-              :style="{
-                padding: '12px',
-                borderRadius: '12px',
-                background: 'var(--card-2)',
-                border: '1px solid var(--line)',
-              }"
-            >
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">上次命中关键词</div>
-              <div class="font-display mt-1 font-bold" :style="{ fontSize: '18px' }">
-                <template v-if="prevMetric">
-                  {{ prevMetric.matched_keywords }} / {{ prevMetric.total_keywords }}
-                  <div class="mt-0.5 text-[10.5px] font-normal" :style="{ color: 'var(--ink-3)' }">
-                    共 {{ prevMetric.total_default_matches }} 条 / {{ prevMetric.total_keywords }}×10
-                  </div>
-                </template>
-                <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+            <!-- KPI 2: 状态 -->
+            <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">状态</div>
+              <div class="mt-1">
+                <Pill :tone="placementStatus.tone">{{ placementStatus.label }}</Pill>
+              </div>
+              <div class="text-[10.5px] mt-2" :style="{ color: 'var(--ink-3)' }">
+                理想排名：前 {{ idealRank }} 位
               </div>
             </div>
 
-            <!-- 检查频率 -->
-            <div
-              :style="{
-                padding: '12px',
-                borderRadius: '12px',
-                background: 'var(--card-2)',
-                border: '1px solid var(--line)',
-              }"
-            >
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">检查频率</div>
-              <div class="font-display mt-1 font-bold" :style="{ fontSize: '14px' }">
-                {{ scheduleLabel(selectedTask?.schedule_cron) }}
+            <!-- KPI 3: 最新资讯卡位数量 -->
+            <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最新资讯卡位数量</div>
+              <div class="font-display text-[20px] font-bold">
+                {{ newsPlacedCount === null ? '无' : newsPlacedCount }}
+              </div>
+              <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">
+                {{ newsPlacedCount === null ? '该轮无最新资讯' : '资讯区命中' }}
               </div>
             </div>
           </div>
 
-          <!-- Sparkline: matched_keywords 最近 14 次 -->
-          <div class="mt-5 flex-shrink-0">
-            <div class="mb-2 text-[12px] font-semibold">最近 14 次命中趋势</div>
+          <!-- Sparkline: 卡位数量 最近 14 天 -->
+          <div class="mb-4 flex-shrink-0">
+            <div class="text-[12.5px] font-semibold mb-2">最近 14 天关键词卡位趋势</div>
             <Sparkline
-              v-if="sparkPoints.filter(v => v > 0).length > 1"
-              :points="sparkPoints"
+              v-if="sparkPointsPlaced.filter(v => v > 0).length > 1"
+              :points="sparkPointsPlaced"
               :width="380"
               :height="70"
               stroke="var(--primary, #ee6a2a)"
@@ -902,232 +953,104 @@ defineExpose({ reload: loadTasks });
             </div>
           </div>
 
-          <!-- 每关键词折叠段 -->
-          <template v-if="latestMetric && latestMetric.keywords?.length">
-            <div class="mt-5">
-              <!-- Section header -->
+          <!-- 选中关键词排名详情 -->
+          <div class="flex-1 min-h-0 overflow-y-auto">
+            <div class="text-[12.5px] font-semibold mb-2 flex items-baseline justify-between">
+              <span>排名情况</span>
+              <span v-if="currentKeyword" class="text-[11px] font-normal" :style="{ color: 'var(--ink-3)' }">
+                关键词：{{ currentKeyword.keyword }}
+              </span>
+            </div>
+
+            <div v-if="!currentKeyword" class="text-center text-[12px] py-8" :style="{ color: 'var(--ink-3)' }">
+              点击左侧关键词查看排名详情
+            </div>
+
+            <template v-else>
+              <!-- 抓取错误 -->
               <div
-                class="mb-2 text-[11px] font-semibold uppercase tracking-widest"
-                :style="{ color: 'var(--ink-3)', letterSpacing: '1.4px' }"
+                v-if="currentKeyword.fetch_error"
+                class="text-[11.5px] mb-3 px-3 py-2 rounded"
+                :style="{ background: 'rgba(239, 68, 68, 0.08)', color: '#b91c1c', borderLeft: '3px solid #b91c1c' }"
               >
-                RANKING DETAIL
+                抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}
               </div>
 
-              <details
-                v-for="(kw, idx) in latestMetric.keywords"
-                :key="kw.keyword"
-                :open="idx === 0"
-                class="mb-2"
-                :style="{
-                  border: '1px solid var(--line)',
-                  borderRadius: '10px',
-                  overflow: 'hidden',
-                }"
+              <!-- 默认搜索 -->
+              <div
+                class="mb-3 rounded"
+                :style="{ background: 'var(--card-2)', borderLeft: '3px solid var(--primary)', padding: '10px 12px' }"
               >
-                <!-- Summary -->
-                <summary
-                  :style="{
-                    cursor: 'pointer',
-                    padding: '10px 12px',
-                    background: 'var(--card-2)',
-                    listStyle: 'none',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    userSelect: 'none',
-                  }"
-                >
-                  <span class="flex-1 truncate text-[12.5px] font-semibold" :style="{ color: 'var(--ink)' }">
-                    {{ kw.keyword }}
+                <div class="text-[12px] font-semibold mb-2">
+                  默认搜索
+                  <span class="text-[11px] font-normal ml-1" :style="{ color: 'var(--ink-3)' }">
+                    命中 {{ currentKeyword.default_matched_count }}/10
                   </span>
-                  <!-- 命中 badge -->
-                  <span
-                    class="flex-shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium"
-                    :style="{
-                      background: kw.default_matched_count > 0 ? 'rgba(238,106,42,0.12)' : 'var(--card)',
-                      color: kw.default_matched_count > 0 ? 'var(--primary-deep)' : 'var(--ink-3)',
-                      border: '1px solid ' + (kw.default_matched_count > 0 ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
-                    }"
-                  >
-                    命中 {{ kw.default_matched_count }}/10
-                  </span>
-                  <!-- 资讯 badge -->
-                  <span
-                    v-if="kw.news_present"
-                    class="flex-shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium"
-                    :style="{
-                      background: 'rgba(79,124,255,0.1)',
-                      color: '#4f7cff',
-                      border: '1px solid rgba(79,124,255,0.25)',
-                    }"
-                  >
-                    资讯 {{ kw.news_results.filter(r => r.matches_brand).length }}/{{ kw.news_results.length }}
-                  </span>
-                  <!-- 抓取失败 badge -->
-                  <span
-                    v-if="kw.fetch_error"
-                    class="flex-shrink-0 text-[10.5px]"
-                    :style="{ color: 'var(--red)' }"
-                  >
-                    抓取失败
-                  </span>
-                </summary>
-
-                <!-- Body -->
-                <div :style="{ padding: '10px 12px' }">
-                  <!-- Fetch error -->
-                  <div
-                    v-if="kw.fetch_error"
-                    class="rounded-lg px-3 py-2 text-[11px]"
-                    :style="{ background: 'rgba(216,90,72,0.08)', color: 'var(--red)' }"
-                  >
-                    抓取失败: {{ kw.fetch_error.slice(0, 100) }}
-                  </div>
-
-                  <template v-else>
-                    <!-- 默认搜索 block (orange left-border) -->
-                    <div
-                      class="mb-3"
-                      :style="{
-                        borderLeft: '3px solid var(--primary)',
-                        background: 'var(--card-2)',
-                        borderRadius: '0 8px 8px 0',
-                        paddingLeft: '12px',
-                        paddingTop: '8px',
-                        paddingBottom: '8px',
-                        paddingRight: '8px',
-                      }"
-                    >
-                      <div class="mb-1.5 text-[11.5px] font-semibold" :style="{ color: 'var(--primary-deep)' }">
-                        默认搜索
-                        <span class="font-normal ml-1" :style="{ color: 'var(--ink-3)' }">
-                          ({{ kw.default_matched_count }} 命中)
-                        </span>
-                      </div>
-                      <template v-if="kw.default_results.length">
-                        <div
-                          v-for="row in kw.default_results"
-                          :key="row.rank"
-                          class="mb-1.5 flex items-start gap-2"
-                          :style="{
-                            padding: '8px',
-                            borderRadius: '8px',
-                            background: row.matches_brand ? 'rgba(238,106,42,0.08)' : 'transparent',
-                          }"
-                        >
-                          <span
-                            class="font-display text-[12px] font-bold flex-shrink-0"
-                            :style="{
-                              width: '22px',
-                              color: row.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
-                            }"
-                          >#{{ row.rank }}</span>
-                          <div class="min-w-0 flex-1">
-                            <a
-                              :href="row.url"
-                              target="_blank"
-                              rel="noopener"
-                              class="block text-[12px] font-medium leading-snug"
-                              :style="{
-                                color: 'var(--ink)',
-                                textDecoration: 'none',
-                                overflow: 'hidden',
-                                display: '-webkit-box',
-                                WebkitLineClamp: '2',
-                                WebkitBoxOrient: 'vertical',
-                              }"
-                              :title="row.title"
-                            >{{ row.title.slice(0, 70) }}{{ row.title.length > 70 ? '…' : '' }}</a>
-                            <div class="flex items-center gap-2 mt-0.5 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                              <span class="truncate">{{ row.host }}</span>
-                              <span
-                                v-if="row.matches_brand"
-                                class="flex-shrink-0 ml-auto font-semibold"
-                                :style="{ color: 'var(--primary-deep)' }"
-                              >自家</span>
-                            </div>
-                          </div>
-                        </div>
-                      </template>
-                      <div v-else class="py-2 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">无结果</div>
-                    </div>
-
-                    <!-- 最新资讯 block (blue left-border) — only when news_present -->
-                    <div
-                      v-if="kw.news_present"
-                      :style="{
-                        borderLeft: '3px solid #4f7cff',
-                        background: 'rgba(79,124,255,0.06)',
-                        borderRadius: '0 8px 8px 0',
-                        paddingLeft: '12px',
-                        paddingTop: '8px',
-                        paddingBottom: '8px',
-                        paddingRight: '8px',
-                      }"
-                    >
-                      <div class="mb-1.5 flex items-center justify-between">
-                        <div class="text-[11.5px] font-semibold" :style="{ color: '#4f7cff' }">
-                          最新资讯
-                          <span class="font-normal ml-1" :style="{ color: 'var(--ink-3)' }">
-                            ({{ kw.news_results.length }} 条)
-                          </span>
-                        </div>
-                        <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                          <span v-if="kw.news_first_rank > 0">
-                            首位 <b :style="{ color: '#4f7cff' }">#{{ kw.news_first_rank }}</b>
-                          </span>
-                          <span v-else>未命中</span>
-                        </div>
-                      </div>
-                      <div
-                        v-for="row in kw.news_results"
-                        :key="row.rank"
-                        class="mb-1.5 flex items-start gap-2"
-                        :style="{
-                          padding: '8px',
-                          borderRadius: '8px',
-                          background: row.matches_brand ? 'rgba(79,124,255,0.1)' : 'transparent',
-                        }"
-                      >
-                        <span
-                          class="font-display text-[12px] font-bold flex-shrink-0"
-                          :style="{
-                            width: '22px',
-                            color: row.matches_brand ? '#4f7cff' : 'var(--ink-2)',
-                          }"
-                        >#{{ row.rank }}</span>
-                        <div class="min-w-0 flex-1">
-                          <a
-                            :href="row.url"
-                            target="_blank"
-                            rel="noopener"
-                            class="block text-[12px] font-medium leading-snug"
-                            :style="{
-                              color: 'var(--ink)',
-                              textDecoration: 'none',
-                              overflow: 'hidden',
-                              display: '-webkit-box',
-                              WebkitLineClamp: '2',
-                              WebkitBoxOrient: 'vertical',
-                            }"
-                            :title="row.title"
-                          >{{ row.title.slice(0, 70) }}{{ row.title.length > 70 ? '…' : '' }}</a>
-                          <div class="flex items-center gap-2 mt-0.5 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                            <span class="truncate">{{ row.host }}</span>
-                            <span
-                              v-if="row.matches_brand"
-                              class="flex-shrink-0 ml-auto font-semibold"
-                              :style="{ color: '#4f7cff' }"
-                            >自家</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </template>
                 </div>
-              </details>
-            </div>
-          </template>
+                <div v-if="currentKeyword.default_results.length === 0" class="text-[11px] py-2" :style="{ color: 'var(--ink-3)' }">
+                  无默认搜索结果
+                </div>
+                <div v-else class="flex flex-col gap-1">
+                  <div
+                    v-for="r in currentKeyword.default_results"
+                    :key="r.url"
+                    class="text-[11.5px] py-1.5 px-2 rounded"
+                    :style="{
+                      background: r.matches_brand ? 'rgba(238, 106, 42, 0.10)' : 'transparent',
+                      border: r.matches_brand ? '1px solid rgba(238, 106, 42, 0.3)' : 'none',
+                    }"
+                  >
+                    <div class="flex items-baseline gap-2">
+                      <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)' }">
+                        #{{ r.rank }}
+                      </span>
+                      <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
+                      <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: 'var(--primary-deep)', color: '#fff' }">
+                        自家
+                      </span>
+                    </div>
+                    <div class="text-[10.5px] mt-0.5 truncate" :style="{ color: 'var(--ink-3)' }">{{ r.host }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 最新资讯 (only if news_present) -->
+              <div
+                v-if="currentKeyword.news_present"
+                class="mb-3 rounded"
+                :style="{ background: 'rgba(79, 124, 255, 0.06)', borderLeft: '3px solid #4f7cff', padding: '10px 12px' }"
+              >
+                <div class="text-[12px] font-semibold mb-2">
+                  最新资讯
+                  <span class="text-[11px] font-normal ml-1" :style="{ color: 'var(--ink-3)' }">
+                    命中 {{ currentKeyword.news_results.filter(r => r.matches_brand).length }}/{{ currentKeyword.news_results.length }}
+                  </span>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <div
+                    v-for="r in currentKeyword.news_results"
+                    :key="r.url"
+                    class="text-[11.5px] py-1.5 px-2 rounded"
+                    :style="{
+                      background: r.matches_brand ? 'rgba(79, 124, 255, 0.12)' : 'transparent',
+                      border: r.matches_brand ? '1px solid rgba(79, 124, 255, 0.3)' : 'none',
+                    }"
+                  >
+                    <div class="flex items-baseline gap-2">
+                      <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? '#4f7cff' : 'var(--ink-2)' }">
+                        #{{ r.rank }}
+                      </span>
+                      <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
+                      <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: '#4f7cff', color: '#fff' }">
+                        自家
+                      </span>
+                    </div>
+                    <div class="text-[10.5px] mt-0.5 truncate" :style="{ color: 'var(--ink-3)' }">{{ r.host }}</div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
 
           <!-- 底部：启动监测 -->
           <div class="mt-5 flex-shrink-0">
