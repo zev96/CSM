@@ -93,6 +93,8 @@ const history = ref<ResultItem[]>([]);
 const loadingTasks = ref(false);
 const loadingHistory = ref(false);
 const runningNow = ref(false);
+// Level 1 右卡用：鼠标悬停哪个任务行 → 右卡显示那个任务的属性预览
+const hoveredId = ref<number | null>(null);
 // Set of task IDs currently being fetched (driven by SSE started/finished
 // + optimistic local mark when user clicks 立刻监测).
 const runningTaskIds = ref<Set<number>>(new Set());
@@ -119,6 +121,14 @@ function clearRunning(taskId: number): void {
 const selectedTask = computed(() =>
   tasks.value.find((t) => t.id === selectedId.value) ?? null,
 );
+
+// Level 1 右卡预览：优先 hover 的任务，没 hover 时 fallback 到第一个任务
+const previewTask = computed<TaskItem | null>(() => {
+  if (hoveredId.value !== null) {
+    return tasks.value.find((t) => t.id === hoveredId.value) ?? null;
+  }
+  return tasks.value[0] ?? null;
+});
 
 const latestResult = computed(() =>
   history.value.length > 0 ? history.value[0] : null,
@@ -448,13 +458,16 @@ defineExpose({ reload: loadTasks });
                   padding: '14px 8px',
                   borderRadius: '10px',
                 }"
-                @mouseenter="(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
+                @mouseenter="(e) => { hoveredId = t.id; (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
                 @mouseleave="(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')"
                 @click="selectedId = t.id"
               >
                 <!-- 任务名字 + N关键词·品牌 -->
                 <div class="min-w-0">
-                  <div class="truncate text-[13px] font-medium">{{ t.name }}</div>
+                  <div
+                    class="truncate text-[13px] font-medium"
+                    :style="{ color: 'var(--primary-deep)' }"
+                  >{{ t.name }}</div>
                   <div
                     class="truncate text-[11px] mt-0.5"
                     :style="{ color: 'var(--ink-3)' }"
@@ -519,9 +532,9 @@ defineExpose({ reload: loadTasks });
           </div>
         </section>
 
-        <!-- ── 右卡：占位提示 ─────────────────────────────────── -->
+        <!-- ── 右卡：任务属性预览 ────────────────────────────────── -->
         <section
-          class="flex min-h-0 flex-col items-center justify-center"
+          class="flex min-h-0 flex-col overflow-y-auto"
           :style="{
             background: 'var(--card)',
             border: '1px solid var(--line)',
@@ -529,15 +542,69 @@ defineExpose({ reload: loadTasks });
             padding: '22px',
           }"
         >
+          <!-- 没有任务时：占位 -->
           <div
-            class="text-center"
+            v-if="!previewTask"
+            class="flex flex-1 flex-col items-center justify-center text-center"
             :style="{ color: 'var(--ink-3)' }"
           >
-            <div class="text-[16px] font-medium mb-2">点击左侧任务行 → 查看详情</div>
-            <div class="text-[12px] leading-relaxed" style="max-width: 220px; margin: 0 auto;">
-              每个任务可包含多个搜索关键词，进入详情查看每个关键词的排名情况。
-            </div>
+            <div class="text-[14px] font-medium mb-1">暂无任务</div>
+            <div class="text-[11.5px]">点击左上「+ 新增任务」开始监测</div>
           </div>
+
+          <!-- 有任务：属性预览 -->
+          <template v-else>
+            <!-- 标题：previewTask 的名字 -->
+            <div class="mb-3 flex-shrink-0">
+              <div class="font-display text-[14px] font-semibold">{{ previewTask.name }}</div>
+              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+                任务属性 · 点击行进入详情查看排名
+              </div>
+            </div>
+
+            <!-- 属性表 -->
+            <div class="flex flex-col gap-3 flex-shrink-0">
+              <!-- 目标品牌 -->
+              <div>
+                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">目标品牌</div>
+                <div class="text-[13px] font-medium">{{ previewTask.config.target_brand || '—' }}</div>
+              </div>
+
+              <!-- 搜索关键词列表 -->
+              <div>
+                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">
+                  搜索关键词（{{ previewTask.config.search_keywords?.length ?? 0 }} 个）
+                </div>
+                <div class="flex flex-col gap-1">
+                  <div
+                    v-for="(kw, idx) in (previewTask.config.search_keywords ?? [])"
+                    :key="idx"
+                    class="text-[12.5px]"
+                    :style="{
+                      padding: '6px 10px',
+                      background: 'var(--card-2)',
+                      borderRadius: '6px',
+                      borderLeft: '3px solid var(--primary)',
+                    }"
+                  >{{ kw }}</div>
+                </div>
+              </div>
+
+              <!-- 检查频率 -->
+              <div>
+                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">检查频率</div>
+                <div class="text-[12.5px]">{{ scheduleLabel(previewTask.schedule_cron) }}</div>
+              </div>
+
+              <!-- 上次检查 -->
+              <div>
+                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">上次检查</div>
+                <div class="text-[12.5px]">
+                  {{ previewTask.last_check_at ? previewTask.last_check_at.slice(0, 16).replace('T', ' ') : '从未' }}
+                </div>
+              </div>
+            </div>
+          </template>
         </section>
 
       </div>
@@ -548,38 +615,6 @@ defineExpose({ reload: loadTasks });
          顶部返回 + 任务信息 + 双卡（关键词列表 + 任务汇总）
     ════════════════════════════════════════════════════════════════ -->
     <template v-else>
-
-      <!-- 顶部：返回按钮 + 任务标题 -->
-      <div class="flex flex-shrink-0 items-start gap-3">
-        <button
-          type="button"
-          class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center"
-          :style="{
-            background: 'var(--card-2)',
-            border: '1px solid var(--line)',
-            borderRadius: '999px',
-            color: 'var(--ink-2)',
-            cursor: 'pointer',
-          }"
-          title="返回任务列表"
-          @click="backToList()"
-        >
-          <Icon name="arrowLeft" :size="14" />
-        </button>
-        <div class="min-w-0">
-          <div class="font-display text-[15px] font-semibold">
-            {{ selectedTask?.name ?? '' }}
-            <span :style="{ color: 'var(--ink-3)', fontWeight: 400 }"> · 百度关键词</span>
-          </div>
-          <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-            {{ selectedTask?.config?.search_keywords?.length ?? 0 }} 个关键词
-            <template v-if="selectedTask?.config?.target_brand">
-              · 品牌 {{ selectedTask.config.target_brand }}
-            </template>
-            · 检查频率 {{ scheduleLabel(selectedTask?.schedule_cron) }}
-          </div>
-        </div>
-      </div>
 
       <!-- 双卡 -->
       <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
@@ -594,14 +629,37 @@ defineExpose({ reload: loadTasks });
             padding: '22px',
           }"
         >
-          <!-- Card header -->
-          <div class="mb-3 flex-shrink-0">
-            <div class="font-display text-[14px] font-semibold">关键词列表</div>
-            <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              {{ latestMetric?.total_keywords ?? selectedTask?.config?.search_keywords?.length ?? 0 }} 个关键词
-              <template v-if="latestResult?.checked_at">
-                · 最近一次检查 {{ latestResult.checked_at.slice(0, 16).replace('T', ' ') }}
-              </template>
+          <!-- Card header with back button INSIDE (B站 style) -->
+          <div class="mb-3 flex-shrink-0 flex items-start gap-3">
+            <button
+              type="button"
+              class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center"
+              :style="{
+                background: 'var(--card-2)',
+                border: '1px solid var(--line)',
+                borderRadius: '999px',
+                color: 'var(--ink-2)',
+                cursor: 'pointer',
+              }"
+              title="返回任务列表"
+              @click="backToList()"
+            >
+              <Icon name="arrowLeft" :size="14" />
+            </button>
+            <div class="min-w-0">
+              <div class="text-[11px] uppercase" :style="{ color: 'var(--ink-3)', letterSpacing: '1.2px' }">
+                百度排名 · 关键词列表
+              </div>
+              <div class="font-display text-[14px] font-semibold mt-0.5">
+                {{ selectedTask?.name ?? '' }}
+              </div>
+              <div class="mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                {{ selectedTask?.config?.search_keywords?.length ?? 0 }} 个关键词
+                <template v-if="selectedTask?.config?.target_brand">
+                  · 品牌 {{ selectedTask.config.target_brand }}
+                </template>
+                · 检查频率 {{ scheduleLabel(selectedTask?.schedule_cron) }}
+              </div>
             </div>
           </div>
 
@@ -616,14 +674,56 @@ defineExpose({ reload: loadTasks });
               加载中…
             </div>
 
-            <!-- No history -->
-            <div
-              v-else-if="!latestMetric"
-              class="flex flex-1 items-center justify-center py-10 text-center text-[12px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              暂无检查记录 — 跑几次「启动监测」后会出数据。
-            </div>
+            <!-- No history: 显示配置里的关键词列表，每条状态「未跑」 -->
+            <template v-if="!latestMetric">
+              <!-- Header row -->
+              <div
+                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+                :style="{
+                  gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
+                  letterSpacing: '1.2px',
+                  color: 'var(--ink-3)',
+                  borderBottom: '1px solid var(--line)',
+                }"
+              >
+                <div>关键词</div>
+                <div>默认排名</div>
+                <div>资讯排名</div>
+                <div>状态</div>
+              </div>
+              <!-- 用 config.search_keywords 占位 -->
+              <div
+                v-for="(kw, i) in (selectedTask?.config?.search_keywords ?? [])"
+                :key="kw + '-noresult'"
+                class="grid items-center"
+                :style="{
+                  gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
+                  borderBottom: i < (selectedTask?.config?.search_keywords?.length ?? 0) - 1 ? '1px solid var(--line)' : 'none',
+                  padding: '12px 8px',
+                }"
+              >
+                <div class="min-w-0">
+                  <div class="truncate text-[12.5px] font-medium">{{ kw }}</div>
+                </div>
+                <div :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
+                <div :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
+                <div><Pill tone="info">未跑</Pill></div>
+              </div>
+              <div
+                v-if="(selectedTask?.config?.search_keywords?.length ?? 0) === 0"
+                class="py-10 text-center text-[12px]"
+                :style="{ color: 'var(--ink-3)' }"
+              >
+                此任务未配置搜索关键词
+              </div>
+              <div
+                v-else
+                class="mt-3 px-2 text-[11px]"
+                :style="{ color: 'var(--ink-3)' }"
+              >
+                暂无检查记录 — 点击右侧「▶ 启动监测」后会出排名数据。
+              </div>
+            </template>
 
             <template v-else>
               <!-- Header row -->
