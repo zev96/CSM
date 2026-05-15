@@ -12,6 +12,7 @@ from pathlib import Path
 
 from csm_core.monitor import storage
 from csm_core.monitor.drivers import browser_driver
+from csm_core.monitor.platforms.baidu_keyword import ADAPTER as BAIDU_ADAPTER
 from csm_core.monitor.platforms.zhihu_question import ADAPTER as ZHIHU_ADAPTER
 
 from . import config_service
@@ -53,6 +54,15 @@ def start(*, db_path: Path | None = None) -> MonitorLoop:
         rotation_enabled=mcfg.multi_account_rotation,
         tasks_per_account=mcfg.tasks_per_account,
         cooldown_seconds=mcfg.cookie_cooldown_minutes * 60,
+    )
+    bcfg = mcfg.baidu_keyword
+    BAIDU_ADAPTER.apply_settings(
+        headless_default=bcfg.headless_default,
+        captcha_visible_timeout_s=bcfg.captcha_visible_timeout_s,
+        captcha_max_promotions=bcfg.captcha_max_promotions,
+        serp_pacing_seconds=bcfg.serp_pacing_seconds,
+        breaker_failures=bcfg.breaker_failures,
+        breaker_cooldown_seconds=bcfg.breaker_cooldown_seconds,
     )
     _loop = MonitorLoop(
         event_sink=monitor_bus.publish,
