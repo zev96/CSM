@@ -707,7 +707,7 @@ defineExpose({ reload: loadTasks });
             padding: '22px',
           }"
         >
-          <!-- Card header with back button INSIDE (B站 style) -->
+          <!-- Card header with back button INSIDE (B站 style — 简洁版) -->
           <div class="mb-3 flex-shrink-0 flex items-start gap-3">
             <button
               type="button"
@@ -724,20 +724,25 @@ defineExpose({ reload: loadTasks });
             >
               <Icon name="arrowLeft" :size="14" />
             </button>
-            <div class="min-w-0">
-              <div class="text-[11px] uppercase" :style="{ color: 'var(--ink-3)', letterSpacing: '1.2px' }">
+            <div class="min-w-0 flex-1">
+              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
                 百度排名 · 关键词列表
               </div>
               <div class="font-display text-[14px] font-semibold mt-0.5">
                 {{ selectedTask?.name ?? '' }}
               </div>
-              <div class="mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                {{ selectedTask?.config?.search_keywords?.length ?? 0 }} 个关键词
-                <template v-if="selectedTask?.config?.target_brand">
-                  · 品牌 {{ selectedTask.config.target_brand }}
-                </template>
-                · 检查频率 {{ scheduleLabel(selectedTask?.schedule_cron) }}
-              </div>
+            </div>
+            <!-- 右上角徽章：N 个关键词（仿 B 站「5 条」） -->
+            <div
+              class="flex-shrink-0 text-[11px] px-2.5 py-1"
+              :style="{
+                background: 'var(--card-2)',
+                border: '1px solid var(--line)',
+                borderRadius: '999px',
+                color: 'var(--ink-3)',
+              }"
+            >
+              {{ selectedTask?.config?.search_keywords?.length ?? 0 }} 个关键词
             </div>
           </div>
 
@@ -800,13 +805,6 @@ defineExpose({ reload: loadTasks });
                 :style="{ color: 'var(--ink-3)' }"
               >
                 此任务未配置搜索关键词
-              </div>
-              <div
-                v-else
-                class="mt-3 px-2 text-[11px]"
-                :style="{ color: 'var(--ink-3)' }"
-              >
-                暂无检查记录 — 点击右侧「▶ 启动监测」后会出排名数据。
               </div>
             </template>
 
