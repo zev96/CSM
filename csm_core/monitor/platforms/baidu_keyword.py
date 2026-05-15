@@ -81,6 +81,28 @@ def _extract_a_tags(doc: Any, xpath: str) -> list[dict[str, str]]:
     return out
 
 
+def match_brand(content: str, brands: list[str]) -> str | None:
+    """大小写不敏感找首个出现的目标品牌词。
+
+    "首个" 的含义是 brands 列表里的顺序，不是 content 中位置 ——
+    用户排品牌词顺序代表优先级（主品牌排前面）。
+
+    Args:
+        content: 待检测正文（不限长度，但建议先 readability 提过）
+        brands: 目标品牌词列表，至少非空才有意义
+
+    Returns:
+        命中的品牌词原文（保留 brands 列表里的大小写），无命中 → None
+    """
+    if not content or not brands:
+        return None
+    content_lc = content.lower()
+    for brand in brands:
+        if brand and brand.lower() in content_lc:
+            return brand
+    return None
+
+
 class BaiduKeywordAdapter:
     """`BaseMonitorAdapter` 实现。完整 fetch 在后续任务里逐步加上。"""
 

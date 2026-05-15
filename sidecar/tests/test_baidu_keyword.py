@@ -50,3 +50,31 @@ def test_parse_serp_empty_html_returns_empty():
     assert parsed["default_links"] == []
     assert parsed["news_links"] == []
     assert parsed["news_present"] is False
+
+
+# ── 品牌词匹配 ───────────────────────────────────────────────────────────
+def test_match_brand_case_insensitive_hit():
+    matched = baidu_keyword.match_brand(
+        "I love claude code today",
+        ["Claude", "Anthropic"],
+    )
+    assert matched == "Claude"
+
+
+def test_match_brand_returns_first_in_brand_order():
+    """命中多个时，按 brands 列表里的顺序取第一个。"""
+    matched = baidu_keyword.match_brand(
+        "anthropic 出了一个叫 claude 的产品",
+        ["Claude", "Anthropic"],  # Claude 在前
+    )
+    assert matched == "Claude"
+
+
+def test_match_brand_no_match_returns_none():
+    assert baidu_keyword.match_brand("text without brand", ["Claude"]) is None
+
+
+def test_match_brand_empty_inputs():
+    assert baidu_keyword.match_brand("", ["Claude"]) is None
+    assert baidu_keyword.match_brand("text", []) is None
+    assert baidu_keyword.match_brand("", []) is None
