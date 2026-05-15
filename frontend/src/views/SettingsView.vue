@@ -488,7 +488,6 @@ async function checkForUpdate() {
     );
     const {
       updateAlert,
-      updateAlertState,
       transitionToDownloading,
       updateProgress,
       transitionToReady,
@@ -525,8 +524,15 @@ async function checkForUpdate() {
 
     transitionToDownloading();
 
-    // SSE 订阅：tearDown 在 done / error / cancel 时调
+    // SSE 订阅：tearDown 在 done / error / cancel 时调。
+    //
+    // ⚠ 关键：downloadedPath 必须**本地捕获**。不能在 invoke 时再读
+    // updateAlertState.targetPath —— resolveFinal("restart") 内部同步调
+    // closeAndReset() 会立刻把 state 全清掉（包括 targetPath = ""），等
+    // SettingsView 这边的 await ctrl.final 在 microtask 后醒过来时，state
+    // 已经是空的。本地变量不会被 reset 影响。
     let resolved = false; // 防止 done + cancel 抢双 finalResolve
+    let downloadedPath = "";
     const stop = subscribe(job.stream_url, {
       progress: (d: any) => {
         if (resolved) return;
@@ -535,7 +541,8 @@ async function checkForUpdate() {
       done: (d: any) => {
         if (resolved) return;
         resolved = true;
-        transitionToReady(d.target ?? "");
+        downloadedPath = d.target ?? "";
+        transitionToReady(downloadedPath);
         stop();
       },
       error: (d: any) => {
@@ -556,7 +563,7 @@ async function checkForUpdate() {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("install_and_restart", {
-          zipPath: updateAlertState.targetPath,
+          zipPath: downloadedPath,
         });
         // 走到这里说明 install_and_restart 没立刻 exit —— 不正常，给个 toast。
         toast.info("正在准备安装更新…");

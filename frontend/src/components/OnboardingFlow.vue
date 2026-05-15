@@ -30,16 +30,17 @@
  *
  * Done = emit("done") so the parent (App.vue) unmounts this overlay.
  */
-import { reactive, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
+import Spinner from "@/components/ui/Spinner.vue";
 import FormInput from "@/components/forms/FormInput.vue";
 import logoUrl from "@/assets/logo.png";
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { usePathPicker } from "@/composables/usePathPicker";
-import { keyringSet } from "@/api/client";
+import { getVersion, keyringSet } from "@/api/client";
 
 const emit = defineEmits<{ (e: "done"): void }>();
 
@@ -47,7 +48,17 @@ const cfg = useConfig();
 const toast = useToast();
 const { pick } = usePathPicker();
 
-const APP_VERSION = "0.4.0";
+// 跟 SettingsView 一致：从 sidecar 实时读版本号，避免常量过期。
+const appVersion = ref("…");
+onMounted(async () => {
+  try {
+    const r = await getVersion();
+    appVersion.value = r.sidecar;
+  } catch {
+    appVersion.value = "?";
+  }
+});
+
 const STORAGE_KEY = "csm.onboarded.v1";
 
 type Step = "welcome" | "vault" | "model" | "skill";
@@ -91,33 +102,45 @@ const chosenSkill = ref<string>("");
 
 // 各步的处理逻辑 —— 都设计成失败不阻塞前进：网络抖一下不能让用户
 // 卡在 onboarding，永远进不来主界面。
+//
+// welcomeSubmitting 在 patch 期间为 true；按钮显示 spinner 并 disable，
+// 防止用户连点 + 让用户知道"程序在干活、不是卡死"。这是 v0.4.2 装好
+// 后用户反馈的 bug —— 第一次冷启动 sidecar 慢，patch 要好几秒，按钮
+// 又是个无标签小箭头，用户以为没反应就 force-quit 了。
+const welcomeSubmitting = ref(false);
 async function submitWelcome() {
+  if (welcomeSubmitting.value) return;
   if (!welcomeForm.name.trim()) {
     toast.warn("请先输入姓名");
     return;
   }
+  welcomeSubmitting.value = true;
   try {
-    // ⚠ 字段名必须跟后端 AppConfig 对齐 —— Pydantic 默认 extra="ignore"
-    //   会静默丢弃不认识的 key（之前 product_line 就这样被吃了）
-    await cfg.patch({
-      user_name: welcomeForm.name.trim(),
-      user_product: welcomeForm.productLine.trim(),
-    });
-  } catch (e: any) {
-    // 之前这里"保存失败仍然推进"导致一个静默 bug：sidecar 启动慢时
-    // patch 503 但 step 还是跳走了，用户以为名字存了实际没存，最后
-    // Settings 里只看到"未命名用户"。改成 hard-block：必须保存成功
-    // 才推进，让用户重试 / 等 sidecar 起来。
-    toast.error(`保存失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
-    return;
+    try {
+      // ⚠ 字段名必须跟后端 AppConfig 对齐 —— Pydantic 默认 extra="ignore"
+      //   会静默丢弃不认识的 key（之前 product_line 就这样被吃了）
+      await cfg.patch({
+        user_name: welcomeForm.name.trim(),
+        user_product: welcomeForm.productLine.trim(),
+      });
+    } catch (e: any) {
+      // 之前这里"保存失败仍然推进"导致一个静默 bug：sidecar 启动慢时
+      // patch 503 但 step 还是跳走了，用户以为名字存了实际没存，最后
+      // Settings 里只看到"未命名用户"。改成 hard-block：必须保存成功
+      // 才推进，让用户重试 / 等 sidecar 起来。
+      toast.error(`保存失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
+      return;
+    }
+    // 二次校验：再从 cfg.data 里读一次，确认确实写进去了。极端情况
+    // patch 没抛但 data 没更新（store 实现的隐藏失败路径），这里能拦下。
+    if (!(cfg.data?.user_name as string | undefined)?.trim()) {
+      toast.error("保存失败：服务端未确认。请稍后重试。");
+      return;
+    }
+    step.value = "vault";
+  } finally {
+    welcomeSubmitting.value = false;
   }
-  // 二次校验：再从 cfg.data 里读一次，确认确实写进去了。极端情况
-  // patch 没抛但 data 没更新（store 实现的隐藏失败路径），这里能拦下。
-  if (!(cfg.data?.user_name as string | undefined)?.trim()) {
-    toast.error("保存失败：服务端未确认。请稍后重试。");
-    return;
-  }
-  step.value = "vault";
 }
 
 async function pickVault() {
@@ -250,7 +273,15 @@ function stepIndex(): number {
           先让 CSM 认识你 —— 名字会出现在工作台问候里，产品线用于文档分类。
         </div>
 
-        <div class="mt-8 flex w-full flex-col gap-4">
+        <!--
+          form 包裹 + @submit.prevent 让 Enter 键也能触发提交（之前只能
+          点按钮、键盘用户没法走完欢迎页）。type="submit" 的按钮才能
+          被表单 submit 事件接住。
+        -->
+        <form
+          class="mt-8 flex w-full flex-col gap-4"
+          @submit.prevent="submitWelcome"
+        >
           <div>
             <div class="mb-1.5 text-center text-[12.5px] font-semibold">姓名</div>
             <FormInput
@@ -270,30 +301,30 @@ function stepIndex(): number {
               debounce="live"
             />
           </div>
-        </div>
 
-        <button
-          type="button"
-          class="mt-8 inline-flex items-center justify-center"
-          :style="{
-            width: '46px',
-            height: '46px',
-            borderRadius: '999px',
-            border: '1px solid var(--line)',
-            color: 'var(--ink-2)',
-            cursor: 'pointer',
-            background: 'transparent',
-          }"
-          @click="submitWelcome"
-        >
-          <Icon name="arrowRight" :size="16" />
-        </button>
+          <!--
+            按钮带文字 + spinner。之前是 46px 圆圈只有箭头，没人意识到
+            那是按钮 + sidecar 冷启动慢时按了没反馈，用户以为卡死。
+            disabled 状态让 Btn 自带的 :disabled="true" 样式生效。
+          -->
+          <Btn
+            type="submit"
+            variant="solid"
+            class="mt-2 self-center"
+            :disabled="welcomeSubmitting || !welcomeForm.name.trim()"
+            @click="submitWelcome"
+          >
+            <Spinner v-if="welcomeSubmitting" :size="14" />
+            <span>{{ welcomeSubmitting ? "正在保存…" : "下一步" }}</span>
+            <Icon v-if="!welcomeSubmitting" name="arrowRight" :size="14" />
+          </Btn>
+        </form>
 
         <div
           class="mt-8 text-[11px]"
           :style="{ color: 'var(--ink-4)', letterSpacing: '0.5px' }"
         >
-          V {{ APP_VERSION }} · 本地版本 · 数据仅保存在你电脑上
+          V {{ appVersion }} · 本地版本 · 数据仅保存在你电脑上
         </div>
       </div>
 
