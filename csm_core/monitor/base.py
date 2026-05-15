@@ -17,6 +17,7 @@ TaskType = Literal[
     "bilibili_comment",
     "douyin_comment",
     "kuaishou_comment",
+    "baidu_keyword",
 ]
 
 MonitorStatus = Literal["ok", "failed", "risk_control", "skipped"]

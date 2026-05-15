@@ -231,3 +231,23 @@ def test_monitor_routes_require_auth(monitor_db: Path):
         # No Authorization header.
         resp = c.get("/api/monitor/tasks")
     assert resp.status_code == 401
+
+
+# ── Baidu Keyword Monitor ──────────────────────────────────────────────────────
+def test_create_baidu_keyword_task(client: TestClient, monitor_db: Path):
+    body = {
+        "type": "baidu_keyword",
+        "name": "百度-Claude教程",
+        "target_url": "search:Claude Code 教程",
+        "config": {
+            "search_keyword": "Claude Code 教程",
+            "target_brands": ["Claude", "Anthropic"],
+            "headless": True,
+        },
+        "schedule_cron": "manual",
+        "enabled": True,
+    }
+    resp = client.post("/api/monitor/tasks", json=body)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["type"] == "baidu_keyword"
+    assert resp.json()["config"]["target_brands"] == ["Claude", "Anthropic"]

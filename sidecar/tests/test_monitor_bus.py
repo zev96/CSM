@@ -135,3 +135,14 @@ async def test_subscriber_count_tracks_lifetime():
             break
         await asyncio.sleep(0.01)
     assert bus.subscriber_count() == 0
+
+
+def test_monitor_event_kind_includes_captcha_states():
+    """captcha 三个状态在 EventKind Literal 里。"""
+    from typing import get_args
+    from csm_sidecar.services.monitor_loop import EventKind
+
+    args = set(get_args(EventKind))
+    assert "captcha_required" in args
+    assert "captcha_resolved" in args
+    assert "captcha_timeout" in args

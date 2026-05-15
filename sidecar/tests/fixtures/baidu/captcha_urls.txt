@@ -1,0 +1,4 @@
+https://wappass.baidu.com/static/captcha/tuxing.html?ak=xxx&backurl=https%3A%2F%2Fwww.baidu.com%2Fs%3Fwd%3Dtest
+https://wappass.baidu.com/static/captcha/tuxing_v2.html?ak=xxx&backurl=https%3A%2F%2Fwww.baidu.com%2Fs%3Fwd%3Dtest
+https://passport.baidu.com/?login&u=https%3A%2F%2Fwww.baidu.com%2F
+https://verify.baidu.com/v2/index.html?token=xxx

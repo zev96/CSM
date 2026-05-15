@@ -20,6 +20,17 @@ Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen"]
 CloseAction = Literal["minimize_to_tray", "quit"]
 
 
+class BaiduKeywordConfig(BaseModel):
+    """settings.monitor.baidu_keyword.*"""
+
+    headless_default: bool = True
+    captcha_visible_timeout_s: int = 90
+    captcha_max_promotions: int = 1
+    serp_pacing_seconds: int = 5
+    breaker_failures: int = 3
+    breaker_cooldown_seconds: int = 600
+
+
 class MonitorConfig(BaseModel):
     """Settings for the monitor module (Zhihu question / multi-platform comments).
 
@@ -58,6 +69,9 @@ class MonitorConfig(BaseModel):
     # 30 分钟够 zhihu 反爬 token 自动 refresh 一轮；用户也能在 UI
     # 看到这条 cookie 暂时不可用，去 Cookie 池手动重抓。
     cookie_cooldown_minutes: int = 30
+
+    # ── 百度关键词监控 ──────────────────────────────────────────────
+    baidu_keyword: BaiduKeywordConfig = Field(default_factory=BaiduKeywordConfig)
 
 
 class AppConfig(BaseModel):
