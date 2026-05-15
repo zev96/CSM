@@ -1674,7 +1674,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
             <div class="min-w-0">
               <div class="font-display text-[14px] font-semibold">监测任务</div>
               <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                按上次检查倒序
+                知乎问题列表
               </div>
             </div>
             <div class="flex flex-shrink-0 gap-2">
