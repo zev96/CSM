@@ -234,7 +234,7 @@ from csm_core.monitor.base import MonitorTask
 
 
 class FakeSession:
-    """假装 IncognitoSession，只暴露 page。"""
+    """假装 IncognitoSession，只暴露 page。支持多关键词顺序 goto。"""
 
     def __init__(self, *, serp_html: str, page_contents: dict[str, str],
                  captcha_url: str | None = None):
@@ -280,18 +280,27 @@ def patch_session(monkeypatch):
     monkeypatch.setattr(
         baidu_keyword, "incognito_session", fake_ctx
     )
+    # Also mock the pacer so wait() is instant for subsequent keywords
+    from csm_core.monitor import rate_limit as _rl
+
+    class _NoWaitPacer:
+        def wait(self):
+            pass
+        def configure(self, **kw):
+            pass
+
+    monkeypatch.setattr(_rl, "get_pacer", lambda name: _NoWaitPacer())
     return holder
 
 
 def test_fetch_happy_path_default_only(monkeypatch, patch_session):
-    """没有最新资讯，10 条结果里第 1 条是自家、其余竞品。"""
+    """两个关键词，没有最新资讯，第 1 条结果是自家、其余竞品。"""
     serp = _load("serp_default_only.html")
     # 用真实 SERP 抓出来的 hrefs 给每条配一段正文
     parsed = baidu_keyword.parse_serp(serp)
     default_links = parsed["default_links"]
     page_contents = {}
     for i, link in enumerate(default_links):
-        # 解掉百度跳转后 fake_get 默认走 mock_resolve（见下）
         url = link["href"]
         page_contents[url] = (
             "<html><body><article>"
@@ -315,25 +324,41 @@ def test_fetch_happy_path_default_only(monkeypatch, patch_session):
         id=1,
         type="baidu_keyword",
         name="t",
-        target_url="https://www.baidu.com/s?wd=test",
-        config={"search_keyword": "test", "target_brands": ["Claude"]},
+        target_url="https://www.baidu.com/s?wd=test1",
+        config={"search_keywords": ["test1", "test2"], "target_brand": "Claude"},
     )
 
     result = baidu_keyword.ADAPTER.fetch(task)
     assert result.status == "ok"
-    assert result.metric["news_present"] is False
-    assert len(result.metric["default_results"]) >= 8
-    assert result.metric["default_results"][0]["matches_brand"] is True
-    assert result.metric["default_results"][0]["matched_brand"] == "Claude"
-    assert result.rank == 1  # 首条命中
-    assert result.metric["default_first_rank"] == 1
-    assert result.metric["default_matched_count"] >= 1
+    # metric.keywords has 2 entries (one per keyword)
+    assert len(result.metric["keywords"]) == 2
+    # Each keyword entry has correct shape
+    for kw_entry in result.metric["keywords"]:
+        assert "keyword" in kw_entry
+        assert "default_results" in kw_entry
+        assert "news_results" in kw_entry
+        assert "default_matched_count" in kw_entry
+        assert "default_first_rank" in kw_entry
+        assert "news_first_rank" in kw_entry
+        assert "news_present" in kw_entry
+    # First keyword: first result matches Claude
+    kw0 = result.metric["keywords"][0]
+    assert kw0["default_results"][0]["matches_brand"] is True
+    assert kw0["default_results"][0]["matched_brand"] == "Claude"
+    assert kw0["default_first_rank"] == 1
+    # Aggregations
+    assert result.metric["total_keywords"] == 2
+    assert result.metric["matched_keywords"] >= 1
+    assert result.metric["best_default_first_rank"] == 1
+    assert result.rank == 1
     assert result.metric["captcha_hit"] is False
+    # news_present is now per-keyword in metric["keywords"][i]["news_present"]
+    assert "news_present" in result.metric["keywords"][0]
 
 
 def test_fetch_captcha_returns_risk_control(monkeypatch, patch_session):
     """SERP 落地到验证码 URL，单 task 不升级（max_promotions=0 用 monkey）→
-    立即返回 risk_control。"""
+    立即返回 risk_control。metric 含 keywords 数组，captcha 条目有 fetch_error。"""
     serp = _load("serp_default_only.html")
     patch_session["session"] = FakeSession(
         serp_html=serp,
@@ -351,11 +376,16 @@ def test_fetch_captcha_returns_risk_control(monkeypatch, patch_session):
             type="baidu_keyword",
             name="t",
             target_url="https://www.baidu.com/s?wd=test",
-            config={"search_keyword": "test", "target_brands": ["Claude"]},
+            config={"search_keywords": ["test"], "target_brand": "Claude"},
         )
         result = baidu_keyword.ADAPTER.fetch(task)
         assert result.status == "risk_control"
         assert result.metric["captcha_hit"] is True
+        # keywords array should have the captcha entry
+        assert len(result.metric["keywords"]) >= 1
+        captcha_kw = result.metric["keywords"][0]
+        assert captcha_kw["fetch_error"] is not None
+        assert "captcha" in captcha_kw["fetch_error"].lower()
     finally:
         baidu_keyword.ADAPTER._captcha_max_promotions = original
 
@@ -379,7 +409,7 @@ def test_fetch_breaker_open_returns_risk_control(monkeypatch):
             type="baidu_keyword",
             name="t",
             target_url="https://www.baidu.com/s?wd=test",
-            config={"search_keyword": "test", "target_brands": ["x"]},
+            config={"search_keywords": ["test"], "target_brand": "x"},
         )
         result = baidu_keyword.ADAPTER.fetch(task)
         assert result.status == "risk_control"
@@ -388,3 +418,17 @@ def test_fetch_breaker_open_returns_risk_control(monkeypatch):
         breaker.failure_threshold = orig_threshold
         breaker.cool_off_seconds = orig_cooldown
         breaker.record_success()
+
+
+def test_fetch_validation_empty_keywords_fails(monkeypatch):
+    """空 search_keywords list → status=failed，error_message 含 'keywords'。"""
+    task = MonitorTask(
+        id=4,
+        type="baidu_keyword",
+        name="t",
+        target_url="https://www.baidu.com/s?wd=test",
+        config={"search_keywords": [], "target_brand": "Claude"},
+    )
+    result = baidu_keyword.ADAPTER.fetch(task)
+    assert result.status == "failed"
+    assert "keywords" in (result.error_message or "").lower()
