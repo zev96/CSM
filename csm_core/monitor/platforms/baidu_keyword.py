@@ -273,7 +273,11 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
 
 
 class BaiduKeywordAdapter:
-    """`BaseMonitorAdapter` 实现。完整 fetch 在后续任务里逐步加上。"""
+    """`BaseMonitorAdapter` 实现。SERP → 解链 → 抓正文 → 品牌匹配 → MonitorResult。
+
+    引擎硬绑 patchright incognito。验证码命中时尝试 headless→可见升级（最多
+    ``_captcha_max_promotions`` 次），全失败则 status=risk_control。
+    """
 
     platform: str = "baidu_keyword"
 

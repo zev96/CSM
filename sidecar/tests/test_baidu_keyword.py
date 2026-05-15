@@ -342,43 +342,49 @@ def test_fetch_captcha_returns_risk_control(monkeypatch, patch_session):
     )
 
     # 把 max_promotions 暂时设成 0，避免单测里真跑升级流程
-    baidu_keyword.ADAPTER._captcha_max_promotions = 0
+    original = baidu_keyword.ADAPTER._captcha_max_promotions
+    try:
+        baidu_keyword.ADAPTER._captcha_max_promotions = 0
 
-    task = MonitorTask(
-        id=2,
-        type="baidu_keyword",
-        name="t",
-        target_url="https://www.baidu.com/s?wd=test",
-        config={"search_keyword": "test", "target_brands": ["Claude"]},
-    )
-    result = baidu_keyword.ADAPTER.fetch(task)
-    assert result.status == "risk_control"
-    assert result.metric["captcha_hit"] is True
-
-    # 还原
-    baidu_keyword.ADAPTER._captcha_max_promotions = 1
+        task = MonitorTask(
+            id=2,
+            type="baidu_keyword",
+            name="t",
+            target_url="https://www.baidu.com/s?wd=test",
+            config={"search_keyword": "test", "target_brands": ["Claude"]},
+        )
+        result = baidu_keyword.ADAPTER.fetch(task)
+        assert result.status == "risk_control"
+        assert result.metric["captcha_hit"] is True
+    finally:
+        baidu_keyword.ADAPTER._captcha_max_promotions = original
 
 
 def test_fetch_breaker_open_returns_risk_control(monkeypatch):
     """熔断打开时跳过所有 IO 直接 risk_control。"""
     from csm_core.monitor.rate_limit import get_breaker
     breaker = get_breaker("baidu_keyword")
-    # 强制打开
-    breaker.failure_threshold = 1
-    breaker.cool_off_seconds = 999.0
-    breaker.record_failure()
-    assert breaker.allow() is False
+    # 保存原始值
+    orig_threshold = breaker.failure_threshold
+    orig_cooldown = breaker.cool_off_seconds
+    try:
+        # 强制打开
+        breaker.failure_threshold = 1
+        breaker.cool_off_seconds = 999.0
+        breaker.record_failure()
+        assert breaker.allow() is False
 
-    task = MonitorTask(
-        id=3,
-        type="baidu_keyword",
-        name="t",
-        target_url="https://www.baidu.com/s?wd=test",
-        config={"search_keyword": "test", "target_brands": ["x"]},
-    )
-    result = baidu_keyword.ADAPTER.fetch(task)
-    assert result.status == "risk_control"
-    assert "circuit breaker" in result.error_message.lower()
-
-    # 还原
-    breaker.record_success()
+        task = MonitorTask(
+            id=3,
+            type="baidu_keyword",
+            name="t",
+            target_url="https://www.baidu.com/s?wd=test",
+            config={"search_keyword": "test", "target_brands": ["x"]},
+        )
+        result = baidu_keyword.ADAPTER.fetch(task)
+        assert result.status == "risk_control"
+        assert "circuit breaker" in result.error_message.lower()
+    finally:
+        breaker.failure_threshold = orig_threshold
+        breaker.cool_off_seconds = orig_cooldown
+        breaker.record_success()
