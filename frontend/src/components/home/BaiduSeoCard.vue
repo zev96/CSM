@@ -28,13 +28,14 @@ interface Kpis {
 }
 interface Keyword {
   task_id: number;
+  task_name: string;
   search_keyword: string;
+  target_brand: string;
   matched_count: number;
   top_n: number;
   matched_ranks: number[];
   best_rank: number;
   change_kind: ChangeKind;
-  captcha_hit: boolean;
   checked_at: string | null;
 }
 interface BaiduResponse {
@@ -186,10 +187,10 @@ onMounted(async () => {
         <div class="min-w-0 flex-1">
           <div class="truncate text-[11.5px] font-medium">{{ kw.search_keyword }}</div>
           <div class="mt-0.5 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-            <span v-if="kw.matched_ranks.length">命中 {{ kw.matched_ranks.map((r) => '#' + r).join(' ') }}</span>
-            <span v-else>未命中</span>
-            <span class="mx-1">·</span>
-            <span>{{ kw.matched_count }}/{{ kw.top_n }}</span>
+            <template v-if="kw.matched_ranks.length">
+              target: {{ kw.target_brand }} · 命中 {{ kw.matched_ranks.map((r) => '#' + r).join(' ') }} ({{ kw.matched_count }}/{{ kw.top_n }})
+            </template>
+            <template v-else>未命中</template>
           </div>
         </div>
         <span class="flex-shrink-0 text-[10px]" :style="{ color: 'var(--ink-4)' }">
