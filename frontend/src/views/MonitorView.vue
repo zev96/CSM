@@ -1429,9 +1429,9 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         >
           {{
             activeTab === "zhihu"
-              ? "知乎问题 · 问题监控"
+              ? "知乎问题监测"
               : activeTab === "comment"
-                ? "平台评论 · 留存监控"
+                ? "评论留存率监控"
                 : activeTab === "baidu"
                   ? "百度排名 · 关键词监控"
                   : "历史监测报告"
@@ -1440,9 +1440,9 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         <div class="mt-1 text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
           {{
             activeTab === "zhihu"
-              ? "知乎问题 · 关键词排名 + Top 抢占者"
+              ? "回答排名"
               : activeTab === "comment"
-                ? "B 站 / 抖音 / 快手 · 评论被删与折叠告警"
+                ? "B站/抖音/快手"
                 : activeTab === "baidu"
                   ? "百度搜索 · 默认 + 最新资讯 · 自家命中"
                   : "日报 · 周报 · 按时间倒序"
@@ -1674,7 +1674,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
             <div class="min-w-0">
               <div class="font-display text-[14px] font-semibold">监测任务</div>
               <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                知乎问题列表
+                问题列表
               </div>
             </div>
             <div class="flex flex-shrink-0 gap-2">

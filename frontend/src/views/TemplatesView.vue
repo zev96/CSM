@@ -472,7 +472,7 @@ const skillFileName = computed(() => {
             class="font-display mt-2 font-bold"
             :style="{ fontSize: '30px', letterSpacing: '-0.5px' }"
           >
-            {{ tab === "templates" ? "结构 · 槽位 · 节奏" : "风格 · 语气 · 收口" }}
+            {{ tab === "templates" ? "文章模板" : "风格语气" }}
           </div>
           <div class="mt-1 text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
             {{
