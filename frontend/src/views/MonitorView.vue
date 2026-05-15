@@ -52,7 +52,7 @@ const route = useRoute();
 const router = useRouter();
 const { whenReady } = useSidecarReady();
 
-type Tab = "zhihu" | "comment" | "report";
+type Tab = "zhihu" | "comment" | "baidu" | "report";
 type CommentPlatform = "bilibili" | "douyin" | "kuaishou";
 
 function tabFromQuery(): Tab {
@@ -1395,6 +1395,7 @@ function pickSampleZhihu(row: SampleZhihu) {
 const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
   { k: "zhihu", l: "知乎问题", ic: "radar" },
   { k: "comment", l: "平台评论", ic: "warn" },
+  { k: "baidu", l: "百度关键词", ic: "search" },
   { k: "report", l: "历史报告", ic: "fileText" },
 ];
 </script>
@@ -1417,7 +1418,9 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
               ? "知乎问题 · 问题监控"
               : activeTab === "comment"
                 ? "平台评论 · 留存监控"
-                : "历史监测报告"
+                : activeTab === "baidu"
+                  ? "百度关键词 · 排名监控"
+                  : "历史监测报告"
           }}
         </div>
         <div class="mt-1 text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
@@ -1426,7 +1429,9 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
               ? "知乎问题 · 关键词排名 + Top 抢占者"
               : activeTab === "comment"
                 ? "B 站 / 抖音 / 快手 · 评论被删与折叠告警"
-                : "日报 · 周报 · 按时间倒序"
+                : activeTab === "baidu"
+                  ? "百度搜索 · 默认 + 最新资讯 · 自家命中"
+                  : "日报 · 周报 · 按时间倒序"
           }}
         </div>
       </div>
@@ -3138,6 +3143,20 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         掉。L3 单视频详情里需要的"立刻跑 / 状态 spinner"已经接到了选中
         任务，详见 selectedVideo + selectedRealTaskId 流。
       -->
+    </template>
+
+    <!-- ── 百度关键词（顶级 tab，渲染同款 BaiduRankingPage）────────── -->
+    <template v-else-if="activeTab === 'baidu'">
+      <section
+        class="flex min-h-0 flex-1 flex-col overflow-hidden"
+        :style="{
+          background: 'var(--card)',
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--radius-card)',
+        }"
+      >
+        <BaiduRankingPage />
+      </section>
     </template>
 
     <!-- ── 历史报告（重构后：sub-pivot + 两个子页）──────────────────── -->
