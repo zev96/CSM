@@ -407,12 +407,18 @@ watch(selectedId, (id) => {
   if (id !== null) loadHistory(id);
 });
 
-// Auto-select first keyword when entering Level 2
+// Auto-select first keyword when entering Level 2 (works for both
+// metric.keywords data AND the fallback config.search_keywords path).
 watch(() => latestMetric.value?.keywords, (kws) => {
   if (kws && kws.length > 0 && selectedKeywordIdx.value === null) {
     selectedKeywordIdx.value = 0;
   }
 });
+watch(() => selectedTask.value?.config?.search_keywords, (kws) => {
+  if (kws && kws.length > 0 && selectedKeywordIdx.value === null) {
+    selectedKeywordIdx.value = 0;
+  }
+}, { immediate: true });
 
 // Parent (MonitorView) calls this after a create/update from the shared
 // AddTaskModal so the new task shows up immediately without tab-switching.
@@ -763,19 +769,27 @@ defineExpose({ reload: loadTasks });
                 <div>资讯排名</div>
                 <div>状态</div>
               </div>
-              <!-- 用 config.search_keywords 占位 -->
+              <!-- 用 config.search_keywords 占位，但保持和有数据时一致的点击/选中行为 -->
               <div
                 v-for="(kw, i) in (selectedTask?.config?.search_keywords ?? [])"
                 :key="kw + '-noresult'"
-                class="grid items-center"
+                class="grid items-center cursor-pointer transition"
                 :style="{
                   gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
                   borderBottom: i < (selectedTask?.config?.search_keywords?.length ?? 0) - 1 ? '1px solid var(--line)' : 'none',
                   padding: '12px 8px',
+                  background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
+                  borderLeft: selectedKeywordIdx === i ? '3px solid var(--primary)' : '3px solid transparent',
                 }"
+                @click="selectedKeywordIdx = i"
+                @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
+                @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
               >
                 <div class="min-w-0">
-                  <div class="truncate text-[12.5px] font-medium">{{ kw }}</div>
+                  <div
+                    class="truncate text-[12.5px] font-medium"
+                    :style="{ color: selectedKeywordIdx === i ? 'var(--primary-deep)' : 'var(--ink)' }"
+                  >{{ kw }}</div>
                 </div>
                 <div :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
                 <div :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
@@ -832,7 +846,10 @@ defineExpose({ reload: loadTasks });
               >
                 <!-- 关键词 -->
                 <div class="min-w-0">
-                  <div class="truncate text-[12.5px] font-medium">{{ kw.keyword }}</div>
+                  <div
+                    class="truncate text-[12.5px] font-medium"
+                    :style="{ color: selectedKeywordIdx === i ? 'var(--primary-deep)' : 'var(--ink)' }"
+                  >{{ kw.keyword }}</div>
                 </div>
 
                 <!-- 默认排名 -->
