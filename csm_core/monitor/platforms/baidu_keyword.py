@@ -103,6 +103,33 @@ def match_brand(content: str, brands: list[str]) -> str | None:
     return None
 
 
+# Indirection 给单测 monkeypatch 用。真实调用走 curl_cffi。
+def _cc_get(url: str, **kwargs: Any) -> Any:
+    from curl_cffi import requests as cc_requests
+    return cc_requests.get(url, **kwargs)
+
+
+def resolve_baidu_link(url: str) -> str:
+    """如果是 baidu.com/link?url=... 跳转，跟随 redirect 拿真实 URL。
+
+    非百度跳转 URL 直接返回。任何异常 → 返回原 URL（adapter 自然把它当
+    抓取失败 source）。
+    """
+    if not url or "baidu.com/link?" not in url:
+        return url
+    try:
+        resp = _cc_get(
+            url,
+            impersonate="chrome120",
+            allow_redirects=True,
+            timeout=10,
+        )
+        return getattr(resp, "url", None) or url
+    except Exception as e:
+        logger.info("resolve_baidu_link(%s) raised: %s", url[:60], e)
+        return url
+
+
 class BaiduKeywordAdapter:
     """`BaseMonitorAdapter` 实现。完整 fetch 在后续任务里逐步加上。"""
 

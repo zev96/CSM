@@ -78,3 +78,44 @@ def test_match_brand_empty_inputs():
     assert baidu_keyword.match_brand("", ["Claude"]) is None
     assert baidu_keyword.match_brand("text", []) is None
     assert baidu_keyword.match_brand("", []) is None
+
+
+# ── 百度跳转解析 ─────────────────────────────────────────────────────────
+def test_resolve_baidu_link_already_real_url():
+    """非百度跳转 URL 原样返回。"""
+    real = "https://zhuanlan.zhihu.com/p/123456"
+    assert baidu_keyword.resolve_baidu_link(real) == real
+
+
+def test_resolve_baidu_link_follows_302(monkeypatch):
+    """baidu.com/link?url=... 跟随 302 到真实站点。"""
+    fake_real = "https://www.example.com/article"
+
+    class FakeResp:
+        url = fake_real
+        status_code = 200
+
+    def fake_get(url, **kwargs):
+        # 验证调用方传了 allow_redirects=True
+        assert kwargs.get("allow_redirects") is True
+        return FakeResp()
+
+    import csm_core.monitor.platforms.baidu_keyword as bk
+    monkeypatch.setattr(bk, "_cc_get", fake_get)
+
+    resolved = baidu_keyword.resolve_baidu_link(
+        "https://www.baidu.com/link?url=encoded_blob_xxx"
+    )
+    assert resolved == fake_real
+
+
+def test_resolve_baidu_link_returns_original_on_error(monkeypatch):
+    """解失败 → 退回原始 URL，让上游决定怎么处理。"""
+    def fake_get(url, **kwargs):
+        raise RuntimeError("network down")
+
+    import csm_core.monitor.platforms.baidu_keyword as bk
+    monkeypatch.setattr(bk, "_cc_get", fake_get)
+
+    original = "https://www.baidu.com/link?url=blob"
+    assert baidu_keyword.resolve_baidu_link(original) == original
