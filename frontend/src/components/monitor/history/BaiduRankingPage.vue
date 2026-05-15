@@ -194,8 +194,8 @@ async function loadHistory(id: number) {
   history.value = [];
   try {
     await whenReady();
-    const r = await sidecar.client.get(`/api/monitor/tasks/${id}/results`, {
-      params: { limit: 30 },
+    const r = await sidecar.client.get("/api/monitor/results", {
+      params: { task_id: id, limit: 30 },
     });
     history.value = r.data.results ?? [];
   } catch (e: any) {
