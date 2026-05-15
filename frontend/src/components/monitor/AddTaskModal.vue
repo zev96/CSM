@@ -68,15 +68,14 @@ const TYPES = [
 const type = ref<TaskType>("zhihu_question");
 const name = ref("");
 const targetUrl = ref("");
-// Zhihu-specific
+// Zhihu-specific / Baidu target brand (single word)
 const targetBrand = ref("");
 // Comment-specific
 const myCommentText = ref("");
 // Shared —— 默认 5；watch(type) 时知乎切到 10（zhihu_question 的合理起点）
 const topN = ref(5);
 // Baidu-specific
-const searchKeyword = ref("");
-const targetBrandsRaw = ref(""); // newline-separated string; split to array on submit
+const searchKeywordsRaw = ref(""); // newline-separated string; split to list on submit
 const baiduHeadless = ref(true);
 // Schedule
 const scheduleMode = ref<"manual" | "daily">("manual");
@@ -99,8 +98,8 @@ function close() {
   targetBrand.value = "";
   myCommentText.value = "";
   topN.value = type.value === "zhihu_question" ? 10 : 5;
-  searchKeyword.value = "";
-  targetBrandsRaw.value = "";
+  searchKeywordsRaw.value = "";
+  targetBrand.value = "";
   baiduHeadless.value = true;
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
@@ -130,10 +129,9 @@ function hydrateFromTask(t: EditingTask) {
   targetBrand.value = String(cfg.target_brand ?? "");
   myCommentText.value = String(cfg.my_comment_text ?? "");
   topN.value = Number(cfg.top_n) || 5;
-  // Baidu-specific hydration
-  searchKeyword.value = String(cfg.search_keyword ?? "");
-  const brands: string[] = Array.isArray(cfg.target_brands) ? cfg.target_brands : [];
-  targetBrandsRaw.value = brands.join("\n");
+  // Baidu-specific hydration (inverted model: search_keywords list + target_brand single word)
+  const keywords: string[] = Array.isArray(cfg.search_keywords) ? cfg.search_keywords : [];
+  searchKeywordsRaw.value = keywords.join("\n");
   baiduHeadless.value = cfg.headless !== false; // default true
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
@@ -176,9 +174,9 @@ function validate(): string | null {
   // 百度分支：target_url 由 search_keyword 派生，不需要用户填 URL
   if (!isBaidu.value && !targetUrl.value.trim()) return "目标 URL 不能为空";
   if (isBaidu.value) {
-    if (!searchKeyword.value.trim()) return "搜索关键词不能为空";
-    const brands = targetBrandsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
-    if (brands.length === 0) return "目标品牌词至少填一个";
+    const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
+    if (keywords.length === 0) return "搜索关键词至少填一个";
+    if (!targetBrand.value.trim()) return "目标品牌词不能为空";
   } else {
     if (isComment.value && !myCommentText.value.trim()) {
       return "评论留存监测必须填写自己发布的评论文本";
@@ -214,14 +212,14 @@ async function submit() {
     let config: Record<string, any>;
     let computedTargetUrl = targetUrl.value.trim();
     if (isBaidu.value) {
-      const brands = targetBrandsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
+      const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
       config = {
-        search_keyword: searchKeyword.value.trim(),
-        target_brands: brands,
+        search_keywords: keywords,
+        target_brand: targetBrand.value.trim(),
         headless: baiduHeadless.value,
       };
-      // target_url 由 search_keyword 派生 —— 后端要求非空
-      computedTargetUrl = "https://www.baidu.com/s?wd=" + encodeURIComponent(searchKeyword.value.trim());
+      // target_url 由第一个 search_keyword 派生 —— 后端要求非空
+      computedTargetUrl = "https://www.baidu.com/s?wd=" + encodeURIComponent(keywords[0]);
     } else if (isComment.value) {
       config = {
         my_comment_text: myCommentText.value.trim(),
@@ -339,19 +337,11 @@ async function submit() {
 
           <!-- 百度关键词排名：专属字段 -->
           <template v-if="isBaidu">
-            <FormField label="搜索关键词" hint="在百度搜索框输入的词，用来查排名。">
-              <FormInput
-                v-model="searchKeyword"
-                placeholder="百度搜索关键词（如：Claude Code 教程）"
-                debounce="live"
-              />
-            </FormField>
-
-            <FormField label="目标品牌词" hint="一行一个，命中任一即标「自家」">
+            <FormField label="搜索关键词" hint="一行一个，每个关键词单独搜一次">
               <textarea
-                v-model="targetBrandsRaw"
+                v-model="searchKeywordsRaw"
                 rows="4"
-                placeholder="如：&#10;Claude Code&#10;Anthropic"
+                placeholder="如：&#10;Claude Code 教程&#10;Claude Code 怎么用&#10;Anthropic Claude"
                 :style="{
                   width: '100%',
                   resize: 'vertical',
@@ -365,6 +355,14 @@ async function submit() {
                   outline: 'none',
                   boxSizing: 'border-box',
                 }"
+              />
+            </FormField>
+
+            <FormField label="目标品牌词" hint="命中关键词的搜索结果就标「自家」">
+              <FormInput
+                v-model="targetBrand"
+                placeholder="如：Claude Code"
+                debounce="live"
               />
             </FormField>
 
