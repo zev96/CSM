@@ -25,7 +25,7 @@ def test_parse_serp_default_only_no_news():
     parsed = baidu_keyword.parse_serp(html)
     assert parsed["news_present"] is False
     assert parsed["news_links"] == []
-    assert len(parsed["default_links"]) >= 5
+    assert len(parsed["default_links"]) == 8
     # 每个 link 是 dict，包含 title + href
     for link in parsed["default_links"]:
         assert "title" in link
@@ -37,8 +37,8 @@ def test_parse_serp_with_news_extracts_both_blocks():
     html = _load("serp_with_news.html")
     parsed = baidu_keyword.parse_serp(html)
     assert parsed["news_present"] is True
-    assert 1 <= len(parsed["news_links"]) <= 5
-    assert len(parsed["default_links"]) >= 3
+    assert len(parsed["news_links"]) == 4
+    assert len(parsed["default_links"]) == 7
     # 两个 list 严格分开，不重复
     default_hrefs = {l["href"] for l in parsed["default_links"]}
     news_hrefs = {l["href"] for l in parsed["news_links"]}
