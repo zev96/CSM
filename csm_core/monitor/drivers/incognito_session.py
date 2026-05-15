@@ -100,3 +100,23 @@ def incognito_session(*, headless: bool) -> Iterator[IncognitoSession]:
                 pw.stop()
             except Exception as e:
                 logger.debug("incognito pw.stop raised: %s", e)
+
+
+# 百度验证码落地页固定走这几个域；URL 子串匹配比 DOM 检测便宜很多，
+# 优先用 URL。DOM 兜底另外做（adapter 调 page.locator 检测）。
+_BAIDU_CAPTCHA_URL_MARKERS = (
+    "wappass.baidu.com/static/captcha",
+    "passport.baidu.com",
+    "verify.baidu.com",
+)
+
+
+def is_baidu_captcha_url(url: str) -> bool:
+    """True iff 落地 URL 看起来是百度的反爬验证码页。
+
+    在 `page.goto` 之后立刻调一次 —— 命中说明已被百度拦下，要么走
+    headless→可见升级，要么把当前 task 标 risk_control。
+    """
+    if not url:
+        return False
+    return any(marker in url for marker in _BAIDU_CAPTCHA_URL_MARKERS)
