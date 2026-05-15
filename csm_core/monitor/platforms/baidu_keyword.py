@@ -12,9 +12,15 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse, quote
 
 from lxml import html as lxml_html
+
+from .. import rate_limit
+from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
+from ..drivers.incognito_session import incognito_session, is_baidu_captcha_url
 
 logger = logging.getLogger(__name__)
 
@@ -304,17 +310,211 @@ class BaiduKeywordAdapter:
         breaker.failure_threshold = breaker_failures
         breaker.cool_off_seconds = float(breaker_cooldown_seconds)
 
-    def fetch(self, task):  # noqa: ANN001 — full annotation in later task
-        """先返回失败结果，完整实现见后续任务。"""
-        from datetime import datetime
-        from ..base import MonitorResult
+    def fetch(self, task: MonitorTask) -> MonitorResult:
+        breaker = rate_limit.get_breaker(self.platform)
+        if not breaker.allow():
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="risk_control",
+                rank=-1,
+                error_message="circuit breaker open for baidu_keyword",
+            )
+
+        cfg = task.config or {}
+        keyword = (cfg.get("search_keyword") or "").strip()
+        brands = [b.strip() for b in (cfg.get("target_brands") or []) if b and b.strip()]
+        if not keyword or not brands:
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="failed",
+                rank=-1,
+                error_message="config.search_keyword + target_brands required",
+            )
+
+        headless = bool(cfg.get("headless", self._headless_default))
+        rate_limit.get_pacer(self.platform).wait()
+
+        return self._fetch_with_promotion(task, keyword, brands, headless)
+
+    def _fetch_with_promotion(
+        self,
+        task: MonitorTask,
+        keyword: str,
+        brands: list[str],
+        headless: bool,
+    ) -> MonitorResult:
+        """跑一次 SERP；命中验证码且还有升级机会 → headless=False 再跑一次。"""
+        breaker = rate_limit.get_breaker(self.platform)
+        promotions_left = self._captcha_max_promotions
+        last_attempt_headless = headless
+        captcha_hit_overall = False
+
+        while True:
+            try:
+                result = self._fetch_once(task, keyword, brands, last_attempt_headless)
+            except Exception as e:
+                logger.exception("baidu fetch raised: %s", e)
+                breaker.record_failure()
+                return MonitorResult(
+                    task_id=task.id or 0,
+                    checked_at=datetime.utcnow(),
+                    status="failed",
+                    rank=-1,
+                    error_message=f"adapter exception: {e!r}",
+                )
+
+            captcha_hit_overall = captcha_hit_overall or result.metric.get("captcha_hit", False)
+            if result.status == "risk_control" and result.metric.get("captcha_hit"):
+                if promotions_left > 0 and last_attempt_headless:
+                    logger.info(
+                        "baidu captcha hit; promoting to visible (%d promotions left)",
+                        promotions_left,
+                    )
+                    promotions_left -= 1
+                    last_attempt_headless = False
+                    continue
+                # 用尽升级机会，或者本来就在 visible 还命中
+                result.metric["captcha_hit"] = True
+                breaker.record_failure()
+                return result
+
+            if result.status == "ok":
+                breaker.record_success()
+            else:
+                breaker.record_failure()
+            # 把 captcha_hit_overall 写回去，前端用得到
+            result.metric["captcha_hit"] = captcha_hit_overall
+            return result
+
+    def _fetch_once(
+        self,
+        task: MonitorTask,
+        keyword: str,
+        brands: list[str],
+        headless: bool,
+    ) -> MonitorResult:
+        """一次完整 SERP→解 link→抓正文→打分。"""
+        serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)
+        now = datetime.utcnow()
+        empty_metric: dict[str, Any] = {
+            "search_keyword": keyword,
+            "target_brands": brands,
+            "serp_url": serp_url,
+            "default_results": [],
+            "news_results": [],
+            "default_matched_count": 0,
+            "default_first_rank": -1,
+            "news_first_rank": -1,
+            "news_present": False,
+            "engine": "patchright",
+            "headless": headless,
+            "captcha_hit": False,
+        }
+
+        with incognito_session(headless=headless) as session:
+            page = session.page
+            try:
+                page.goto(serp_url, wait_until="domcontentloaded", timeout=20000)
+            except TypeError:
+                # Test FakePage 不接受 kwargs
+                page.goto(serp_url)
+            except Exception as e:
+                empty_metric["captcha_hit"] = False
+                return MonitorResult(
+                    task_id=task.id or 0,
+                    checked_at=now,
+                    status="failed",
+                    rank=-1,
+                    metric=empty_metric,
+                    error_message=f"serp navigate raised: {e!r}",
+                )
+
+            landed_url = getattr(page, "url", "") or ""
+            if is_baidu_captcha_url(landed_url):
+                empty_metric["captcha_hit"] = True
+                return MonitorResult(
+                    task_id=task.id or 0,
+                    checked_at=now,
+                    status="risk_control",
+                    rank=-1,
+                    metric=empty_metric,
+                    error_message=f"baidu captcha at {landed_url[:120]}",
+                )
+
+            try:
+                serp_html = page.content() or ""
+            except Exception as e:
+                return MonitorResult(
+                    task_id=task.id or 0,
+                    checked_at=now,
+                    status="failed",
+                    rank=-1,
+                    metric=empty_metric,
+                    error_message=f"serp page.content raised: {e!r}",
+                )
+
+            parsed = parse_serp(serp_html)
+            empty_metric["news_present"] = parsed["news_present"]
+
+            # 抓默认搜索 + 最新资讯两组
+            default_results = self._check_block(
+                page, parsed["default_links"], brands, block="default",
+            )
+            news_results = self._check_block(
+                page, parsed["news_links"], brands, block="news",
+            )
+
+            empty_metric["default_results"] = default_results
+            empty_metric["news_results"] = news_results
+            matched = [r for r in default_results if r.get("matches_brand")]
+            empty_metric["default_matched_count"] = len(matched)
+            empty_metric["default_first_rank"] = matched[0]["rank"] if matched else -1
+            news_matched = [r for r in news_results if r.get("matches_brand")]
+            empty_metric["news_first_rank"] = news_matched[0]["rank"] if news_matched else -1
+
+        first_rank = empty_metric["default_first_rank"]
         return MonitorResult(
             task_id=task.id or 0,
-            checked_at=datetime.utcnow(),
-            status="failed",
-            rank=-1,
-            error_message="baidu_keyword adapter not yet implemented",
+            checked_at=now,
+            status="ok",
+            rank=first_rank,
+            metric=empty_metric,
         )
+
+    def _check_block(
+        self,
+        page: Any,
+        links: list[dict[str, str]],
+        brands: list[str],
+        *,
+        block: str,
+    ) -> list[dict[str, Any]]:
+        """对一组链接逐条抓正文 + 判命中。返回 1-based rank 的 dict 列表。"""
+        out: list[dict[str, Any]] = []
+        for i, link in enumerate(links, start=1):
+            href = resolve_baidu_link(link["href"])
+            host = urlparse(href).netloc or "baidu.com"
+
+            attempt = fetch_article_http(href)
+            if attempt.get("needs_browser_fallback"):
+                attempt = fetch_article_browser(page, href)
+
+            content = attempt.get("content") or ""
+            matched_brand = match_brand(content, brands)
+            out.append({
+                "rank": i,
+                "title": link.get("title", ""),
+                "url": href,
+                "host": host,
+                "matches_brand": matched_brand is not None,
+                "matched_brand": matched_brand,
+                "source": attempt.get("source") or "http",
+                "content_preview": content[:160],
+                "fetch_error": attempt.get("fetch_error"),
+            })
+        return out
 
 
 # Module-level singleton —— 跟其他平台一致。
