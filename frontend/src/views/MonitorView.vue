@@ -36,6 +36,7 @@ import CookieManagerModal from "@/components/monitor/CookieManagerModal.vue";
 import EditBatchModal from "@/components/monitor/EditBatchModal.vue";
 import RetentionPage from "@/components/monitor/history/RetentionPage.vue";
 import ZhihuRankingPage from "@/components/monitor/history/ZhihuRankingPage.vue";
+import BaiduRankingPage from "@/components/monitor/history/BaiduRankingPage.vue";
 
 import { subscribe } from "@/api/client";
 import { useConfig } from "@/stores/config";
@@ -74,7 +75,7 @@ const PLATFORM_TYPE: Record<CommentPlatform, string> = {
 };
 const commentSubtab = ref<CommentPlatform>("bilibili");
 
-type HistorySubtab = "retention" | "zhihu";
+type HistorySubtab = "retention" | "zhihu" | "baidu";
 const historySubtab = ref<HistorySubtab>("retention");
 
 interface Task {
@@ -1343,6 +1344,7 @@ const TYPE_LABEL: Record<string, string> = {
   bilibili_comment: "B 站评论",
   douyin_comment: "抖音评论",
   kuaishou_comment: "快手评论",
+  baidu_keyword: "百度关键词",
 };
 function typeLabel(t: string): string {
   return TYPE_LABEL[t] ?? t;
@@ -3163,12 +3165,21 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                 color: historySubtab === 'zhihu' ? 'var(--card)' : 'var(--ink-3)',
               }"
             >知乎排名</button>
+            <button
+              @click="historySubtab = 'baidu'"
+              class="px-4 py-1.5 rounded-full text-[12.5px] font-medium"
+              :style="{
+                background: historySubtab === 'baidu' ? 'var(--dark)' : 'transparent',
+                color: historySubtab === 'baidu' ? 'var(--card)' : 'var(--ink-3)',
+              }"
+            >百度关键词</button>
           </div>
         </div>
 
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <RetentionPage v-if="historySubtab === 'retention'" @navigate="goToCommentTask" />
-          <ZhihuRankingPage v-else @navigate="goToZhihuTask" />
+          <ZhihuRankingPage v-else-if="historySubtab === 'zhihu'" @navigate="goToZhihuTask" />
+          <BaiduRankingPage v-else-if="historySubtab === 'baidu'" />
         </div>
       </section>
     </template>
