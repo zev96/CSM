@@ -35,7 +35,7 @@ import Spinner from "@/components/ui/Spinner.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
 
-type Platform = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment";
+type Platform = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
 
 const props = defineProps<{
   open: boolean;
@@ -54,6 +54,7 @@ const TYPES: Array<{ value: Platform; label: string }> = [
   { value: "bilibili_comment", label: "B 站评论留存" },
   { value: "douyin_comment", label: "抖音评论留存" },
   { value: "kuaishou_comment", label: "快手评论留存" },
+  { value: "baidu_keyword", label: "百度关键词排名" },
 ];
 
 const platform = ref<Platform>("zhihu_question");
@@ -71,7 +72,9 @@ const importError = ref<string | null>(null);
 const submitting = ref(false);
 const progress = ref({ done: 0, total: 0 });
 
-const isComment = computed(() => platform.value !== "zhihu_question");
+const isComment = computed(() =>
+  platform.value !== "zhihu_question" && platform.value !== "baidu_keyword"
+);
 
 watch(
   () => props.open,
@@ -620,6 +623,11 @@ async function submitAll() {
                 视频 URL ⇥
                 <span :style="{ color: 'var(--primary-deep)' }">评论原文</span>
               </template>
+              <template v-else-if="platform === 'baidu_keyword'">
+                搜索词 ⇥ 目标 URL ⇥
+                <span :style="{ color: 'var(--primary-deep)' }">品牌列表</span>
+                ⇥ Top-N(可选)
+              </template>
               <template v-else>
                 问题名字 ⇥ 目标 URL ⇥
                 <span :style="{ color: 'var(--primary-deep)' }">目标品牌</span>
@@ -629,6 +637,9 @@ async function submitAll() {
             <div class="mt-1.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
               <template v-if="isComment">
                 只两列：视频链接 + 评论原文。任务名 / Top-N 在上方填一次即可应用到整批。支持 .xlsx / .csv 上传，也支持把抖音/B站「复制链接」整段分享文案直接粘进来（URL 会自动识别）。
+              </template>
+              <template v-else-if="platform === 'baidu_keyword'">
+                搜索词 + 目标 URL + 品牌（多个品牌用 | 分隔）。支持从 Excel 复制粘贴（TAB 分隔）、上传 .xlsx / .csv。
               </template>
               <template v-else>
                 支持从 Excel 复制粘贴（TAB 分隔）、上传 .xlsx / .csv；只粘 URL 也行，任务名会从 URL 自动派生。
