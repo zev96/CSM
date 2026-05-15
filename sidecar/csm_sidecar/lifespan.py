@@ -67,6 +67,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     started_monitor = False
     auto_scan_task: asyncio.Task | None = None
     if not _is_test_run():
+        # Migrate pre-v0.4.5 Windows data dir BEFORE anything else opens
+        # a file inside config_dir — once monitor_lifecycle / vault scan /
+        # ensure_default_dirs start writing, copytree would race with
+        # those writes.
+        try:
+            from csm_core.config import migrate_legacy_config_dir
+            migrate_legacy_config_dir()
+        except Exception:
+            logger.exception("legacy data dir migration failed; continuing")
         try:
             from .services import startup_dirs
             startup_dirs.ensure_default_dirs()

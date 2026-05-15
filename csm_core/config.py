@@ -127,17 +127,74 @@ def default_config_dir() -> Path:
     Replaces the QStandardPaths-based path used by the legacy GUI shell.
     Picks the first matching strategy:
 
-    * Windows: ``%LOCALAPPDATA%/CSM/CSM``
+    * Windows: ``%LOCALAPPDATA%/CSM-Data``  (was ``CSM/CSM`` pre-v0.4.5)
     * macOS:   ``~/Library/Application Support/CSM/CSM``
     * Linux:   ``$XDG_CONFIG_HOME/CSM`` (fallback ``~/.config/CSM``)
+
+    Windows path note: pre-v0.4.5 we used ``%LOCALAPPDATA%/CSM/CSM`` which
+    sat **inside** the NSIS install dir (``%LOCALAPPDATA%/CSM``). The hot-
+    update flow renames the install dir wholesale, which would have wiped
+    user data along with the old binaries. Moving to ``CSM-Data`` puts the
+    data out of the install path entirely. See ``legacy_config_dir_win``
+    for the old path that migrate_legacy_config_dir() copies from.
     """
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(base) / "CSM" / "CSM"
+        return Path(base) / "CSM-Data"
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "CSM" / "CSM"
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(base) / "CSM"
+
+
+def legacy_config_dir_win() -> Path:
+    """Pre-v0.4.5 Windows data dir. Only meaningful for one-shot migration."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(base) / "CSM" / "CSM"
+
+
+def migrate_legacy_config_dir() -> bool:
+    """Copy pre-v0.4.5 Windows data into the new dir if applicable.
+
+    Conditions to trigger (Windows only):
+      - Old dir ``%LOCALAPPDATA%/CSM/CSM`` exists with at least one file
+      - New dir ``%LOCALAPPDATA%/CSM-Data`` does NOT exist (or is empty)
+
+    Strategy: shutil.copytree (don't delete old) — leaves the old dir as
+    a safety net for the user to manually recover from if anything looks
+    off in the new dir. A future release can decide to clean it up.
+
+    Returns True if a copy was performed, False if skipped (no old data,
+    or new already populated).
+    """
+    if sys.platform != "win32":
+        return False
+    old = legacy_config_dir_win()
+    new = default_config_dir()
+    if not old.is_dir():
+        return False
+    # Consider new as "already populated" if settings.json is present —
+    # cheaper than os.scandir + safer (don't treat an accidental mkdir
+    # without files as "already migrated").
+    if (new / "settings.json").exists():
+        return False
+    try:
+        import shutil
+        if new.exists():
+            # New dir exists but has no settings.json. Maybe partial
+            # migration from a previous run — merge instead of nuking.
+            # shutil.copytree with dirs_exist_ok=True (Py 3.8+) handles
+            # this without raising.
+            shutil.copytree(str(old), str(new), dirs_exist_ok=True)
+        else:
+            shutil.copytree(str(old), str(new))
+        logger.info("migrated legacy config dir %s -> %s (old retained as backup)", old, new)
+        return True
+    except OSError as e:
+        # Don't propagate — sidecar can still start with an empty new dir.
+        # The user just won't see their old data; they can manually copy.
+        logger.exception("legacy config dir migration failed: %s", e)
+        return False
 
 
 def default_config_path() -> Path:
