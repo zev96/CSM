@@ -51,6 +51,36 @@ def test_session_passes_headless_flag(mock_playwright):
     assert launch_call.kwargs.get("headless") is False
 
 
+def test_session_headless_true_uses_offscreen_window_trick(mock_playwright):
+    """headless=True 的"假隐藏"约定：始终 headed 启动（保 patchright
+    stealth 完整），用 --window-position 把窗口推到屏外 + --start-minimized。
+    Playwright 真 headless 在 stealth fork 下不可靠，这条约定不能破。"""
+    with incognito_session.incognito_session(headless=True):
+        pass
+    launch_call = mock_playwright["pw_handle"].chromium.launch.call_args
+    # 关键 1：真传给 chromium.launch 的 headless 必须是 False
+    assert launch_call.kwargs.get("headless") is False
+    # 关键 2：args 里必须有「屏外位置」+「最小化」两个 flag
+    args = launch_call.kwargs.get("args") or []
+    assert any("--window-position=" in a and "-32000" in a for a in args), (
+        f"expected offscreen window-position in args, got: {args}"
+    )
+    assert "--start-minimized" in args, f"expected --start-minimized in args, got: {args}"
+
+
+def test_session_disables_image_loading(mock_playwright):
+    """SERP 抓取永远不需要图片，关掉 image loading 是性能默认 ——
+    无论 headless 真假都关。"""
+    for hl in (True, False):
+        mock_playwright["pw_handle"].chromium.launch.reset_mock()
+        with incognito_session.incognito_session(headless=hl):
+            pass
+        args = mock_playwright["pw_handle"].chromium.launch.call_args.kwargs.get("args") or []
+        assert "--blink-settings=imagesEnabled=false" in args, (
+            f"images must be disabled for SERP scraping (headless={hl}); got args: {args}"
+        )
+
+
 def test_session_uses_incognito_context_not_persistent(mock_playwright):
     """关键反爬不变量：必须用 browser.new_context()，绝不能用
     launch_persistent_context（持久 user-data-dir 会跨任务带前次痕迹）。"""
