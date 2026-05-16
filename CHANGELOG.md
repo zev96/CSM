@@ -2,6 +2,11 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.9] - 2026-05-16
+
+### Fixed
+- **应用内热更新从来没真正 work 过 —— rename 安装目录失败 (WinError 32)**：v0.4.1 起 hot-update 路径就埋了这个 bug，只是之前没人实际触发过（多数用户走 NSIS setup.exe 升级）。updater 等 csm-tauri.exe 退出后立即 rename 安装目录，但 **csm-sidecar.exe 是 Tauri sidecar 子进程，主进程退出后没被一起 kill**，仍锁着 `<install>/csm-sidecar.exe` → rename 失败 → updater 静默回滚到旧版（关于页一直停在升级前的版本号，并伴随 csm-sidecar 重启时 PyInstaller `_MEI*` 解压撞文件的 dll Error 弹窗）。本次给 `updater/main.py` 在 rename 之前加 `taskkill /F /IM csm-sidecar.exe /T`（同款 `csm-tauri.exe` 防御），跟 NSIS PREINSTALL 钩子对齐。**老用户 0.4.7 / 0.4.8 装的需要走一次 NSIS setup.exe 重装到 0.4.9**——他们机器里的旧 updater.exe 没修，下次热更新还会撞同样的锁。
+
 ## [0.4.8] - 2026-05-16
 
 ### Fixed
