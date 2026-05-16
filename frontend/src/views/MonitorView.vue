@@ -1398,32 +1398,6 @@ watch(commentSubtab, () => {
   selectedVideoId.value = null;
 });
 
-function severity(t: Task): "alert" | "warn" | "ok" | "info" {
-  if (!t.last_status) return "info";
-  if (t.last_status === "failed" || t.last_status === "risk_control") return "alert";
-  if (t.last_status !== "ok") return "info";
-  return "ok";
-}
-const STATUS_LABEL: Record<string, string> = {
-  alert: "异常",
-  warn: "跌出",
-  ok: "稳定",
-  info: "未检",
-};
-
-// 任务类型 → 中文显示。Task.type 后端用英文 enum (zhihu_question / *_comment)，
-// 但列表/详情卡里给用户看的应该是中文，跟 AddTaskModal 的 TYPES 标签对齐。
-const TYPE_LABEL: Record<string, string> = {
-  zhihu_question: "知乎问题",
-  bilibili_comment: "B 站评论",
-  douyin_comment: "抖音评论",
-  kuaishou_comment: "快手评论",
-  baidu_keyword: "百度关键词",
-};
-function typeLabel(t: string): string {
-  return TYPE_LABEL[t] ?? t;
-}
-
 // tabCounts 计数徽章已下线（顶部 pivot 不再展示 4/1/12 数字胶囊）；
 // 如需重启回归，把上面的 pill 模板 + 这里的 computed 一起恢复。
 
