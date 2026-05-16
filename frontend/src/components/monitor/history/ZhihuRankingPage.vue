@@ -124,7 +124,12 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
 <template>
   <div v-if="loading && !data" class="py-10 text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">加载中…</div>
   <div v-else-if="!data" class="py-10 text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">暂无数据</div>
-  <div v-else class="flex flex-col gap-3">
+  <!--
+    h-full + min-h-0 + flex-col 让 KPI/图表保持固定，「问题列表」块
+    单独 flex-1 内部滚动。父 wrapper 是 overflow-hidden，不会再串到
+    整个历史报告页面。
+  -->
+  <div v-else class="flex h-full min-h-0 flex-col gap-3">
     <!-- range picker -->
     <div class="flex items-center justify-end flex-shrink-0">
       <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">
@@ -140,8 +145,8 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
       </div>
     </div>
 
-    <!-- 3 KPI -->
-    <div class="grid grid-cols-3 gap-2.5">
+    <!-- 3 KPI —— 固定，不滚 -->
+    <div class="grid grid-cols-3 gap-2.5 flex-shrink-0">
       <!-- KPI 1: 监测问题数 -->
       <div :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }" class="flex flex-col gap-1.5">
         <div class="text-[11.5px] font-medium" :style="{ color: 'var(--ink-2)' }">监测问题数</div>
@@ -194,9 +199,10 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
       </div>
     </div>
 
-    <!-- 主图（1d 时隐藏） -->
+    <!-- 主图（1d 时隐藏）—— 固定，不滚 -->
     <div
       v-if="range !== '1d'"
+      class="flex-shrink-0"
       :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }"
     >
       <div class="flex justify-between items-center mb-2">
@@ -209,9 +215,16 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
       <LineChart :labels="chartLabels" :series="chartSeries" dual-axis />
     </div>
 
-    <!-- 问题列表 -->
-    <div :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }">
-      <div class="flex justify-between items-center mb-2">
+    <!--
+      问题列表 —— 占满剩余高度，header (过滤器 + 计数) 固定，行列表
+      内部滚动。这样问题再多滚动条也只出现在这块卡内，不会污染上面
+      KPI / 图表。
+    -->
+    <div
+      class="flex min-h-0 flex-1 flex-col"
+      :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }"
+    >
+      <div class="flex justify-between items-center mb-2 flex-shrink-0">
         <div class="text-[12.5px] font-semibold">
           问题列表 <span class="font-normal" :style="{ color: 'var(--ink-3)' }">({{ filtered.length }} 条 · 点行进详情)</span>
         </div>
@@ -229,8 +242,8 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
           </button>
         </div>
       </div>
-      <div v-if="!filtered.length" class="py-6 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">无符合条件的问题</div>
-      <div v-else>
+      <div v-if="!filtered.length" class="py-6 text-center text-[12px] flex-shrink-0" :style="{ color: 'var(--ink-3)' }">无符合条件的问题</div>
+      <div v-else class="flex-1 min-h-0 overflow-y-auto">
         <div
           v-for="q in filtered" :key="q.task_id"
           @click="emit('navigate', { taskId: q.task_id })"

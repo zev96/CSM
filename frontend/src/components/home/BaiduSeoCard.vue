@@ -120,12 +120,15 @@ onMounted(async () => {
         >
           百度关键词
         </div>
+        <!--
+          副标题已收敛到「排名异动 N」单条 —— 原来「监测 X 关键词 / 覆盖 Y
+          品牌词 / 平均命中率」这条信息密度高但首页卡用户主要关心异动，
+          所以只保留异动计数；详细 KPI 在监测中心详情页查看。
+        -->
         <div class="mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
           <template v-if="!loaded">加载中…</template>
           <template v-else-if="data && data.kpis.monitored_keywords > 0">
-            监测 {{ data.kpis.monitored_keywords }} 关键词 ·
-            覆盖 {{ data.kpis.brands_covered }} 品牌词 ·
-            平均命中率 {{ fmtPct(data.kpis.avg_match_rate_today) }}
+            排名异动 <b :style="{ color: 'var(--ink)' }">{{ data.kpis.changed_keywords }}</b>
           </template>
           <template v-else>暂无百度关键词任务</template>
         </div>
@@ -145,18 +148,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <!-- 异动摘要 -->
-    <div
-      v-if="loaded && data && data.kpis.changed_keywords > 0"
-      class="mb-2 text-[11px] flex-shrink-0"
-      :style="{ color: 'var(--ink-3)' }"
-    >
-      排名异动 <b :style="{ color: 'var(--ink)' }">{{ data.kpis.changed_keywords }}</b> ·
-      <span :style="{ color: 'var(--red)' }">↓ {{ data.kpis.changed_down }}</span>
-      <span class="mx-1">·</span>
-      <span :style="{ color: '#5e7848' }">↑ {{ data.kpis.changed_up }}</span>
-      <span v-if="data.kpis.captcha_count > 0" class="ml-1" :style="{ color: '#c98a18' }">· 验证码 {{ data.kpis.captcha_count }}</span>
-    </div>
+    <!-- 异动摘要块已与副标题合并，避免重复显示「排名异动 N」 -->
 
     <!-- 关键词列表 -->
     <div

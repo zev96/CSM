@@ -127,7 +127,9 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
 <template>
   <div v-if="loading && !data" class="py-10 text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">加载中…</div>
   <div v-else-if="!data" class="py-10 text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">暂无数据</div>
-  <div v-else class="flex flex-col gap-3">
+  <!-- 跟 ZhihuRankingPage 同模式：h-full + min-h-0 + flex-col，让
+       关键词列表块内部滚动，KPI / 主图 / range picker 固定。 -->
+  <div v-else class="flex h-full min-h-0 flex-col gap-3">
     <!-- range picker -->
     <div class="flex items-center justify-end flex-shrink-0">
       <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">
@@ -143,8 +145,8 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
       </div>
     </div>
 
-    <!-- 3 KPI cards -->
-    <div class="grid grid-cols-3 gap-2.5">
+    <!-- 3 KPI cards —— 固定 -->
+    <div class="grid grid-cols-3 gap-2.5 flex-shrink-0">
       <!-- KPI 1: 监测关键词数 -->
       <div :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }" class="flex flex-col gap-1.5">
         <div class="text-[11.5px] font-medium" :style="{ color: 'var(--ink-2)' }">监测关键词数</div>
@@ -201,9 +203,10 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
       </div>
     </div>
 
-    <!-- 主图（1d 时隐藏） -->
+    <!-- 主图（1d 时隐藏）—— 固定 -->
     <div
       v-if="range !== '1d'"
+      class="flex-shrink-0"
       :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }"
     >
       <div class="flex justify-between items-center mb-2">
@@ -216,9 +219,15 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
       <LineChart :labels="chartLabels" :series="chartSeries" dual-axis />
     </div>
 
-    <!-- 关键词列表 -->
-    <div :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }">
-      <div class="flex justify-between items-center mb-2">
+    <!--
+      关键词列表 —— 占满剩余高度，header 固定，行列表内部滚动。
+      跟 ZhihuRankingPage 的问题列表同模式。
+    -->
+    <div
+      class="flex min-h-0 flex-1 flex-col"
+      :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }"
+    >
+      <div class="flex justify-between items-center mb-2 flex-shrink-0">
         <div class="text-[12.5px] font-semibold">
           关键词列表 <span class="font-normal" :style="{ color: 'var(--ink-3)' }">({{ filtered.length }} 条 · 点行进详情)</span>
         </div>
@@ -236,8 +245,8 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
           </button>
         </div>
       </div>
-      <div v-if="!filtered.length" class="py-6 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">无符合条件的关键词</div>
-      <div v-else>
+      <div v-if="!filtered.length" class="py-6 text-center text-[12px] flex-shrink-0" :style="{ color: 'var(--ink-3)' }">无符合条件的关键词</div>
+      <div v-else class="flex-1 min-h-0 overflow-y-auto">
         <div
           v-for="k in filtered" :key="k.task_id"
           @click="emit('navigate', { taskId: k.task_id })"

@@ -158,13 +158,16 @@ const commentBatchAlerts = computed<AlertRow[]>(() => {
   return out;
 });
 
-// 真实预警 = 知乎告警 + 评论批次告警，按严重度排
+// 真实预警 = 仅知乎告警（卡片已收窄到「知乎问题」，评论预警不再合并）。
+// commentBatchAlerts 保留计算但不进合并列表 —— 后续若要恢复全平台视图，
+// 只需改回 [...zhihuAlerts.value, ...commentBatchAlerts.value]。
 const realAlerts = computed<AlertRow[]>(() => {
   const order: Record<Level, number> = { alert: 0, warn: 1, info: 2 };
-  return [...zhihuAlerts.value, ...commentBatchAlerts.value].sort(
+  return [...zhihuAlerts.value].sort(
     (a, b) => order[a.level] - order[b.level],
   );
 });
+void commentBatchAlerts; // suppress "unused" warning while keeping the code path alive
 
 // 无异动时的兜底行：把知乎"上榜中"的任务展示出来，让首页能看到监测在
 // 跑、当前排名是多少。否则用户在监测中心明明有任务，首页却空白。
@@ -190,22 +193,12 @@ const rows = computed<AlertRow[]>(() => {
   return merged.slice(0, 4);
 });
 
+// 卡片范围已收窄到「知乎问题」—— 副标题只反映预警状态，不再
+// 报告任务监测中数量（评论平台数据不在本卡显示范围）。
 const subLabel = computed(() => {
   const alerts = realAlerts.value.length;
-  const zhihuTotal = tasks.value.length;
-  const commentTotal = commentPlatforms.value.reduce(
-    (a, p) => a + p.tasks.length,
-    0,
-  );
-  const totalTasks = zhihuTotal + commentTotal;
   if (alerts > 0) return `近 1 小时 · ${alerts} 个预警`;
-  if (totalTasks > 0) {
-    const parts: string[] = [];
-    if (zhihuTotal > 0) parts.push(`知乎 ${zhihuTotal}`);
-    if (commentTotal > 0) parts.push(`评论 ${commentTotal}`);
-    return `${parts.join(" · ")} 任务监测中 · 暂无预警`;
-  }
-  return "暂无监测任务";
+  return "暂无预警";
 });
 
 function formatTime(iso: string): string {
@@ -283,13 +276,13 @@ function badgeStyle(level: Level) {
           class="text-[10.5px] font-medium uppercase tracking-[1.5px]"
           :style="{ color: 'var(--ink-3)' }"
         >
-          Monitor · 全平台预警
+          Monitor · 知乎问题
         </div>
         <div
           class="font-display mt-1 font-bold"
           :style="{ fontSize: '18px', letterSpacing: '-0.4px' }"
         >
-          排名异动
+          知乎问题
         </div>
         <div class="mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
           {{ subLabel }}
@@ -305,7 +298,7 @@ function badgeStyle(level: Level) {
         }"
         @click="router.push({ name: 'monitor', query: { tab: 'zhihu' } })"
       >
-        全部
+        详情
         <Icon name="arrowRight" :size="10" />
       </button>
     </div>
