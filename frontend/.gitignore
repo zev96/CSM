@@ -4,6 +4,12 @@ dist-ssr/
 *.local
 .vite/
 
+# 项目用 npm（package-lock.json + CI `npm ci`）。任何 pnpm install 误调
+# 用产生的 lock / workspace 文件都不应该进仓库 —— 跟 npm lock 共存会让
+# CI 抓不一致的依赖图。
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
 # Tauri build artefacts
 src-tauri/target/
 src-tauri/Cargo.lock
