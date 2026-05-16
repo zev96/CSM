@@ -91,6 +91,12 @@ def event_to_dict(event: MonitorEvent) -> dict[str, Any]:
         out["error"] = event.error
     if event.dispatched is not None:
         out["dispatched"] = event.dispatched
+    # `progress` events carry N/M counters; the frontend (BaiduRankingPage)
+    # uses these to render a per-task progress bar (3 / 10 etc.).
+    if event.progress_current is not None:
+        out["progress_current"] = event.progress_current
+    if event.progress_total is not None:
+        out["progress_total"] = event.progress_total
     if event.result is not None:
         # MonitorResult is a Pydantic v2 model; mode='json' converts datetimes.
         out["result"] = event.result.model_dump(mode="json")

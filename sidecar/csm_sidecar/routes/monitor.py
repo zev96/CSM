@@ -82,9 +82,19 @@ async def delete_task(task_id: int) -> None:
 
 
 @router.post("/api/monitor/tasks/{task_id}/run-now")
-async def run_now(task_id: int) -> dict[str, Any]:
+async def run_now(
+    task_id: int,
+    keyword: str | None = Query(default=None),
+) -> dict[str, Any]:
     """Force one dispatch off-schedule. Returns immediately — watch
-    /api/monitor/events for the result."""
+    /api/monitor/events for the result.
+
+    ``keyword`` (optional) — currently only honored by ``baidu_keyword``
+    tasks: when present, the adapter only scrapes that single keyword's
+    SERP, and the loop merges the partial result with the previous
+    snapshot so other keywords' data is preserved. Sent by the Level 2
+    «启动监测» button to avoid spinning a browser per keyword.
+    """
     _require_storage()
     loop = monitor_lifecycle.get()
     if loop is None or not loop.is_running():
@@ -94,8 +104,43 @@ async def run_now(task_id: int) -> dict[str, Any]:
         )
     if monitor_service.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
-    loop.run_task_now(task_id)
-    return {"task_id": task_id, "queued": True}
+    loop.run_task_now(task_id, keyword_override=keyword)
+    return {"task_id": task_id, "queued": True, "keyword": keyword}
+
+
+@router.get("/api/monitor/running")
+async def list_running() -> dict[str, Any]:
+    """Truth source for "which tasks are currently being fetched".
+
+    Frontend hydrates ``runningTaskIds`` from this when a page mounts
+    after the user navigated away (SSE `started` events fired while the
+    component was unmounted are lost, so the local Set goes stale).
+    Sidecar restart returns empty (any in-flight tasks died with the
+    process) — that's the correct semantics.
+    """
+    loop = monitor_lifecycle.get()
+    if loop is None or not loop.is_running():
+        return {"running_task_ids": []}
+    return {"running_task_ids": loop.get_active_task_ids()}
+
+
+@router.post("/api/monitor/tasks/{task_id}/cancel")
+async def cancel_task(task_id: int) -> dict[str, Any]:
+    """Cooperative cancel: signal the running worker to bail at its next
+    checkpoint. Baidu adapter checks between keywords; other adapters
+    are single-shot fetches that can't easily be interrupted (the
+    cancel flag will still mark them so they won't reschedule mid-run).
+
+    Returns ``{cancelled: true}`` if the signal was delivered (task was
+    running), else ``{cancelled: false}``. Either way 200 — the UI just
+    treats the result as advisory and waits for the next SSE event.
+    """
+    _require_storage()
+    loop = monitor_lifecycle.get()
+    if loop is None or not loop.is_running():
+        return {"task_id": task_id, "cancelled": False}
+    delivered = loop.cancel_task(task_id)
+    return {"task_id": task_id, "cancelled": delivered}
 
 
 # ── Results ────────────────────────────────────────────────────────────────

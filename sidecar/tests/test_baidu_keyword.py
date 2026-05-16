@@ -432,3 +432,48 @@ def test_fetch_validation_empty_keywords_fails(monkeypatch):
     result = baidu_keyword.ADAPTER.fetch(task)
     assert result.status == "failed"
     assert "keywords" in (result.error_message or "").lower()
+
+
+# ── exclude_domains 过滤 ───────────────────────────────────────────────────
+def test_is_host_excluded_exact_and_subdomain():
+    """host 后缀匹配：jd.com 同时命中 jd.com / www.jd.com / mall.jd.com。"""
+    ex = {"jd.com", "1688.com"}
+    assert baidu_keyword.BaiduKeywordAdapter._is_host_excluded("jd.com", ex)
+    assert baidu_keyword.BaiduKeywordAdapter._is_host_excluded("www.jd.com", ex)
+    assert baidu_keyword.BaiduKeywordAdapter._is_host_excluded("mall.jd.com", ex)
+    assert baidu_keyword.BaiduKeywordAdapter._is_host_excluded("DETAIL.1688.COM", ex)  # case-insensitive
+    # 类似前缀但非子域名 → 不命中（jd.com.cn 不是 jd.com 的后缀）
+    assert not baidu_keyword.BaiduKeywordAdapter._is_host_excluded("notjd.com", ex)
+    assert not baidu_keyword.BaiduKeywordAdapter._is_host_excluded("zhihu.com", ex)
+    # 空 set / 空 host → False
+    assert not baidu_keyword.BaiduKeywordAdapter._is_host_excluded("jd.com", set())
+    assert not baidu_keyword.BaiduKeywordAdapter._is_host_excluded("", ex)
+
+
+def test_build_exclude_set_merges_global_and_task():
+    """task.config.exclude_domains 跟 apply_settings 设的全局合并；
+    use_default_excludes=False 时只用 task list。"""
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(
+        default_excluded_domains=["jd.com", "Taobao.com"],
+    )
+    task_merge = MonitorTask(
+        id=1, type="baidu_keyword", name="t", target_url="x",
+        config={"exclude_domains": ["cewey.com", " "], "use_default_excludes": True},
+    )
+    s = adapter._build_exclude_set(task_merge)
+    assert s == {"jd.com", "taobao.com", "cewey.com"}
+
+    task_opt_out = MonitorTask(
+        id=2, type="baidu_keyword", name="t", target_url="x",
+        config={"exclude_domains": ["cewey.com"], "use_default_excludes": False},
+    )
+    s2 = adapter._build_exclude_set(task_opt_out)
+    assert s2 == {"cewey.com"}
+
+    task_empty = MonitorTask(
+        id=3, type="baidu_keyword", name="t", target_url="x",
+        config={},  # opts-in by default
+    )
+    s3 = adapter._build_exclude_set(task_empty)
+    assert s3 == {"jd.com", "taobao.com"}

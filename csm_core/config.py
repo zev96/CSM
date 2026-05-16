@@ -30,6 +30,45 @@ class BaiduKeywordConfig(BaseModel):
     breaker_failures: int = 3
     breaker_cooldown_seconds: int = 600
 
+    # ── Result filtering: 默认排除的"非软文"域名 ──────────────────
+    # 用户跑百度排名的目的是追"自家软文"的卡位，但 SERP 经常混进
+    # B2B 采购站（jd, 1688）、电商列表（taobao, tmall）—— 即便品牌
+    # 词命中，那也不是软文。下面这份默认黑名单会从 SERP 结果里
+    # 整条剔除，剔除后再重新编号 #1 #2 #3。
+    #
+    # 单独门户网站（如自家品牌官网）属于每个任务自己的语义，
+    # 写在 task.config.exclude_domains 里（per-task list），跟这里
+    # 的全局默认合并使用。
+    #
+    # 匹配规则：host == pattern  OR  host endswith ('.' + pattern)
+    # 所以 "jd.com" 同时命中 "jd.com" / "www.jd.com" / "mall.jd.com"。
+    default_excluded_domains: list[str] = Field(default_factory=lambda: [
+        # B2B / 采购站
+        "1688.com",
+        "alibaba.com",
+        "yiwugo.com",
+        # 综合电商
+        "jd.com",
+        "taobao.com",
+        "tmall.com",
+        "tmall.hk",
+        "tb.cn",
+        "suning.com",
+        "yhd.com",
+        "vip.com",
+        "vipshop.com",
+        "pinduoduo.com",
+        "pdd.com",
+        "gome.com.cn",
+        "kaola.com",
+        # 海淘 / 跨境
+        "amazon.cn",
+        "ymatou.com",
+        # 微商 / 小程序商城
+        "youzan.com",
+        "mogu.com",
+    ])
+
 
 class MonitorConfig(BaseModel):
     """Settings for the monitor module (Zhihu question / multi-platform comments).
