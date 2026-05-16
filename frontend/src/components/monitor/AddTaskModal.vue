@@ -78,6 +78,11 @@ const topN = ref(5);
 const searchKeywordsRaw = ref(""); // newline-separated string; split to list on submit
 const baiduHeadless = ref(true);
 const baiduIdealRank = ref<number>(5);
+// 排除域名：换行/逗号分隔，提交时拆成 list。默认空表示「只走全局
+// B2B/电商黑名单」（由 settings.monitor.baidu_keyword.default_excluded_domains 提供）。
+// 用户在这里加自家品牌官网 / 其他不算"软文"的域名即可。
+const baiduExcludeDomainsRaw = ref("");
+const baiduUseDefaultExcludes = ref(true);
 // Schedule
 const scheduleMode = ref<"manual" | "daily">("manual");
 const dailyTime = ref("09:00");
@@ -103,6 +108,8 @@ function close() {
   targetBrand.value = "";
   baiduHeadless.value = true;
   baiduIdealRank.value = 5;
+  baiduExcludeDomainsRaw.value = "";
+  baiduUseDefaultExcludes.value = true;
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
   enabled.value = true;
@@ -136,6 +143,9 @@ function hydrateFromTask(t: EditingTask) {
   searchKeywordsRaw.value = keywords.join("\n");
   baiduHeadless.value = cfg.headless !== false; // default true
   baiduIdealRank.value = Number(cfg.ideal_rank ?? 5);
+  const exDomains: string[] = Array.isArray(cfg.exclude_domains) ? cfg.exclude_domains : [];
+  baiduExcludeDomainsRaw.value = exDomains.join("\n");
+  baiduUseDefaultExcludes.value = cfg.use_default_excludes !== false;
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
   } else if (/^\d{1,2}:\d{2}$/.test(t.schedule_cron)) {
@@ -216,11 +226,20 @@ async function submit() {
     let computedTargetUrl = targetUrl.value.trim();
     if (isBaidu.value) {
       const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
+      // 排除域名解析：换行 / 逗号 / 空格 / 顿号都拆开；剥掉协议头 +
+      // 末尾斜杠。后端 adapter 用 hostsuffix 匹配，所以 "https://www.jd.com/"
+      // 和 "jd.com" 都最终能命中 jd.com 这个 pattern。
+      const excludeDomains = baiduExcludeDomainsRaw.value
+        .split(/[\n,，、\s]+/)
+        .map((s) => s.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase())
+        .filter(Boolean);
       config = {
         search_keywords: keywords,
         target_brand: targetBrand.value.trim(),
         headless: baiduHeadless.value,
         ideal_rank: baiduIdealRank.value,
+        exclude_domains: excludeDomains,
+        use_default_excludes: baiduUseDefaultExcludes.value,
       };
       // target_url 由第一个 search_keyword 派生 —— 后端要求非空
       computedTargetUrl = "https://www.baidu.com/s?wd=" + encodeURIComponent(keywords[0]);
@@ -269,11 +288,22 @@ async function submit() {
       class="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
       @click.self="close"
     >
+      <!--
+        Layout: header (pinned) + body (scrolls) + footer (pinned).
+        outer `overflow-hidden` 把 body 的 scrollbar 限制在圆角矩形内
+        ——之前把 max-h + overflow-y-auto 直接挂在外层，浏览器渲染滚动条
+        时会伸到圆角外，「右边的下拉条超出界面本身」就是这个问题。
+      -->
       <div
-        class="anim-up bg-bg-inner max-h-[90vh] overflow-y-auto p-6"
-        :style="{ width: '480px', maxWidth: '92vw', borderRadius: 'var(--radius-card)' }"
+        class="anim-up bg-bg-inner flex flex-col overflow-hidden"
+        :style="{
+          width: '480px',
+          maxWidth: '92vw',
+          maxHeight: '90vh',
+          borderRadius: 'var(--radius-card)',
+        }"
       >
-        <div class="mb-4 flex items-center justify-between">
+        <div class="flex flex-shrink-0 items-center justify-between" :style="{ padding: '24px 24px 12px' }">
           <div class="font-display text-[16px] font-semibold">
             {{ isEdit ? "编辑监测任务" : "新增监测任务" }}
           </div>
@@ -282,7 +312,7 @@ async function submit() {
           </button>
         </div>
 
-        <div class="flex flex-col gap-4">
+        <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto" :style="{ padding: '4px 24px' }">
           <FormField label="平台">
             <!--
               编辑模式下平台改不了 —— task.type 决定后端 adapter 路由，
@@ -371,8 +401,8 @@ async function submit() {
             </FormField>
 
             <FormField
-              label="理想排名（前 N 位）"
-              hint="排名进入前 N 位即视为「卡位成功」（首页一般 10 位）"
+              label="理想卡位（数量）"
+              hint="该关键词下目标品牌软文的理想卡位总数 ＝ 默认搜索卡位 ＋ 最新资讯卡位（若有）"
               inline
             >
               <FormInput
@@ -395,10 +425,47 @@ async function submit() {
               <div class="mt-2 flex flex-col gap-3">
                 <FormField
                   label="默认尝试隐藏窗口"
-                  hint="patchright 是反检测 stealth fork，部分环境下仍会弹窗。命中验证码会自动升级为可见。"
+                  hint="开启后窗口会被推到屏外（offscreen + 最小化），用户视觉上看不见。命中验证码会自动升级到可见窗口让你手动过验证。"
                   inline
                 >
                   <FormToggle v-model="baiduHeadless" />
+                </FormField>
+
+                <!--
+                  Baidu SERP 常混进 jd / 1688 / taobao / 自家品牌官网，这些
+                  即便品牌词命中也不是"软文卡位"。开启全局黑名单 + 手动加
+                  自家域名即可在 SERP 解析后清干净再编号 rank。
+                -->
+                <FormField
+                  label="启用默认电商/B2B 黑名单"
+                  hint="默认过滤 jd / 1688 / taobao / pinduoduo 等采购与电商站点（这些命中目标品牌也不是软文）。如果你确实要监测这些站，关掉。"
+                  inline
+                >
+                  <FormToggle v-model="baiduUseDefaultExcludes" />
+                </FormField>
+
+                <FormField
+                  label="自定义排除域名"
+                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。"
+                >
+                  <textarea
+                    v-model="baiduExcludeDomainsRaw"
+                    rows="3"
+                    placeholder="cewey.com&#10;example.com"
+                    :style="{
+                      width: '100%',
+                      resize: 'vertical',
+                      padding: '6px 10px',
+                      fontSize: '12.5px',
+                      fontFamily: 'inherit',
+                      background: 'var(--card-2)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 'var(--radius-inner)',
+                      color: 'var(--ink)',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }"
+                  />
                 </FormField>
               </div>
             </details>
@@ -478,7 +545,8 @@ async function submit() {
           </FormField>
         </div>
 
-        <div class="mt-6 flex justify-end gap-2">
+        <!-- Footer pinned at bottom; sits outside the scrollable body. -->
+        <div class="flex flex-shrink-0 justify-end gap-2" :style="{ padding: '12px 24px 24px', borderTop: '1px solid var(--line)' }">
           <Btn variant="ghost" small @click="close">取消</Btn>
           <Btn variant="solid" small :disabled="submitting" @click="submit">
             <Spinner v-if="submitting" :size="12" />
