@@ -475,6 +475,7 @@ const placedCountCurrent = computed<number>(() => {
     (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
   ).length;
 });
+void placedCountCurrent; // suppress unused warning
 
 const placedCountPrev = computed<number>(() => {
   if (!prevMetric.value) return 0;
@@ -483,29 +484,6 @@ const placedCountPrev = computed<number>(() => {
   ).length;
 });
 void placedCountPrev; // suppress unused warning
-
-// 最新资讯卡位数量: across all keywords with news_present, count matches in news_results
-// Returns null if NO keyword has news_present (display as "无")
-const newsPlacedCount = computed<number | null>(() => {
-  if (!latestMetric.value) return null;
-  const newsKws = latestMetric.value.keywords.filter((kw) => kw.news_present);
-  if (newsKws.length === 0) return null;
-  return newsKws.reduce((sum, kw) => {
-    return sum + kw.news_results.filter((r) => r.matches_brand).length;
-  }, 0);
-});
-
-// 状态 pill tone + label based on current vs total
-const placementStatus = computed<{ label: string; tone: PillTone }>(() => {
-  const m = latestMetric.value;
-  if (!m) return { label: "未跑", tone: "info" };
-  if (m.captcha_hit) return { label: "验证码", tone: "warn" };
-  const placed = placedCountCurrent.value;
-  const total = m.total_keywords || 1;
-  if (placed === total && total > 0) return { label: "全部卡位", tone: "ok" };
-  if (placed > 0) return { label: `部分卡位 (${placed}/${total})`, tone: "warn" };
-  return { label: "未卡位", tone: "alert" };
-});
 
 // Sparkline: 卡位 count (not matched_keywords) over last 14 days
 // 按本地日历日聚合 —— 同一天多次跑取最后一次，缺失天用 0 占位（Sparkline

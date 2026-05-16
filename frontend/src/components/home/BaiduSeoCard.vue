@@ -62,8 +62,6 @@ const topKeywords = computed<Keyword[]>(() => {
     .slice(0, 4);
 });
 
-function fmtPct(x: number): string { return `${Math.round(x * 100)}%`; }
-
 function formatCheckedAt(iso: string | null): string {
   if (!iso) return "—";
   try {
