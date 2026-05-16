@@ -2,6 +2,11 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.8] - 2026-05-16
+
+### Fixed
+- **设置 → 关于 显示版本号比实际安装的低一位**：v0.4.7 安装包装好后关于页显示 v0.4.6（热更新升级也一样）。原因是发版时只 bump 了 `tauri.conf.json` / `Cargo.toml` / `package.json` 三处，漏了 sidecar `__version__`——而关于页的版本号是 sidecar `/api/system/version` 实时返回。v0.4.8 把 sidecar 自报版本号补齐为 0.4.8。**老用户 0.4.7 → 0.4.8 热更新后关于页就会正确显示**。下次发版应该用 `python scripts/release.py X.Y.Z` 一键脚本，它会同时 bump 全部 4 处源头。
+
 ## [0.4.7] - 2026-05-16
 
 ### Added
