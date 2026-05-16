@@ -63,6 +63,9 @@ def start(*, db_path: Path | None = None) -> MonitorLoop:
         serp_pacing_seconds=bcfg.serp_pacing_seconds,
         breaker_failures=bcfg.breaker_failures,
         breaker_cooldown_seconds=bcfg.breaker_cooldown_seconds,
+        # 默认黑名单：B2B / 电商域名（jd / 1688 / taobao …）。
+        # 任务级 exclude_domains 跟它合并使用 —— 见 BaiduKeywordAdapter._build_exclude_set。
+        default_excluded_domains=bcfg.default_excluded_domains,
     )
     _loop = MonitorLoop(
         event_sink=monitor_bus.publish,

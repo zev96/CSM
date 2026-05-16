@@ -131,11 +131,7 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
   </div>
   <div v-else class="flex flex-col gap-3">
     <!-- range picker -->
-    <div class="flex items-center justify-between flex-shrink-0">
-      <div>
-        <div class="font-display text-[14px] font-semibold">评论平台 · 留存率分析</div>
-        <div class="text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">看哪个平台在掉评论、什么时候开始掉</div>
-      </div>
+    <div class="flex items-center justify-end flex-shrink-0">
       <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">
         <button
           v-for="r in (['1d','7d','30d'] as Range[])" :key="r"

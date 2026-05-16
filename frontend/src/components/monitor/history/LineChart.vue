@@ -47,7 +47,9 @@ Chart.register(
 interface Series {
   label: string;
   color: string;
-  data: number[];
+  // null 表示该 x 位置无数据 —— chart.js 默认 spanGaps=false，会在该点
+  // 断线，符合"那天没监测"的视觉语义（vs. 0 = 那天监测了但卡位为 0）。
+  data: (number | null)[];
 }
 
 const props = defineProps<{

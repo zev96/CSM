@@ -5,15 +5,20 @@
 2. 用 spec 给的 XPath 抓「默认搜索」「最新资讯」两个区块的 h3//a href
 3. 解 baidu.com/link?url=... 跳转拿真实 URL
 4. 对每条 URL：curl_cffi + readability 抓正文，识别失败 fallback 浏览器
-5. 大小写不敏感匹配任一 target_brand → matches_brand=True
+5. 大小写不敏感匹配 target_brand → matches_brand=True
 
 引擎硬绑 patchright（无痕需 BrowserContext API，drission 不支持）。
+
+新数据模型：
+- config.search_keywords: list[str]  (多关键词，每个跑一次 SERP)
+- config.target_brand: str           (单品牌词)
+- A task = N SERPs × 1 brand
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, quote
 
 from lxml import html as lxml_html
@@ -275,6 +280,9 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
 class BaiduKeywordAdapter:
     """`BaseMonitorAdapter` 实现。SERP → 解链 → 抓正文 → 品牌匹配 → MonitorResult。
 
+    新模型：config.search_keywords (list[str]) + config.target_brand (str)。
+    每个 keyword 跑一次独立 SERP，结果聚合到 metric.keywords[] + task 级统计。
+
     引擎硬绑 patchright incognito。验证码命中时尝试 headless→可见升级（最多
     ``_captcha_max_promotions`` 次），全失败则 status=risk_control。
     """
@@ -286,6 +294,9 @@ class BaiduKeywordAdapter:
         self._headless_default = True
         self._captcha_timeout_s = 90
         self._captcha_max_promotions = 1
+        # 默认排除域名（B2B / 电商）。apply_settings 会用 config 里的值
+        # 覆盖；空 list 表示「不应用全局黑名单」（用户在设置页清空时）。
+        self._default_excluded_domains: tuple[str, ...] = ()
 
     def apply_settings(
         self,
@@ -296,6 +307,7 @@ class BaiduKeywordAdapter:
         serp_pacing_seconds: int = 5,
         breaker_failures: int = 3,
         breaker_cooldown_seconds: int = 600,
+        default_excluded_domains: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         """挂接 settings.monitor.baidu_keyword.*。lifecycle 启动 + 设置页保存时各调一次。"""
         from ..rate_limit import get_pacer, get_breaker
@@ -303,6 +315,14 @@ class BaiduKeywordAdapter:
         self._headless_default = headless_default
         self._captcha_timeout_s = captcha_visible_timeout_s
         self._captcha_max_promotions = captcha_max_promotions
+        # Normalize to lowercase + stripped tuple (cheap immutable snapshot
+        # so the fetch path doesn't need a lock if settings re-applies
+        # mid-flight).
+        if default_excluded_domains is None:
+            default_excluded_domains = ()
+        self._default_excluded_domains = tuple(
+            d.strip().lower() for d in default_excluded_domains if d and d.strip()
+        )
 
         pacer = get_pacer(self.platform)
         # 把 spec 的 serp_pacing_seconds 映射成 pacer 的 (min, max) jitter 窗口。
@@ -314,7 +334,58 @@ class BaiduKeywordAdapter:
         breaker.failure_threshold = breaker_failures
         breaker.cool_off_seconds = float(breaker_cooldown_seconds)
 
-    def fetch(self, task: MonitorTask) -> MonitorResult:
+    # ── exclude-domain helpers ──────────────────────────────────────
+    def _build_exclude_set(self, task: MonitorTask) -> set[str]:
+        """Merge global default + per-task ``exclude_domains`` into a
+        single lowercase set of patterns. Task can opt out of the global
+        list by setting ``use_default_excludes: false``.
+        """
+        out: set[str] = set()
+        cfg = task.config or {}
+        if cfg.get("use_default_excludes", True):
+            out.update(self._default_excluded_domains)
+        for d in (cfg.get("exclude_domains") or []):
+            if isinstance(d, str):
+                d2 = d.strip().lower()
+                if d2:
+                    out.add(d2)
+        return out
+
+    @staticmethod
+    def _is_host_excluded(host: str, exclude_set: set[str]) -> bool:
+        """Match host against any pattern. host equals pattern OR ends
+        with ('.' + pattern) — covers subdomains like ``mall.jd.com``.
+        """
+        if not host or not exclude_set:
+            return False
+        h = host.lower()
+        for pat in exclude_set:
+            if h == pat or h.endswith("." + pat):
+                return True
+        return False
+
+    def fetch(
+        self,
+        task: MonitorTask,
+        *,
+        progress_cb: "Callable[[int, int], None] | None" = None,
+        cancel_token: Any = None,
+    ) -> MonitorResult:
+        """Run one round of SERP scraping for all configured keywords.
+
+        ``progress_cb(current, total)`` is called after each keyword
+        completes so the UI can render a "N / M" progress bar live.
+        ``current`` starts at 1 (after first keyword done) and ends at
+        ``total``; the loop publishes (0, total) once up front so the bar
+        shows the total count immediately on start.
+
+        ``cancel_token`` is a duck-typed object exposing ``is_set() -> bool``
+        (we accept ``threading.Event`` from the sidecar; ``None`` skips
+        cancellation entirely so unit tests don't need to fake it). The
+        loop polls it before each keyword and raises
+        ``_CancelledFetch`` (imported lazily to avoid sidecar -> csm_core
+        coupling) which the worker catches as cooperative cancellation.
+        """
         breaker = rate_limit.get_breaker(self.platform)
         if not breaker.allow():
             return MonitorResult(
@@ -326,30 +397,34 @@ class BaiduKeywordAdapter:
             )
 
         cfg = task.config or {}
-        keyword = (cfg.get("search_keyword") or "").strip()
-        brands = [b.strip() for b in (cfg.get("target_brands") or []) if b and b.strip()]
-        if not keyword or not brands:
+        keywords_raw = cfg.get("search_keywords") or []
+        keywords = [k.strip() for k in keywords_raw if k and k.strip()]
+        brand = (cfg.get("target_brand") or "").strip()
+
+        if not keywords or not brand:
             return MonitorResult(
                 task_id=task.id or 0,
                 checked_at=datetime.utcnow(),
                 status="failed",
                 rank=-1,
-                error_message="config.search_keyword + target_brands required",
+                error_message="config.search_keywords (non-empty list) + target_brand required",
             )
 
         headless = bool(cfg.get("headless", self._headless_default))
         rate_limit.get_pacer(self.platform).wait()
 
-        return self._fetch_with_promotion(task, keyword, brands, headless)
+        return self._fetch_with_promotion(task, keywords, brand, headless, progress_cb, cancel_token)
 
     def _fetch_with_promotion(
         self,
         task: MonitorTask,
-        keyword: str,
-        brands: list[str],
+        keywords: list[str],
+        brand: str,
         headless: bool,
+        progress_cb: "Callable[[int, int], None] | None" = None,
+        cancel_token: Any = None,
     ) -> MonitorResult:
-        """跑一次 SERP；命中验证码且还有升级机会 → headless=False 再跑一次。"""
+        """跑一次所有 SERP；命中验证码且还有升级机会 → headless=False 再跑一次（全重跑）。"""
         breaker = rate_limit.get_breaker(self.platform)
         promotions_left = self._captcha_max_promotions
         last_attempt_headless = headless
@@ -357,7 +432,7 @@ class BaiduKeywordAdapter:
 
         while True:
             try:
-                result = self._fetch_once(task, keyword, brands, last_attempt_headless)
+                result = self._fetch_once(task, keywords, brand, last_attempt_headless, progress_cb, cancel_token)
             except Exception as e:
                 logger.exception("baidu fetch raised: %s", e)
                 breaker.record_failure()
@@ -395,96 +470,185 @@ class BaiduKeywordAdapter:
     def _fetch_once(
         self,
         task: MonitorTask,
-        keyword: str,
-        brands: list[str],
+        keywords: list[str],
+        brand: str,
         headless: bool,
+        progress_cb: "Callable[[int, int], None] | None" = None,
+        cancel_token: Any = None,
     ) -> MonitorResult:
-        """一次完整 SERP→解 link→抓正文→打分。"""
-        serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)
+        """一次完整 多SERP→解 link→抓正文→打分，返回聚合 MonitorResult。"""
         now = datetime.utcnow()
+
+        # 用于 risk_control 的 minimal metric（captcha hit 时快速返回）
         empty_metric: dict[str, Any] = {
-            "search_keyword": keyword,
-            "target_brands": brands,
-            "serp_url": serp_url,
-            "default_results": [],
-            "news_results": [],
-            "default_matched_count": 0,
-            "default_first_rank": -1,
-            "news_first_rank": -1,
-            "news_present": False,
+            "target_brand": brand,
+            "search_keywords": keywords,
             "engine": "patchright",
             "headless": headless,
             "captcha_hit": False,
+            "keywords": [],
+            "total_keywords": len(keywords),
+            "matched_keywords": 0,
+            "total_default_matches": 0,
+            "best_default_first_rank": -1,
         }
+
+        keyword_results: list[dict[str, Any]] = []
+        captcha_hit = False
+        total_kw = len(keywords)
+        # 全局黑名单 + 任务级 exclude_domains 合并 —— 一次性算好，循环
+        # 内每个关键词共用同一份；空 set 等价于不过滤。
+        exclude_set = self._build_exclude_set(task)
+
+        # Emit a 0/N progress event up-front so the UI can show the total
+        # before the first keyword finishes (otherwise the bar is invisible
+        # until ~5–15s in).
+        if progress_cb is not None:
+            try:
+                progress_cb(0, total_kw)
+            except Exception:
+                logger.exception("progress_cb(0,N) raised; ignoring")
 
         with incognito_session(headless=headless) as session:
             page = session.page
-            try:
-                page.goto(serp_url, wait_until="domcontentloaded", timeout=20000)
-            except TypeError:
-                # Test FakePage 不接受 kwargs
-                page.goto(serp_url)
-            except Exception as e:
-                empty_metric["captcha_hit"] = False
-                return MonitorResult(
-                    task_id=task.id or 0,
-                    checked_at=now,
-                    status="failed",
-                    rank=-1,
-                    metric=empty_metric,
-                    error_message=f"serp navigate raised: {e!r}",
+
+            for kw_idx, keyword in enumerate(keywords):
+                # Cooperative cancellation checkpoint —— polled BEFORE we
+                # spend more time on the next SERP. The sidecar imports
+                # _CancelledFetch from monitor_loop; importing it lazily
+                # here keeps csm_core decoupled from sidecar (test runs
+                # without sidecar still pass).
+                if cancel_token is not None and cancel_token.is_set():
+                    try:
+                        from csm_sidecar.services.monitor_loop import _CancelledFetch
+                    except ImportError:
+                        # Lazy fallback: any exception works for the worker —
+                        # but the worker won't recognize it as cancellation,
+                        # it'll be reported as a generic adapter exception.
+                        _CancelledFetch = RuntimeError  # type: ignore[assignment]
+                    raise _CancelledFetch(
+                        f"cancelled before keyword {kw_idx + 1}/{len(keywords)}",
+                    )
+
+                pacer = rate_limit.get_pacer(self.platform)
+                # Only wait between keywords (not before the first one — caller already waited)
+                if keyword != keywords[0]:
+                    pacer.wait()
+
+                serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)
+                kw_entry: dict[str, Any] = {
+                    "keyword": keyword,
+                    "serp_url": serp_url,
+                    "default_results": [],
+                    "news_results": [],
+                    "default_matched_count": 0,
+                    "default_first_rank": -1,
+                    "news_first_rank": -1,
+                    "news_present": False,
+                    "fetch_error": None,
+                }
+
+                # Navigate to SERP. 45s timeout — baidu 偶尔冷启慢，20s 不够。
+                try:
+                    page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
+                except TypeError:
+                    # Test FakePage 不接受 kwargs
+                    page.goto(serp_url)
+                except Exception as e:
+                    logger.warning(
+                        "baidu navigate failed (headless=%s, keyword=%r): %s",
+                        headless, keyword, e,
+                    )
+                    kw_entry["fetch_error"] = f"serp navigate raised: {e!r}"
+                    keyword_results.append(kw_entry)
+                    continue
+
+                landed_url = getattr(page, "url", "") or ""
+                if is_baidu_captcha_url(landed_url):
+                    captcha_hit = True
+                    kw_entry["fetch_error"] = f"captcha at {landed_url[:120]}"
+                    keyword_results.append(kw_entry)
+                    # Break on captcha — return risk_control immediately
+                    break
+
+                try:
+                    serp_html = page.content() or ""
+                except Exception as e:
+                    kw_entry["fetch_error"] = f"serp page.content raised: {e!r}"
+                    keyword_results.append(kw_entry)
+                    continue
+
+                parsed = parse_serp(serp_html)
+                kw_entry["news_present"] = parsed["news_present"]
+
+                # 抓默认搜索 + 最新资讯两组（pass single brand as list）。
+                # exclude_set 过滤 B2B/电商/品牌门户 —— 详见 _check_block。
+                default_results = self._check_block(
+                    page, parsed["default_links"], [brand], block="default",
+                    exclude_set=exclude_set,
+                )
+                news_results = self._check_block(
+                    page, parsed["news_links"], [brand], block="news",
+                    exclude_set=exclude_set,
                 )
 
-            landed_url = getattr(page, "url", "") or ""
-            if is_baidu_captcha_url(landed_url):
-                empty_metric["captcha_hit"] = True
-                return MonitorResult(
-                    task_id=task.id or 0,
-                    checked_at=now,
-                    status="risk_control",
-                    rank=-1,
-                    metric=empty_metric,
-                    error_message=f"baidu captcha at {landed_url[:120]}",
-                )
+                kw_entry["default_results"] = default_results
+                kw_entry["news_results"] = news_results
+                matched = [r for r in default_results if r.get("matches_brand")]
+                kw_entry["default_matched_count"] = len(matched)
+                kw_entry["default_first_rank"] = matched[0]["rank"] if matched else -1
+                news_matched = [r for r in news_results if r.get("matches_brand")]
+                kw_entry["news_first_rank"] = news_matched[0]["rank"] if news_matched else -1
 
-            try:
-                serp_html = page.content() or ""
-            except Exception as e:
-                return MonitorResult(
-                    task_id=task.id or 0,
-                    checked_at=now,
-                    status="failed",
-                    rank=-1,
-                    metric=empty_metric,
-                    error_message=f"serp page.content raised: {e!r}",
-                )
+                keyword_results.append(kw_entry)
 
-            parsed = parse_serp(serp_html)
-            empty_metric["news_present"] = parsed["news_present"]
+                # Notify UI: keyword (kw_idx + 1) of total_kw is done.
+                if progress_cb is not None:
+                    try:
+                        progress_cb(kw_idx + 1, total_kw)
+                    except Exception:
+                        logger.exception("progress_cb(%s,%s) raised; ignoring", kw_idx + 1, total_kw)
 
-            # 抓默认搜索 + 最新资讯两组
-            default_results = self._check_block(
-                page, parsed["default_links"], brands, block="default",
+        if captcha_hit:
+            empty_metric["captcha_hit"] = True
+            empty_metric["keywords"] = keyword_results
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=now,
+                status="risk_control",
+                rank=-1,
+                metric=empty_metric,
+                error_message="baidu captcha hit during keyword SERP",
             )
-            news_results = self._check_block(
-                page, parsed["news_links"], brands, block="news",
-            )
 
-            empty_metric["default_results"] = default_results
-            empty_metric["news_results"] = news_results
-            matched = [r for r in default_results if r.get("matches_brand")]
-            empty_metric["default_matched_count"] = len(matched)
-            empty_metric["default_first_rank"] = matched[0]["rank"] if matched else -1
-            news_matched = [r for r in news_results if r.get("matches_brand")]
-            empty_metric["news_first_rank"] = news_matched[0]["rank"] if news_matched else -1
+        # Compute task-level aggregations
+        total_keywords = len(keywords)
+        matched_keywords = sum(
+            1 for kw in keyword_results if kw["default_matched_count"] > 0
+        )
+        total_default_matches = sum(kw["default_matched_count"] for kw in keyword_results)
+        first_ranks = [kw["default_first_rank"] for kw in keyword_results if kw["default_first_rank"] > 0]
+        best_default_first_rank = min(first_ranks) if first_ranks else -1
 
-        first_rank = empty_metric["default_first_rank"]
+        metric: dict[str, Any] = {
+            "target_brand": brand,
+            "search_keywords": keywords,
+            "engine": "patchright",
+            "headless": headless,
+            "captcha_hit": False,
+            "keywords": keyword_results,
+            "total_keywords": total_keywords,
+            "matched_keywords": matched_keywords,
+            "total_default_matches": total_default_matches,
+            "best_default_first_rank": best_default_first_rank,
+        }
+
         return MonitorResult(
             task_id=task.id or 0,
             checked_at=now,
             status="ok",
-            rank=first_rank,
-            metric=empty_metric,
+            rank=best_default_first_rank,
+            metric=metric,
         )
 
     def _check_block(
@@ -494,13 +658,31 @@ class BaiduKeywordAdapter:
         brands: list[str],
         *,
         block: str,
+        exclude_set: set[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """对一组链接逐条抓正文 + 判命中。返回 1-based rank 的 dict 列表。"""
+        """对一组链接逐条抓正文 + 判命中。返回 1-based rank 的 dict 列表。
+
+        ``exclude_set`` —— 在 baidu redirect 解析后做一道域名黑名单过滤
+        （命中 jd.com / 1688.com 等 B2B/电商，或者品牌方在 task 配置里
+        指定的「自家门户」域名），过滤掉的条目不计入 rank、不占数。
+        这样最终的 rank 1, 2, 3 都是"软文/媒体"性质的链接。
+        """
         out: list[dict[str, Any]] = []
-        for i, link in enumerate(links, start=1):
+        rank = 0
+        for link in links:
             href = resolve_baidu_link(link["href"])
             host = urlparse(href).netloc or "baidu.com"
 
+            # 早过滤：命中黑名单直接跳过 —— 既不计 rank 也不发文章请求，
+            # 节省 1 次 article HTTP 调用。
+            if exclude_set and self._is_host_excluded(host, exclude_set):
+                logger.debug(
+                    "baidu _check_block: skip excluded host %s (link %s)",
+                    host, link.get("title", "")[:40],
+                )
+                continue
+
+            rank += 1
             attempt = fetch_article_http(href)
             if attempt.get("needs_browser_fallback"):
                 attempt = fetch_article_browser(page, href)
@@ -508,7 +690,7 @@ class BaiduKeywordAdapter:
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
             out.append({
-                "rank": i,
+                "rank": rank,
                 "title": link.get("title", ""),
                 "url": href,
                 "host": host,

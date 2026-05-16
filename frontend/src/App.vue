@@ -25,6 +25,7 @@ import WindowControls from "./components/WindowControls.vue";
 import { useTweaks } from "./composables/useTweaks";
 import { useNotifications } from "./composables/useNotifications";
 import { useConfig } from "./stores/config";
+import { useMonitorStatus } from "./stores/monitorStatus";
 import { useSidecarReady } from "./composables/useSidecarReady";
 
 const search = ref("");
@@ -112,6 +113,14 @@ onMounted(async () => {
     // 情况 B：清掉 stale flag
     try { localStorage.removeItem(ONBOARDED_KEY); } catch { /* private-mode */ }
     onboardingDismissed.value = false;
+  }
+  // Boot the monitor-status store ONCE at app start. It owns the SSE
+  // subscription + periodic /running hydration, so monitor pages can
+  // navigate in/out without losing track of in-flight scrapes.
+  try {
+    useMonitorStatus().start();
+  } catch (e) {
+    /* sidecar 没起来时 store.start() 内部会静默 —— 走 ready 之后 hydrate 兜底 */
   }
   configReady.value = true;
 });

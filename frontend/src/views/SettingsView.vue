@@ -590,6 +590,38 @@ async function checkForUpdate() {
 // ── Cookie 管理器：监测 section 内打开的弹窗 ─────────────────
 const cookieMgrOpen = ref(false);
 
+// ── 默认排除域名管理弹窗 (百度全局黑名单) ─────────────────────
+// 弹窗内用 textarea 编辑；打开时 cloning 当前值到 draftRaw，避免在
+// 用户敲字时频繁 setField（每次按键都会触发后端 PATCH）。
+const excludeDomainsModalOpen = ref(false);
+const excludeDomainsDraftRaw = ref("");
+
+watch(excludeDomainsModalOpen, (open) => {
+  if (open) {
+    const list = (get("monitor.baidu_keyword.default_excluded_domains") ?? []) as string[];
+    excludeDomainsDraftRaw.value = list.join("\n");
+  }
+});
+
+function saveExcludeDomains() {
+  const raw = excludeDomainsDraftRaw.value;
+  const list = raw
+    .split(/[\n,，、\s]+/)
+    .map((s) => s.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase())
+    .filter(Boolean);
+  // dedupe preserving order
+  const seen = new Set<string>();
+  const dedup: string[] = [];
+  for (const d of list) {
+    if (!seen.has(d)) {
+      seen.add(d);
+      dedup.push(d);
+    }
+  }
+  setField("monitor.baidu_keyword.default_excluded_domains", dedup);
+  excludeDomainsModalOpen.value = false;
+}
+
 // 通知设置弹窗的 ref 在文件上方声明（applyHash 需要先用）。
 
 // ── 账号编辑弹窗 ─────────────────────────────────────────────
@@ -1165,6 +1197,14 @@ async function saveAccountEdit() {
             才能打开，现在作为设置项一目了然。
           -->
           <template v-else-if="section === 'monitor'">
+            <!--
+              「常规设置」/「百度关键词」两块用同级 section header（粗体小标）
+              + 顶部分割线分组，跟原来的深色 card-2 圈起来视觉权重大不一样。
+              第一块没有顶部分割线（页面已经是 panel 的顶部）。
+            -->
+            <div class="mb-3 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
+              常规设置
+            </div>
             <SettingsRow label="平台并发" hint="单个平台同时发起的请求数">
               <input
                 :value="get('monitor.concurrency_per_platform') ?? 2"
@@ -1311,6 +1351,147 @@ async function saveAccountEdit() {
                 @update:model-value="(v) => setField('monitor.ai_classify_comments', v)"
               />
             </SettingsRow>
+
+            <!--
+              ── 百度关键词 子配置 ──
+              之前用深色 card-2 背景把这组单独圈起来视觉权重过重；改为
+              「常规设置」一道顶部分割线 + 一个粗体小标题（与上面那组
+              用 8px 间距区分），跟其它分组保持同样的视觉层级。
+            -->
+            <div
+              class="mt-6 pt-5"
+              :style="{ borderTop: '1px solid var(--line)' }"
+            >
+              <div class="mb-3 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
+                百度关键词
+              </div>
+              <SettingsRow
+                label="默认 headless"
+                hint="勾选则后台跑浏览器；命中验证码会自动升级可见窗口。"
+              >
+                <FormToggle
+                  :model-value="get('monitor.baidu_keyword.headless_default') ?? true"
+                  @update:model-value="(v) => setField('monitor.baidu_keyword.headless_default', v)"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="验证码等待时长（秒）"
+                hint="出现验证码后等待用户手动过验证的最长时间。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.captcha_visible_timeout_s') ?? 90"
+                  type="number"
+                  min="30"
+                  max="300"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.captcha_visible_timeout_s', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="单任务最多升级次数"
+                hint="同一任务最多允许从 headless 切换到可见窗口的次数。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.captcha_max_promotions') ?? 1"
+                  type="number"
+                  min="0"
+                  max="3"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.captcha_max_promotions', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="SERP 节流（秒）"
+                hint="跨任务 SERP 最小间隔；实际抖动取 [N, 2N]。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.serp_pacing_seconds') ?? 5"
+                  type="number"
+                  min="1"
+                  max="60"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.serp_pacing_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="熔断失败阈值"
+                hint="连续失败达到此次数后触发熔断，暂停该平台的请求。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.breaker_failures') ?? 3"
+                  type="number"
+                  min="1"
+                  max="10"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.breaker_failures', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="熔断恢复时长（秒）"
+                hint="熔断后等待多少秒再重新放行请求。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.breaker_cooldown_seconds') ?? 600"
+                  type="number"
+                  min="60"
+                  max="3600"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.breaker_cooldown_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <!--
+                默认排除域名 —— 全局黑名单。之前直接挂个 120px 的 textarea
+                在这条 row 里会把整张设置页撑得很高、滚动条乱跳；改为按钮
+                +「管理排除域名」弹窗，row 高度保持跟其它字段一致。
+                count 标显当前已配置的域名数，让用户不打开也知道规模。
+              -->
+              <SettingsRow
+                label="默认排除域名（全局黑名单）"
+                hint="所有百度任务默认应用的 SERP 过滤名单。常见 B2B/电商站点（jd.com / 1688.com / taobao.com 等）已经预置；任务级可再加自家品牌官网。"
+                last
+              >
+                <div class="flex items-center gap-2">
+                  <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+                    {{ (get('monitor.baidu_keyword.default_excluded_domains') ?? []).length }} 条
+                  </span>
+                  <Btn variant="solid" small @click="excludeDomainsModalOpen = true">
+                    <Icon name="edit" :size="12" />
+                    <span>管理排除域名</span>
+                  </Btn>
+                </div>
+              </SettingsRow>
+            </div>
+
             <SettingsRow
               label="Cookie 池"
               hint="管理各平台登录态 — 知乎 / B 站 / 抖音 / 快手"
@@ -1433,6 +1614,66 @@ async function saveAccountEdit() {
 
     <!-- 通知设置弹窗（通用 section 触发，按分类勾选）-->
     <NotificationPrefsModal v-model:open="notifPrefsOpen" />
+
+    <!--
+      百度全局排除域名管理弹窗 —— 跟 AddTaskModal 同款的 header/body/footer
+      三段式：header + 滚动 body + 固定 footer，rounded-card 圆角下 overflow
+      不溢出。draft 模型让用户连续敲不会触发 PATCH，点保存才一次落盘。
+    -->
+    <Teleport to="body">
+      <div
+        v-if="excludeDomainsModalOpen"
+        class="fixed inset-0 z-40 flex items-center justify-center"
+        :style="{ background: 'rgba(28,26,23,0.4)' }"
+        @click.self="excludeDomainsModalOpen = false"
+      >
+        <div
+          class="anim-up bg-bg-inner flex flex-col overflow-hidden"
+          :style="{
+            width: '480px',
+            maxWidth: '92vw',
+            maxHeight: '80vh',
+            borderRadius: 'var(--radius-card)',
+            border: '1px solid var(--line)',
+          }"
+        >
+          <div class="flex flex-shrink-0 items-center justify-between" :style="{ padding: '20px 24px 12px' }">
+            <div>
+              <div class="font-display text-[16px] font-semibold">管理排除域名</div>
+              <div class="mt-1 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+                所有百度任务默认应用；一行一个 host pattern（不带协议头）。
+              </div>
+            </div>
+            <button type="button" @click="excludeDomainsModalOpen = false">
+              <Icon name="x" :size="18" />
+            </button>
+          </div>
+          <div class="flex min-h-0 flex-1 flex-col" :style="{ padding: '4px 24px' }">
+            <textarea
+              v-model="excludeDomainsDraftRaw"
+              class="bg-card-white px-3 py-2 text-[12.5px] outline-none flex-1 min-h-0"
+              placeholder="jd.com&#10;taobao.com&#10;1688.com&#10;cewey.com"
+              :style="{
+                width: '100%',
+                borderRadius: '10px',
+                border: '1px solid var(--line)',
+                fontFamily: 'ui-monospace, SF Mono, Menlo, Consolas, monospace',
+                resize: 'none',
+                color: 'var(--ink)',
+              }"
+            />
+            <div class="mt-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+              规则：host 后缀匹配 —— <code>jd.com</code> 同时命中 <code>www.jd.com</code> / <code>mall.jd.com</code>。
+              支持换行 / 逗号 / 空格分隔；保存时自动剥协议头和尾斜杠。
+            </div>
+          </div>
+          <div class="flex flex-shrink-0 justify-end gap-2" :style="{ padding: '12px 24px 20px', borderTop: '1px solid var(--line)' }">
+            <Btn variant="ghost" small @click="excludeDomainsModalOpen = false">取消</Btn>
+            <Btn variant="solid" small @click="saveExcludeDomains">保存</Btn>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- 账号编辑弹窗 -->
     <Teleport to="body">

@@ -312,6 +312,243 @@ def _zhihu_daily_series(
     return series
 
 
+def get_baidu_keyword_history(range_str: str) -> dict[str, Any]:
+    """KPI + 每日趋势 + 全量关键词列表（前端按 change_kind 自行 filter）。
+
+    新数据模型：config.search_keywords (list) + config.target_brand (str)。
+    keywords[] 是 (task, keyword) 的笛卡尔展开，每行一个关键词。
+
+    Metric fields (new shape):
+      - keywords[].default_matched_count  → per-keyword matched count
+      - keywords[].default_first_rank     → per-keyword best rank
+      - keywords[].default_results        → list of result dicts
+      - keywords[].news_present           → bool
+      - target_brand                      → single brand str
+      - captcha_hit                       → bool (task-level)
+      - best_default_first_rank           → task-level aggregation
+    """
+    range_days = _parse_range(range_str)
+    now = datetime.now()
+    conn = storage.get_conn()
+    rows = conn.execute(
+        """
+        SELECT r.task_id, r.checked_at, r.status, r.rank, r.metric_json,
+               t.id AS t_id, t.name AS task_name, t.config_json
+        FROM monitor_results r
+        JOIN monitor_tasks t ON t.id = r.task_id
+        WHERE t.type = 'baidu_keyword'
+          AND t.enabled = 1
+          AND r.status = 'ok'
+        ORDER BY r.task_id ASC, r.checked_at DESC
+        """,
+    ).fetchall()
+    all_tasks = conn.execute(
+        "SELECT id, name, config_json FROM monitor_tasks "
+        "WHERE type='baidu_keyword' AND enabled=1",
+    ).fetchall()
+
+    # per_task: task_id → list of result dicts in checked_at DESC order
+    # Each entry represents one full task run (covers all keywords in that run).
+    per_task: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        m = json.loads(row["metric_json"] or "{}")
+        checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001
+        if not checked:
+            continue
+        per_task[row["task_id"]].append({
+            "checked_at": checked,
+            "metric": m,
+            "task_name": row["task_name"],
+        })
+
+    keyword_rows = []
+    captcha_set: set[int] = set()   # task_ids whose latest result had captcha_hit
+    news_present_kw_count = 0
+
+    for t in all_tasks:
+        cfg = json.loads(t["config_json"] or "{}")
+        results = per_task.get(t["id"], [])
+        curr_result = results[0] if results else None
+        prev_result = results[1] if len(results) > 1 else None
+
+        curr_m = curr_result["metric"] if curr_result else {}
+        prev_m = prev_result["metric"] if prev_result else {}
+
+        # Task-level captcha flag from latest result
+        if curr_m.get("captcha_hit"):
+            captcha_set.add(t["id"])
+
+        # Enumerate per-keyword entries from config (so tasks with 0 results
+        # still appear in the list with curr=None)
+        search_keywords = list(cfg.get("search_keywords") or [])
+        target_brand = cfg.get("target_brand", "")
+
+        # If no keywords in config, fall back to metric for backwards compat
+        if not search_keywords and curr_m.get("search_keywords"):
+            search_keywords = list(curr_m["search_keywords"])
+
+        for kw in search_keywords:
+            # Find per-keyword entry in curr and prev metrics
+            curr_kw = _find_keyword_entry(curr_m, kw)
+            prev_kw = _find_keyword_entry(prev_m, kw)
+
+            curr_matched = curr_kw["default_matched_count"] if curr_kw else 0
+            curr_best = curr_kw["default_first_rank"] if curr_kw else -1
+            prev_matched = prev_kw["default_matched_count"] if prev_kw else None
+            prev_best = prev_kw["default_first_rank"] if prev_kw else None
+
+            # Build synthetic curr/prev dicts for _classify_zhihu_change
+            _curr = {"matched_count": curr_matched, "best_rank": curr_best, "top_n": 10} if curr_kw else None
+            _prev = {"matched_count": (prev_matched or 0), "best_rank": (prev_best or -1), "top_n": 10} if prev_kw else None
+            kind, _ = _classify_zhihu_change(_curr, _prev)
+
+            default_results = (curr_kw or {}).get("default_results") or []
+            matched_ranks = [r["rank"] for r in default_results if r.get("matches_brand")]
+
+            news_present_flag = bool((curr_kw or {}).get("news_present"))
+            if news_present_flag:
+                news_present_kw_count += 1
+
+            keyword_rows.append({
+                "task_id": t["id"],
+                "task_name": t["name"],
+                "search_keyword": kw,
+                "target_brand": target_brand,
+                "matched_count": curr_matched,
+                "matched_count_prev": prev_matched,
+                "top_n": 10,
+                "matched_ranks": matched_ranks,
+                "best_rank": curr_best,
+                "best_rank_prev": prev_best,
+                "change_kind": kind,
+                "checked_at": (curr_result["checked_at"].isoformat() if curr_result else None),
+            })
+
+    # KPIs
+    monitored_keywords = len(keyword_rows)
+    hit_count_total = sum(k["matched_count"] for k in keyword_rows)
+    topn_total = monitored_keywords * 10
+    avg_match_rate_today = (hit_count_total / topn_total) if topn_total else 0.0
+    hit_count_prev = sum((k["matched_count_prev"] or 0) for k in keyword_rows if k["matched_count_prev"] is not None)
+    topn_prev_total = sum(10 for k in keyword_rows if k["matched_count_prev"] is not None)
+    avg_match_rate_prev = (hit_count_prev / topn_prev_total) if topn_prev_total else 0.0
+
+    changed_down = sum(1 for k in keyword_rows if k["change_kind"] in ("down", "dropped"))
+    changed_up = sum(1 for k in keyword_rows if k["change_kind"] in ("up", "new"))
+    changed_total = changed_down + changed_up
+
+    # Distinct brand values across tasks
+    brands_covered = len({
+        json.loads(t["config_json"] or "{}").get("target_brand", "")
+        for t in all_tasks
+        if json.loads(t["config_json"] or "{}").get("target_brand")
+    })
+
+    captcha_count = len(captcha_set)
+
+    # Daily series — build per-keyword-row series using (task_id, keyword) as unit
+    daily_series = _baidu_daily_series(per_task, all_tasks, range_days=range_days, now=now)
+
+    return {
+        "range": range_str,
+        "kpis": {
+            "monitored_keywords": monitored_keywords,
+            "brands_covered": brands_covered,
+            "avg_match_rate_today": avg_match_rate_today,
+            "avg_match_rate_prev": avg_match_rate_prev,
+            "hit_count_total": hit_count_total,
+            "topn_total": topn_total,
+            "changed_keywords": changed_total,
+            "changed_up": changed_up,
+            "changed_down": changed_down,
+            "captcha_count": captcha_count,
+            "news_present_count": news_present_kw_count,
+        },
+        "daily_series": daily_series,
+        "keywords": keyword_rows,
+    }
+
+
+def _find_keyword_entry(metric: dict, keyword: str) -> dict | None:
+    """Find the per-keyword sub-result in a metric dict by keyword string."""
+    kw_list = metric.get("keywords") or []
+    for entry in kw_list:
+        if entry.get("keyword") == keyword:
+            return entry
+    return None
+
+
+def _baidu_daily_series(
+    per_task: dict[int, list[dict]],
+    all_tasks: list,
+    *,
+    range_days: int,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Per-day series for baidu: avg_match_rate + change counts.
+
+    For each day, we aggregate across all (task, keyword) pairs: the
+    latest result on or before that day's end contributes its per-keyword
+    matched_count / 10 to the avg_match_rate bucket.
+    """
+    series = []
+    # Build task→keywords map from config
+    task_keywords: dict[int, list[str]] = {}
+    for t in all_tasks:
+        cfg = json.loads(t["config_json"] or "{}")
+        kws = list(cfg.get("search_keywords") or [])
+        task_keywords[t["id"]] = kws
+
+    for d in range(range_days):
+        day = (now - timedelta(days=range_days - 1 - d)).date()
+        day_start = datetime.combine(day, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        hits = 0
+        topn = 0
+        changed_up = changed_down = 0
+
+        for task_id, results in per_task.items():
+            keywords_for_task = task_keywords.get(task_id, [])
+            # results is DESC by checked_at; find latest on or before day_end
+            curr_on_day = next((r for r in results if r["checked_at"] < day_end), None)
+            if not curr_on_day:
+                continue
+            prev_for_day = next((r for r in results if r["checked_at"] < day_start), None)
+
+            curr_m = curr_on_day["metric"]
+            prev_m = prev_for_day["metric"] if prev_for_day else {}
+
+            for kw in keywords_for_task:
+                curr_kw = _find_keyword_entry(curr_m, kw)
+                prev_kw = _find_keyword_entry(prev_m, kw)
+                if curr_kw is None:
+                    continue
+                c_matched = curr_kw.get("default_matched_count", 0)
+                c_best = curr_kw.get("default_first_rank", -1)
+                hits += c_matched
+                topn += 10
+
+                _curr = {"matched_count": c_matched, "best_rank": c_best, "top_n": 10}
+                _prev = None
+                if prev_kw:
+                    _prev = {"matched_count": prev_kw.get("default_matched_count", 0),
+                             "best_rank": prev_kw.get("default_first_rank", -1), "top_n": 10}
+                kind, _ = _classify_zhihu_change(_curr, _prev)
+                if kind in ("up", "new"):
+                    changed_up += 1
+                elif kind in ("down", "dropped"):
+                    changed_down += 1
+
+        series.append({
+            "date": day.strftime("%Y-%m-%d"),
+            "avg_match_rate": (hits / topn) if topn else 0.0,
+            "changed_count": changed_up + changed_down,
+            "changed_up": changed_up,
+            "changed_down": changed_down,
+        })
+    return series
+
+
 def _collect_deletion_events(
     by_platform_date: dict[str, dict[str, dict[int, dict]]],
     *,

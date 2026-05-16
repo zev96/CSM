@@ -16,7 +16,7 @@ import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Sparkline from "@/components/ui/Sparkline.vue";
 
-type Kind = "zhihu_alert" | "comment_alert";
+type Kind = "zhihu_alert" | "comment_alert" | "baidu_alert";
 
 interface AlertTimelineItem {
   t: string;
@@ -63,6 +63,30 @@ interface CommentAlertData {
   deleted: AlertDeletedComment[];
 }
 
+/**
+ * Baidu 告警详情 —— 触发条件：任务的「理想关键词率」< 70%（=「警报」状态）。
+ * 三联 KPI：
+ *   missingCurrent / missingPrev / missingDelta —— 未达理想的关键词条数
+ * 趋势：sparkPoints (最近 14 天) + sparkAxis (M/D)
+ * 重点关注列表：critical[] —— 卡位为 0 的关键词，附下降幅度
+ */
+interface BaiduCriticalKeyword {
+  keyword: string;
+  placedCount: number;          // 当前卡位数（默认 + 资讯命中合计）
+  placedCountPrev: number | null; // 上次卡位数；null 表示首次抓取
+  drop: number;                 // prev - current（>0 表示下降）
+}
+interface BaiduAlertData {
+  title: string;
+  subtitle: string;
+  missingCurrent: number;       // 当前未达理想的关键词数
+  missingPrev: number | null;   // 上次未达理想的关键词数；null = 无历史
+  missingDelta: number;         // current - prev（>0 = 变多 = 更糟）
+  sparkPoints: number[];        // 最近 14 天未达理想关键词数序列
+  sparkAxis: string[];          // M/D 标签
+  critical: BaiduCriticalKeyword[];  // 卡位 = 0 的关键词
+}
+
 const props = defineProps<{
   open: boolean;
   kind: Kind;
@@ -70,6 +94,8 @@ const props = defineProps<{
   zhihuData?: ZhihuAlertData;
   /** comment_alert 模式下的真实数据 */
   commentData?: CommentAlertData;
+  /** baidu_alert 模式下的真实数据 */
+  baiduData?: BaiduAlertData;
 }>();
 const emit = defineEmits<{
   (e: "update:open", v: boolean): void;
@@ -82,14 +108,17 @@ function close() {
 
 const title = computed(() => {
   if (props.kind === "zhihu_alert") return props.zhihuData?.title ?? "知乎排名告警";
+  if (props.kind === "baidu_alert") return props.baiduData?.title ?? "百度卡位告警";
   return props.commentData?.title ?? "评论留存告警";
 });
 const subtitle = computed(() => {
   if (props.kind === "zhihu_alert") return props.zhihuData?.subtitle ?? "暂无数据";
+  if (props.kind === "baidu_alert") return props.baiduData?.subtitle ?? "暂无数据";
   return props.commentData?.subtitle ?? "暂无数据";
 });
 const eyebrow = computed(() => {
   if (props.kind === "zhihu_alert") return "知乎告警详情";
+  if (props.kind === "baidu_alert") return "百度卡位详情";
   return "评论留存详情";
 });
 
@@ -488,6 +517,174 @@ const eyebrow = computed(() => {
             </template>
           </template>
 
+          <!-- ── 百度告警 ──────────────────────────────────── -->
+          <template v-else-if="kind === 'baidu_alert'">
+            <div
+              v-if="!baiduData"
+              class="py-8 text-center text-[12.5px]"
+              :style="{ color: 'var(--ink-3)' }"
+            >
+              暂无数据 —— 任务还没抓过，先点「立刻监测」。
+            </div>
+            <template v-else>
+              <!--
+                KPI 三联：未达理想数 / 上次未达 / 变化条数。
+                变化 >0 表示「更糟」（更多关键词掉出理想）→ 红字。
+              -->
+              <div class="grid grid-cols-3 gap-3">
+                <div
+                  :style="{
+                    padding: '12px 14px',
+                    borderRadius: '12px',
+                    background: 'var(--card)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">未达理想关键词数量</div>
+                  <div class="font-display mt-0.5 font-bold" :style="{ fontSize: '24px', color: 'var(--red, #d85a48)' }">
+                    {{ baiduData.missingCurrent }}
+                  </div>
+                </div>
+                <div
+                  :style="{
+                    padding: '12px 14px',
+                    borderRadius: '12px',
+                    background: 'var(--card)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">上次未达理想关键词数量</div>
+                  <div class="font-display mt-0.5 font-bold" :style="{ fontSize: '24px' }">
+                    <template v-if="baiduData.missingPrev !== null">{{ baiduData.missingPrev }}</template>
+                    <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                  </div>
+                </div>
+                <div
+                  :style="{
+                    padding: '12px 14px',
+                    borderRadius: '12px',
+                    background: 'var(--card)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">变化条数</div>
+                  <div
+                    class="font-display mt-0.5 font-bold"
+                    :style="{
+                      fontSize: '24px',
+                      color: baiduData.missingPrev === null
+                        ? 'var(--ink)'
+                        : baiduData.missingDelta > 0
+                          ? 'var(--red, #d85a48)'
+                          : baiduData.missingDelta < 0
+                            ? 'var(--green, #6c9b5d)'
+                            : 'var(--ink-2)',
+                    }"
+                  >
+                    <template v-if="baiduData.missingPrev !== null">
+                      {{ baiduData.missingDelta > 0 ? '+' : '' }}{{ baiduData.missingDelta }}
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 14 天未达理想趋势 sparkline -->
+              <div
+                :style="{
+                  background: 'var(--card)',
+                  border: '1px solid var(--line)',
+                  borderRadius: '12px',
+                  padding: '14px 16px',
+                }"
+              >
+                <div class="mb-2 flex items-center justify-between">
+                  <div class="text-[12px] font-semibold">最近 14 天未达理想关键词趋势</div>
+                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">越低越好</div>
+                </div>
+                <Sparkline
+                  v-if="baiduData.sparkPoints.length >= 2"
+                  :points="baiduData.sparkPoints"
+                  :width="700"
+                  :height="80"
+                  stroke="var(--red, #d85a48)"
+                  :axis-labels="baiduData.sparkAxis"
+                />
+                <div
+                  v-else
+                  class="py-3 text-[11.5px]"
+                  :style="{ color: 'var(--ink-3)' }"
+                >至少需要两次检查才能成线。</div>
+              </div>
+
+              <!--
+                重点关注关键词列表 —— 卡位 = 0 的关键词。
+                列：关键词 | 卡位数量 | 状态（下降幅度）。
+              -->
+              <div v-if="baiduData.critical.length">
+                <div class="mb-2 text-[12px] font-semibold">
+                  重点关注关键词列表 <span class="font-normal" :style="{ color: 'var(--ink-3)' }">({{ baiduData.critical.length }} 条卡位为 0)</span>
+                </div>
+                <!-- 表头 -->
+                <div
+                  class="grid items-center text-[11px] uppercase"
+                  :style="{
+                    gridTemplateColumns: '1.6fr .8fr .8fr',
+                    padding: '8px 12px',
+                    letterSpacing: '1.2px',
+                    color: 'var(--ink-3)',
+                    background: 'var(--card)',
+                    border: '1px solid var(--line)',
+                    borderRadius: '8px 8px 0 0',
+                  }"
+                >
+                  <div>关键词</div>
+                  <div>卡位数量</div>
+                  <div>状态</div>
+                </div>
+                <div
+                  v-for="(k, i) in baiduData.critical"
+                  :key="k.keyword"
+                  class="grid items-center text-[12.5px]"
+                  :style="{
+                    gridTemplateColumns: '1.6fr .8fr .8fr',
+                    padding: '10px 12px',
+                    background: 'var(--card)',
+                    borderLeft: '1px solid var(--line)',
+                    borderRight: '1px solid var(--line)',
+                    borderBottom: '1px solid var(--line)',
+                    borderRadius: i === baiduData.critical.length - 1 ? '0 0 8px 8px' : '0',
+                  }"
+                >
+                  <div class="truncate">{{ k.keyword }}</div>
+                  <div class="font-display font-bold" :style="{ color: 'var(--red, #d85a48)' }">{{ k.placedCount }}</div>
+                  <div>
+                    <span
+                      v-if="k.drop > 0"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-medium"
+                      :style="{ background: 'rgba(216,90,72,0.12)', color: 'var(--red, #d85a48)' }"
+                    >↓ {{ k.drop }}</span>
+                    <span
+                      v-else-if="k.placedCountPrev === null"
+                      class="text-[11px]"
+                      :style="{ color: 'var(--ink-3)' }"
+                    >首次</span>
+                    <span
+                      v-else
+                      class="text-[11px]"
+                      :style="{ color: 'var(--ink-3)' }"
+                    >持平</span>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-else
+                class="py-3 text-[12px]"
+                :style="{ color: 'var(--ink-3)' }"
+              >没有卡位为 0 的关键词 —— 所有关键词都有命中。</div>
+            </template>
+          </template>
+
         </div>
 
         <!-- footer -->
@@ -510,6 +707,14 @@ const eyebrow = computed(() => {
               </template>
               <template v-else>
                 全部评论留存中
+              </template>
+            </template>
+            <template v-else-if="kind === 'baidu_alert' && baiduData">
+              <template v-if="baiduData.missingCurrent > 0">
+                建议：为 {{ baiduData.missingCurrent }} 个未达理想的关键词补一篇软文
+              </template>
+              <template v-else>
+                全部关键词已达理想卡位
               </template>
             </template>
           </div>

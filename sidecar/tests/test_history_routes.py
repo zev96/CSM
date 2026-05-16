@@ -223,3 +223,125 @@ def test_zhihu_kpis_aggregate_across_questions(client: TestClient, monitor_db: P
     assert k["changed_questions"] == 2
     assert k["changed_down"] == 1
     assert k["changed_up"] == 1  # "new" 也算 up 类（新增命中）
+
+
+# ── Baidu keyword history ──────────────────────────────────────────────────
+
+def _seed_baidu_task(client: TestClient, **overrides) -> int:
+    body = {
+        "type": "baidu_keyword",
+        "name": "测试关键词",
+        "target_url": "https://www.baidu.com/s?wd=kw1",
+        "config": {
+            "search_keywords": ["kw1"],
+            "target_brand": "拾梧",
+        },
+        "schedule_cron": "manual",
+        "enabled": True,
+    }
+    body.update(overrides)
+    resp = client.post("/api/monitor/tasks", json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def _seed_baidu_result(
+    task_id: int,
+    *,
+    checked_at: datetime,
+    matched_count: int,
+    best_rank: int = -1,
+    captcha_hit: bool = False,
+    news_present: bool = False,
+    keyword: str = "kw1",
+):
+    """Insert a baidu_keyword MonitorResult with the new metric shape."""
+    default_results = []
+    for i in range(1, 11):
+        default_results.append({
+            "rank": i,
+            "matches_brand": i <= matched_count,
+        })
+    kw_entry = {
+        "keyword": keyword,
+        "serp_url": f"https://www.baidu.com/s?wd={keyword}",
+        "default_results": default_results,
+        "news_results": [],
+        "default_matched_count": matched_count,
+        "default_first_rank": best_rank,
+        "news_first_rank": -1,
+        "news_present": news_present,
+        "fetch_error": None,
+    }
+    storage.save_result(MonitorResult(
+        task_id=task_id,
+        checked_at=checked_at,
+        status="ok",
+        rank=best_rank if matched_count > 0 else -1,
+        metric={
+            "target_brand": "拾梧",
+            "search_keywords": [keyword],
+            "engine": "patchright",
+            "headless": True,
+            "captcha_hit": captcha_hit,
+            "keywords": [kw_entry],
+            "total_keywords": 1,
+            "matched_keywords": 1 if matched_count > 0 else 0,
+            "total_default_matches": matched_count,
+            "best_default_first_rank": best_rank,
+        },
+        error_message="",
+    ))
+
+
+def test_baidu_keyword_history_empty_db(client: TestClient, monitor_db: Path):
+    """空 DB 返回 200，monitored_keywords=0，keywords=[]。"""
+    resp = client.get("/api/monitor/history/baidu-keyword?range=7d")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["range"] == "7d"
+    assert body["kpis"]["monitored_keywords"] == 0
+    assert body["keywords"] == []
+    assert len(body["daily_series"]) == 7
+    assert all(d["avg_match_rate"] == 0.0 for d in body["daily_series"])
+
+
+def test_baidu_keyword_history_change_kind_new(client: TestClient, monitor_db: Path):
+    """无命中 → 有命中 → change_kind=new。"""
+    tid = _seed_baidu_task(
+        client,
+        config={"search_keywords": ["kw1"], "target_brand": "BrandA"},
+        target_url="https://www.baidu.com/s?wd=kw1",
+    )
+    now = datetime.now()
+    _seed_baidu_result(tid, checked_at=now - timedelta(hours=2), matched_count=0, keyword="kw1")
+    _seed_baidu_result(tid, checked_at=now, matched_count=3, best_rank=2, keyword="kw1")
+    resp = client.get("/api/monitor/history/baidu-keyword?range=7d")
+    assert resp.status_code == 200
+    body = resp.json()
+    # One row per (task, keyword) — task has 1 keyword → 1 row
+    kw = next(k for k in body["keywords"] if k["task_id"] == tid)
+    assert kw["change_kind"] == "new"
+    assert kw["matched_count"] == 3
+    assert kw["best_rank"] == 2
+    assert kw["search_keyword"] == "kw1"
+    assert body["kpis"]["monitored_keywords"] == 1
+    assert body["kpis"]["changed_up"] == 1
+
+
+def test_baidu_keyword_history_captcha_and_news_flags(client: TestClient, monitor_db: Path):
+    """captcha_hit=True / news_present=True 在 KPI 里被统计到。"""
+    tid = _seed_baidu_task(client)
+    now = datetime.now()
+    _seed_baidu_result(tid, checked_at=now, matched_count=2, best_rank=1,
+                       captcha_hit=True, news_present=True)
+    resp = client.get("/api/monitor/history/baidu-keyword?range=7d")
+    k = resp.json()["kpis"]
+    assert k["captcha_count"] == 1
+    assert k["news_present_count"] == 1
+
+
+def test_baidu_keyword_history_invalid_range_400(client: TestClient, monitor_db: Path):
+    resp = client.get("/api/monitor/history/baidu-keyword?range=2d")
+    assert resp.status_code == 400
+    assert "range" in resp.json()["detail"]

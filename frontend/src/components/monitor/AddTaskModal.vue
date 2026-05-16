@@ -29,7 +29,7 @@ import FormToggle from "@/components/forms/FormToggle.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
 
-type TaskType = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment";
+type TaskType = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
 
 interface EditingTask {
   id: number;
@@ -62,17 +62,27 @@ const TYPES = [
   { value: "bilibili_comment", label: "B 站评论留存" },
   { value: "douyin_comment", label: "抖音评论留存" },
   { value: "kuaishou_comment", label: "快手评论留存" },
+  { value: "baidu_keyword", label: "百度关键词排名" },
 ] as const;
 
 const type = ref<TaskType>("zhihu_question");
 const name = ref("");
 const targetUrl = ref("");
-// Zhihu-specific
+// Zhihu-specific / Baidu target brand (single word)
 const targetBrand = ref("");
 // Comment-specific
 const myCommentText = ref("");
 // Shared —— 默认 5；watch(type) 时知乎切到 10（zhihu_question 的合理起点）
 const topN = ref(5);
+// Baidu-specific
+const searchKeywordsRaw = ref(""); // newline-separated string; split to list on submit
+const baiduHeadless = ref(true);
+const baiduIdealRank = ref<number>(5);
+// 排除域名：换行/逗号分隔，提交时拆成 list。默认空表示「只走全局
+// B2B/电商黑名单」（由 settings.monitor.baidu_keyword.default_excluded_domains 提供）。
+// 用户在这里加自家品牌官网 / 其他不算"软文"的域名即可。
+const baiduExcludeDomainsRaw = ref("");
+const baiduUseDefaultExcludes = ref(true);
 // Schedule
 const scheduleMode = ref<"manual" | "daily">("manual");
 const dailyTime = ref("09:00");
@@ -80,7 +90,10 @@ const enabled = ref(true);
 
 const submitting = ref(false);
 
-const isComment = computed(() => type.value !== "zhihu_question");
+const isComment = computed(() =>
+  type.value !== "zhihu_question" && type.value !== "baidu_keyword"
+);
+const isBaidu = computed(() => type.value === "baidu_keyword");
 const isEdit = computed(() => !!props.editingTask);
 
 function close() {
@@ -91,6 +104,12 @@ function close() {
   targetBrand.value = "";
   myCommentText.value = "";
   topN.value = type.value === "zhihu_question" ? 10 : 5;
+  searchKeywordsRaw.value = "";
+  targetBrand.value = "";
+  baiduHeadless.value = true;
+  baiduIdealRank.value = 5;
+  baiduExcludeDomainsRaw.value = "";
+  baiduUseDefaultExcludes.value = true;
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
   enabled.value = true;
@@ -119,6 +138,14 @@ function hydrateFromTask(t: EditingTask) {
   targetBrand.value = String(cfg.target_brand ?? "");
   myCommentText.value = String(cfg.my_comment_text ?? "");
   topN.value = Number(cfg.top_n) || 5;
+  // Baidu-specific hydration (inverted model: search_keywords list + target_brand single word)
+  const keywords: string[] = Array.isArray(cfg.search_keywords) ? cfg.search_keywords : [];
+  searchKeywordsRaw.value = keywords.join("\n");
+  baiduHeadless.value = cfg.headless !== false; // default true
+  baiduIdealRank.value = Number(cfg.ideal_rank ?? 5);
+  const exDomains: string[] = Array.isArray(cfg.exclude_domains) ? cfg.exclude_domains : [];
+  baiduExcludeDomainsRaw.value = exDomains.join("\n");
+  baiduUseDefaultExcludes.value = cfg.use_default_excludes !== false;
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
   } else if (/^\d{1,2}:\d{2}$/.test(t.schedule_cron)) {
@@ -157,19 +184,26 @@ watch(
 
 function validate(): string | null {
   if (!name.value.trim()) return "任务名不能为空";
-  if (!targetUrl.value.trim()) return "目标 URL 不能为空";
-  if (isComment.value && !myCommentText.value.trim()) {
-    return "评论留存监测必须填写自己发布的评论文本";
-  }
-  // 评论场景不要求 target_brand（UI 里也不暴露）；知乎必填。
-  if (!isComment.value && !targetBrand.value.trim()) {
-    return "知乎监测必须填写目标品牌关键词";
-  }
-  // 知乎 Top-N 上限 40（后端 silent clamp，UI 多卡一道避免用户写 100 再奇怪）；
-  // 评论"理想排名"软上限 100。
-  const topNMax = isComment.value ? 100 : 40;
-  if (topN.value < 1 || topN.value > topNMax) {
-    return `Top-N 阈值应在 1–${topNMax} 之间`;
+  // 百度分支：target_url 由 search_keyword 派生，不需要用户填 URL
+  if (!isBaidu.value && !targetUrl.value.trim()) return "目标 URL 不能为空";
+  if (isBaidu.value) {
+    const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
+    if (keywords.length === 0) return "搜索关键词至少填一个";
+    if (!targetBrand.value.trim()) return "目标品牌词不能为空";
+  } else {
+    if (isComment.value && !myCommentText.value.trim()) {
+      return "评论留存监测必须填写自己发布的评论文本";
+    }
+    // 评论场景不要求 target_brand（UI 里也不暴露）；知乎必填。
+    if (!isComment.value && !targetBrand.value.trim()) {
+      return "知乎监测必须填写目标品牌关键词";
+    }
+    // 知乎 Top-N 上限 40（后端 silent clamp，UI 多卡一道避免用户写 100 再奇怪）；
+    // 评论"理想排名"软上限 100。
+    const topNMax = isComment.value ? 100 : 40;
+    if (topN.value < 1 || topN.value > topNMax) {
+      return `Top-N 阈值应在 1–${topNMax} 之间`;
+    }
   }
   if (scheduleMode.value === "daily" && !/^\d{1,2}:\d{2}$/.test(dailyTime.value)) {
     return "时间格式应为 HH:MM";
@@ -188,16 +222,39 @@ async function submit() {
     // 评论场景 config 只带 my_comment_text + top_n —— 用户决定不引入
     // 品牌词，避免无用字段误导（评论匹配走 `my_comment_text` 相似度，
     // 跟品牌词无关）。target_brand 仅知乎走，那条命令链路用得上。
-    const config: Record<string, any> = isComment.value
-      ? {
-          my_comment_text: myCommentText.value.trim(),
-          top_n: topN.value,
-        }
-      : { target_brand: targetBrand.value.trim(), top_n: topN.value };
+    let config: Record<string, any>;
+    let computedTargetUrl = targetUrl.value.trim();
+    if (isBaidu.value) {
+      const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
+      // 排除域名解析：换行 / 逗号 / 空格 / 顿号都拆开；剥掉协议头 +
+      // 末尾斜杠。后端 adapter 用 hostsuffix 匹配，所以 "https://www.jd.com/"
+      // 和 "jd.com" 都最终能命中 jd.com 这个 pattern。
+      const excludeDomains = baiduExcludeDomainsRaw.value
+        .split(/[\n,，、\s]+/)
+        .map((s) => s.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase())
+        .filter(Boolean);
+      config = {
+        search_keywords: keywords,
+        target_brand: targetBrand.value.trim(),
+        headless: baiduHeadless.value,
+        ideal_rank: baiduIdealRank.value,
+        exclude_domains: excludeDomains,
+        use_default_excludes: baiduUseDefaultExcludes.value,
+      };
+      // target_url 由第一个 search_keyword 派生 —— 后端要求非空
+      computedTargetUrl = "https://www.baidu.com/s?wd=" + encodeURIComponent(keywords[0]);
+    } else if (isComment.value) {
+      config = {
+        my_comment_text: myCommentText.value.trim(),
+        top_n: topN.value,
+      };
+    } else {
+      config = { target_brand: targetBrand.value.trim(), top_n: topN.value };
+    }
     const body = {
       type: type.value,
       name: name.value.trim(),
-      target_url: targetUrl.value.trim(),
+      target_url: computedTargetUrl,
       config,
       schedule_cron:
         scheduleMode.value === "manual" ? "manual" : dailyTime.value,
@@ -231,11 +288,22 @@ async function submit() {
       class="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
       @click.self="close"
     >
+      <!--
+        Layout: header (pinned) + body (scrolls) + footer (pinned).
+        outer `overflow-hidden` 把 body 的 scrollbar 限制在圆角矩形内
+        ——之前把 max-h + overflow-y-auto 直接挂在外层，浏览器渲染滚动条
+        时会伸到圆角外，「右边的下拉条超出界面本身」就是这个问题。
+      -->
       <div
-        class="anim-up bg-bg-inner max-h-[90vh] overflow-y-auto p-6"
-        :style="{ width: '480px', maxWidth: '92vw', borderRadius: 'var(--radius-card)' }"
+        class="anim-up bg-bg-inner flex flex-col overflow-hidden"
+        :style="{
+          width: '480px',
+          maxWidth: '92vw',
+          maxHeight: '90vh',
+          borderRadius: 'var(--radius-card)',
+        }"
       >
-        <div class="mb-4 flex items-center justify-between">
+        <div class="flex flex-shrink-0 items-center justify-between" :style="{ padding: '24px 24px 12px' }">
           <div class="font-display text-[16px] font-semibold">
             {{ isEdit ? "编辑监测任务" : "新增监测任务" }}
           </div>
@@ -244,7 +312,7 @@ async function submit() {
           </button>
         </div>
 
-        <div class="flex flex-col gap-4">
+        <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto" :style="{ padding: '4px 24px' }">
           <FormField label="平台">
             <!--
               编辑模式下平台改不了 —— task.type 决定后端 adapter 路由，
@@ -271,17 +339,19 @@ async function submit() {
           </FormField>
 
           <FormField
-            :label="isComment ? '任务名' : '问题名字'"
-            :hint="isComment ? '出现在监测列表里。' : '抓取到的知乎问题标题，会显示在监测任务列表的第一列。'"
+            :label="isBaidu ? '任务名' : isComment ? '任务名' : '问题名字'"
+            :hint="isBaidu ? '出现在监测列表里。' : isComment ? '出现在监测列表里。' : '抓取到的知乎问题标题，会显示在监测任务列表的第一列。'"
           >
             <FormInput
               v-model="name"
-              :placeholder="isComment ? '如：客厅投影实测视频留存' : '如：无线吸尘器哪款好用'"
+              :placeholder="isBaidu ? '如：Claude Code 排名监测' : isComment ? '如：客厅投影实测视频留存' : '如：无线吸尘器哪款好用'"
               debounce="live"
             />
           </FormField>
 
+          <!-- 百度分支：target_url 由 search_keyword 派生，不暴露 URL 输入框 -->
           <FormField
+            v-if="!isBaidu"
             label="目标 URL"
             :hint="
               isEdit
@@ -298,6 +368,108 @@ async function submit() {
               :disabled="isEdit"
             />
           </FormField>
+
+          <!-- 百度关键词排名：专属字段 -->
+          <template v-if="isBaidu">
+            <FormField label="搜索关键词" hint="一行一个，每个关键词单独搜一次">
+              <textarea
+                v-model="searchKeywordsRaw"
+                rows="4"
+                placeholder="如：&#10;Claude Code 教程&#10;Claude Code 怎么用&#10;Anthropic Claude"
+                :style="{
+                  width: '100%',
+                  resize: 'vertical',
+                  padding: '6px 10px',
+                  fontSize: '12.5px',
+                  fontFamily: 'inherit',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 'var(--radius-inner)',
+                  color: 'var(--ink)',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }"
+              />
+            </FormField>
+
+            <FormField label="目标品牌词" hint="命中关键词的搜索结果就标「自家」">
+              <FormInput
+                v-model="targetBrand"
+                placeholder="如：Claude Code"
+                debounce="live"
+              />
+            </FormField>
+
+            <FormField
+              label="理想卡位（数量）"
+              hint="该关键词下目标品牌软文的理想卡位总数 ＝ 默认搜索卡位 ＋ 最新资讯卡位（若有）"
+              inline
+            >
+              <FormInput
+                type="number"
+                :model-value="baiduIdealRank"
+                :width="100"
+                @commit="(v) => (baiduIdealRank = Math.min(50, Math.max(1, Number(v) || 5)))"
+              />
+            </FormField>
+
+            <details>
+              <summary
+                :style="{
+                  cursor: 'pointer',
+                  fontSize: '12.5px',
+                  color: 'var(--ink-2)',
+                  userSelect: 'none',
+                }"
+              >高级</summary>
+              <div class="mt-2 flex flex-col gap-3">
+                <FormField
+                  label="默认尝试隐藏窗口"
+                  hint="开启后窗口会被推到屏外（offscreen + 最小化），用户视觉上看不见。命中验证码会自动升级到可见窗口让你手动过验证。"
+                  inline
+                >
+                  <FormToggle v-model="baiduHeadless" />
+                </FormField>
+
+                <!--
+                  Baidu SERP 常混进 jd / 1688 / taobao / 自家品牌官网，这些
+                  即便品牌词命中也不是"软文卡位"。开启全局黑名单 + 手动加
+                  自家域名即可在 SERP 解析后清干净再编号 rank。
+                -->
+                <FormField
+                  label="启用默认电商/B2B 黑名单"
+                  hint="默认过滤 jd / 1688 / taobao / pinduoduo 等采购与电商站点（这些命中目标品牌也不是软文）。如果你确实要监测这些站，关掉。"
+                  inline
+                >
+                  <FormToggle v-model="baiduUseDefaultExcludes" />
+                </FormField>
+
+                <FormField
+                  label="自定义排除域名"
+                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。"
+                >
+                  <textarea
+                    v-model="baiduExcludeDomainsRaw"
+                    rows="3"
+                    placeholder="cewey.com&#10;example.com"
+                    :style="{
+                      width: '100%',
+                      resize: 'vertical',
+                      padding: '6px 10px',
+                      fontSize: '12.5px',
+                      fontFamily: 'inherit',
+                      background: 'var(--card-2)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 'var(--radius-inner)',
+                      color: 'var(--ink)',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }"
+                  />
+                </FormField>
+              </div>
+            </details>
+          </template>
 
           <FormField
             v-if="isComment"
@@ -318,7 +490,7 @@ async function submit() {
             放这里只会让用户多填一个无用字段；评论场景下整段隐藏。
           -->
           <FormField
-            v-if="!isComment"
+            v-if="!isComment && !isBaidu"
             label="目标品牌关键词"
             hint="在知乎答案排序里要追的品牌关键词"
           >
@@ -330,6 +502,7 @@ async function submit() {
           </FormField>
 
           <FormField
+            v-if="!isBaidu"
             :label="isComment ? '理想排名（前 N 位）' : 'Top-N（监测前 N 条答案）'"
             :hint="
               isComment
@@ -372,7 +545,8 @@ async function submit() {
           </FormField>
         </div>
 
-        <div class="mt-6 flex justify-end gap-2">
+        <!-- Footer pinned at bottom; sits outside the scrollable body. -->
+        <div class="flex flex-shrink-0 justify-end gap-2" :style="{ padding: '12px 24px 24px', borderTop: '1px solid var(--line)' }">
           <Btn variant="ghost" small @click="close">取消</Btn>
           <Btn variant="solid" small :disabled="submitting" @click="submit">
             <Spinner v-if="submitting" :size="12" />

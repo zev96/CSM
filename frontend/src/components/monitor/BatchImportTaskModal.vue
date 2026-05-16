@@ -35,7 +35,7 @@ import Spinner from "@/components/ui/Spinner.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
 
-type Platform = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment";
+type Platform = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
 
 const props = defineProps<{
   open: boolean;
@@ -54,6 +54,7 @@ const TYPES: Array<{ value: Platform; label: string }> = [
   { value: "bilibili_comment", label: "B 站评论留存" },
   { value: "douyin_comment", label: "抖音评论留存" },
   { value: "kuaishou_comment", label: "快手评论留存" },
+  { value: "baidu_keyword", label: "百度关键词排名" },
 ];
 
 const platform = ref<Platform>("zhihu_question");
@@ -64,14 +65,20 @@ const dailyTime = ref("09:00");
 const enabled = ref(true);
 // 评论场景下整批共用的任务名（"戴森评论监测"之类）。每行最终的 task.name
 // 会派生成 `${batchName} - <video id 尾段>`，方便在监测中心列表里区分。
+// 百度场景也复用这个字段：整批的 N 个关键词合成一个任务，batchName 直接做 task.name。
 const batchName = ref("");
+// 百度场景独有：整批共用的目标品牌词（一个 baidu_keyword 任务必带一个 brand）。
+const targetBrand = ref("");
 // 二进制（xlsx / 图片）误传时记下的错误，给 UI 显示一条明确提示。
 const importError = ref<string | null>(null);
 
 const submitting = ref(false);
 const progress = ref({ done: 0, total: 0 });
 
-const isComment = computed(() => platform.value !== "zhihu_question");
+const isComment = computed(() =>
+  platform.value !== "zhihu_question" && platform.value !== "baidu_keyword"
+);
+const isBaidu = computed(() => platform.value === "baidu_keyword");
 
 watch(
   () => props.open,
@@ -210,6 +217,28 @@ const rows = computed<ParsedRow[]>(() => {
     if (i === 0 && /任务名|name|url|关键词|品牌|评论|链接|视频/i.test(line) && !URL_RE.test(line)) {
       continue;
     }
+
+    // 百度分支：每行就是一个搜索关键词，无 URL / 无品牌 / 无 Top-N。
+    // 整批共用一个 task（任务名 / 目标品牌 / 理想卡位）—— 见 submitAll。
+    // ParsedRow 字段在这里被「复用」表达 keyword：
+    //   - name = 关键词文本（也直接作为预览行标签）
+    //   - url  = 留空（baidu 不需要逐行 URL；后端建任务时由第一个关键词派生 SERP URL）
+    //   - brandOrComment = 留空（品牌词来自模态全局字段 targetBrand）
+    //   - topN = 留空意义；submit 时统一从 topN ref 取（=理想卡位）
+    if (isBaidu.value) {
+      const kw = line.trim();
+      const row: ParsedRow = {
+        name: kw,
+        url: "",
+        brandOrComment: "",
+        topN: topN.value,
+        line: i + 1,
+      };
+      if (!kw) row.error = "空行";
+      out.push(row);
+      continue;
+    }
+
     // 按 TAB/逗号切完后再就地清洗每个字段里的 URL：
     //   - 已经是 URL 的字段做一次 normalize（剥 B 站追踪参数）
     //   - 整行没有字段以 http 开头时，会扫一遍把内嵌 URL 抽出来，覆盖
@@ -294,6 +323,7 @@ function close() {
   rawText.value = "";
   importError.value = null;
   batchName.value = "";
+  targetBrand.value = "";
   progress.value = { done: 0, total: 0 };
 }
 
@@ -424,7 +454,15 @@ async function onFile(e: Event) {
 
 function loadExample() {
   importError.value = null;
-  if (isComment.value) {
+  if (isBaidu.value) {
+    // 百度：一列多行关键词。任务名 + 目标品牌 + 理想卡位由模态填。
+    rawText.value = [
+      "家用吸尘器哪款好用",
+      "无线吸尘器推荐",
+      "宠物吸尘器哪个牌子好",
+      "口碑最好的吸尘器",
+    ].join("\n");
+  } else if (isComment.value) {
     // 2 列：视频 URL + 评论原文。任务名 + Top-N 由模态填。
     rawText.value = [
       "https://www.bilibili.com/video/BV1xx411c7AB\t我家这台投影仪用了半年的真实感受...",
@@ -459,6 +497,51 @@ async function submitAll() {
     toast.warn("没有可提交的行");
     return;
   }
+  // 百度分支：N 个关键词 → 1 个任务（不是 N 个）。校验任务名 + 品牌后单次 POST。
+  if (isBaidu.value) {
+    const taskName = batchName.value.trim();
+    const brand = targetBrand.value.trim();
+    if (!taskName) {
+      toast.warn("百度批量导入必须填写「任务名」");
+      return;
+    }
+    if (!brand) {
+      toast.warn("百度批量导入必须填写「目标品牌词」");
+      return;
+    }
+    const keywords = validRows.value.map((r) => r.name);
+    submitting.value = true;
+    progress.value = { done: 0, total: 1 };
+    try {
+      const body = {
+        type: "baidu_keyword" as Platform,
+        name: taskName,
+        // baidu adapter 不需要逐行 URL —— 由第一个关键词派生 SERP URL。
+        target_url: `https://www.baidu.com/s?wd=${encodeURIComponent(keywords[0])}`,
+        config: {
+          search_keywords: keywords,
+          target_brand: brand,
+          ideal_rank: topN.value,
+          headless: true,
+        },
+        schedule_cron: scheduleMode.value === "manual" ? "manual" : dailyTime.value,
+        enabled: enabled.value,
+      };
+      await sidecar.client.post("/api/monitor/tasks", body);
+      progress.value.done = 1;
+      toast.success(`已批量导入 ${keywords.length} 个关键词到任务「${taskName}」`);
+      emit("imported", 1);
+      close();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail ?? e?.message ?? e;
+      toast.error(`批量导入失败：${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+    } finally {
+      submitting.value = false;
+    }
+    return;
+  }
+
+  // 其它平台：保持 N 行 → N 任务原语义。
   submitting.value = true;
   progress.value = { done: 0, total: validRows.value.length };
   let okCount = 0;
@@ -579,8 +662,11 @@ async function submitAll() {
             </select>
           </div>
 
-          <!-- 任务名（评论场景才需要，整批共用一个名字） -->
-          <div v-if="isComment" class="flex items-center gap-2">
+          <!--
+            任务名 —— 评论场景每行任务名 = `${batchName} - <video id>`，
+            百度场景整批就是一个任务，任务名直接用 batchName。
+          -->
+          <div v-if="isComment || isBaidu" class="flex items-center gap-2">
             <label
               class="text-[12px] font-medium"
               :style="{ color: 'var(--ink-2)', minWidth: '60px' }"
@@ -588,7 +674,30 @@ async function submitAll() {
             <input
               v-model="batchName"
               type="text"
-              placeholder="如：戴森评论监测（每条视频会自动加上视频 ID 后缀）"
+              :placeholder="isBaidu ? '如：0515-吸尘器关键词组' : '如：戴森评论监测（每条视频会自动加上视频 ID 后缀）'"
+              :style="{
+                flex: 1,
+                height: '34px',
+                background: 'var(--card)',
+                border: '1px solid var(--line)',
+                borderRadius: '8px',
+                padding: '0 12px',
+                fontSize: '12.5px',
+                color: 'var(--ink)',
+              }"
+            >
+          </div>
+
+          <!-- 目标品牌（仅百度） —— 整批共用一个品牌词 -->
+          <div v-if="isBaidu" class="flex items-center gap-2">
+            <label
+              class="text-[12px] font-medium"
+              :style="{ color: 'var(--ink-2)', minWidth: '60px' }"
+            >目标品牌</label>
+            <input
+              v-model="targetBrand"
+              type="text"
+              placeholder="如：CEWEY（一个品牌词，命中该词的搜索结果会标「自家」）"
               :style="{
                 flex: 1,
                 height: '34px',
@@ -620,6 +729,10 @@ async function submitAll() {
                 视频 URL ⇥
                 <span :style="{ color: 'var(--primary-deep)' }">评论原文</span>
               </template>
+              <template v-else-if="isBaidu">
+                <span :style="{ color: 'var(--primary-deep)' }">关键词</span>
+                <span class="ml-2" :style="{ color: 'var(--ink-3)' }">（一列多行，每行一个关键词）</span>
+              </template>
               <template v-else>
                 问题名字 ⇥ 目标 URL ⇥
                 <span :style="{ color: 'var(--primary-deep)' }">目标品牌</span>
@@ -629,6 +742,10 @@ async function submitAll() {
             <div class="mt-1.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
               <template v-if="isComment">
                 只两列：视频链接 + 评论原文。任务名 / Top-N 在上方填一次即可应用到整批。支持 .xlsx / .csv 上传，也支持把抖音/B站「复制链接」整段分享文案直接粘进来（URL 会自动识别）。
+              </template>
+              <template v-else-if="isBaidu">
+                只一列：每行一个搜索关键词。<strong>整批关键词会合并到 1 个任务里</strong>（不是 N 个任务）——
+                任务名、目标品牌、理想卡位均在上方一次性填写。支持 Excel 复制粘贴 / .xlsx / .csv 上传。
               </template>
               <template v-else>
                 支持从 Excel 复制粘贴（TAB 分隔）、上传 .xlsx / .csv；只粘 URL 也行，任务名会从 URL 自动派生。
@@ -697,7 +814,11 @@ async function submitAll() {
           <textarea
             v-model="rawText"
             spellcheck="false"
-            placeholder="无线吸尘器哪款好用&#9;https://www.zhihu.com/question/12345&#9;戴森&#9;5"
+            :placeholder="isBaidu
+              ? '家用吸尘器哪款好用\n无线吸尘器推荐\n宠物吸尘器哪个牌子好'
+              : isComment
+                ? 'https://www.bilibili.com/video/BV1xx&#9;我家这台投影仪用了半年的真实感受...'
+                : '无线吸尘器哪款好用\t https://www.zhihu.com/question/12345\t 戴森\t 5'"
             :style="{
               width: '100%',
               minHeight: '180px',
@@ -726,7 +847,27 @@ async function submitAll() {
                 overflow: 'hidden',
               }"
             >
+              <!--
+                百度只两列（#/关键词/状态）；其它平台保留原来的 6 列。
+                把 gridTemplateColumns 绑成 computed 太碎，这里直接用三元。
+              -->
               <div
+                v-if="isBaidu"
+                class="grid items-center text-[11px] uppercase"
+                :style="{
+                  gridTemplateColumns: '40px 1fr 80px',
+                  background: 'var(--card-2)',
+                  padding: '8px 12px',
+                  letterSpacing: '1px',
+                  color: 'var(--ink-3)',
+                }"
+              >
+                <div>#</div>
+                <div>关键词</div>
+                <div>状态</div>
+              </div>
+              <div
+                v-else
                 class="grid items-center text-[11px] uppercase"
                 :style="{
                   gridTemplateColumns: '40px 1.6fr 1.4fr 1fr 60px 80px',
@@ -744,49 +885,91 @@ async function submitAll() {
                 <div>状态</div>
               </div>
               <div :style="{ maxHeight: '200px', overflowY: 'auto' }">
-                <div
-                  v-for="r in rows"
-                  :key="r.line"
-                  class="grid items-center text-[12px]"
-                  :style="{
-                    gridTemplateColumns: '40px 1.6fr 1.4fr 1fr 60px 80px',
-                    padding: '8px 12px',
-                    borderTop: '1px solid var(--line)',
-                    background: r.error ? 'rgba(216,90,72,0.06)' : 'transparent',
-                  }"
-                >
-                  <div :style="{ color: 'var(--ink-3)' }">{{ r.line }}</div>
-                  <div class="truncate">{{ r.name || "—" }}</div>
-                  <div class="truncate font-mono text-[11px]" :style="{ color: 'var(--ink-2)' }">
-                    {{ r.url || "—" }}
+                <!-- 百度预览：只有关键词列 -->
+                <template v-if="isBaidu">
+                  <div
+                    v-for="r in rows"
+                    :key="r.line"
+                    class="grid items-center text-[12px]"
+                    :style="{
+                      gridTemplateColumns: '40px 1fr 80px',
+                      padding: '8px 12px',
+                      borderTop: '1px solid var(--line)',
+                      background: r.error ? 'rgba(216,90,72,0.06)' : 'transparent',
+                    }"
+                  >
+                    <div :style="{ color: 'var(--ink-3)' }">{{ r.line }}</div>
+                    <div class="truncate">{{ r.name || "—" }}</div>
+                    <div>
+                      <span
+                        v-if="r.error"
+                        class="text-[10.5px]"
+                        :style="{ color: 'var(--red, #d85a48)' }"
+                      >{{ r.error }}</span>
+                      <span
+                        v-else
+                        class="text-[10.5px]"
+                        :style="{ color: 'var(--green, #6c9b5d)' }"
+                      >就绪</span>
+                    </div>
                   </div>
-                  <div class="truncate" :style="{ color: 'var(--ink-2)' }">
-                    {{ r.brandOrComment || "—" }}
+                </template>
+                <template v-else>
+                  <div
+                    v-for="r in rows"
+                    :key="r.line"
+                    class="grid items-center text-[12px]"
+                    :style="{
+                      gridTemplateColumns: '40px 1.6fr 1.4fr 1fr 60px 80px',
+                      padding: '8px 12px',
+                      borderTop: '1px solid var(--line)',
+                      background: r.error ? 'rgba(216,90,72,0.06)' : 'transparent',
+                    }"
+                  >
+                    <div :style="{ color: 'var(--ink-3)' }">{{ r.line }}</div>
+                    <div class="truncate">{{ r.name || "—" }}</div>
+                    <div class="truncate font-mono text-[11px]" :style="{ color: 'var(--ink-2)' }">
+                      {{ r.url || "—" }}
+                    </div>
+                    <div class="truncate" :style="{ color: 'var(--ink-2)' }">
+                      {{ r.brandOrComment || "—" }}
+                    </div>
+                    <div class="font-mono text-[11px]">{{ r.topN }}</div>
+                    <div>
+                      <span
+                        v-if="r.error"
+                        class="text-[10.5px]"
+                        :style="{ color: 'var(--red, #d85a48)' }"
+                      >{{ r.error }}</span>
+                      <span
+                        v-else
+                        class="text-[10.5px]"
+                        :style="{ color: 'var(--green, #6c9b5d)' }"
+                      >就绪</span>
+                    </div>
                   </div>
-                  <div class="font-mono text-[11px]">{{ r.topN }}</div>
-                  <div>
-                    <span
-                      v-if="r.error"
-                      class="text-[10.5px]"
-                      :style="{ color: 'var(--red, #d85a48)' }"
-                    >{{ r.error }}</span>
-                    <span
-                      v-else
-                      class="text-[10.5px]"
-                      :style="{ color: 'var(--green, #6c9b5d)' }"
-                    >就绪</span>
-                  </div>
-                </div>
+                </template>
               </div>
             </div>
           </div>
 
-          <!-- 默认理想排名 + 计划 -->
+          <!--
+            底部数字字段语义随平台变：
+              - 评论：理想排名（前 N 位）
+              - 百度：理想卡位（数量）—— 与 AddTaskModal 完全一致
+              - 知乎：默认 Top-N
+          -->
           <div class="grid grid-cols-2 gap-4">
             <div>
               <div class="mb-1 text-[12px] font-medium" :style="{ color: 'var(--ink-2)' }">
-                <span :title="isComment ? '希望评论排在前几位（默认 5）。后台始终扫描前 150 条，能看到真实位置。' : 'Top-N 阈值'">
-                  {{ isComment ? '理想排名（前 N 位）' : '默认 Top-N' }}
+                <span
+                  :title="isBaidu
+                    ? '该任务下目标品牌软文的理想卡位总数 ＝ 默认搜索卡位 ＋ 最新资讯卡位（若有）'
+                    : isComment
+                      ? '希望评论排在前几位（默认 5）。后台始终扫描前 150 条，能看到真实位置。'
+                      : 'Top-N 阈值'"
+                >
+                  {{ isBaidu ? '理想卡位（数量）' : isComment ? '理想排名（前 N 位）' : '默认 Top-N' }}
                 </span>
               </div>
               <input

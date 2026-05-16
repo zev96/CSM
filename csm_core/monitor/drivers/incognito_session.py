@@ -65,15 +65,38 @@ def incognito_session(*, headless: bool) -> Iterator[IncognitoSession]:
     context = None
     try:
         pw = _sync_playwright().start()
+
+        # ── Launch flags ────────────────────────────────────────────────
+        # 1) 关图片加载：百度 SERP 抓取只需要 HTML/标题/URL，缩略图、Logo、
+        #    资讯卡片图都用不到。`--blink-settings=imagesEnabled=false` 让
+        #    Blink 引擎层直接跳过 image request —— 单次 fetch 能省 1-3s 网
+        #    络时间，对一个 task 跑多个 SERP 的场景累计很可观。
+        # 2) 「假隐藏」窗口（headless=True 时）：patchright 的 stealth fork
+        #    不能真正 honor playwright `headless=True` —— 部分环境下 Chromium
+        #    会照样弹窗（stealth 需要真实 GPU 上下文）。我们改成 headed +
+        #    `--window-position=-32000,-32000` + `--start-minimized`，让窗
+        #    口在虚拟桌面外，用户视觉上完全察觉不到。验证码升级时（外部
+        #    传 `headless=False`）才用正常坐标，让用户能看到 / 滑滑块。
+        launch_args: list[str] = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--window-size=1366,768",
+            "--blink-settings=imagesEnabled=false",
+        ]
+        effective_headless = headless
+        if headless:
+            # 始终以 headed 启动（stealth 才能工作），位置推到屏外。
+            launch_args.extend([
+                "--window-position=-32000,-32000",
+                "--start-minimized",
+            ])
+            effective_headless = False
+
         # 真正的「无痕」: launch() 默认每次新建临时 profile dir，并在 close()
         # 时删除。比 launch_persistent_context 简单得多。
         browser = pw.chromium.launch(
-            headless=headless,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--window-size=1366,768",
-            ],
+            headless=effective_headless,
+            args=launch_args,
         )
         # new_context 真正给我们一个无痕上下文 —— cookie/storage 不会落盘。
         context = browser.new_context(
