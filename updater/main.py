@@ -79,6 +79,36 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _taskkill_csm_processes() -> None:
+    """Defensive kill of any leftover csm-sidecar.exe / csm-tauri.exe.
+
+    Tauri's sidecar lifecycle doesn't reliably propagate close to the child
+    csm-sidecar.exe when the main process exits — sidecar then keeps a lock
+    on ``<install>/csm-sidecar.exe`` (and on data-dir files), which makes the
+    rename in ``replace_directory`` fail with WinError 32. Mirrors the NSIS
+    PREINSTALL hook in ``frontend/src-tauri/installer-hooks.nsh``.
+
+    No-op on non-Windows. taskkill exit code is ignored (process may already
+    be gone, which we want).
+    """
+    if not sys.platform.startswith("win"):
+        return
+    for name in ("csm-sidecar.exe", "csm-tauri.exe"):
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", name, "/T"],
+                timeout=10,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            logger.info("taskkill /F /IM %s issued", name)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning("taskkill %s failed: %s", name, e)
+    # Give Windows time to release file handles after process exit.
+    time.sleep(0.5)
+
+
 def _rmtree_retry(path: Path, max_attempts: int = 8, delay: float = 0.5) -> None:
     """rmtree with retry. Windows can hold file locks for several seconds
     after the source process exits — DLLs in particular have lazy-release
@@ -220,6 +250,12 @@ def main(argv: list[str]) -> int:
     logger.info("waiting for main pid %d to exit", args.pid)
     wait_for_pid_exit(args.pid, timeout_s=10)
     logger.info("main pid exited (or timeout passed)")
+
+    # Even after main (csm-tauri) exits, csm-sidecar.exe often outlives it
+    # briefly because Tauri's sidecar lifecycle doesn't always propagate the
+    # close signal. The sidecar then holds a lock on <install>/csm-sidecar.exe
+    # and blocks the rename below. Match the NSIS PREINSTALL hook's behavior.
+    _taskkill_csm_processes()
 
     success = False
     try:
