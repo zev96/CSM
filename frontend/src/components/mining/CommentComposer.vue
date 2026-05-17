@@ -48,6 +48,10 @@ const props = defineProps<{
   /** N+1 for the next floor to publish (e.g. 1 when there are 0 floors). */
   nextTier: number;
   previousTiers: string[];
+  /** True iff at least one floor exists so 完成 is meaningful. */
+  canComplete?: boolean;
+  /** Parent is mid-bulkMarkCommented call; show "处理中…" + freeze. */
+  completeBusy?: boolean;
   /** When non-null, composer is in EDIT mode for that comment. */
   editingComment: Comment | null;
 }>();
@@ -55,6 +59,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "saved"): void;
   (e: "cancel-edit"): void;
+  (e: "complete"): void;
 }>();
 
 const store = useMiningStore();
@@ -352,6 +357,13 @@ function onCancelEdit() {
         color: 'var(--ink)',
         fontFamily: 'inherit',
         minHeight: mode === 'empty' ? '48px' : '32px',
+        // Global `:focus-visible { outline: 2px solid var(--primary) }`
+        // (style.css:188) shows an orange ring when the textarea is
+        // focused. The composer's outer container already telegraphs
+        // edit / publish state with its own color cues, so the ring on
+        // the textarea is visual noise. Suppress for textarea only —
+        // keyboard nav on toolbar buttons keeps the global affordance.
+        outline: 'none',
       }"
     />
 
@@ -472,6 +484,28 @@ function onCancelEdit() {
       >
         <Icon :name="isEditing ? 'check' : 'play'" :size="11"/>
         <span>{{ isSaving ? "保存中…" : publishLabel }}</span>
+      </button>
+      <button
+        v-if="!isEditing"
+        type="button"
+        class="inline-flex items-center gap-1.5 transition"
+        :disabled="!canComplete || completeBusy"
+        :style="{
+          height: '28px',
+          padding: '0 14px',
+          borderRadius: '999px',
+          fontSize: '11.5px',
+          fontWeight: 600,
+          background: canComplete ? 'var(--dark)' : 'var(--card-2)',
+          color: canComplete ? '#fff' : 'var(--ink-4)',
+          border: '1px solid ' + (canComplete ? 'var(--dark)' : 'var(--line)'),
+          cursor: (!canComplete || completeBusy) ? 'not-allowed' : 'pointer',
+        }"
+        :title="canComplete ? '标记这条已搞定' : '至少写一层评论才能完成'"
+        @click="emit('complete')"
+      >
+        <Icon name="check" :size="11"/>
+        <span>{{ completeBusy ? "处理中…" : "完成" }}</span>
       </button>
     </div>
 

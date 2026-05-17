@@ -216,6 +216,34 @@ body[data-radius="bold"] {
   --radius-inner: 20px;
 }
 
+/*
+ * Thin tone-tinted scrollbar for the 评论楼 box (FloorList wrapper).
+ * The wrapper sets max-height: 200px; overflow: auto, and these rules
+ * paint the WebKit scrollbar in the same tone as the floor circles —
+ * orange for 盖楼中, neutral for 待评论. The 已完成 state collapses the
+ * box entirely so we don't need a green variant.
+ */
+.floor-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.floor-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.floor-scroll-active::-webkit-scrollbar-thumb {
+  background: rgba(238, 106, 42, 0.45);
+  border-radius: 999px;
+}
+.floor-scroll-active::-webkit-scrollbar-thumb:hover {
+  background: rgba(238, 106, 42, 0.65);
+}
+.floor-scroll-idle::-webkit-scrollbar-thumb {
+  background: rgba(28, 26, 23, 0.18);
+  border-radius: 999px;
+}
+.floor-scroll-idle::-webkit-scrollbar-thumb:hover {
+  background: rgba(28, 26, 23, 0.32);
+}
+
 .pad-d {
   padding: var(--density-pad);
 }

@@ -579,60 +579,62 @@ const pillLabel = computed(() => {
           >
             评论楼 · {{ comments.length }} 层
           </span>
+          <span
+            v-if="comments.length >= 3"
+            class="ml-auto text-[10px]"
+            :style="{ color: 'var(--ink-4)' }"
+          >滚动查看全部</span>
         </div>
 
-        <FloorList
-          v-if="comments.length > 0"
-          :comments="comments"
-          tone="active"
-          @edit="onEditFloor"
-          @delete="onDeleteComment"
-        />
+        <!--
+          Floor area is capped at 200px so that, no matter how many floors
+          the user 盖's on this card, the overall card height stays in
+          line with adjacent cards in the 2-col grid (otherwise the row
+          gets visually jagged). 3+ floors → internal scrollbar, styled
+          to match tone via the `floor-scroll-active` / `floor-scroll-done`
+          classes in style.css.
+        -->
         <div
-          v-else
-          class="text-[11px]"
-          style="color: var(--ink-3); padding: 2px 2px 0;"
+          :class="['floor-scroll', cardState === 'drafting' ? 'floor-scroll-active' : 'floor-scroll-idle']"
+          :style="{ maxHeight: '200px', overflowY: comments.length >= 3 ? 'auto' : 'hidden', paddingRight: comments.length >= 3 ? '4px' : '0' }"
         >
-          还没写过评论, 用下面的输入框写一条
+          <FloorList
+            v-if="comments.length > 0"
+            :comments="comments"
+            tone="active"
+            @edit="onEditFloor"
+            @delete="onDeleteComment"
+          />
+          <div
+            v-else
+            class="flex items-center justify-center text-center"
+            :style="{
+              background: 'var(--card-2)',
+              border: '1px dashed var(--line-2)',
+              borderRadius: '10px',
+              padding: '22px 14px',
+              color: 'var(--ink-3)',
+              fontSize: '11.5px',
+            }"
+          >
+            还没有评论 · 在下面写一条作为第 1 层
+          </div>
         </div>
       </div>
 
-      <!-- composer + 完成 button row -->
-      <div class="mt-3 flex flex-col" style="gap: 8px;">
+      <!-- composer 自带"完成"按钮，无需外层再开一行 -->
+      <div class="mt-3">
         <CommentComposer
           :video-id="v.id"
           :next-tier="nextTier"
           :previous-tiers="previousTiers"
           :editing-comment="editingComment"
+          :can-complete="comments.length > 0"
+          :complete-busy="bulkBusy"
           @saved="onCommentSaved"
           @cancel-edit="onCancelEdit"
+          @complete="onMarkDone"
         />
-
-        <!-- 完成 button — disabled until at least one floor exists. -->
-        <div class="flex items-center" style="gap: 8px;">
-          <div class="flex-1"/>
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 transition"
-            :disabled="comments.length === 0 || bulkBusy"
-            :style="{
-              height: '28px',
-              padding: '0 14px',
-              borderRadius: '999px',
-              fontSize: '11.5px',
-              fontWeight: 600,
-              background: comments.length > 0 ? 'var(--dark)' : 'var(--card-2)',
-              color: comments.length > 0 ? '#fff' : 'var(--ink-4)',
-              border: '1px solid ' + (comments.length > 0 ? 'var(--dark)' : 'var(--line)'),
-              cursor: (comments.length === 0 || bulkBusy) ? 'not-allowed' : 'pointer',
-            }"
-            :title="comments.length > 0 ? '标记这条已搞定' : '至少写一层评论才能完成'"
-            @click="onMarkDone"
-          >
-            <Icon name="check" :size="11"/>
-            <span>{{ bulkBusy ? "处理中…" : "完成" }}</span>
-          </button>
-        </div>
       </div>
     </template>
   </div>
