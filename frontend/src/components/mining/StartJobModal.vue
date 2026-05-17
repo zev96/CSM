@@ -49,6 +49,15 @@ function onSubmit() {
 </script>
 
 <template>
+  <!--
+    Teleport to body so the backdrop covers the whole window — Vue's
+    default mount target sits inside <main>, which is an anim-up
+    descendant with transform != none. Per CSS spec, position:fixed
+    children of a transformed ancestor get clipped to that ancestor's
+    box, so without Teleport the backdrop wouldn't reach LeftNav.
+    Monitor's AddTaskModal and ui/ConfirmModal do the same.
+  -->
+  <Teleport to="body">
   <div
     class="anim-in"
     @click="$emit('close')"
@@ -220,4 +229,5 @@ function onSubmit() {
       </div>
     </div>
   </div>
+  </Teleport>
 </template>

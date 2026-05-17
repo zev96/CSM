@@ -2,7 +2,6 @@
 import { computed } from "vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
-import Avatar from "@/components/ui/Avatar.vue";
 import PlatformChip from "./PlatformChip.vue";
 import type { Video, Platform } from "@/stores/mining";
 
@@ -40,14 +39,6 @@ function fmtDuration(s: number | null): string {
   return `${m}:${String(ss).padStart(2, "0")}`;
 }
 
-function relativeTime(iso: string): string {
-  const d = new Date(iso);
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
-  if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
-  if (diff < 604800) return Math.floor(diff / 86400) + " 天前";
-  return d.toLocaleDateString();
-}
 </script>
 
 <template>
@@ -80,14 +71,11 @@ function relativeTime(iso: string): string {
 
       <PlatformChip :k="v.platform as Platform"/>
 
-      <div class="flex items-center gap-1 min-w-0">
-        <Avatar :name="v.author_name" :size="18"/>
-        <span class="text-[11.5px] font-medium truncate" style="color: var(--ink-2); max-width: 110px;">
-          @{{ v.author_name || "(无作者)" }}
-        </span>
-      </div>
-
-      <span class="text-[10.5px]" style="color: var(--ink-4)">· {{ relativeTime(v.first_seen_at) }}</span>
+      <!--
+        Phase 1: 作者 + 抓取时间这一段先省掉 —— B 站 SSR parser
+        把标题塞进了 author_name，渲染出来反而是冗余。Phase 2 改
+        adapter 解析后再恢复。
+      -->
 
       <div class="ml-auto flex items-center gap-2">
         <Pill v-if="isDone" tone="ok"><Icon name="check" :size="10"/> 已评论</Pill>
