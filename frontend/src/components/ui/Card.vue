@@ -9,15 +9,22 @@ defineProps<{
   muted?: boolean;
   /** Drop the inner padding — for cards that want their own layout. */
   padless?: boolean;
+  /** Dark hero treatment — used by OutreachHero. */
+  dark?: boolean;
 }>();
 </script>
 
 <template>
   <section
-    class="border border-line transition-colors"
+    class="transition-colors"
     :class="[
-      muted ? 'bg-card-2' : 'bg-card',
+      dark
+        ? 'bg-dark text-card border-transparent'
+        : muted
+          ? 'bg-card-2 border-line'
+          : 'bg-card border-line',
       padless ? '' : 'pad-d',
+      !dark && 'border',
     ]"
     :style="{ borderRadius: 'var(--radius-card)' }"
   >
