@@ -48,7 +48,16 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="anim-up flex flex-col" style="gap: var(--density-gap); padding-bottom: 60px; position: relative;">
+  <div
+    class="anim-up flex flex-col"
+    style="
+      gap: var(--density-gap);
+      position: relative;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+    "
+  >
     <!-- 页头 -->
     <div class="flex items-end justify-between">
       <div>
@@ -171,7 +180,17 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 视频网格 -->
+    <!-- 视频网格 (独立滚动区) -->
+    <div
+      class="flex-1"
+      style="
+        min-height: 0;
+        overflow-y: auto;
+        padding-bottom: 60px;
+        margin-right: -6px;
+        padding-right: 6px;
+      "
+    >
     <div v-if="filtered.length > 0" class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;">
       <VideoCard
         v-for="v in filtered"
@@ -194,6 +213,8 @@ onMounted(async () => {
         <Btn variant="solid" @click="showNewTask = true"><Icon name="plus" :size="12"/> 新建任务</Btn>
       </div>
     </div>
+    </div>
+    <!-- /视频网格独立滚动区 -->
 
     <!-- 浮动批量栏 -->
     <div
