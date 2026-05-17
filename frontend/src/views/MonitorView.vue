@@ -523,7 +523,7 @@ async function deleteBatch(batchName: string) {
     selectedCommentTaskId.value = null;
     selectedVideoId.value = null;
   }
-  await loadTasks(PLATFORM_TYPE[commentSubtab.value]);
+  await loadTasks(currentTaskType.value);
   await loadTaskSnapshots();
 }
 const showCookieMgr = ref(false);
@@ -832,7 +832,7 @@ async function deleteTask(taskId: number) {
       selectedTaskId.value = null;
       taskResults.value = [];
     }
-    await loadTasks(activeTab.value === "zhihu" ? "zhihu_question" : PLATFORM_TYPE[commentSubtab.value]);
+    await loadTasks(currentTaskType.value);
   } catch (e: any) {
     toast.error(`删除失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
   }
@@ -1419,7 +1419,7 @@ onMounted(async () => {
       await loadTasks("zhihu_question");
       await loadTaskSnapshots();
     } else if (activeTab.value === "comment") {
-      await loadTasks(PLATFORM_TYPE[commentSubtab.value]);
+      await loadTasks(currentTaskType.value);
       await loadTaskSnapshots();
     }
     // 历史报告 sub-page self-loads via RetentionPage / ZhihuRankingPage onMounted
