@@ -94,6 +94,9 @@ const PATHS: Record<string, string> = {
   sort: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M11 18h2"/>',
   pause: '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>',
   video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
+  // Generic image / photo glyph — rectangle with a mountain + sun. Used
+  // for the comment composer's 图片 upload button (Phase 2 评论楼).
+  image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
 };
 
 const inner = PATHS[props.name] ?? PATHS.home;

@@ -4,10 +4,11 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -17,7 +18,8 @@ from csm_core.mining.models import Platform, StartJobRequest
 
 from ..auth import RequireToken
 from ..event_bus import bus as event_bus
-from ..services import config_service, mining_service
+from ..services import config_service, mining_ai_service, mining_images_service, mining_service
+from ..services.llm_factory import LLMConfigError
 from ..services.mining_ai_service import (
     DEFAULT_SUGGEST_PROMPT_SYSTEM,
     DEFAULT_SUGGEST_PROMPT_USER,
@@ -295,3 +297,202 @@ async def patch_ai_prompts(body: AIPromptsPatch) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="no fields provided")
     config_service.patch(updates)
     return _ai_prompts_payload()
+
+
+# ── Comment CRUD (Phase 2 T5) ────────────────────────────────────────
+def _video_exists(video_id: int) -> bool:
+    conn = mining_storage.get_conn()
+    return conn.execute("SELECT 1 FROM videos WHERE id=?", (video_id,)).fetchone() is not None
+
+
+class CommentCreate(BaseModel):
+    """POST body for /api/mining/videos/{id}/comments."""
+
+    tier: int = Field(..., ge=1)
+    text: str = ""
+    image_ids: list[str] = Field(default_factory=list)
+    source: str = "manual"
+
+
+class CommentPatch(BaseModel):
+    """PATCH body for /api/mining/comments/{cid}. All fields optional."""
+
+    text: str | None = None
+    image_ids: list[str] | None = None
+    status: str | None = None
+
+
+@router.get("/api/mining/videos/{video_id}/comments")
+async def list_video_comments(video_id: int) -> dict[str, Any]:
+    if not _video_exists(video_id):
+        raise HTTPException(status_code=404, detail=f"video not found: {video_id}")
+    return {"comments": mining_storage.list_comments(video_id)}
+
+
+@router.post("/api/mining/videos/{video_id}/comments", status_code=201)
+async def create_video_comment(video_id: int, body: CommentCreate) -> dict[str, Any]:
+    if not _video_exists(video_id):
+        raise HTTPException(status_code=404, detail=f"video not found: {video_id}")
+    try:
+        comment_id = mining_storage.create_comment(
+            video_id=video_id,
+            tier=body.tier,
+            text=body.text,
+            image_ids=body.image_ids,
+            source=body.source,
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"tier {body.tier} already exists for video {video_id}",
+        )
+    return mining_storage.get_comment(comment_id) or {}
+
+
+@router.patch("/api/mining/comments/{comment_id}")
+async def patch_comment(comment_id: int, body: CommentPatch) -> dict[str, Any]:
+    existing = mining_storage.get_comment(comment_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
+    # Diff image_ids BEFORE writing so we can clean up the orphaned files
+    # off-DB regardless of what update_comment ends up doing.
+    removed: list[str] = []
+    if body.image_ids is not None:
+        old_set = set(existing["image_ids"])
+        new_set = set(body.image_ids)
+        removed = sorted(old_set - new_set)
+    updated = mining_storage.update_comment(
+        comment_id,
+        text=body.text,
+        image_ids=body.image_ids,
+        status=body.status,
+    )
+    if updated is None:  # racy delete between get + update
+        raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
+    if removed:
+        mining_images_service.delete_images(removed)
+    return updated
+
+
+@router.delete("/api/mining/comments/{comment_id}", status_code=204)
+async def delete_comment_route(comment_id: int) -> None:
+    existing = mining_storage.get_comment(comment_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
+    image_ids = list(existing["image_ids"])
+    if not mining_storage.delete_comment(comment_id):
+        raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
+    if image_ids:
+        mining_images_service.delete_images(image_ids)
+
+
+# ── Image upload + serve (Phase 2 T5) ────────────────────────────────
+@router.post("/api/mining/comments/images", status_code=201)
+async def upload_comment_image(
+    video_id: int = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Multipart upload. Bytes are sniffed for magic-bytes — the declared
+    Content-Type / filename are NOT trusted (spec §6.2)."""
+    if not _video_exists(video_id):
+        raise HTTPException(status_code=404, detail=f"video not found: {video_id}")
+    content = await file.read()
+    try:
+        image_id = mining_images_service.save_image(video_id, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "image_id": image_id,
+        "url": f"/api/mining/images/{image_id}",
+        "size": len(content),
+    }
+
+
+# NOTE: this route is auth-gated like every other API route (RequireToken
+# accepts either Bearer header OR ?token=<token> on GET — see auth.py).
+# Frontend <img :src="..."> needs to append ?token=... from the sidecar
+# store; alternatively the axios client can fetch and produce a blob URL.
+_EXT_TO_MEDIA_TYPE = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
+
+@router.get("/api/mining/images/{image_id}")
+async def get_comment_image(image_id: str) -> FileResponse:
+    path = mining_images_service.get_image_path(image_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"image not found: {image_id}")
+    media_type = _EXT_TO_MEDIA_TYPE.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(str(path), media_type=media_type)
+
+
+# ── AI inference (Phase 3 T5) ────────────────────────────────────────
+class AISummaryBody(BaseModel):
+    force: bool = False
+
+
+class AISuggestBody(BaseModel):
+    tier: int = Field(..., ge=1)
+    previous_tiers: list[str] = Field(default_factory=list)
+    tone_hint: str = ""
+
+
+def _llm_http_error(e: Exception) -> HTTPException:
+    """Map LLMConfigError → 503; anything else from the LLM client → 502."""
+    if isinstance(e, LLMConfigError):
+        return HTTPException(
+            status_code=503,
+            detail={"code": "llm_not_configured", "detail": str(e)},
+        )
+    return HTTPException(
+        status_code=502,
+        detail={"code": "llm_error", "detail": str(e) or e.__class__.__name__},
+    )
+
+
+@router.post("/api/mining/videos/{video_id}/ai_summary")
+async def ai_summary(video_id: int, body: AISummaryBody) -> dict[str, Any]:
+    try:
+        text = mining_ai_service.summarize_video(video_id, force=body.force)
+    except LookupError:
+        raise HTTPException(status_code=404, detail=f"video not found: {video_id}")
+    except LLMConfigError as e:
+        raise _llm_http_error(e)
+    except Exception as e:  # noqa: BLE001 — LLM client can raise anything
+        logger.exception("ai_summary failed for video %s", video_id)
+        raise _llm_http_error(e)
+    return {"summary": text}
+
+
+@router.post("/api/mining/videos/{video_id}/ai_suggest_comment")
+async def ai_suggest_comment(video_id: int, body: AISuggestBody) -> dict[str, Any]:
+    try:
+        text = mining_ai_service.suggest_comment(
+            video_id,
+            tier=body.tier,
+            previous_tiers=body.previous_tiers,
+            tone_hint=body.tone_hint,
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail=f"video not found: {video_id}")
+    except LLMConfigError as e:
+        raise _llm_http_error(e)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("ai_suggest_comment failed for video %s", video_id)
+        raise _llm_http_error(e)
+    return {"suggestion": text}
+
+
+# ── Bulk mark commented (Phase 2 T5) ─────────────────────────────────
+class BulkMarkBody(BaseModel):
+    video_ids: list[int] = Field(default_factory=list)
+    value: bool
+
+
+@router.patch("/api/mining/videos/bulk_mark_commented")
+async def bulk_mark_commented(body: BulkMarkBody) -> dict[str, Any]:
+    updated = mining_storage.bulk_mark_commented(body.video_ids, body.value)
+    return {"updated": updated}
