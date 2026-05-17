@@ -99,7 +99,10 @@ def _publish_to_bus(kind: str, payload: dict[str, Any]) -> None:
     job_id = payload.get("job_id")
     if job_id is None:
         return
-    event_bus.publish(_event_job_id(job_id), kind, **payload)
+    # event_bus.publish(job_id, kind, **data) — strip job_id from payload
+    # before splatting or we get TypeError ("multiple values for job_id").
+    data = {k: v for k, v in payload.items() if k != "job_id"}
+    event_bus.publish(_event_job_id(job_id), kind, **data)
 
 
 def _event_job_id(job_id: int) -> str:

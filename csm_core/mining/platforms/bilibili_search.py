@@ -1,9 +1,11 @@
-"""B 站 search adapter — intercepts the wbi search XHR, falls back to DOM.
+"""B 站 search adapter — DOM extraction from the SSR search page.
 
-Why XHR-first: B 站's React app renders cards lazily, and DOM selectors
-break every ~6 months when the search page is rebuilt. The
-``/x/web-interface/wbi/search/type`` response is a stable contract — we
-just route it from the browser into our card stream.
+The original design intercepted ``/x/web-interface/wbi/search/type`` XHR
+but **bilibili's search page is server-side rendered as of mid-2026**
+— it returns the full HTML on ``page.goto()`` and never fires that XHR.
+We extract video metadata from the DOM via ``page.evaluate``, deduping
+by BV ID since each card has multiple anchor links to the same video
+(cover image + title + author each get their own ``<a href="/video/BV...">``).
 """
 from __future__ import annotations
 
@@ -48,52 +50,56 @@ class BilibiliSearchAdapter:
         with mining_browser.launched_page("bilibili") as page:
             on_progress(ProgressUpdate(platform=self.platform, phase="scrolling", got=0, target=target_count))
 
-            def _handle_response(response: Any) -> None:
-                nonlocal emitted
-                if cancel_event.is_set():
-                    return
-                if "/web-interface/wbi/search/type" not in response.url and \
-                   "/web-interface/search/type" not in response.url:
-                    return
+            base_url = f"https://search.bilibili.com/all?keyword={quote(keyword)}"
+            for page_num in range(1, 11):  # cap at 10 pages ≈ 200 results
+                if cancel_event.is_set() or emitted >= target_count:
+                    break
+                target_url = base_url if page_num == 1 else f"{base_url}&page={page_num}"
                 try:
-                    body = response.json()
-                except Exception:
-                    return
-                cards = self._extract_cards(body)
-                for c in cards:
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=30_000)
+                    time.sleep(2.0)  # let SSR + hydration settle
+                except Exception as e:
+                    logger.warning("bilibili page %d goto failed: %s", page_num, e)
+                    continue
+
+                try:
+                    raw_cards = page.evaluate(_EXTRACT_JS)
+                except Exception as e:
+                    logger.warning("bilibili page %d evaluate failed: %s", page_num, e)
+                    continue
+
+                new_this_page = 0
+                for raw in raw_cards or []:
                     if cancel_event.is_set() or emitted >= target_count:
-                        return
-                    if c.platform_video_id in seen_bvids:
+                        break
+                    bvid = raw.get("bvid")
+                    if not bvid or bvid in seen_bvids:
                         continue
-                    seen_bvids.add(c.platform_video_id)
+                    seen_bvids.add(bvid)
                     emitted += 1
-                    c.rank_in_search = emitted
-                    on_card(c)
+                    new_this_page += 1
+                    on_card(VideoCard(
+                        platform="bilibili",
+                        platform_video_id=bvid,
+                        url=raw.get("url") or f"https://www.bilibili.com/video/{bvid}",
+                        title=(raw.get("title") or "").strip(),
+                        author_name=(raw.get("author") or "").strip(),
+                        cover_url=_normalize_url(raw.get("cover") or ""),
+                        duration_sec=parse_duration(raw.get("duration_text") or ""),
+                        play_count=_parse_count(raw.get("play_text")),
+                        like_count=_parse_count(raw.get("like_text")),
+                        published_at=(raw.get("pubdate_text") or "").strip() or None,
+                        raw=raw,
+                        rank_in_search=emitted,
+                    ))
                 on_progress(ProgressUpdate(
                     platform=self.platform, phase="scrolling",
                     got=emitted, target=target_count,
                 ))
-
-            page.on("response", _handle_response)
-            url = f"https://search.bilibili.com/all?keyword={quote(keyword)}"
-            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-
-            # Paginate by clicking "下一页" or by URL ?page=N — URL is more reliable.
-            for page_num in range(2, 11):  # initial goto already loaded page 1; cap at ~200 results
-                if cancel_event.is_set() or emitted >= target_count:
+                # End-of-results heuristic: if a page yielded zero new BVs,
+                # we've likely run past the last results page — stop early.
+                if new_this_page == 0 and page_num > 1:
                     break
-                page.goto(
-                    f"{url}&page={page_num}",
-                    wait_until="domcontentloaded",
-                    timeout=30_000,
-                )
-                # Give the XHR a chance to fire before the next page.
-                for _ in range(20):
-                    if cancel_event.is_set() or emitted >= target_count:
-                        break
-                    time.sleep(0.5)
-                    if emitted >= target_count:
-                        break
 
         if cancel_event.is_set():
             return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
@@ -131,6 +137,13 @@ class BilibiliSearchAdapter:
         return cards
 
 
+def _parse_count(text: str | None) -> int | None:
+    """Wrapper that handles None + delegates to parse_int_count."""
+    if text is None:
+        return None
+    return parse_int_count(text)
+
+
 def _strip_em(text: str) -> str:
     """Search API wraps keyword hits in <em class="keyword">…</em>. Strip."""
     if not text:
@@ -138,6 +151,80 @@ def _strip_em(text: str) -> str:
     # Cheap regex strip — no DOM parser needed.
     import re
     return re.sub(r"</?em[^>]*>", "", text)
+
+
+# JS executed in the search page to extract one card per unique BV id.
+# Strategy: for each unique BV link, walk up to a stable ancestor (the
+# closest element that ALSO contains a non-link "play count" digit cluster
+# or a "duration" stamp) and dump that element's innerText. We then split
+# on \n on the Python side. Less fragile than CSS selectors that change
+# every B 站 search-page revamp.
+_EXTRACT_JS = r"""
+() => {
+  const anchors = Array.from(document.querySelectorAll('a[href*="/video/BV"]'));
+  const seen = new Set();
+  const cards = [];
+  for (const a of anchors) {
+    const m = a.href.match(/\/video\/(BV[A-Za-z0-9]+)/);
+    if (!m) continue;
+    const bvid = m[1];
+    if (seen.has(bvid)) continue;
+    seen.add(bvid);
+    // Walk up until we find an ancestor with reasonable text content.
+    let node = a;
+    for (let i = 0; i < 6 && node; i++) {
+      if (node.parentElement) node = node.parentElement; else break;
+      const txt = (node.innerText || "").trim();
+      if (txt.length > 30) break;
+    }
+    const txt = (node && node.innerText) || a.innerText || "";
+    const lines = txt.split("\n").map(s => s.trim()).filter(Boolean);
+    // Heuristic: title is the longest line that's not a number-only token.
+    let title = "";
+    for (const line of lines) {
+      if (/^[\d.万亿k]+$/i.test(line)) continue;
+      if (line.length > title.length) title = line;
+    }
+    // Find author: a sibling <a> with no /video/ in href, or any line
+    // following a 时长 token (mm:ss). Cheap heuristic — pick the line
+    // right after the duration line, which is conventionally the uploader.
+    let author = "";
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(lines[i])) {
+        author = lines[i + 1] || "";
+        break;
+      }
+    }
+    // Duration + play count: regex over lines.
+    let dur = "", play = "", pub = "";
+    for (const line of lines) {
+      if (!dur && /^\d{1,2}:\d{2}(:\d{2})?$/.test(line)) dur = line;
+      else if (!play && /^[\d.,]+(万|亿|k|m)?$/i.test(line)) play = line;
+      else if (!pub && /^(·|\s)*(\d{4}-\d{2}-\d{2}|昨天|前天|今天|\d+(天|月|周|小时|分钟)前|\d{2}-\d{2})/i.test(line)) {
+        pub = line.replace(/^[·\s]+/, "");
+      }
+    }
+    // Cover image: try to find an <img> within the card subtree.
+    let cover = "";
+    if (node && node.querySelector) {
+      const img = node.querySelector('img[src*="hdslb.com"], img[data-src*="hdslb.com"], img');
+      if (img) cover = img.getAttribute("src") || img.getAttribute("data-src") || "";
+    }
+    cards.push({
+      bvid,
+      url: a.href,
+      title,
+      author,
+      duration_text: dur,
+      play_text: play,
+      pubdate_text: pub,
+      cover,
+      raw_text: txt.slice(0, 300),
+    });
+  }
+  return cards;
+}
+""".strip()
 
 
 def _normalize_url(u: str) -> str:
