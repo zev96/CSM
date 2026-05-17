@@ -19,6 +19,14 @@ defineEmits<{
 // Phase 1 surrogate for "done": already_commented from monitor reverse-lookup.
 const isDone = computed(() => props.v.already_commented);
 
+// Truncate title to 15 chars to keep cards compact. Full title goes into
+// the anchor's `title=` attr so hover still shows the whole thing.
+const TITLE_MAX = 15;
+const titleShort = computed(() => {
+  const t = props.v.title || "(无标题)";
+  return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX) + "…" : t;
+});
+
 function fmt(n: number | null): string {
   if (n == null) return "—";
   if (n >= 10000) return (n / 10000).toFixed(n >= 100000 ? 0 : 1) + "w";
@@ -98,14 +106,12 @@ function relativeTime(iso: string): string {
         :href="v.url"
         target="_blank"
         rel="noopener"
-        class="font-display font-semibold hover:underline flex-1 min-w-0"
+        class="font-display font-semibold hover:underline flex-1 min-w-0 truncate"
         :style="{
           fontSize: '15.5px', lineHeight: 1.4, color: 'var(--ink)',
-          textWrap: 'pretty',
-          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }"
-        title="在浏览器中打开原视频"
-      >{{ v.title || "(无标题)" }}</a>
+        :title="v.title || '(无标题)'"
+      >{{ titleShort }}</a>
       <div class="flex items-center gap-2.5 flex-shrink-0" style="color: var(--ink-3); font-size: 10.5px;">
         <span v-if="v.duration_sec" class="inline-flex items-center gap-1">
           <Icon name="clock" :size="11"/><span class="font-mono">{{ fmtDuration(v.duration_sec) }}</span>

@@ -52,7 +52,7 @@ function onSubmit() {
   <div
     class="anim-in"
     @click="$emit('close')"
-    style="position: fixed; inset: 0; z-index: 50; background: rgba(28,26,23,0.42); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px;"
+    style="position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.30); display: flex; align-items: center; justify-content: center; padding: 24px;"
   >
     <div
       class="anim-up"
