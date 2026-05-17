@@ -137,12 +137,28 @@ def update_platform_progress(job_id: int, platform: str, *, got: int, target: in
 
 
 def finalize_job(job_id: int) -> dict[str, Any]:
-    """Compute the overall job status from per-platform phases."""
+    """Compute the overall job status from per-platform phases.
+
+    If the job was already marked ``cancelled`` (by user) or ``interrupted``
+    (by sidecar startup sweep), preserve that status — only stamp finished_at
+    and return. Otherwise aggregate per-platform phases into one of
+    done / partial_done / failed.
+    """
     conn = get_conn()
-    row = conn.execute("SELECT progress_json FROM mining_jobs WHERE id=?", (job_id,)).fetchone()
+    row = conn.execute("SELECT status, progress_json FROM mining_jobs WHERE id=?", (job_id,)).fetchone()
     if row is None:
         return {}
     progress: dict[str, Any] = json.loads(row["progress_json"]) if row["progress_json"] else {}
+
+    existing_status = row["status"]
+    if existing_status in {"cancelled", "interrupted"}:
+        # Preserve the user-initiated / startup-recovery state. Just stamp finished_at.
+        conn.execute(
+            "UPDATE mining_jobs SET finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND finished_at IS NULL",
+            (job_id,),
+        )
+        return {"status": existing_status, "successes": 0, "failures": 0, "progress": progress}
+
     phases = [p["phase"] for p in progress.values()]
     successes = sum(1 for ph in phases if ph == "done")
     failures = len(phases) - successes

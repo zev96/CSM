@@ -158,6 +158,19 @@ def test_cancel_running_job_flips_status(db):
     assert ms.get_job(jid)["status"] == "cancelled"
 
 
+def test_finalize_job_preserves_cancelled_status(db):
+    jid = ms.create_job("k", ["douyin"], 50)
+    ms.mark_started(jid)
+    assert ms.cancel_job_if_running(jid) is True
+    # Simulate runner finishing after cancel.
+    ms.update_platform_progress(jid, "douyin", got=3, target=50, phase="cancelled")
+    summary = ms.finalize_job(jid)
+    assert summary["status"] == "cancelled"
+    job = ms.get_job(jid)
+    assert job["status"] == "cancelled"
+    assert job["finished_at"] is not None
+
+
 def test_extract_platform_video_id_handles_short_forms():
     assert ms.extract_platform_video_id("douyin", "https://www.douyin.com/video/7123") == "7123"
     assert ms.extract_platform_video_id("douyin", "https://www.douyin.com/?modal_id=7123") == "7123"
