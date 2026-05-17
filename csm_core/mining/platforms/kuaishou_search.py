@@ -130,17 +130,22 @@ class KuaishouSearchAdapter:
             def _attr(sel: str, key: str) -> str:
                 el = item.select_one(sel)
                 return (el.get(key, "") if el else "")
+            title = _t(".photo-title")
+            author = _t(".author-name")
+            play_txt = _t(".photo-play-count")
+            like_txt = _t(".photo-like-count")
+            dur_txt = _t(".photo-duration")
             cards.append(VideoCard(
                 platform="kuaishou",
                 platform_video_id=pid,
                 url=f"https://www.kuaishou.com/short-video/{pid}",
-                title=_t(".photo-title"),
-                author_name=_t(".author-name"),
+                title=title,
+                author_name=author,
                 cover_url=_attr("img.photo-cover", "src"),
-                duration_sec=parse_duration(_t(".photo-duration")),
-                play_count=parse_int_count(_t(".photo-play-count")),
-                like_count=parse_int_count(_t(".photo-like-count")),
-                raw={},
+                duration_sec=parse_duration(dur_txt),
+                play_count=parse_int_count(play_txt),
+                like_count=parse_int_count(like_txt),
+                raw={"title": title, "author": author, "play_txt": play_txt, "like_txt": like_txt},
             ))
         return cards
 
