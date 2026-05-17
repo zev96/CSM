@@ -152,6 +152,13 @@ class AppConfig(BaseModel):
     # ── Monitor (Zhihu / comment-platforms) ────────────────────────────
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)
 
+    # ── Outreach AI prompts (Phase 3) ──────────────────────────────────
+    # 空字符串 = 用 mining_ai_service 里的内置默认 prompt。用户在设置页
+    # 改了之后，下次调用 AI 速览 / AI 建议时优先用这里的值。
+    # 自定义格式：单一字符串 = system；含 "---user---" 分隔符 = (system, user) 两段。
+    mining_summary_prompt: str = ""
+    mining_suggest_prompt: str = ""
+
 
 def load_config(path: Path) -> AppConfig:
     path = Path(path)

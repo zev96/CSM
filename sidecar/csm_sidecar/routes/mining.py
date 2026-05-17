@@ -17,7 +17,13 @@ from csm_core.mining.models import Platform, StartJobRequest
 
 from ..auth import RequireToken
 from ..event_bus import bus as event_bus
-from ..services import mining_service
+from ..services import config_service, mining_service
+from ..services.mining_ai_service import (
+    DEFAULT_SUGGEST_PROMPT_SYSTEM,
+    DEFAULT_SUGGEST_PROMPT_USER,
+    DEFAULT_SUMMARY_PROMPT_SYSTEM,
+    DEFAULT_SUMMARY_PROMPT_USER,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -232,3 +238,60 @@ class _LoginState:
 
 
 _login_state = _LoginState()
+
+
+# ── AI Prompts config (Phase 3, T3b) ─────────────────────────────────
+# Single source of truth: DEFAULT_* constants come from mining_ai_service.
+# settings page hits these two routes; mining_ai_service reads the same
+# config_service.load() values so they stay in lock-step automatically.
+
+_PROMPT_VARS = {
+    "summary": ["platform", "title", "author", "duration", "play_count"],
+    "suggest": ["platform", "title", "author", "tier", "previous_block", "tone_hint"],
+}
+
+
+def _ai_prompts_payload() -> dict[str, Any]:
+    cfg = config_service.load()
+    return {
+        "summary": {
+            "current": cfg.mining_summary_prompt,
+            "default": DEFAULT_SUMMARY_PROMPT_SYSTEM + "\n---user---\n" + DEFAULT_SUMMARY_PROMPT_USER,
+        },
+        "suggest": {
+            "current": cfg.mining_suggest_prompt,
+            "default": DEFAULT_SUGGEST_PROMPT_SYSTEM + "\n---user---\n" + DEFAULT_SUGGEST_PROMPT_USER,
+        },
+        "vars": _PROMPT_VARS,
+    }
+
+
+class AIPromptsPatch(BaseModel):
+    """PATCH body for /api/mining/ai_prompts. 空字符串 = 回默认。"""
+
+    summary: str | None = None
+    suggest: str | None = None
+
+
+@router.get("/api/mining/ai_prompts")
+async def get_ai_prompts() -> dict[str, Any]:
+    """Return current + default prompts + the variable lists the UI hints with."""
+    return _ai_prompts_payload()
+
+
+@router.patch("/api/mining/ai_prompts")
+async def patch_ai_prompts(body: AIPromptsPatch) -> dict[str, Any]:
+    """Update mining_summary_prompt / mining_suggest_prompt.
+
+    Either field may be omitted (no change). Empty string is allowed and
+    means "clear back to built-in default". No fields → 400.
+    """
+    updates: dict[str, Any] = {}
+    if body.summary is not None:
+        updates["mining_summary_prompt"] = body.summary
+    if body.suggest is not None:
+        updates["mining_suggest_prompt"] = body.suggest
+    if not updates:
+        raise HTTPException(status_code=400, detail="no fields provided")
+    config_service.patch(updates)
+    return _ai_prompts_payload()

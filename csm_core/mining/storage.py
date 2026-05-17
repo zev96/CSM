@@ -91,6 +91,53 @@ def apply_v3_migration(conn: sqlite3.Connection) -> None:
         conn.execute(stmt)
 
 
+# ── Schema v4 additions ─────────────────────────────────────────────────
+# Phase 2 / 3 of Outreach: comment-drafting (video_comments) + AI summary.
+# UNIQUE(video_id, tier) is the integrity backstop for "next tier =
+# MAX(tier)+1 calculated client-side"; concurrent tabs can race the
+# computation and the DB will reject the second writer with IntegrityError.
+_DDL_V4_MINING: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS video_comments (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        video_id        INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        tier            INTEGER NOT NULL,
+        text            TEXT NOT NULL DEFAULT '',
+        image_ids_json  TEXT NOT NULL DEFAULT '[]',
+        status          TEXT NOT NULL DEFAULT 'draft',
+        source          TEXT NOT NULL DEFAULT 'manual',
+        created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        UNIQUE(video_id, tier)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_video_comments_video ON video_comments(video_id)",
+]
+
+
+def apply_v4_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v3 → v4.
+
+    Idempotent: CREATE TABLE IF NOT EXISTS on video_comments; the
+    ai_summary column on videos is added via a PRAGMA-guarded ALTER
+    because sqlite has no ``ADD COLUMN IF NOT EXISTS``.
+    """
+    for stmt in _DDL_V4_MINING:
+        conn.execute(stmt)
+    # PRAGMA returns: (cid, name, type, notnull, dflt, pk).
+    # row_factory may or may not be set on this conn (init path uses
+    # default tuple rows; later upgrades come through a Row factory).
+    cols = set()
+    for row in conn.execute("PRAGMA table_info(videos)").fetchall():
+        # Tolerate both tuple and sqlite3.Row.
+        try:
+            cols.add(row[1])
+        except (IndexError, TypeError):
+            cols.add(row["name"])
+    if "ai_summary" not in cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN ai_summary TEXT")
+
+
 def get_conn() -> sqlite3.Connection:
     """Thin alias — mining shares monitor's connection pool."""
     return monitor_storage.get_conn()
@@ -429,6 +476,13 @@ def list_videos(
 
 def _row_to_video_dict(row) -> dict[str, Any]:
     keys_csv = row["source_keywords"] or ""
+    # ai_summary is v4-only; tolerate v3 rows in mixed test setups by
+    # reading via .keys() rather than direct key access (sqlite3.Row
+    # raises IndexError on missing columns).
+    try:
+        ai_summary = row["ai_summary"]
+    except (IndexError, KeyError):
+        ai_summary = None
     return {
         "id": row["id"],
         "platform": row["platform"],
@@ -447,6 +501,7 @@ def _row_to_video_dict(row) -> dict[str, Any]:
         "commented_source": row["commented_source"],
         "commented_at": row["commented_at"],
         "first_seen_at": row["first_seen_at"],
+        "ai_summary": ai_summary,
         "source_keywords": [k for k in keys_csv.split(",") if k],
     }
 
@@ -455,3 +510,159 @@ def soft_delete_video(video_id: int) -> bool:
     conn = get_conn()
     cur = conn.execute("UPDATE videos SET excluded=1 WHERE id=?", (video_id,))
     return cur.rowcount > 0
+
+
+# ── Video comments (v4) ───────────────────────────────────────────────
+def _row_to_comment_dict(row) -> dict[str, Any]:
+    image_ids = json.loads(row["image_ids_json"]) if row["image_ids_json"] else []
+    return {
+        "id": row["id"],
+        "video_id": row["video_id"],
+        "tier": row["tier"],
+        "text": row["text"],
+        "image_ids": image_ids,
+        # Static-serve URL pattern; route layer is responsible for the
+        # actual /api/mining/images/{id} handler in T5. We compute here
+        # so all consumers (REST, CSV export) see the same shape.
+        "image_urls": [f"/api/mining/images/{img}" for img in image_ids],
+        "status": row["status"],
+        "source": row["source"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def create_comment(
+    video_id: int,
+    tier: int,
+    text: str,
+    image_ids: list[str] | None = None,
+    source: str = "manual",
+) -> int:
+    """Insert a new comment row. Raises sqlite3.IntegrityError on
+    UNIQUE(video_id, tier) violation — caller (T5 route) maps to 409."""
+    conn = get_conn()
+    cur = conn.execute(
+        """
+        INSERT INTO video_comments(video_id, tier, text, image_ids_json, source)
+        VALUES(?, ?, ?, ?, ?)
+        RETURNING id
+        """,
+        (
+            video_id,
+            tier,
+            text,
+            json.dumps(list(image_ids or []), ensure_ascii=False),
+            source,
+        ),
+    )
+    return int(cur.fetchone()[0])
+
+
+def list_comments(video_id: int) -> list[dict[str, Any]]:
+    """Return comments for a video, ordered by tier ascending."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM video_comments WHERE video_id=? ORDER BY tier ASC",
+        (video_id,),
+    ).fetchall()
+    return [_row_to_comment_dict(r) for r in rows]
+
+
+def get_comment(comment_id: int) -> dict[str, Any] | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM video_comments WHERE id=?", (comment_id,),
+    ).fetchone()
+    return _row_to_comment_dict(row) if row else None
+
+
+def update_comment(
+    comment_id: int,
+    *,
+    text: str | None = None,
+    image_ids: list[str] | None = None,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    """Partial update. Returns the post-update row, or None if no such id.
+
+    Caller is responsible for diff-and-cleanup of removed image_ids
+    (T5 routes call mining_images_service.delete_images on the removed
+    set) so this layer stays storage-only and free of side effects.
+    """
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM video_comments WHERE id=?", (comment_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    sets: list[str] = []
+    args: list[Any] = []
+    if text is not None:
+        sets.append("text=?")
+        args.append(text)
+    if image_ids is not None:
+        sets.append("image_ids_json=?")
+        args.append(json.dumps(list(image_ids), ensure_ascii=False))
+    if status is not None:
+        sets.append("status=?")
+        args.append(status)
+    if not sets:
+        return _row_to_comment_dict(row)
+    sets.append("updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+    args.append(comment_id)
+    conn.execute(
+        f"UPDATE video_comments SET {', '.join(sets)} WHERE id=?",
+        args,
+    )
+    new_row = conn.execute(
+        "SELECT * FROM video_comments WHERE id=?", (comment_id,),
+    ).fetchone()
+    return _row_to_comment_dict(new_row) if new_row else None
+
+
+def delete_comment(comment_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.execute("DELETE FROM video_comments WHERE id=?", (comment_id,))
+    return cur.rowcount > 0
+
+
+def set_ai_summary(video_id: int, text: str) -> None:
+    conn = get_conn()
+    conn.execute("UPDATE videos SET ai_summary=? WHERE id=?", (text, video_id))
+
+
+def bulk_mark_commented(video_ids: list[int], value: bool) -> int:
+    """Flip already_commented for a batch. Returns row count touched.
+
+    When marking true, stamp commented_source='manual' + commented_at=now;
+    when un-marking, clear both metadata columns. Empty list returns 0
+    without hitting the DB.
+    """
+    if not video_ids:
+        return 0
+    conn = get_conn()
+    placeholders = ",".join("?" * len(video_ids))
+    if value:
+        sql = (
+            f"UPDATE videos SET already_commented=1, commented_source='manual', "
+            f"commented_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            f"WHERE id IN ({placeholders})"
+        )
+    else:
+        sql = (
+            f"UPDATE videos SET already_commented=0, commented_source=NULL, "
+            f"commented_at=NULL WHERE id IN ({placeholders})"
+        )
+    cur = conn.execute(sql, list(video_ids))
+    return cur.rowcount
+
+
+def next_tier(video_id: int) -> int:
+    """Next available tier number for a video (1-based)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(MAX(tier), 0) + 1 AS next FROM video_comments WHERE video_id=?",
+        (video_id,),
+    ).fetchone()
+    return int(row["next"]) if row else 1
