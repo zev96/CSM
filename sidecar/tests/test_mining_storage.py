@@ -164,3 +164,9 @@ def test_extract_platform_video_id_handles_short_forms():
     assert ms.extract_platform_video_id("bilibili", "https://b23.tv/video/BV1ab2cd3ef4") == "BV1ab2cd3ef4"
     assert ms.extract_platform_video_id("kuaishou", "https://www.kuaishou.com/short-video/aZ9Q1xY") == "aZ9Q1xY"
     assert ms.extract_platform_video_id("douyin", "https://example.com") is None
+
+
+def test_mining_browser_import_only():
+    from csm_core.browser_infra import mining_browser
+    assert callable(mining_browser.launched_page)
+    assert callable(mining_browser.has_login_cookie)
