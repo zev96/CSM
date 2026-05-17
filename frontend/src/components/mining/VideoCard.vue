@@ -587,7 +587,7 @@ const pillLabel = computed(() => {
         </div>
 
         <!--
-          Floor area is FIXED to 200px so every card reserves the same
+          Floor area is FIXED to 150px so every card reserves the same
           vertical space regardless of how many floors are inside —
           keeps the 2-col grid rows visually aligned and gives empty /
           1-2-floor cards a "blueprint" that doesn't shift when content
@@ -596,7 +596,7 @@ const pillLabel = computed(() => {
         -->
         <div
           :class="['floor-scroll', cardState === 'drafting' ? 'floor-scroll-active' : 'floor-scroll-idle']"
-          :style="{ height: '200px', overflowY: comments.length >= 3 ? 'auto' : 'hidden', paddingRight: comments.length >= 3 ? '4px' : '0' }"
+          :style="{ height: '150px', overflowY: comments.length >= 3 ? 'auto' : 'hidden', paddingRight: comments.length >= 3 ? '4px' : '0' }"
         >
           <FloorList
             v-if="comments.length > 0"
