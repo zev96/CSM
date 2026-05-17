@@ -587,16 +587,16 @@ const pillLabel = computed(() => {
         </div>
 
         <!--
-          Floor area is capped at 200px so that, no matter how many floors
-          the user 盖's on this card, the overall card height stays in
-          line with adjacent cards in the 2-col grid (otherwise the row
-          gets visually jagged). 3+ floors → internal scrollbar, styled
-          to match tone via the `floor-scroll-active` / `floor-scroll-done`
-          classes in style.css.
+          Floor area is FIXED to 200px so every card reserves the same
+          vertical space regardless of how many floors are inside —
+          keeps the 2-col grid rows visually aligned and gives empty /
+          1-2-floor cards a "blueprint" that doesn't shift when content
+          arrives. 3+ floors → internal scrollbar, tone-tinted via
+          `floor-scroll-active` / `floor-scroll-idle` (style.css).
         -->
         <div
           :class="['floor-scroll', cardState === 'drafting' ? 'floor-scroll-active' : 'floor-scroll-idle']"
-          :style="{ maxHeight: '200px', overflowY: comments.length >= 3 ? 'auto' : 'hidden', paddingRight: comments.length >= 3 ? '4px' : '0' }"
+          :style="{ height: '200px', overflowY: comments.length >= 3 ? 'auto' : 'hidden', paddingRight: comments.length >= 3 ? '4px' : '0' }"
         >
           <FloorList
             v-if="comments.length > 0"
@@ -607,17 +607,33 @@ const pillLabel = computed(() => {
           />
           <div
             v-else
-            class="flex items-center justify-center text-center"
+            class="flex flex-col items-center justify-center text-center"
             :style="{
+              height: '100%',
               background: 'var(--card-2)',
               border: '1px dashed var(--line-2)',
               borderRadius: '10px',
-              padding: '22px 14px',
               color: 'var(--ink-3)',
               fontSize: '11.5px',
+              gap: '10px',
             }"
           >
-            还没有评论 · 在下面写一条作为第 1 层
+            <span
+              :style="{
+                width: '28px',
+                height: '28px',
+                borderRadius: '8px',
+                background: 'var(--card)',
+                color: 'var(--ink-4)',
+                border: '1px dashed var(--line-2)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }"
+            >
+              <Icon name="comment" :size="13"/>
+            </span>
+            <span>还没有评论 · 在下面写一条作为第 1 层</span>
           </div>
         </div>
       </div>
