@@ -6,13 +6,16 @@ import StartJobModal from "@/components/mining/StartJobModal.vue";
 import OutreachHero from "@/components/mining/OutreachHero.vue";
 import VideoCard from "@/components/mining/VideoCard.vue";
 import { useMiningStore, type Platform } from "@/stores/mining";
+import { useToast } from "@/composables/useToast";
 
 const store = useMiningStore();
+const toast = useToast();
 const showNewTask = ref(false);
 const tab = ref<"unread" | "done" | "all">("unread");
 const platform = ref<"all" | Platform>("all");
 const sortBy = ref("最新");
 const selected = ref(new Set<number>());
+const bulkMarkBusy = ref(false);
 
 const counts = computed(() => ({
   unread: store.videos.filter(v => !v.already_commented).length,
@@ -39,6 +42,37 @@ function toggleSelect(id: number) {
 async function onStartSubmit(payload: { keyword: string; platforms: Platform[]; target: number }) {
   showNewTask.value = false;
   await store.startJob(payload.keyword, payload.platforms, payload.target);
+}
+
+async function onBulkMarkCommented() {
+  if (selected.value.size === 0 || bulkMarkBusy.value) return;
+  bulkMarkBusy.value = true;
+  try {
+    const ids = Array.from(selected.value);
+    const updated = await store.bulkMarkCommented(ids, true);
+    toast.success(`已标记 ${updated} 条`);
+    selected.value = new Set();
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("批量标记失败" + (detail ? "：" + detail : ""));
+  } finally {
+    bulkMarkBusy.value = false;
+  }
+}
+
+function onBulkOpen() {
+  const byId = new Map(filtered.value.map(v => [v.id, v]));
+  let opened = 0;
+  selected.value.forEach((id) => {
+    const v = byId.get(id);
+    if (v?.url) {
+      window.open(v.url, "_blank");
+      opened += 1;
+    }
+  });
+  if (opened > 0) {
+    toast.success(`已在新窗口打开 ${opened} 条`);
+  }
 }
 
 onMounted(async () => {
@@ -227,16 +261,24 @@ onMounted(async () => {
       </span>
       <span style="width: 1px; height: 18px; background: rgba(255,255,255,0.14);"/>
       <button
-        disabled
+        :disabled="bulkMarkBusy"
         class="inline-flex items-center gap-1.5 text-[12px] font-medium"
-        style="height: 30px; padding: 0 12px; border-radius: 999px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.45); cursor: not-allowed;"
-        title="第二期上线"
+        :style="{
+          height: '30px',
+          padding: '0 12px',
+          borderRadius: '999px',
+          background: 'rgba(255,255,255,0.08)',
+          color: bulkMarkBusy ? 'rgba(255,255,255,0.45)' : '#fbf7ec',
+          cursor: bulkMarkBusy ? 'wait' : 'pointer',
+        }"
+        @click="onBulkMarkCommented"
       >
-        <Icon name="check" :size="12"/> 标记已评论
+        <Icon name="check" :size="12"/> {{ bulkMarkBusy ? "标记中…" : "标记已评论" }}
       </button>
       <button
         class="inline-flex items-center gap-1.5 text-[12px] font-medium"
         style="height: 30px; padding: 0 12px; border-radius: 999px; background: rgba(255,255,255,0.08); color: #fbf7ec; cursor: pointer;"
+        @click="onBulkOpen"
       >
         <Icon name="external" :size="12"/> 全部打开
       </button>
@@ -244,7 +286,7 @@ onMounted(async () => {
         disabled
         class="inline-flex items-center gap-1.5 text-[12px] font-medium"
         style="height: 30px; padding: 0 12px; border-radius: 999px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.45); cursor: not-allowed;"
-        title="第二期上线"
+        title="即将上线"
       >
         <Icon name="download" :size="12"/> 导出选中
       </button>

@@ -89,34 +89,132 @@ def _json(obj: Any) -> str:
 
 
 # ── Videos ───────────────────────────────────────────────────────────
+def _parse_ids_param(ids: str | None) -> list[int] | None:
+    """Parse a ``?ids=1,2,3`` query string into a list of ints.
+
+    Empty / None → ``None`` (caller falls back to filter-based listing).
+    Non-numeric tokens are silently skipped — the export is a convenience
+    endpoint, not a transactional API, so we don't 400 on a malformed
+    URL the user pasted by hand.
+    """
+    if not ids:
+        return None
+    out: list[int] = []
+    for tok in ids.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.append(int(tok))
+        except ValueError:
+            continue
+    return out or None
+
+
+def _fetch_comments_by_video(video_ids: list[int]) -> tuple[dict[int, dict[int, dict]], int]:
+    """One round-trip: fetch all comments for the given videos.
+
+    Returns (comments_by_video, max_tier) where comments_by_video is
+    ``{video_id: {tier: {"text": str, "image_ids": list[str]}}}`` and
+    max_tier is 0 if no comments exist for any of the videos.
+    """
+    if not video_ids:
+        return {}, 0
+    import json as _json
+
+    conn = mining_storage.get_conn()
+    placeholders = ",".join("?" * len(video_ids))
+    rows = conn.execute(
+        f"SELECT video_id, tier, text, image_ids_json FROM video_comments "
+        f"WHERE video_id IN ({placeholders}) ORDER BY video_id, tier",
+        list(video_ids),
+    ).fetchall()
+    by_video: dict[int, dict[int, dict]] = {}
+    max_tier = 0
+    for r in rows:
+        vid = int(r["video_id"])
+        tier = int(r["tier"])
+        if tier > max_tier:
+            max_tier = tier
+        try:
+            image_ids = _json.loads(r["image_ids_json"]) if r["image_ids_json"] else []
+        except (ValueError, TypeError):
+            image_ids = []
+        by_video.setdefault(vid, {})[tier] = {
+            "text": r["text"] or "",
+            "image_ids": image_ids,
+        }
+    return by_video, max_tier
+
+
 @router.get("/api/mining/videos/export.csv")
 async def export_csv(
     keyword: str | None = Query(default=None),
     platform: Platform | None = Query(default=None),
     commented: str = Query(default="0", pattern="^(0|1|all)$"),
     q: str | None = Query(default=None),
+    ids: str | None = Query(default=None),
 ):
-    rows, _ = mining_storage.list_videos(
-        keyword=keyword, platform=platform, commented=commented,
-        q=q, offset=0, limit=10_000,
-    )
+    selected_ids = _parse_ids_param(ids)
+    if selected_ids is not None:
+        # Explicit id list overrides the filter params. We still go through
+        # list_videos for the source_keywords aggregation, then filter
+        # down — small N so an in-Python filter is fine.
+        rows, _ = mining_storage.list_videos(
+            commented="all", offset=0, limit=10_000,
+        )
+        wanted = set(selected_ids)
+        rows = [r for r in rows if r["id"] in wanted]
+    else:
+        rows, _ = mining_storage.list_videos(
+            keyword=keyword, platform=platform, commented=commented,
+            q=q, offset=0, limit=10_000,
+        )
+
+    # Single-query comment fetch keyed by the exported video ids only.
+    video_ids = [int(r["id"]) for r in rows]
+    comments_by_video, max_tier = _fetch_comments_by_video(video_ids)
+
     buf = io.StringIO()
     buf.write("﻿")  # BOM so Excel auto-detects UTF-8
     writer = csv.writer(buf)
-    writer.writerow([
+    header = [
         "platform", "video_id", "url", "title", "author",
         "duration_sec", "play_count", "like_count",
         "source_keywords", "already_commented", "first_seen_at",
-    ])
+        "ai_summary",
+    ]
+    # If no comments exist for any selected video (max_tier == 0), don't
+    # add comment_tier_N columns at all — keeps the old export shape for
+    # callers who don't use the new feature (spec §4.5 "向后兼容").
+    for tier in range(1, max_tier + 1):
+        header.append(f"comment_tier_{tier}")
+        header.append(f"images_tier_{tier}")
+    writer.writerow(header)
+
     for r in rows:
-        writer.writerow([
+        row = [
             r["platform"], r["platform_video_id"], r["url"], r["title"],
             r["author_name"], r["duration_sec"] or "",
             r["play_count"] or "", r["like_count"] or "",
             "|".join(r["source_keywords"]),
             "1" if r["already_commented"] else "0",
             r["first_seen_at"],
-        ])
+            r.get("ai_summary") or "",
+        ]
+        tiers_for_video = comments_by_video.get(int(r["id"]), {})
+        for tier in range(1, max_tier + 1):
+            c = tiers_for_video.get(tier)
+            if c is None:
+                row.append("")
+                row.append("")
+            else:
+                row.append(c["text"])
+                # Relative URLs so the export is portable; could be zipped
+                # alongside an ``images/`` directory later (spec §4.5).
+                row.append(",".join(f"images/{img}" for img in c["image_ids"]))
+        writer.writerow(row)
+
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv; charset=utf-8",
