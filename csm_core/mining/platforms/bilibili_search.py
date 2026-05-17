@@ -79,7 +79,7 @@ class BilibiliSearchAdapter:
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
             # Paginate by clicking "下一页" or by URL ?page=N — URL is more reliable.
-            for page_num in range(1, 11):  # cap at 10 pages = ~200 results
+            for page_num in range(2, 11):  # initial goto already loaded page 1; cap at ~200 results
                 if cancel_event.is_set() or emitted >= target_count:
                     break
                 page.goto(
