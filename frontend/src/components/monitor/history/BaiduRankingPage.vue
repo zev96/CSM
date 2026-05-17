@@ -1477,7 +1477,11 @@ defineExpose({ reload: loadTasks });
                 <div v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
               </div>
 
-              <!-- 状态 -->
+              <!--
+                状态 ＝ 是否达到任务设置的「理想卡位（数量）」。
+                总卡位 ＝ 默认搜索命中 ＋ 最新资讯命中（无资讯块时只算默认）。
+                ≥ idealRank → 理想，否则 → 未理想；抓取失败单独标记；未跑（row.result === null）显示「未跑」。
+              -->
               <div>
                 <template v-if="!row.result">
                   <Pill tone="info">未跑</Pill>
