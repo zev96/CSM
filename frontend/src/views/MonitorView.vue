@@ -80,6 +80,16 @@ const commentSubtab = ref<CommentPlatform>("bilibili");
 type HistorySubtab = "retention" | "zhihu" | "baidu";
 const historySubtab = ref<HistorySubtab>("retention");
 
+// 当前 tab 对应的任务 type——modal 的 :default-type 和 @imported reload 共用，
+// 避免两处分别 inline 维护出现错位（baidu 分支原本只在 :default-type 里有，
+// @imported 漏了，导致百度批量导入后刷错 tab 的列表）。
+const currentTaskType = computed<string>(() => {
+  if (activeTab.value === "zhihu") return "zhihu_question";
+  if (activeTab.value === "baidu") return "baidu_keyword";
+  if (activeTab.value === "report" && historySubtab.value === "baidu") return "baidu_keyword";
+  return PLATFORM_TYPE[commentSubtab.value];
+});
+
 interface Task {
   id: number;
   type: string;
@@ -3260,18 +3270,8 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
     />
     <BatchImportTaskModal
       v-model:open="showBatchImport"
-      :default-type="
-        activeTab === 'zhihu'
-          ? 'zhihu_question'
-          : activeTab === 'baidu' || (activeTab === 'report' && historySubtab === 'baidu')
-            ? 'baidu_keyword'
-            : commentSubtab === 'bilibili'
-              ? 'bilibili_comment'
-              : commentSubtab === 'douyin'
-                ? 'douyin_comment'
-                : 'kuaishou_comment'
-      "
-      @imported="loadTasks(activeTab === 'zhihu' ? 'zhihu_question' : PLATFORM_TYPE[commentSubtab])"
+      :default-type="currentTaskType"
+      @imported="loadTasks(currentTaskType)"
     />
     <CookieManagerModal
       v-model:open="showCookieMgr"
