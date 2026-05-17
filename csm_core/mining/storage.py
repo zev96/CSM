@@ -94,3 +94,348 @@ def apply_v3_migration(conn: sqlite3.Connection) -> None:
 def get_conn() -> sqlite3.Connection:
     """Thin alias — mining shares monitor's connection pool."""
     return monitor_storage.get_conn()
+
+
+# ── Job CRUD ──────────────────────────────────────────────────────────
+def create_job(keyword: str, platforms: list[str], target_per_platform: int) -> int:
+    conn = get_conn()
+    cur = conn.execute(
+        """
+        INSERT INTO mining_jobs(keyword, platforms_json, target_per_platform, status, progress_json)
+        VALUES(?, ?, ?, 'pending', ?)
+        RETURNING id
+        """,
+        (
+            keyword,
+            json.dumps(platforms, ensure_ascii=False),
+            target_per_platform,
+            json.dumps({p: {"got": 0, "target": target_per_platform, "phase": "queued"} for p in platforms}, ensure_ascii=False),
+        ),
+    )
+    return int(cur.fetchone()[0])
+
+
+def mark_started(job_id: int) -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE mining_jobs SET status='running', started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+        (job_id,),
+    )
+
+
+def update_platform_progress(job_id: int, platform: str, *, got: int, target: int, phase: str, note: str = "") -> None:
+    conn = get_conn()
+    row = conn.execute("SELECT progress_json FROM mining_jobs WHERE id=?", (job_id,)).fetchone()
+    if row is None:
+        return
+    progress: dict[str, Any] = json.loads(row["progress_json"]) if row["progress_json"] else {}
+    progress[platform] = {"got": got, "target": target, "phase": phase, "note": note}
+    conn.execute(
+        "UPDATE mining_jobs SET progress_json=? WHERE id=?",
+        (json.dumps(progress, ensure_ascii=False), job_id),
+    )
+
+
+def finalize_job(job_id: int) -> dict[str, Any]:
+    """Compute the overall job status from per-platform phases."""
+    conn = get_conn()
+    row = conn.execute("SELECT progress_json FROM mining_jobs WHERE id=?", (job_id,)).fetchone()
+    if row is None:
+        return {}
+    progress: dict[str, Any] = json.loads(row["progress_json"]) if row["progress_json"] else {}
+    phases = [p["phase"] for p in progress.values()]
+    successes = sum(1 for ph in phases if ph == "done")
+    failures = len(phases) - successes
+    if successes == len(phases) and len(phases) > 0:
+        status = "done"
+    elif successes == 0:
+        status = "failed"
+    else:
+        status = "partial_done"
+    conn.execute(
+        "UPDATE mining_jobs SET status=?, finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+        (status, job_id),
+    )
+    return {"status": status, "successes": successes, "failures": failures, "progress": progress}
+
+
+def cancel_job_if_running(job_id: int) -> bool:
+    """Flip status to cancelled only if still running/pending. Caller wakes the runner separately."""
+    conn = get_conn()
+    cur = conn.execute(
+        """
+        UPDATE mining_jobs SET status='cancelled', finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id=? AND status IN ('pending', 'running')
+        """,
+        (job_id,),
+    )
+    return cur.rowcount > 0
+
+
+def mark_interrupted_jobs() -> int:
+    """At sidecar startup, flip orphaned status=running rows to interrupted."""
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE mining_jobs SET status='interrupted', finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running'"
+    )
+    return cur.rowcount
+
+
+def get_job(job_id: int) -> dict[str, Any] | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM mining_jobs WHERE id=?", (job_id,)).fetchone()
+    return _row_to_job_dict(row) if row else None
+
+
+def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM mining_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [_row_to_job_dict(r) for r in rows]
+
+
+def _row_to_job_dict(row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "keyword": row["keyword"],
+        "platforms": json.loads(row["platforms_json"]),
+        "target_per_platform": row["target_per_platform"],
+        "status": row["status"],
+        "progress": json.loads(row["progress_json"]) if row["progress_json"] else {},
+        "error_message": row["error_message"],
+        "created_at": row["created_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+    }
+
+
+# ── Video upsert ──────────────────────────────────────────────────────
+def upsert_video_and_link(card, job_id: int) -> int:
+    """Insert (or skip duplicate) a video row, run the already_commented
+    check on first insert, and always add the source-keyword link.
+
+    Returns the videos.id (existing or freshly inserted).
+
+    Why a single function and not two: the call site (``runner.on_card``)
+    needs both writes to happen atomically with respect to the rest of
+    the pipeline — if we split, a crash between them could leave a
+    video row without its keyword link, which would make the dedup-on-
+    rerun behavior silently wrong.
+    """
+    conn = get_conn()
+    # Step 1: try insert; ON CONFLICT keep existing row but return id.
+    cur = conn.execute(
+        """
+        INSERT INTO videos(platform, platform_video_id, url, title, author_name, author_id,
+                           cover_url, duration_sec, play_count, like_count, published_at, raw_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(platform, platform_video_id) DO NOTHING
+        RETURNING id
+        """,
+        (
+            card.platform, card.platform_video_id, card.url, card.title,
+            card.author_name, card.author_id, card.cover_url,
+            card.duration_sec, card.play_count, card.like_count, card.published_at,
+            json.dumps(card.raw, ensure_ascii=False, default=str),
+        ),
+    )
+    row = cur.fetchone()
+    is_new = row is not None
+    if is_new:
+        video_id = int(row[0])
+        # Run reverse-lookup ONLY on first insert. Cheap (≤ 1 sqlite query
+        # per platform per card) and ensures the already_commented flag
+        # is in place before the UI ever sees the row.
+        _check_already_commented(conn, video_id, card.platform, card.platform_video_id)
+    else:
+        # Existing row — fetch its id.
+        idrow = conn.execute(
+            "SELECT id FROM videos WHERE platform=? AND platform_video_id=?",
+            (card.platform, card.platform_video_id),
+        ).fetchone()
+        video_id = int(idrow["id"])
+    # Step 2: link this hit to the keyword + job. Composite PK swallows
+    # the "same video, same keyword, same job" case (only happens on
+    # retries — rank stays the first rank we observed).
+    keyword = _job_keyword(conn, job_id)
+    conn.execute(
+        """
+        INSERT INTO video_source_keywords(video_id, keyword, job_id, rank_in_search)
+        VALUES(?,?,?,?)
+        ON CONFLICT DO NOTHING
+        """,
+        (video_id, keyword, job_id, card.rank_in_search),
+    )
+    return video_id
+
+
+def _job_keyword(conn, job_id: int) -> str:
+    row = conn.execute("SELECT keyword FROM mining_jobs WHERE id=?", (job_id,)).fetchone()
+    return row["keyword"] if row else ""
+
+
+# ── already_commented reverse lookup ──────────────────────────────────
+# Each platform's *_comment task targets a video URL; we extract the
+# platform_video_id from that URL using the same regex set the monitor
+# adapters use. Kept in-module to avoid pulling adapter code into mining.
+import re as _re
+
+_VIDEO_ID_PATTERNS: dict[str, list[_re.Pattern[str]]] = {
+    "douyin": [
+        _re.compile(r"/video/(\d+)"),
+        _re.compile(r"/note/(\d+)"),
+        _re.compile(r"modal_id=(\d+)"),
+        _re.compile(r"aweme_id=(\d+)"),
+    ],
+    "bilibili": [
+        _re.compile(r"/video/(BV[A-Za-z0-9]+)"),
+        _re.compile(r"bvid=(BV[A-Za-z0-9]+)"),
+        # av-IDs can co-exist; we treat the BV form as the canonical platform_video_id.
+        _re.compile(r"/video/av(\d+)"),
+    ],
+    "kuaishou": [
+        _re.compile(r"/short-video/([0-9a-zA-Z]+)"),
+        _re.compile(r"photoId=([0-9a-zA-Z]+)"),
+        _re.compile(r"/profile/[^/]+/photo/([0-9a-zA-Z]+)"),
+    ],
+}
+
+
+def extract_platform_video_id(platform: str, url: str) -> str | None:
+    """Public helper, used by adapters AND by the reverse-lookup below."""
+    for pat in _VIDEO_ID_PATTERNS.get(platform, []):
+        m = pat.search(url or "")
+        if m:
+            return m.group(1)
+    return None
+
+
+_PLATFORM_TO_MONITOR_TYPE = {
+    "douyin": "douyin_comment",
+    "bilibili": "bilibili_comment",
+    "kuaishou": "kuaishou_comment",
+}
+
+
+def _check_already_commented(conn, video_id: int, platform: str, platform_video_id: str) -> None:
+    """Look at monitor_tasks rows for type=<platform>_comment; if any
+    target_url resolves to the same platform_video_id, mark the new
+    video row already_commented=1.
+
+    Why scan all rows of that type instead of an index lookup: monitor
+    target_urls are stored verbatim (short links, modal_id forms, etc.)
+    — no normalized column to JOIN on. The rowset is small (the user's
+    own comment task list, hundreds at most), so a linear scan with
+    regex extraction on each row is fine. If this ever crosses 10k rows
+    we can add a generated column ``platform_video_id_norm`` and an
+    index; YAGNI for v1.
+    """
+    monitor_type = _PLATFORM_TO_MONITOR_TYPE.get(platform)
+    if monitor_type is None:
+        return
+    rows = conn.execute(
+        "SELECT id, target_url, last_check_at FROM monitor_tasks WHERE type=?",
+        (monitor_type,),
+    ).fetchall()
+    for r in rows:
+        pid = extract_platform_video_id(platform, r["target_url"])
+        if pid == platform_video_id:
+            conn.execute(
+                """
+                UPDATE videos SET already_commented=1,
+                                  commented_source='monitor_task',
+                                  commented_at=?
+                WHERE id=?
+                """,
+                (r["last_check_at"], video_id),
+            )
+            return
+
+
+# ── Video reads ───────────────────────────────────────────────────────
+def list_videos(
+    *,
+    keyword: str | None = None,
+    platform: str | None = None,
+    commented: str = "0",   # "0" | "1" | "all"
+    q: str | None = None,
+    job_id: int | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> tuple[list[dict[str, Any]], int]:
+    """Returns (rows, total). Each row is a dict with source_keywords aggregated."""
+    conn = get_conn()
+    where = ["v.excluded=0"]
+    args: list[Any] = []
+    if platform:
+        where.append("v.platform=?")
+        args.append(platform)
+    if commented == "0":
+        where.append("v.already_commented=0")
+    elif commented == "1":
+        where.append("v.already_commented=1")
+    # "all" → no filter
+    if keyword:
+        where.append(
+            "EXISTS (SELECT 1 FROM video_source_keywords vsk "
+            "WHERE vsk.video_id=v.id AND vsk.keyword=?)"
+        )
+        args.append(keyword)
+    if job_id is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM video_source_keywords vsk "
+            "WHERE vsk.video_id=v.id AND vsk.job_id=?)"
+        )
+        args.append(job_id)
+    if q:
+        where.append("(v.title LIKE ? OR v.author_name LIKE ?)")
+        args.extend([f"%{q}%", f"%{q}%"])
+
+    where_sql = " AND ".join(where)
+    total = int(conn.execute(
+        f"SELECT COUNT(*) FROM videos v WHERE {where_sql}", args,
+    ).fetchone()[0])
+    rows = conn.execute(
+        f"""
+        SELECT v.*, GROUP_CONCAT(DISTINCT vsk.keyword) AS source_keywords
+        FROM videos v
+        LEFT JOIN video_source_keywords vsk ON vsk.video_id = v.id
+        WHERE {where_sql}
+        GROUP BY v.id
+        ORDER BY v.first_seen_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        args + [limit, offset],
+    ).fetchall()
+    return [_row_to_video_dict(r) for r in rows], total
+
+
+def _row_to_video_dict(row) -> dict[str, Any]:
+    keys_csv = row["source_keywords"] or ""
+    return {
+        "id": row["id"],
+        "platform": row["platform"],
+        "platform_video_id": row["platform_video_id"],
+        "url": row["url"],
+        "title": row["title"],
+        "author_name": row["author_name"],
+        "author_id": row["author_id"],
+        "cover_url": row["cover_url"],
+        "duration_sec": row["duration_sec"],
+        "play_count": row["play_count"],
+        "like_count": row["like_count"],
+        "published_at": row["published_at"],
+        "excluded": bool(row["excluded"]),
+        "already_commented": bool(row["already_commented"]),
+        "commented_source": row["commented_source"],
+        "commented_at": row["commented_at"],
+        "first_seen_at": row["first_seen_at"],
+        "source_keywords": [k for k in keys_csv.split(",") if k],
+    }
+
+
+def soft_delete_video(video_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.execute("UPDATE videos SET excluded=1 WHERE id=?", (video_id,))
+    return cur.rowcount > 0
