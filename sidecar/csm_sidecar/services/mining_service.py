@@ -1,0 +1,102 @@
+"""Mining service — submits jobs to a single-worker pool, owns the runner."""
+from __future__ import annotations
+
+import logging
+from concurrent.futures import ThreadPoolExecutor, Future
+from threading import Lock
+from typing import Any
+
+from csm_core.mining import storage as mining_storage
+from csm_core.mining.runner import MiningRunner
+
+from ..event_bus import bus as event_bus
+
+logger = logging.getLogger(__name__)
+
+
+_executor: ThreadPoolExecutor | None = None
+_runner: MiningRunner | None = None
+_active_job_id: int | None = None
+_active_lock = Lock()
+
+
+def init() -> None:
+    """Called from sidecar lifespan. Idempotent."""
+    global _executor, _runner
+    if _executor is not None:
+        return
+    _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mining-worker")
+    _runner = MiningRunner(publish=_publish_to_bus)
+    # Sweep orphaned running jobs from a previous run.
+    interrupted = mining_storage.mark_interrupted_jobs()
+    if interrupted:
+        logger.info("mining: marked %d orphaned jobs as interrupted", interrupted)
+
+
+def shutdown() -> None:
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor = None
+
+
+def is_busy() -> bool:
+    with _active_lock:
+        return _active_job_id is not None
+
+
+def active_job_id() -> int | None:
+    with _active_lock:
+        return _active_job_id
+
+
+def submit_job(keyword: str, platforms: list[str], target_per_platform: int) -> int:
+    if _executor is None or _runner is None:
+        raise RuntimeError("mining_service not initialized")
+    with _active_lock:
+        if _active_job_id is not None:
+            raise RuntimeError(f"mining busy on job {_active_job_id}")
+    job_id = mining_storage.create_job(keyword, platforms, target_per_platform)
+    event_bus.create_job(_event_job_id(job_id))
+    fut = _executor.submit(_run_with_guard, job_id)
+    fut.add_done_callback(lambda f: _on_done(job_id, f))
+    return job_id
+
+
+def cancel_job(job_id: int) -> bool:
+    if _runner is None:
+        return False
+    flipped_storage = mining_storage.cancel_job_if_running(job_id)
+    runner_acked = _runner.cancel(job_id)
+    return flipped_storage or runner_acked
+
+
+def _run_with_guard(job_id: int) -> None:
+    global _active_job_id
+    with _active_lock:
+        _active_job_id = job_id
+    try:
+        assert _runner is not None
+        _runner.run(job_id)
+    except Exception as e:
+        logger.exception("mining job %d crashed: %s", job_id, e)
+        mining_storage.finalize_job(job_id)
+    finally:
+        with _active_lock:
+            _active_job_id = None
+
+
+def _on_done(job_id: int, _future: Future) -> None:
+    event_bus.finish(_event_job_id(job_id))
+
+
+def _publish_to_bus(kind: str, payload: dict[str, Any]) -> None:
+    job_id = payload.get("job_id")
+    if job_id is None:
+        return
+    event_bus.publish(_event_job_id(job_id), kind, **payload)
+
+
+def _event_job_id(job_id: int) -> str:
+    """One bus queue per mining job, keyed by 'mining-<id>'."""
+    return f"mining-{job_id}"
