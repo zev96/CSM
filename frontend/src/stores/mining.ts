@@ -126,6 +126,13 @@ export const useMiningStore = defineStore("mining", () => {
       eventSource?.close()
       eventSource = null
     })
+    eventSource.onerror = () => {
+      // Stream errored — sidecar restart, network blip, unknown job.
+      // Browser auto-reconnect would otherwise hammer a queue that
+      // may no longer exist; close explicitly.
+      eventSource?.close()
+      eventSource = null
+    }
   }
 
   async function cancelActive() {
