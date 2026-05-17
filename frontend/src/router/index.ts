@@ -32,6 +32,12 @@ const router = createRouter({
       meta: { label: "监测中心" },
     },
     {
+      path: "/mining",
+      name: "mining",
+      component: () => import("@/views/MiningView.vue"),
+      meta: { label: "引流" },
+    },
+    {
       path: "/templates",
       name: "templates",
       component: () => import("@/views/TemplatesView.vue"),

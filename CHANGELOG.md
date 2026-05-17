@@ -2,6 +2,18 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.0] - 2026-05-17
+
+### Added
+- **视频引流抓取（mining）**：新建独立「引流」view，输入关键词后从抖音/B站/快手三平台搜索抓视频列表，全局按 `(platform, platform_video_id)` 去重落 SQLite。每平台 ≈50 条，5-10 分钟出表。
+- **已评论反查**：抓回的视频反查 `monitor_tasks` 中 `*_comment` 类型任务，命中则标 `already_commented=1`；前端默认筛选"未评论"看不到，切到"已评论"看到 + 绿色徽章 + 来源 tooltip。
+- **平台登录 UI**：首次手动登录浏览器、cookie 持久化到 `<config_dir>/browser_profiles/<platform>/`，下次抓取自动复用。
+- **任务进度 SSE**：mining 任务运行时通过 SSE 实时推 `job.progress` / `job.platform_done` / `job.finished` 事件到前端进度卡。
+
+### Changed
+- 共享浏览器基建（`cookie_store` / `ua_pool` / `rate_limit` / `patchright_pool` / `interactive_login`）从 `csm_core/monitor/` 上提到新的顶层 `csm_core/browser_infra/` 包；`monitor` 包内保留 re-export 薄层以兼容现有调用方。
+- monitor SQLite schema 升级到 v3（新增 `mining_jobs` / `videos` / `video_source_keywords` 三张表）。
+
 ## [0.4.9] - 2026-05-16
 
 ### Fixed

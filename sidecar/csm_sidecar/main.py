@@ -22,6 +22,7 @@ from .routes import batch as batch_routes
 from .routes import config as config_routes
 from .routes import dedup as dedup_routes
 from .routes import generate as generate_routes
+from .routes import mining as mining_routes
 from .routes import monitor as monitor_routes
 from .routes import skills as skills_routes
 from .routes import system as system_routes
@@ -79,6 +80,7 @@ app.include_router(generate_routes.router)
 app.include_router(article_routes.router)
 app.include_router(batch_routes.router)
 app.include_router(monitor_routes.router)
+app.include_router(mining_routes.router)
 app.include_router(dedup_routes.router)
 app.include_router(updater_routes.router)
 app.include_router(aggregation_routes.router)

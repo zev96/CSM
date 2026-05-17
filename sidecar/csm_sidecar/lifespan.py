@@ -94,6 +94,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             # Failure here shouldn't kill the whole sidecar — the user can
             # still generate articles, just not run scheduled monitoring.
             logger.exception("MonitorLoop failed to start; continuing without it")
+        try:
+            from .services import mining_service
+            mining_service.init()
+            from csm_core.browser_infra import mining_browser as _mb
+            from csm_core import config as core_config
+            _mb.configure_profile_root(core_config.default_config_dir() / "browser_profiles")
+        except Exception:
+            logger.exception("mining_service init failed; continuing without mining")
     try:
         yield
     finally:
@@ -111,6 +119,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 monitor_lifecycle.stop()
             except Exception:
                 logger.exception("MonitorLoop shutdown raised; ignoring")
+        try:
+            from .services import mining_service
+            mining_service.shutdown()
+        except Exception:
+            logger.exception("mining_service shutdown raised; ignoring")
 
 
 async def _auto_scan_vault() -> None:

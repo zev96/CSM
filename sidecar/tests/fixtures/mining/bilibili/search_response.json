@@ -1,0 +1,35 @@
+{
+  "code": 0,
+  "data": {
+    "result": [
+      {
+        "type": "video",
+        "bvid": "BV1abc23defg",
+        "aid": 1234567890,
+        "title": "扫地机器人选购指南",
+        "author": "测评UP主",
+        "mid": 88888888,
+        "pic": "//i0.hdslb.com/bfs/archive/abc.jpg",
+        "duration": "10:23",
+        "play": 12345,
+        "like": 678,
+        "pubdate": 1715000000,
+        "description": "本期测评 ..."
+      },
+      {
+        "type": "video",
+        "bvid": "BV2bcd34efgh",
+        "aid": 1234567891,
+        "title": "扫地机器人对比",
+        "author": "家电小白",
+        "mid": 77777777,
+        "pic": "//i0.hdslb.com/bfs/archive/def.jpg",
+        "duration": "5:01",
+        "play": 50000,
+        "like": 1200,
+        "pubdate": 1715100000,
+        "description": "..."
+      }
+    ]
+  }
+}

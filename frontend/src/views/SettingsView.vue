@@ -25,6 +25,7 @@ import CookieManagerModal from "@/components/monitor/CookieManagerModal.vue";
 import NotificationPrefsModal from "@/components/ui/NotificationPrefsModal.vue";
 import FormInput from "@/components/forms/FormInput.vue";
 import Spinner from "@/components/ui/Spinner.vue";
+import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
 import logoUrl from "@/assets/logo.png";
 
 import { useConfig } from "@/stores/config";
@@ -1079,6 +1080,16 @@ async function saveAccountEdit() {
                 </div>
               </SettingsRow>
             </div>
+
+            <!--
+              Outreach AI 提示词 — 评论楼 AI 速览 / AI 建议 用的 prompt
+              模板的用户自定义入口。后端契约见 design §4.6，前端组件自带
+              GET + PATCH，所以放在「模型」section 末尾是完整可用的。
+            -->
+            <div class="mb-3 mt-5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              Outreach AI 提示词
+            </div>
+            <MiningPromptsCard />
           </template>
 
           <!-- 导出 section 已合并到「通用」，「导出后操作」默认无动作。 -->
