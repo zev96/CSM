@@ -102,6 +102,19 @@ def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
             "mining_browser[%s] launched (profile=%s, node_pid=%d)",
             platform, user_data_dir, node_pid,
         )
+        # Inject cookies from monitor.db platform_credentials. This is the
+        # supported login surface — monitor's "interactive login" or
+        # cookie-paste flow already populates these for douyin/bilibili/
+        # kuaishou. Mining no longer needs its own login UX; users just
+        # configure cookies once in 监控中心 → 凭据管理 and we ride along.
+        try:
+            n = _inject_monitor_cookies(context, platform)
+            if n:
+                logger.info(
+                    "mining_browser[%s] injected %d cookies from monitor DB", platform, n,
+                )
+        except Exception as e:
+            logger.warning("mining_browser[%s] cookie injection failed: %s", platform, e)
         try:
             yield page
         finally:
@@ -119,53 +132,98 @@ def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
 
 
 def has_login_cookie(platform: str) -> bool:
-    """Best-effort: does the persistent profile have a key login cookie?
+    """Does monitor.db have an enabled credential for this platform?
 
-    Returns False if the profile root has not been configured yet (e.g. tests
-    that didn't call configure_profile_root, or sidecar lifespan init that
-    swallowed an exception). A speculative "no cookie" answer is always safer
-    than crashing the calling adapter.
+    Mining reuses the cookies that the user already configured in 监控中心
+    (via the existing interactive-login flow or cookie-paste UI). That's
+    the only login surface — mining doesn't maintain its own per-platform
+    profile credentials.
 
-    Chromium cookie file layout has moved over time:
-      - Older builds: ``<profile>/Default/Cookies``
-      - Patchright/Chromium 120+: ``<profile>/Default/Network/Cookies``
-    We probe the newer path first and fall back, so this stays robust if
-    Patchright bumps its bundled Chromium between releases.
+    The platform name maps to monitor's TaskType naming convention:
+      - "bilibili" → "bilibili_comment"
+      - "douyin"   → "douyin_comment"
+      - "kuaishou" → "kuaishou_comment"
     """
-    try:
-        profile = _profile_dir_for(platform)
-    except RuntimeError:
-        return False
-    cookies_db = None
-    for candidate in (
-        profile / "Default" / "Network" / "Cookies",  # Chromium 120+
-        profile / "Default" / "Cookies",              # legacy fallback
-    ):
-        if candidate.exists():
-            cookies_db = candidate
-            break
-    if cookies_db is None:
-        return False
-    key_cookie = {
-        "douyin": "sessionid",
-        "bilibili": "SESSDATA",
-        "kuaishou": "kuaishou.web.cp.api_st",
-    }.get(platform)
-    if not key_cookie:
+    cred_type = _MONITOR_CRED_TYPE.get(platform)
+    if not cred_type:
         return False
     try:
-        import sqlite3
-        conn = sqlite3.connect(f"file:{cookies_db}?mode=ro", uri=True, timeout=0.2)
-        try:
-            row = conn.execute(
-                "SELECT 1 FROM cookies WHERE name=? LIMIT 1", (key_cookie,)
-            ).fetchone()
-            return row is not None
-        finally:
-            conn.close()
-    except sqlite3.OperationalError:
-        # locked = Chromium running with this profile → assume valid
-        return True
+        from csm_core.monitor import storage as monitor_storage
+        conn = monitor_storage.get_conn()
+        row = conn.execute(
+            "SELECT 1 FROM platform_credentials "
+            "WHERE platform=? AND enabled=1 LIMIT 1",
+            (cred_type,),
+        ).fetchone()
+        return row is not None
     except Exception as e:
-        logger.debug("has_login_cookie[%s] read failed: %s", platform, e)
+        logger.debug("has_login_cookie[%s] monitor DB lookup failed: %s", platform, e)
         return False
+
+
+_MONITOR_CRED_TYPE = {
+    "bilibili": "bilibili_comment",
+    "douyin": "douyin_comment",
+    "kuaishou": "kuaishou_comment",
+}
+
+_COOKIE_DOMAIN = {
+    "bilibili": ".bilibili.com",
+    "douyin": ".douyin.com",
+    "kuaishou": ".kuaishou.com",
+}
+
+
+def _inject_monitor_cookies(context: Any, platform: str) -> int:
+    """Pull the most-recently-used enabled credential from monitor.db and
+    inject its cookies into the patchright browser ``context``.
+
+    Returns the number of cookies injected (0 if none / config error).
+
+    The cookies_text column stores a ``k=v; k=v`` string captured either
+    by monitor's interactive-login flow or pasted from the user's daily
+    Chrome (via 监控中心 → 凭据管理). We parse it the same way
+    patchright_pool.set_cookies_for_domain does — Secure=True + SameSite=Lax,
+    far-future expires so they survive the Chromium session boundary.
+    """
+    cred_type = _MONITOR_CRED_TYPE.get(platform)
+    domain = _COOKIE_DOMAIN.get(platform)
+    if not cred_type or not domain:
+        return 0
+    try:
+        from csm_core.monitor import storage as monitor_storage
+        conn = monitor_storage.get_conn()
+        row = conn.execute(
+            "SELECT cookies_text FROM platform_credentials "
+            "WHERE platform=? AND enabled=1 "
+            "ORDER BY last_used_at DESC NULLS LAST, id DESC LIMIT 1",
+            (cred_type,),
+        ).fetchone()
+    except Exception as e:
+        logger.warning("_inject_monitor_cookies[%s] DB lookup failed: %s", platform, e)
+        return 0
+    if row is None or not row[0]:
+        return 0
+    cookies_text = row[0]
+
+    import time as _time
+    far_future = int(_time.time()) + 30 * 86400  # +30 days
+    cookies: list[dict[str, Any]] = []
+    for piece in cookies_text.split(";"):
+        piece = piece.strip()
+        if not piece or "=" not in piece:
+            continue
+        k, _, v = piece.partition("=")
+        cookies.append({
+            "name": k.strip(),
+            "value": v.strip(),
+            "domain": domain,
+            "path": "/",
+            "expires": far_future,
+            "secure": True,
+            "sameSite": "Lax",
+        })
+    if not cookies:
+        return 0
+    context.add_cookies(cookies)
+    return len(cookies)

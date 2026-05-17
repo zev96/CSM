@@ -166,12 +166,25 @@ async def login_start(platform: Platform) -> dict[str, Any]:
     User logs in manually; cookies persist in the platform's user_data_dir.
     Returns immediately — the browser stays open and is closed when the
     user calls /confirm.
+
+    Idempotency: clicking "登录" twice for the same platform is a normal
+    user mistake (window minimized, user thinks it's not there). Instead
+    of 409-ing them into a wall, we just report "already open" and they
+    can find their existing window. 409 is only raised when ANOTHER
+    platform's login is in progress (that's a real conflict — patchright
+    serializes one Chromium at a time).
     """
     import threading
     state = _login_state
     with state.lock:
+        if state.active_platform == platform:
+            # Same-platform retry: window is still open from a previous click.
+            return {"platform": platform, "browser_opened": True, "reused": True}
         if state.active_platform is not None:
-            raise HTTPException(status_code=409, detail=f"login already active for {state.active_platform}")
+            raise HTTPException(
+                status_code=409,
+                detail=f"login already active for {state.active_platform}; finish or call /confirm first",
+            )
         state.active_platform = platform
         state.confirm_event = threading.Event()
 
@@ -190,7 +203,7 @@ async def login_start(platform: Platform) -> dict[str, Any]:
                 state.confirm_event = None
 
     threading.Thread(target=_runner, name=f"mining-login-{platform}", daemon=True).start()
-    return {"platform": platform, "browser_opened": True}
+    return {"platform": platform, "browser_opened": True, "reused": False}
 
 
 @router.post("/api/mining/login/{platform}/confirm")
