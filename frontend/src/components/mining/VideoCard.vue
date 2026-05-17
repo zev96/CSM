@@ -2,27 +2,47 @@
 /**
  * One video tile in the Outreach grid.
  *
- * Phase 2/3:
- *   - Real comment list (`<CommentItem>` 列表 + `<CommentComposer>`)
- *   - Real AI 速览 (3 态：空 / 加载 / 已生成 + 重新生成)
- *   - 顶部 ⋯ 下拉菜单：复制全部评论 / 删除视频
+ * Tower-style 评论楼 redesign:
  *
- * The comment list is sourced from `store.commentsByVideo[id]` which the
- * composer already updates on create/delete — no need to re-fetch after
- * a save (the store does an optimistic insert). We do call
- * `loadComments` once on mount and on `v.id` change so cards that were
- * never opened still show their persisted drafts.
+ *   - Three card states driven entirely by ``v.already_commented`` +
+ *     ``comments.length``:
+ *
+ *       待评论   comments.length === 0 && !already_commented
+ *                yellow pill, no floor area, composer in empty mode,
+ *                完成 button disabled.
+ *
+ *       盖楼中   comments.length > 0 && !already_commented
+ *                orange pill "盖楼中 · N 层", orange-tinted floor tower
+ *                with numbered circles, composer in continue mode,
+ *                完成 button active.
+ *
+ *       已完成   already_commented === true
+ *                green pill "已完成 · N 层", floor tower COLLAPSES to a
+ *                single "这条已经搞定. [继续盖楼]" line. Composer hidden.
+ *
+ *   - Clicking "继续盖楼" in the 已完成 state calls
+ *     ``store.bulkMarkCommented([v.id], false)`` which flips the flag
+ *     and re-expands the tower + composer.
+ *
+ *   - Clicking 完成 in the toolbar (only enabled when ≥1 comment)
+ *     flips the flag the other way after a confirm.
+ *
+ *   - Edit flow: click "编辑" on a floor → composer enters edit mode
+ *     for that comment (orange banner, "保存修改" button). Cancel or
+ *     save returns to normal mode.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
-import Pill from "@/components/ui/Pill.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import PlatformChip from "./PlatformChip.vue";
-import CommentItem from "./CommentItem.vue";
+import FloorList from "./FloorList.vue";
 import CommentComposer from "./CommentComposer.vue";
-import { useMiningStore, LLMNotConfiguredError, type Video, type Platform } from "@/stores/mining";
+import {
+  useMiningStore, LLMNotConfiguredError,
+  type Video, type Platform, type Comment,
+} from "@/stores/mining";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 
@@ -40,11 +60,6 @@ const store = useMiningStore();
 const toast = useToast();
 const router = useRouter();
 
-// Phase 1 surrogate for "done": already_commented from monitor reverse-lookup.
-const isDone = computed(() => props.v.already_commented);
-
-// Truncate title to 15 chars to keep cards compact. Full title goes into
-// the anchor's `title=` attr so hover still shows the whole thing.
 const TITLE_MAX = 15;
 const titleShort = computed(() => {
   const t = props.v.title || "(无标题)";
@@ -71,10 +86,16 @@ const nextTier = computed(
 );
 const previousTiers = computed(() => comments.value.map(c => c.text));
 
-// Track which video ids we've already hit `loadComments` for so re-renders
-// of the same card don't re-fetch needlessly. The store cache itself does
-// not distinguish "never loaded" from "loaded empty", so we keep a local
-// sentinel.
+/** Tri-state for pill + tower coloring. */
+type CardState = "todo" | "drafting" | "done";
+const cardState = computed<CardState>(() => {
+  if (props.v.already_commented) return "done";
+  if (comments.value.length > 0) return "drafting";
+  return "todo";
+});
+
+const editingComment = ref<Comment | null>(null);
+
 const loadedIds = ref(new Set<number>());
 
 async function ensureLoaded(id: number) {
@@ -83,19 +104,45 @@ async function ensureLoaded(id: number) {
   try {
     await store.loadComments(id);
   } catch {
-    // Silent: the card just shows the empty-state for now. Caller can
-    // retry by writing a comment, which surfaces a real error toast.
     loadedIds.value.delete(id);
   }
 }
 
 onMounted(() => { ensureLoaded(props.v.id); });
-watch(() => props.v.id, (id) => { ensureLoaded(id); });
+watch(() => props.v.id, (id) => {
+  ensureLoaded(id);
+  // Cancel any in-progress edit if the underlying card swaps (paranoia
+  // — in practice ``v.id`` is stable per card instance).
+  editingComment.value = null;
+});
+
+// If the edited comment gets deleted out from under us (e.g. via a
+// race), bail out of edit mode rather than leaving a dangling banner.
+watch(comments, (list) => {
+  if (editingComment.value && !list.some(c => c.id === editingComment.value!.id)) {
+    editingComment.value = null;
+  }
+});
+
+function onEditFloor(id: number) {
+  const c = comments.value.find(x => x.id === id);
+  if (!c) return;
+  editingComment.value = c;
+}
+
+function onCancelEdit() {
+  editingComment.value = null;
+}
 
 async function onDeleteComment(id: number) {
-  if (!window.confirm("删除这条评论吗?")) return;
+  const ok = await confirmDialog("删除这层评论吗?", {
+    title: "删除评论",
+    okLabel: "删除",
+  });
+  if (!ok) return;
   try {
     await store.deleteComment(id);
+    if (editingComment.value?.id === id) editingComment.value = null;
     toast.success("已删除");
   } catch (e: any) {
     const detail = e?.response?.data?.detail as string | undefined;
@@ -103,14 +150,50 @@ async function onDeleteComment(id: number) {
   }
 }
 
-function onCopyComment() {
-  toast.success("已复制到剪贴板");
+function onCommentSaved() {
+  // store.createComment / updateComment already updated commentsByVideo;
+  // this hook is here for any future "scroll new floor into view".
 }
 
-function onCommentSaved() {
-  // store.createComment already pushed the new comment into
-  // commentsByVideo; no work to do here. We keep this handler hooked up
-  // so future flows (e.g. scroll-into-view of the new row) have a slot.
+// ── 完成 / 继续盖楼 ────────────────────────────────────────────────────
+const bulkBusy = ref(false);
+
+async function onMarkDone() {
+  if (comments.value.length === 0 || bulkBusy.value) return;
+  const ok = await confirmDialog("确认这条已搞定？", {
+    title: "标记完成",
+    okLabel: "确认",
+    kind: "info",
+  });
+  if (!ok) return;
+  bulkBusy.value = true;
+  try {
+    await store.bulkMarkCommented([props.v.id], true);
+    toast.success("已标记完成");
+    editingComment.value = null;
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("标记失败" + (detail ? "：" + detail : ""));
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
+async function onResumeDrafting() {
+  if (bulkBusy.value) return;
+  bulkBusy.value = true;
+  try {
+    await store.bulkMarkCommented([props.v.id], false);
+    // bulkMarkCommented does a refreshVideos() which can drop the
+    // current video from the "已评论" tab; if the parent view filters
+    // it out, the card unmounts cleanly. Otherwise it re-renders here
+    // with the floors + composer expanded.
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("操作失败" + (detail ? "：" + detail : ""));
+  } finally {
+    bulkBusy.value = false;
+  }
 }
 
 // ── AI 速览 ────────────────────────────────────────────────────────────
@@ -133,12 +216,6 @@ async function triggerSummarize(force = false) {
 }
 
 // ── 顶部 ⋯ 下拉菜单 ─────────────────────────────────────────────────
-// Simple inline dropdown:
-//   - `menuOpen` toggles visibility, anchored to the ⋯ button
-//   - A window-level click listener closes it on outside-click; clicks
-//     inside the menu stopPropagation so they don't immediately close
-//   - We register the listener only while open so we don't pay the
-//     cost on every card on every page-wide click.
 const menuOpen = ref(false);
 
 function openMenu(ev: MouseEvent) {
@@ -152,8 +229,6 @@ function onWindowClick() {
 
 watch(menuOpen, (open) => {
   if (open) {
-    // Delay one tick so the same click that opened the menu doesn't
-    // close it via the window handler.
     setTimeout(() => window.addEventListener("click", onWindowClick), 0);
   } else {
     window.removeEventListener("click", onWindowClick);
@@ -197,6 +272,35 @@ async function onDeleteVideo() {
   }
 }
 
+// ── Pill props per state ────────────────────────────────────────────
+const pillStyle = computed(() => {
+  if (cardState.value === "todo") {
+    return {
+      bg: "var(--yellow-soft)",
+      fg: "#a07a18",
+      border: "transparent",
+    };
+  }
+  if (cardState.value === "drafting") {
+    return {
+      bg: "var(--primary-soft)",
+      fg: "var(--primary-deep)",
+      border: "transparent",
+    };
+  }
+  return {
+    bg: "rgba(122,155,94,0.18)",
+    fg: "#3a7d44",
+    border: "transparent",
+  };
+});
+
+const pillLabel = computed(() => {
+  if (cardState.value === "todo") return "待评论";
+  if (cardState.value === "drafting") return `盖楼中 · ${comments.value.length} 层`;
+  return `已完成 · ${comments.value.length} 层`;
+});
+
 </script>
 
 <template>
@@ -229,15 +333,25 @@ async function onDeleteVideo() {
 
       <PlatformChip :k="v.platform as Platform"/>
 
-      <!--
-        Phase 1: 作者 + 抓取时间这一段先省掉 —— B 站 SSR parser
-        把标题塞进了 author_name，渲染出来反而是冗余。Phase 2 改
-        adapter 解析后再恢复。
-      -->
-
       <div class="ml-auto flex items-center gap-2" style="position: relative;">
-        <Pill v-if="isDone" tone="ok"><Icon name="check" :size="10"/> 已评论</Pill>
-        <Pill v-else tone="warn">待评论</Pill>
+        <!-- 三态 pill -->
+        <span
+          class="inline-flex items-center gap-1"
+          :style="{
+            height: '22px',
+            padding: '0 9px',
+            borderRadius: '999px',
+            background: pillStyle.bg,
+            color: pillStyle.fg,
+            border: '1px solid ' + pillStyle.border,
+            fontSize: '11px',
+            fontWeight: 600,
+            letterSpacing: '0.2px',
+          }"
+        >
+          <Icon v-if="cardState === 'done'" name="check" :size="10"/>
+          <span>{{ pillLabel }}</span>
+        </span>
         <button
           class="inline-flex items-center justify-center"
           style="width: 24px; height: 24px; border-radius: 999px; color: var(--ink-3); cursor: pointer;"
@@ -328,12 +442,7 @@ async function onDeleteVideo() {
       </div>
     </div>
 
-    <!--
-      AI 速览 — 3 态：
-        - 未生成（空 + 非 loading）→ 点击生成按钮
-        - loading → spinner + 文案
-        - 已生成 → 文本 + ⟳ 重新生成
-    -->
+    <!-- AI 速览 -->
     <div
       class="mt-3"
       style="background: rgba(245,192,66,0.10); border: 1px solid rgba(245,192,66,0.32); border-radius: 12px; padding: 11px 12px;"
@@ -358,7 +467,6 @@ async function onDeleteVideo() {
         ><Icon name="refresh" :size="11"/></button>
       </div>
 
-      <!-- 加载中 -->
       <div
         v-if="summaryLoading"
         class="flex items-center gap-2 text-[12px]"
@@ -367,15 +475,11 @@ async function onDeleteVideo() {
         <Spinner :size="12"/>
         <span>生成中…</span>
       </div>
-
-      <!-- 已生成 -->
       <div
         v-else-if="v.ai_summary"
         class="text-[12px] leading-relaxed"
         style="color: var(--ink); white-space: pre-wrap;"
       >{{ v.ai_summary }}</div>
-
-      <!-- 未生成 -->
       <button
         v-else
         type="button"
@@ -398,54 +502,138 @@ async function onDeleteVideo() {
       </button>
     </div>
 
-    <!-- 评论楼 -->
+    <!-- 评论楼 — 三态渲染 -->
     <div
-      class="mt-3 flex flex-col"
+      v-if="cardState === 'done'"
+      class="mt-3 flex items-center"
       :style="{
-        background: 'var(--card-2)',
-        border: '1px solid var(--line)',
+        background: 'rgba(122,155,94,0.10)',
+        border: '1px solid rgba(122,155,94,0.32)',
         borderRadius: '12px',
-        padding: '12px',
+        padding: '10px 12px',
         gap: '8px',
       }"
     >
-      <div class="flex items-center gap-1.5">
-        <span style="width: 16px; height: 16px; border-radius: 5px; background: var(--ink-4); color: #fff; display: inline-flex; align-items: center; justify-content: center;">
-          <Icon name="stack" :size="10"/>
-        </span>
-        <span class="text-[10.5px] font-semibold tracking-wide" style="color: var(--ink-3)">
-          评论楼 · {{ comments.length }} 层
-        </span>
-      </div>
-
-      <!-- 评论列表 -->
-      <div v-if="comments.length > 0" class="flex flex-col" style="gap: 6px;">
-        <CommentItem
-          v-for="c in comments"
-          :key="c.id"
-          :comment="c"
-          :video-id="v.id"
-          @delete="onDeleteComment"
-          @copy="onCopyComment"
-        />
-      </div>
-      <div
-        v-else
-        class="text-[11px]"
-        style="color: var(--ink-3); padding: 4px 2px 0;"
+      <span style="width: 18px; height: 18px; border-radius: 999px; background: var(--green); color: #fff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <Icon name="check" :size="11"/>
+      </span>
+      <span style="font-size: 12px; color: #3a7d44;">
+        这条已经搞定 · 共 {{ comments.length }} 层. 需要补盖楼或编辑？
+      </span>
+      <button
+        type="button"
+        class="ml-auto inline-flex items-center gap-1 transition"
+        :disabled="bulkBusy"
+        :style="{
+          height: '26px',
+          padding: '0 11px',
+          borderRadius: '999px',
+          fontSize: '11px',
+          fontWeight: 600,
+          background: '#3a7d44',
+          color: '#fff',
+          border: '1px solid #3a7d44',
+          cursor: bulkBusy ? 'wait' : 'pointer',
+        }"
+        @click="onResumeDrafting"
       >
-        还没写过评论, 用下面的输入框写一条
-      </div>
+        <Icon name="edit" :size="10"/>
+        <span>{{ bulkBusy ? "处理中…" : "继续盖楼" }}</span>
+      </button>
     </div>
 
-    <!-- composer -->
-    <div class="mt-3">
-      <CommentComposer
-        :video-id="v.id"
-        :next-tier="nextTier"
-        :previous-tiers="previousTiers"
-        @saved="onCommentSaved"
-      />
-    </div>
+    <!-- 草稿态 (待评论 / 盖楼中) — floor tower + composer -->
+    <template v-else>
+      <div
+        class="mt-3 flex flex-col"
+        :style="{
+          background: cardState === 'drafting'
+            ? 'rgba(238,106,42,0.06)'
+            : 'var(--card-2)',
+          border: '1px solid ' + (cardState === 'drafting'
+            ? 'rgba(238,106,42,0.20)'
+            : 'var(--line)'),
+          borderRadius: '12px',
+          padding: '12px',
+          gap: '10px',
+        }"
+      >
+        <div class="flex items-center gap-1.5">
+          <span
+            :style="{
+              width: '16px',
+              height: '16px',
+              borderRadius: '5px',
+              background: cardState === 'drafting' ? 'var(--primary)' : 'var(--ink-4)',
+              color: '#fff',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }"
+          >
+            <Icon name="stack" :size="10"/>
+          </span>
+          <span
+            class="text-[10.5px] font-semibold tracking-wide"
+            :style="{ color: cardState === 'drafting' ? 'var(--primary-deep)' : 'var(--ink-3)' }"
+          >
+            评论楼 · {{ comments.length }} 层
+          </span>
+        </div>
+
+        <FloorList
+          v-if="comments.length > 0"
+          :comments="comments"
+          tone="active"
+          @edit="onEditFloor"
+          @delete="onDeleteComment"
+        />
+        <div
+          v-else
+          class="text-[11px]"
+          style="color: var(--ink-3); padding: 2px 2px 0;"
+        >
+          还没写过评论, 用下面的输入框写一条
+        </div>
+      </div>
+
+      <!-- composer + 完成 button row -->
+      <div class="mt-3 flex flex-col" style="gap: 8px;">
+        <CommentComposer
+          :video-id="v.id"
+          :next-tier="nextTier"
+          :previous-tiers="previousTiers"
+          :editing-comment="editingComment"
+          @saved="onCommentSaved"
+          @cancel-edit="onCancelEdit"
+        />
+
+        <!-- 完成 button — disabled until at least one floor exists. -->
+        <div class="flex items-center" style="gap: 8px;">
+          <div class="flex-1"/>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 transition"
+            :disabled="comments.length === 0 || bulkBusy"
+            :style="{
+              height: '28px',
+              padding: '0 14px',
+              borderRadius: '999px',
+              fontSize: '11.5px',
+              fontWeight: 600,
+              background: comments.length > 0 ? 'var(--dark)' : 'var(--card-2)',
+              color: comments.length > 0 ? '#fff' : 'var(--ink-4)',
+              border: '1px solid ' + (comments.length > 0 ? 'var(--dark)' : 'var(--line)'),
+              cursor: (comments.length === 0 || bulkBusy) ? 'not-allowed' : 'pointer',
+            }"
+            :title="comments.length > 0 ? '标记这条已搞定' : '至少写一层评论才能完成'"
+            @click="onMarkDone"
+          >
+            <Icon name="check" :size="11"/>
+            <span>{{ bulkBusy ? "处理中…" : "完成" }}</span>
+          </button>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
