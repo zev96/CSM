@@ -1,0 +1,40 @@
+{
+  "status_code": 0,
+  "data": [
+    {
+      "type": 1,
+      "aweme_info": {
+        "aweme_id": "7300000000000000001",
+        "desc": "扫地机器人推荐",
+        "share_url": "https://www.douyin.com/video/7300000000000000001",
+        "author": {"uid": "123", "nickname": "测评博主", "short_id": "abc"},
+        "video": {
+          "cover": {"url_list": ["https://p3.douyinpic.com/aaa.jpg"]},
+          "duration": 60000
+        },
+        "statistics": {
+          "digg_count": 1234,
+          "play_count": 5678,
+          "share_count": 90,
+          "comment_count": 22
+        },
+        "create_time": 1715000000
+      }
+    },
+    {
+      "type": 1,
+      "aweme_info": {
+        "aweme_id": "7300000000000000002",
+        "desc": "扫地机器人评测",
+        "share_url": "https://www.douyin.com/video/7300000000000000002",
+        "author": {"uid": "456", "nickname": "家电党", "short_id": "def"},
+        "video": {
+          "cover": {"url_list": ["https://p3.douyinpic.com/bbb.jpg"]},
+          "duration": 45000
+        },
+        "statistics": {"digg_count": 88, "play_count": 999, "share_count": 1, "comment_count": 0},
+        "create_time": 1715100000
+      }
+    }
+  ]
+}
