@@ -22,7 +22,8 @@ CSM 现有：
 - 用户在前端输入一个关键词，可选三平台（抖音 / B 站 / 快手），起一次后台任务。
 - 任务每平台抓 ≈50 条搜索结果（默认值），仅取搜索列表页字段。
 - 抓到的视频流式落 SQLite，全局按 `(platform, platform_video_id)` 去重。
-- 视频在前端展示为可筛选/搜索的库表，可导出 CSV。
+- **抓回的视频反查现有 `monitor_tasks` 表里 type 为 `*_comment` 的评论留存任务，命中即标 `already_commented=1`**——用户已经评论过的视频不再被推到"待处理"视图。
+- 视频在前端展示为可筛选/搜索的库表（默认筛选"未评论"），可导出 CSV。
 
 ### 1.3 非范围（out of scope）
 
@@ -30,7 +31,8 @@ CSM 现有：
 - 视频内容的 AI 文本总结（独立横切关注点，第二期）。
 - 评论计划数据结构与评论编辑 UI（第二期）。
 - 外派任务对接（腾讯文档 / 飞书 Base，第三期）。
-- 与 `monitor_tasks` 评论留存监控的双向同步（第二期）。
+- 与 `monitor_tasks` 评论留存监控的双向同步**写入**（第二期；MVP 仅做单向**读取**反查）。
+- **从外部表格（Excel/CSV/腾讯文档/飞书 Base）导入历史已评论视频清单**——独立 small spec，不阻塞 MVP。
 
 ### 1.4 验收标准
 
@@ -39,6 +41,7 @@ CSM 现有：
 - 任意时刻可点取消，已抓到的数据保留不回滚。
 - 抖音 cookie 过期时不阻塞其他平台，job 整体 `status=partial_done`，对应平台 `needs_login`。
 - 同关键词二次起任务，不出现重复 `videos` 行（仅追加 `video_source_keywords`）。
+- **凡是 `monitor_tasks` 表里已存在的 `*_comment` 类型任务对应的视频，被抓回时 `already_commented=1`；前端默认筛选"未评论"看不到这些行；用户切到"已评论"或"全部"可看到。**
 
 ---
 
@@ -140,11 +143,15 @@ CREATE TABLE videos (
   published_at    TEXT,
   raw_json        TEXT NOT NULL DEFAULT '{}', -- 抓到的原始 card 数据
   excluded        INTEGER NOT NULL DEFAULT 0, -- 用户手动剔除（soft delete，仍占 UNIQUE 防再次抓回）
+  already_commented INTEGER NOT NULL DEFAULT 0,  -- 反查 monitor_tasks 命中即 1
+  commented_source TEXT,                          -- "monitor_task" / 后续 "external_import" / NULL
+  commented_at    TEXT,                          -- 命中时记录的来源 last_check_at 或导入时间，便于排序
   first_seen_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   UNIQUE(platform, platform_video_id)
 );
 CREATE INDEX idx_videos_platform ON videos(platform);
 CREATE INDEX idx_videos_first_seen ON videos(first_seen_at DESC);
+CREATE INDEX idx_videos_already_commented ON videos(already_commented, platform);
 
 -- 多对多：视频 ↔ 关键词命中
 CREATE TABLE video_source_keywords (
@@ -165,6 +172,7 @@ CREATE INDEX idx_vsk_job ON video_source_keywords(job_id);
 2. **`raw_json` 保留原始 card 数据** —— MVP 不进详情页，但后续 AI 总结 / enrich 不必回平台重抓。
 3. **`excluded` soft delete** —— 用户主动剔除的视频不真删，避免下一轮抓取又被插回。
 4. **`video_source_keywords` 三元主键 `(video_id, keyword, job_id)`** —— 同一视频被同一关键词在两次 job 中命中是两行，能看到历史命中曲线。
+5. **`already_commented` + `commented_source` 双字段** —— `already_commented` 是 0/1 flag，给 UI 筛选用；`commented_source` 标识来源（MVP 只有 `"monitor_task"`；外部导入后续可扩展为 `"external_import"`、`"manual"` 等）。这套结构兼容后续 spec 接入外部数据源时无需改 schema。
 
 ---
 
@@ -258,7 +266,15 @@ MiningRunner.run(job_id):
    event_bus.emit("mining.job.finished", {job_id, summary: final})
 
 def _on_card(job_id, platform, card):
-    storage.upsert_video_and_link(card, job_id, platform)  # INSERT OR IGNORE + 总是 link source_keyword
+    # upsert_video_and_link 内部三步：
+    #   1) INSERT OR IGNORE INTO videos (...)
+    #   2) 如果是新插入的行，调 _check_already_commented(platform, platform_video_id)
+    #      → 查 monitor_tasks WHERE type LIKE '%_comment'，从每行 target_url
+    #        提取 platform_video_id（复用各平台 adapter 的 _extract_video_id）
+    #      → 命中则 UPDATE videos SET already_commented=1,
+    #               commented_source='monitor_task', commented_at=<task.last_check_at>
+    #   3) INSERT OR IGNORE INTO video_source_keywords (video_id, keyword, job_id, rank_in_search)
+    storage.upsert_video_and_link(card, job_id, platform)
 
 def _on_progress(job_id, platform, pu):
     storage.update_progress_json(job_id, platform, pu)
@@ -274,6 +290,7 @@ def _on_progress(job_id, platform, pu):
 3. **进度事件节流** —— SSE 不能每条卡都推；按"每抓 5 条或每 10 秒"取一次最新进度发出。
 4. **平台间互不阻塞** —— 抖音 fail/needs_login 不影响 B 站快手继续跑。最终 `status` 由三平台子状态聚合（全 done → done；混合 → partial_done；全失败 → failed）。
 5. **熔断 + 限速** —— `from csm_core.browser_infra.rate_limit import get_pacer, get_breaker`，与 monitor 共享熔断状态。
+6. **已评论反查在 upsert 时一次性完成** —— 不是后台 batch job。理由：抓取节奏本来就是每条 200ms+，多一次 sqlite 查询零感知；而且一旦"未评论"列表里出现一条本应是"已评论"的会让用户怀疑系统准确性。**反查工具函数 `_check_already_commented` 单独抽出，未来外部导入 spec 接进来时只需扩展查询源、不改调用方。**
 
 ---
 
@@ -288,7 +305,8 @@ POST   /api/mining/jobs/{id}/cancel   设置 cancel_event
 
 GET    /api/mining/jobs/{id}/videos   该 job 抓到的视频（含 rank）
 GET    /api/mining/videos             全局视频库分页查询
-       query: ?keyword=&platform=&since=&until=&q=&offset=&limit=
+       query: ?keyword=&platform=&since=&until=&q=&commented=0|1|all&offset=&limit=
+       (commented 默认 0 — 仅返回未评论视频；前端"已评论"切换才传 1，"全部"传 all)
 DELETE /api/mining/videos/{id}        soft delete（excluded=1）
 GET    /api/mining/videos/export.csv  导出 CSV（同 query 过滤）
 
@@ -323,8 +341,8 @@ GET    /api/mining/login/status               三平台 profile 是否有有效 
 - 收到 `mining.login.required` 时该平台行变红并出 `[去登录]` 按钮，点击直跳 `PlatformLoginPanel`。
 
 ### 7.3 视频库表（`VideoTable.vue`）
-- 筛选区：关键词下拉、平台下拉、时间范围、全文搜索。
-- 每行：封面缩略图、标题、平台徽章、作者、播放/点赞、命中关键词 chips、时长。
+- 筛选区：**评论状态分段控件（默认"未评论" / "已评论" / "全部"，默认选中"未评论"）**、关键词下拉、平台下拉、时间范围、全文搜索。
+- 每行：封面缩略图、标题、平台徽章、作者、播放/点赞、命中关键词 chips、时长；**已评论的行带绿色 "已评论" 徽章 + 来源 tooltip（"来自评论监控任务 #N，最近一次检查 2026-05-12"）**。
 - 行操作：`[写评论计划]`（MVP 灰色禁用，tooltip："第二期上线"——预埋 UI hook）、`[打开]`（用系统浏览器打开 URL）、`[剔除]`（调 DELETE，soft delete）。
 - 虚拟滚动，分页拉取。
 
@@ -352,7 +370,8 @@ GET    /api/mining/login/status               三平台 profile 是否有有效 
 
 **单测（`sidecar/tests/`）：**
 - `test_mining_storage.py` —— schema migration v2→v3、`upsert_video_and_link` 幂等性、source_keywords 多对一插入。
-- `test_mining_routes.py` —— API 输入校验、job 状态机、cancel 行为。
+- `test_mining_already_commented.py` —— 预先在 `monitor_tasks` 插入 3 条 `*_comment` 任务（含一条短链抖音 URL）；mining 抓回同 ID 的视频时，验证 `already_commented=1` + `commented_source='monitor_task'` 被写入；视频不在 monitor_tasks 时保持 0。
+- `test_mining_routes.py` —— API 输入校验、job 状态机、cancel 行为、`?commented=` query 三种取值。
 - `test_mining_extract_douyin.py` / `_bilibili.py` / `_kuaishou.py` —— 用离线 HTML/JSON fixture 测字段提取（不打真平台）。
 - `test_browser_infra_relocation.py` —— 验证 monitor 包内 re-export 薄层正常工作。
 
@@ -368,6 +387,7 @@ GET    /api/mining/login/status               三平台 profile 是否有有效 
 4. 跑到一半点取消，已抓数据保留。
 5. 抖音 profile 删掉，确认 `mining.login.required` 触发、其余平台继续。
 6. 视频库筛选 + 导出 CSV 字段完整。
+7. **挑一条 monitor_tasks 里已存在的视频 URL 对应的关键词跑一次，确认抓回时这条视频默认筛选下不可见；切到"已评论"看到它，带绿色徽章和来源 tooltip。**
 
 ---
 
@@ -390,7 +410,8 @@ GET    /api/mining/login/status               三平台 profile 是否有有效 
 |---|---|
 | 视频内容 AI 总结 | `videos.raw_json` 保留原始 card；ai_summary 独立表关联 `video_id` |
 | 评论计划库 | `videos` 行的"写评论计划"按钮已占位；评论计划独立表 + `video_id` 外键 |
-| 监控同步 | 视频投放评论后，由评论计划模块在 `monitor_tasks` 注入 `*_comment` 类型任务 |
+| **外部历史评论清单导入**（Excel/CSV/腾讯文档/飞书 Base） | `videos.commented_source` 已是字符串而非 bool；外部导入只需新增 `external_commented_videos` 表 + 扩展 `_check_already_commented` 多查一张表，**不改现有 schema** |
+| 监控同步（评论计划→monitor_task 写入） | 视频投放评论后，由评论计划模块在 `monitor_tasks` 注入 `*_comment` 类型任务；MVP 已经是反向读取关系，新增写入闭环即可 |
 | 外派对接 | 评论计划行的"派给机构"按钮；外派状态字段独立 |
 
 ---
@@ -400,8 +421,8 @@ GET    /api/mining/login/status               三平台 profile 是否有有效 
 建议拆成 4 个 commit：
 
 1. **重构**：`browser_infra` 抽取 + monitor re-export 薄层 + `test_browser_infra_relocation.py`
-2. **数据层**：mining 三表 migration + `mining/storage.py` + `mining/models.py` + storage 单测
-3. **后端核心**：三平台 adapter（先 B 站，再快手，再抖音）+ `mining/runner.py` + sidecar `routes/mining.py` + `services/mining_service.py` + 离线 fixture 单测
-4. **前端**：`MiningView` + `StartJobModal` + `JobProgressCard` + `VideoTable` + `PlatformLoginPanel` + `stores/mining.ts`
+2. **数据层**：mining 三表 migration（含 `already_commented`/`commented_source`/`commented_at` 字段及索引）+ `mining/storage.py`（含 `_check_already_commented` 工具函数，反查 `monitor_tasks` 中 `*_comment` 任务）+ `mining/models.py` + storage 单测（含 `test_mining_already_commented.py`）
+3. **后端核心**：三平台 adapter（先 B 站，再快手，再抖音）+ `mining/runner.py`（流式 upsert 内联触发反查）+ sidecar `routes/mining.py`（含 `?commented=` query）+ `services/mining_service.py` + 离线 fixture 单测
+4. **前端**：`MiningView` + `StartJobModal` + `JobProgressCard` + `VideoTable`（含评论状态分段控件 + 行级徽章）+ `PlatformLoginPanel` + `stores/mining.ts`
 
 每步可独立 PR，前后无强阻塞。
