@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -129,12 +129,13 @@ def init_db(db_path: Path) -> None:
 def _migrate(conn: sqlite3.Connection) -> None:
     for stmt in _DDL_V1:
         conn.execute(stmt)
-    # v2: 加 cooldown_until 给多账号轮换用。失败到一定程度的 cookie 不能
-    # 立刻丢回池里复用 —— 风控冷却期内继续打反而把整条 cookie 彻底烧死。
-    # 这里加列而不是新建表，因为现网用户库里已经有手动加好的 cookie，
-    # 重建表会丢数据。ALTER ADD COLUMN 在 sqlite 上是 metadata-only，
-    # 老行的新列默认 0（= 不在冷却）。
+    # v2: 加 cooldown_until 给多账号轮换用 (see commit history for full why).
     _ensure_column(conn, "platform_credentials", "cooldown_until", "INTEGER NOT NULL DEFAULT 0")
+    # v3: 视频引流抓取 (mining) 三表。Migration lives in csm_core/mining/storage.py
+    # to keep mining-specific DDL out of this file. Import is lazy to avoid
+    # making mining a hard dep of monitor at import time.
+    from csm_core.mining import storage as mining_storage
+    mining_storage.apply_v3_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),
