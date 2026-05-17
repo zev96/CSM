@@ -121,11 +121,15 @@ def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
 def has_login_cookie(platform: str) -> bool:
     """Best-effort: does the persistent profile have a key login cookie?
 
-    Reads the SQLite cookie store directly because spinning a Chromium
-    just to check this would be wasteful. The file may not exist yet
-    (fresh profile) or may be locked (browser running) — both → False.
+    Returns False if the profile root has not been configured yet (e.g. tests
+    that didn't call configure_profile_root, or sidecar lifespan init that
+    swallowed an exception). A speculative "no cookie" answer is always safer
+    than crashing the calling adapter.
     """
-    profile = _profile_dir_for(platform)
+    try:
+        profile = _profile_dir_for(platform)
+    except RuntimeError:
+        return False
     cookies_db = profile / "Default" / "Cookies"
     if not cookies_db.exists():
         return False
