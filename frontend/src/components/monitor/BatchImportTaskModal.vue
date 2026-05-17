@@ -531,6 +531,9 @@ async function submitAll() {
       progress.value.done = 1;
       toast.success(`已批量导入 ${keywords.length} 个关键词到任务「${taskName}」`);
       emit("imported", 1);
+      // submitting=false 必须在 close() 之前——close() 开头有 if (submitting.value) return 早退守卫。
+      // finally 里的同名赋值保留：异常路径（POST 失败）仍要靠它复位。
+      submitting.value = false;
       close();
     } catch (e: any) {
       const detail = e?.response?.data?.detail ?? e?.message ?? e;
