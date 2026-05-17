@@ -54,3 +54,11 @@ def test_v3_schema_version_recorded(fresh_db: Path):
         "SELECT value FROM schema_meta WHERE key='version'"
     ).fetchone()
     assert row[0] == "3"
+
+
+def test_models_import_and_validate():
+    from csm_core.mining.models import StartJobRequest, VideoCard
+    req = StartJobRequest(keyword="扫地机器人")
+    assert req.target_per_platform == 50
+    card = VideoCard(platform="douyin", platform_video_id="x", url="u")
+    assert card.rank_in_search == 0
