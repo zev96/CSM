@@ -167,10 +167,20 @@ _MONITOR_CRED_TYPE = {
     "kuaishou": "kuaishou_comment",
 }
 
-_COOKIE_DOMAIN = {
-    "bilibili": ".bilibili.com",
-    "douyin": ".douyin.com",
-    "kuaishou": ".kuaishou.com",
+# Each cookie gets injected once per domain in this list. monitor stores
+# cookies as flat ``k=v;`` text without the original Set-Cookie domain
+# attribute, so we re-inject every cookie to every plausible domain. The
+# browser will silently drop a cookie on a request whose host doesn't
+# match — there's no harm in over-injecting.
+_COOKIE_DOMAINS = {
+    "bilibili": (".bilibili.com", ".bilibili.cn"),
+    "douyin": (".douyin.com", ".iesdouyin.com", ".snssdk.com"),
+    "kuaishou": (
+        ".kuaishou.com",            # main www
+        "id.kuaishou.com",          # SSO host (where passToken originated)
+        "www.kuaishou.com",         # explicit www (some servers reject .domain wildcard)
+        "live.kuaishou.com",        # live subdomain
+    ),
 }
 
 
@@ -187,8 +197,8 @@ def _inject_monitor_cookies(context: Any, platform: str) -> int:
     far-future expires so they survive the Chromium session boundary.
     """
     cred_type = _MONITOR_CRED_TYPE.get(platform)
-    domain = _COOKIE_DOMAIN.get(platform)
-    if not cred_type or not domain:
+    domains = _COOKIE_DOMAINS.get(platform, ())
+    if not cred_type or not domains:
         return 0
     try:
         from csm_core.monitor import storage as monitor_storage
@@ -208,22 +218,36 @@ def _inject_monitor_cookies(context: Any, platform: str) -> int:
 
     import time as _time
     far_future = int(_time.time()) + 30 * 86400  # +30 days
-    cookies: list[dict[str, Any]] = []
+    parsed: list[tuple[str, str]] = []
     for piece in cookies_text.split(";"):
         piece = piece.strip()
         if not piece or "=" not in piece:
             continue
         k, _, v = piece.partition("=")
-        cookies.append({
-            "name": k.strip(),
-            "value": v.strip(),
-            "domain": domain,
-            "path": "/",
-            "expires": far_future,
-            "secure": True,
-            "sameSite": "Lax",
-        })
+        parsed.append((k.strip(), v.strip()))
+    if not parsed:
+        return 0
+
+    cookies: list[dict[str, Any]] = []
+    for domain in domains:
+        for k, v in parsed:
+            cookies.append({
+                "name": k,
+                "value": v,
+                "domain": domain,
+                "path": "/",
+                "expires": far_future,
+                "secure": True,
+                # SameSite=None lets the cookie travel on cross-domain XHR
+                # (auth-bearing fetches against id.kuaishou.com from a www
+                # page, for example); Secure=True is required for None.
+                "sameSite": "None",
+            })
     if not cookies:
         return 0
-    context.add_cookies(cookies)
+    try:
+        context.add_cookies(cookies)
+    except Exception as e:
+        logger.warning("_inject_monitor_cookies[%s] add_cookies raised: %s", platform, e)
+        return 0
     return len(cookies)

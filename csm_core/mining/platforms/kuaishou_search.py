@@ -39,93 +39,28 @@ class KuaishouSearchAdapter:
         seen: set[str] = set()
 
         with mining_browser.launched_page("kuaishou") as page:
-            # Track every response so we can see what the SSO redirect chain
-            # is doing (id.kuaishou.com → www.kuaishou.com → session cookie).
-            seen_urls: list[str] = []
-            def _on_response(resp: Any) -> None:
-                if "kuaishou.com" in resp.url:
-                    seen_urls.append(f"{resp.status} {resp.url[:160]}")
-            page.on("response", _on_response)
-
-            # Step 1: visit id.kuaishou.com directly — that's where passToken
-            # was set; touching this domain triggers the SSO handshake.
-            try:
-                logger.info("[ks-debug] warm-up A: id.kuaishou.com")
-                page.goto("https://id.kuaishou.com/", wait_until="networkidle", timeout=20_000)
-                time.sleep(2.0)
-            except Exception as e:
-                logger.warning("[ks-debug] id warm-up failed: %s", e)
-
-            # Step 2: visit www homepage with networkidle so all redirects
-            # and the session-cookie XHR complete before we move on.
-            try:
-                logger.info("[ks-debug] warm-up B: www.kuaishou.com (networkidle)")
-                page.goto("https://www.kuaishou.com/", wait_until="networkidle", timeout=30_000)
-                time.sleep(4.0)
-            except Exception as e:
-                logger.warning("[ks-debug] homepage warm-up failed: %s", e)
-
-            # Dump cookies + responses after warm-ups so we can confirm
-            # whether session cookies got set.
-            try:
-                cookies_now = page.context.cookies("https://www.kuaishou.com/")
-                cookie_names = sorted({c["name"] for c in cookies_now})
-                logger.info("[ks-debug] cookies on www after warmup: %s", cookie_names)
-            except Exception as e:
-                logger.warning("[ks-debug] cookies introspection failed: %s", e)
-            logger.info("[ks-debug] %d responses recorded during warm-up", len(seen_urls))
-            for u in seen_urls[-20:]:
-                logger.info("[ks-debug]   resp: %s", u)
-            seen_urls.clear()
-
+            # KNOWN ISSUE (defer to follow-up spec): kuaishou's SPA
+            # fingerprints patchright Chromium and renders search results
+            # as a "请登录" wall even when monitor.db cookies are injected.
+            # Comment API (what monitor uses) works fine; search page does
+            # not. Adapter still walks through the motions so partial_done
+            # remains a valid outcome.
             url = f"https://www.kuaishou.com/search/video?searchKey={quote(keyword)}"
-            logger.info("[ks-debug] goto search %s", url)
-            page.goto(url, wait_until="networkidle", timeout=30_000)
-            time.sleep(3.0)
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            time.sleep(2.0)
             try:
+                # Old debug surface, kept minimal: log title + anchor count
+                # so future debugging has a quick signal.
                 logger.info(
-                    "[ks-debug] after goto: url=%s title=%s",
+                    "kuaishou search page: url=%s title=%s",
                     page.url, page.title()[:80],
                 )
-                # Inventory all anchor URL patterns to discover the real route.
-                hrefs_summary = page.evaluate(r"""
-() => {
-  const links = Array.from(document.querySelectorAll('a[href]'));
-  const buckets = {};
-  for (const a of links) {
-    const h = a.getAttribute('href') || '';
-    // Normalize: keep only the path prefix segments
-    const m = h.match(/^([a-z]+:)?\/\/[^/]*(\/[^?#]*)/) || [null,null,h];
-    const path = (m[2] || h).split('/').slice(0,4).join('/');
-    buckets[path] = (buckets[path] || 0) + 1;
-  }
-  return Object.entries(buckets).sort((a,b) => b[1]-a[1]).slice(0,15);
-}
-""")
-                logger.info("[ks-debug] top anchor path prefixes: %s", hrefs_summary)
-                body_preview = page.evaluate(
-                    "() => (document.body.innerText || '').slice(0, 600)"
+                anchor_count = page.evaluate(
+                    "() => document.querySelectorAll('a[href*=\"/short-video/\"]').length"
                 )
-                logger.info("[ks-debug] body[:600]=%r", body_preview)
-                # Dump full anchor hrefs (not just prefix bucketing) + look
-                # for clickable cards that aren't anchors.
-                full_hrefs = page.evaluate(r"""
-() => {
-  const a = Array.from(document.querySelectorAll('a[href]')).map(x => x.getAttribute('href'));
-  const clickableDivs = Array.from(document.querySelectorAll('[data-photo-id], [data-id*="photo"], [data-photo], [role="link"]'))
-    .slice(0, 10).map(x => ({
-      tag: x.tagName, role: x.getAttribute('role'),
-      'data-photo-id': x.getAttribute('data-photo-id'),
-      'data-id': x.getAttribute('data-id'),
-      'data-photo': x.getAttribute('data-photo'),
-    }));
-  return { anchors: a, clickableDivs };
-}
-""")
-                logger.info("[ks-debug] ALL anchor hrefs (%d): %s", len(full_hrefs['anchors']), full_hrefs['anchors'][:40])
-                logger.info("[ks-debug] clickable divs: %s", full_hrefs['clickableDivs'])
+                logger.info("kuaishou short-video anchor count: %d", anchor_count)
             except Exception as e:
-                logger.warning("[ks-debug] page introspection failed: %s", e)
+                logger.warning("kuaishou page introspection failed: %s", e)
             on_progress(ProgressUpdate(platform=self.platform, phase="scrolling", got=0, target=target_count))
 
             stagnant_scrolls = 0
