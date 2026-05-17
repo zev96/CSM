@@ -125,13 +125,26 @@ def has_login_cookie(platform: str) -> bool:
     that didn't call configure_profile_root, or sidecar lifespan init that
     swallowed an exception). A speculative "no cookie" answer is always safer
     than crashing the calling adapter.
+
+    Chromium cookie file layout has moved over time:
+      - Older builds: ``<profile>/Default/Cookies``
+      - Patchright/Chromium 120+: ``<profile>/Default/Network/Cookies``
+    We probe the newer path first and fall back, so this stays robust if
+    Patchright bumps its bundled Chromium between releases.
     """
     try:
         profile = _profile_dir_for(platform)
     except RuntimeError:
         return False
-    cookies_db = profile / "Default" / "Cookies"
-    if not cookies_db.exists():
+    cookies_db = None
+    for candidate in (
+        profile / "Default" / "Network" / "Cookies",  # Chromium 120+
+        profile / "Default" / "Cookies",              # legacy fallback
+    ):
+        if candidate.exists():
+            cookies_db = candidate
+            break
+    if cookies_db is None:
         return False
     key_cookie = {
         "douyin": "sessionid",
