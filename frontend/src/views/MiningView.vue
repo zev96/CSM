@@ -5,7 +5,7 @@
       <div class="actions">
         <button @click="showStart = true" :disabled="store.hasRunningJob">+ 新任务</button>
         <button @click="showLogin = true">⚙ 平台登录</button>
-        <a :href="exportUrl" download="mining_videos.csv">⏬ 导出 CSV</a>
+        <a :href="exportUrl()" download="mining_videos.csv">⏬ 导出 CSV</a>
       </div>
     </header>
 
@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue"
+import { ref, onMounted } from "vue"
 import { useMiningStore, type Platform, type CommentedFilter } from "../stores/mining"
 import JobProgressCard from "../components/mining/JobProgressCard.vue"
 import VideoTable from "../components/mining/VideoTable.vue"
@@ -66,14 +66,12 @@ const commentedOpts: { value: CommentedFilter; label: string }[] = [
   { value: "all", label: "全部" },
 ]
 
-const exportUrl = computed(() => {
-  const p = new URLSearchParams()
-  if (store.filters.keyword) p.set("keyword", store.filters.keyword)
-  if (store.filters.platform) p.set("platform", store.filters.platform)
-  p.set("commented", store.filters.commented)
-  if (store.filters.q) p.set("q", store.filters.q)
-  return `/api/mining/videos/export.csv?${p}`
-})
+// Use the store's exportUrl() which goes through useSidecar().sseURL —
+// includes baseURL (so it hits the sidecar, not Vite) AND ?token= so the
+// browser's download GET passes auth without needing a custom header.
+function exportUrl() {
+  return store.exportUrl()
+}
 
 function setCommented(v: CommentedFilter) {
   store.filters.commented = v

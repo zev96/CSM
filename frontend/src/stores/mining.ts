@@ -1,5 +1,16 @@
+/**
+ * Mining store — Pinia + SSE subscription for video mining jobs.
+ *
+ * Uses the shared sidecar bridge (``useSidecar().client`` + the ``subscribe``
+ * helper from ``@/api/client``) instead of bare ``fetch``. Bare fetch would
+ * use relative URLs that hit Vite's dev server (returning index.html) and
+ * skip the Bearer-token header that the sidecar requires.
+ */
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
+
+import { subscribe } from "@/api/client"
+import { useSidecar } from "@/stores/sidecar"
 
 export type Platform = "douyin" | "bilibili" | "kuaishou"
 export type CommentedFilter = "0" | "1" | "all"
@@ -45,12 +56,8 @@ export interface Video {
   source_keywords: string[]
 }
 
-const API = "/api/mining"
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(API + path, init)
-  if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`)
-  return r.json()
+function api() {
+  return useSidecar().client
 }
 
 export const useMiningStore = defineStore("mining", () => {
@@ -73,113 +80,123 @@ export const useMiningStore = defineStore("mining", () => {
       && ["pending", "running"].includes(activeJob.value.status)
   )
 
-  let eventSource: EventSource | null = null
+  // SSE teardown function from `subscribe()`. Null when no stream is open.
+  let stopSse: (() => void) | null = null
 
   async function startJob(keyword: string, platforms: Platform[], target: number): Promise<number> {
-    const r = await apiFetch<{ job_id: number; job: MiningJob }>("/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keyword, platforms, target_per_platform: target }),
-    })
-    activeJob.value = r.job
-    subscribe(r.job_id)
-    return r.job_id
+    const resp = await api().post<{ job_id: number; job: MiningJob }>(
+      "/api/mining/jobs",
+      { keyword, platforms, target_per_platform: target },
+    )
+    activeJob.value = resp.data.job
+    subscribeToJob(resp.data.job_id)
+    return resp.data.job_id
   }
 
-  function subscribe(jobId: number) {
-    if (eventSource) eventSource.close()
-    eventSource = new EventSource(`${API}/jobs/${jobId}/events`)
-    eventSource.addEventListener("job.progress", (e: MessageEvent) => {
-      const d = JSON.parse(e.data)
-      if (activeJob.value && activeJob.value.id === d.job_id) {
-        activeJob.value.progress[d.platform as Platform] = {
-          got: d.got, target: d.target, phase: d.phase, note: d.note,
+  function subscribeToJob(jobId: number) {
+    if (stopSse) { stopSse(); stopSse = null }
+    stopSse = subscribe(`/api/mining/jobs/${jobId}/events`, {
+      "job.progress": (d: any) => {
+        if (activeJob.value && activeJob.value.id === d.job_id) {
+          activeJob.value.progress[d.platform as Platform] = {
+            got: d.got, target: d.target, phase: d.phase, note: d.note,
+          }
         }
-      }
-    })
-    eventSource.addEventListener("job.platform_done", (e: MessageEvent) => {
-      const d = JSON.parse(e.data)
-      if (activeJob.value && activeJob.value.id === d.job_id) {
-        activeJob.value.progress[d.platform as Platform] = {
-          ...(activeJob.value.progress[d.platform as Platform] || { target: 50 }),
-          got: d.count,
-          phase: d.status === "done" ? "done" : d.status,
-          note: d.error || "",
+      },
+      "job.platform_done": (d: any) => {
+        if (activeJob.value && activeJob.value.id === d.job_id) {
+          activeJob.value.progress[d.platform as Platform] = {
+            ...(activeJob.value.progress[d.platform as Platform] || { target: 50 }),
+            got: d.count,
+            phase: d.status === "done" ? "done" : d.status,
+            note: d.error || "",
+          }
         }
-      }
+      },
+      "job.finished": (d: any) => {
+        if (activeJob.value && activeJob.value.id === d.job_id) {
+          activeJob.value.status = d.summary.status
+          activeJob.value.finished_at = new Date().toISOString()
+        }
+        if (stopSse) { stopSse(); stopSse = null }
+        refreshVideos()
+      },
+      "login.required": (d: any) => {
+        loginStatus.value[d.platform as Platform] = false
+      },
+      done: () => {
+        if (stopSse) { stopSse(); stopSse = null }
+      },
     })
-    eventSource.addEventListener("job.finished", (e: MessageEvent) => {
-      const d = JSON.parse(e.data)
-      if (activeJob.value && activeJob.value.id === d.job_id) {
-        activeJob.value.status = d.summary.status
-        activeJob.value.finished_at = new Date().toISOString()
-      }
-      eventSource?.close()
-      eventSource = null
-      refreshVideos()
-    })
-    eventSource.addEventListener("login.required", (e: MessageEvent) => {
-      const d = JSON.parse(e.data)
-      loginStatus.value[d.platform as Platform] = false
-    })
-    eventSource.addEventListener("done", () => {
-      eventSource?.close()
-      eventSource = null
-    })
-    eventSource.onerror = () => {
-      // Stream errored — sidecar restart, network blip, unknown job.
-      // Browser auto-reconnect would otherwise hammer a queue that
-      // may no longer exist; close explicitly.
-      eventSource?.close()
-      eventSource = null
-    }
   }
 
   async function cancelActive() {
     if (activeJob.value === null) return
-    await fetch(`${API}/jobs/${activeJob.value.id}/cancel`, { method: "POST" })
+    try {
+      await api().post(`/api/mining/jobs/${activeJob.value.id}/cancel`)
+    } catch (e: any) {
+      // 409 = already finished. Silently swallow; UI will catch up on next refresh.
+      if (e?.response?.status !== 409) throw e
+    }
   }
 
   async function refreshVideos(offset = 0, limit = 50) {
     loading.value = true
     try {
-      const params = new URLSearchParams()
-      if (filters.value.keyword) params.set("keyword", filters.value.keyword)
-      if (filters.value.platform) params.set("platform", filters.value.platform)
-      params.set("commented", filters.value.commented)
-      if (filters.value.q) params.set("q", filters.value.q)
-      params.set("offset", String(offset))
-      params.set("limit", String(limit))
-      const r = await apiFetch<{ total: number; videos: Video[] }>(`/videos?${params}`)
-      total.value = r.total
-      if (offset === 0) videos.value = r.videos
-      else videos.value.push(...r.videos)
+      const params: Record<string, string | number> = {
+        commented: filters.value.commented,
+        offset, limit,
+      }
+      if (filters.value.keyword) params.keyword = filters.value.keyword
+      if (filters.value.platform) params.platform = filters.value.platform
+      if (filters.value.q) params.q = filters.value.q
+      const resp = await api().get<{ total: number; videos: Video[] }>(
+        "/api/mining/videos",
+        { params },
+      )
+      total.value = resp.data.total
+      if (offset === 0) videos.value = resp.data.videos
+      else videos.value.push(...resp.data.videos)
     } finally {
       loading.value = false
     }
   }
 
   async function refreshLoginStatus() {
-    const r = await apiFetch<Record<Platform, { logged_in: boolean }>>("/login/status")
+    const resp = await api().get<Record<Platform, { logged_in: boolean }>>(
+      "/api/mining/login/status",
+    )
     for (const p of ["douyin", "bilibili", "kuaishou"] as Platform[]) {
-      loginStatus.value[p] = r[p]?.logged_in ?? false
+      loginStatus.value[p] = resp.data[p]?.logged_in ?? false
     }
   }
 
   async function startLogin(platform: Platform) {
-    await fetch(`${API}/login/${platform}`, { method: "POST" })
+    await api().post(`/api/mining/login/${platform}`)
   }
 
   async function confirmLogin(platform: Platform): Promise<boolean> {
-    const r = await apiFetch<{ logged_in: boolean }>(`/login/${platform}/confirm`, { method: "POST" })
-    loginStatus.value[platform] = r.logged_in
-    return r.logged_in
+    const resp = await api().post<{ logged_in: boolean }>(
+      `/api/mining/login/${platform}/confirm`,
+    )
+    loginStatus.value[platform] = resp.data.logged_in
+    return resp.data.logged_in
   }
 
   async function deleteVideo(id: number) {
-    await fetch(`${API}/videos/${id}`, { method: "DELETE" })
+    await api().delete(`/api/mining/videos/${id}`)
     videos.value = videos.value.filter(v => v.id !== id)
     total.value = Math.max(0, total.value - 1)
+  }
+
+  /** Absolute CSV-export URL including baseURL + token query string. */
+  function exportUrl(): string {
+    const params = new URLSearchParams()
+    params.set("commented", filters.value.commented)
+    if (filters.value.keyword) params.set("keyword", filters.value.keyword)
+    if (filters.value.platform) params.set("platform", filters.value.platform)
+    if (filters.value.q) params.set("q", filters.value.q)
+    return useSidecar().sseURL(`/api/mining/videos/export.csv?${params.toString()}`)
   }
 
   return {
@@ -187,6 +204,6 @@ export const useMiningStore = defineStore("mining", () => {
     hasRunningJob,
     startJob, cancelActive, refreshVideos,
     refreshLoginStatus, startLogin, confirmLogin,
-    deleteVideo,
+    deleteVideo, exportUrl,
   }
 })
