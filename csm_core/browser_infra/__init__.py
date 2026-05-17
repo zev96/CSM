@@ -7,3 +7,7 @@ imported without pulling in monitor-specific code.
 Re-export shims remain under ``csm_core/monitor/drivers/`` and
 ``csm_core/monitor/`` so existing imports continue to work unchanged.
 """
+
+from . import mining_browser
+
+__all__ = ["mining_browser"]
