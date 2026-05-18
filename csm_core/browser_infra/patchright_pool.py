@@ -448,6 +448,21 @@ def get_page() -> Any:
     return state.page
 
 
+def touch_last_used() -> None:
+    """Bump the calling thread's pool state.last_used so the reaper doesn't fire.
+
+    Use this in long-blocking workflows that need the browser kept alive but
+    don't naturally call get_page() — e.g., interactive login where the worker
+    blocks on a /confirm event for up to 10 minutes.
+
+    No-op if no pool state has been created on this thread yet (you can't keep
+    alive what doesn't exist).
+    """
+    state = _local.state if hasattr(_local, "state") else None
+    if state is not None:
+        state.last_used = time.monotonic()
+
+
 def shutdown() -> None:
     """Tear down every thread's Playwright. Safe to call repeatedly.
 

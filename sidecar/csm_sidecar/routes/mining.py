@@ -297,7 +297,7 @@ async def login_start(platform: Platform) -> dict[str, Any]:
     def _runner():
         try:
             url, cookie_name = _login_specs[platform]
-            with mining_browser.launched_page(platform, headless=False) as page:
+            with mining_browser.launched_page(platform, headless=False, keep_alive=True) as page:
                 page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 logger.info("login flow opened for %s — waiting up to 10 min for /confirm", platform)
                 state.confirm_event.wait(timeout=600)

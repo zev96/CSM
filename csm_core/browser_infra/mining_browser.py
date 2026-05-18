@@ -26,6 +26,9 @@ import logging
 from pathlib import Path
 from typing import Any, Iterator
 
+import threading
+import time
+
 from csm_core.browser_infra.patchright_pool import (
     ensure_browsers_path,
     _kill_process_tree,
@@ -52,19 +55,14 @@ def configure_profile_root(path: Path) -> None:
     _profile_root = Path(path)  # keep the value; callers may read it
 
 
-def _profile_dir_for(platform: str) -> Path:
-    """Retained for reference; no longer called by launched_page after Task 6."""
-    if _profile_root is None:
-        raise RuntimeError(
-            "mining_browser profile root not configured — call configure_profile_root(...) first"
-        )
-    p = _profile_root / platform
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
 
 @contextlib.contextmanager
-def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
+def launched_page(
+    platform: str,
+    *,
+    headless: bool = False,
+    keep_alive: bool = False,
+) -> Iterator[Any]:
     """Context-managed Patchright Page acquired from the shared patchright_pool.
 
     After PR 2b Task 6, mining no longer maintains its own per-platform browser
@@ -78,6 +76,12 @@ def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
 
     Cookies for this platform are still injected from monitor.db at acquire
     time via ``_inject_monitor_cookies(context, platform)``.
+
+    ``keep_alive=True``: spawn a daemon thread that touches
+    ``patchright_pool.last_used`` every 15 s, preventing the 30 s idle reaper
+    from killing the browser during long-blocking workflows (interactive login
+    waits up to 10 min for user confirmation).  The daemon stops automatically
+    when the context exits.
 
     Note on ``headless``: patchright_pool always launches headed (headless=False)
     because zhihu/douyin risk engines flag fully-headless contexts even with
@@ -103,7 +107,28 @@ def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
                 )
         except Exception as e:
             logger.warning("mining_browser[%s] cookie injection failed: %s", platform, e)
-        yield page
+
+        # Optional keep-alive daemon for long-blocking workflows (interactive login).
+        stop_event = threading.Event() if keep_alive else None
+        if keep_alive and stop_event is not None:
+            def _bumper(ev: threading.Event = stop_event) -> None:
+                while not ev.wait(15):
+                    try:
+                        patchright_pool.touch_last_used()
+                    except Exception:
+                        return
+            t = threading.Thread(
+                target=_bumper,
+                daemon=True,
+                name=f"mining_keepalive_{platform}",
+            )
+            t.start()
+
+        try:
+            yield page
+        finally:
+            if keep_alive and stop_event is not None:
+                stop_event.set()
     finally:
         # Pool owns the page lifecycle — idle reaper and shutdown() handle
         # teardown.  Do not close the page here or pool state becomes corrupt.
