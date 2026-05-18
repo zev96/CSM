@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
+import { useRouter } from "vue-router";
 import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
+import Pill from "@/components/ui/Pill.vue";
 import StartJobModal from "@/components/mining/StartJobModal.vue";
 import OutreachHero from "@/components/mining/OutreachHero.vue";
 import VideoCard from "@/components/mining/VideoCard.vue";
@@ -10,6 +12,7 @@ import { useToast } from "@/composables/useToast";
 
 const store = useMiningStore();
 const toast = useToast();
+const router = useRouter();
 const showNewTask = ref(false);
 const tab = ref<"unread" | "done" | "all">("unread");
 const platform = ref<"all" | Platform>("all");
@@ -75,6 +78,24 @@ function onBulkOpen() {
   }
 }
 
+/** 抓取任务各平台风控/登录状态徽章。仅在 activeJob 存在时有意义。 */
+const platformStatusBadges = computed(() => {
+  const job = store.activeJob;
+  if (!job) return [];
+  return (job.platforms as Platform[]).map((p) => {
+    const phase = job.progress[p]?.phase ?? "";
+    return { platform: p, phase };
+  }).filter((b) => ["needs_login", "risk_control", "done"].includes(b.phase));
+});
+
+function goToLogin(platform: Platform) {
+  // Navigate to monitor center, comment subtab for the platform
+  const subtab = platform === "bilibili" ? "bilibili"
+    : platform === "douyin" ? "douyin"
+    : "kuaishou";
+  router.push({ path: "/monitor", query: { tab: "comment", subtab } });
+}
+
 onMounted(async () => {
   await store.refreshLoginStatus();
   await store.refreshVideos();
@@ -126,6 +147,44 @@ onMounted(async () => {
       :counts="counts"
       @cancel="store.cancelActive"
     />
+
+    <!-- 平台风控 / 登录状态徽章 —— 仅当有进行中任务且某平台出现异常时展示 -->
+    <div
+      v-if="platformStatusBadges.length > 0"
+      class="flex flex-wrap items-center gap-2"
+      style="padding: 4px 0;"
+    >
+      <template v-for="badge in platformStatusBadges" :key="badge.platform">
+        <div class="flex items-center gap-1.5">
+          <Pill
+            v-if="badge.phase === 'needs_login' || badge.phase === 'login_required'"
+            tone="alert"
+          >
+            {{ badge.platform }} · 需重新登录
+          </Pill>
+          <Pill v-else-if="badge.phase === 'risk_control'" tone="warn">
+            {{ badge.platform }} · 已被风控
+          </Pill>
+          <Pill v-else-if="badge.phase === 'done'" tone="ok">
+            {{ badge.platform }} · 正常
+          </Pill>
+          <button
+            v-if="badge.phase === 'needs_login' || badge.phase === 'login_required'"
+            type="button"
+            @click="goToLogin(badge.platform)"
+            :style="{
+              background: 'var(--primary)',
+              color: 'white',
+              border: 'none',
+              padding: '3px 10px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '11.5px',
+            }"
+          >重新登录</button>
+        </div>
+      </template>
+    </div>
 
     <!-- Filter 条 -->
     <div class="flex items-center justify-between gap-3 flex-wrap">

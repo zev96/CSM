@@ -785,6 +785,27 @@ function backToList(): void {
   selectedKeywordIdx.value = null;
 }
 
+// ──────────────────────────── risk_control resume ────────────────────────────
+
+const resuming = ref(false);
+
+async function resumeTask(): Promise<void> {
+  if (!selectedTask.value?.id || resuming.value) return;
+  resuming.value = true;
+  try {
+    await whenReady();
+    await sidecar.client.post(`/api/monitor/tasks/${selectedTask.value.id}/resume`);
+    toast.success("已派发续抓任务，从断点继续");
+    await loadHistory(selectedTask.value.id);
+    await loadTaskHistory(selectedTask.value.id);
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail ?? e?.message ?? e;
+    toast.error(`续抓失败：${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+  } finally {
+    resuming.value = false;
+  }
+}
+
 // ──────────────────────────── lifecycle ────────────────────────────
 
 // ──────────────────────────── SSE bus ────────────────────────────
@@ -1515,6 +1536,40 @@ defineExpose({ reload: loadTasks });
             <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
               全部关键词的命中趋势 + 排名详情
             </div>
+          </div>
+
+          <!-- 风控 banner：上次抓取被风控拦截时展示 -->
+          <div
+            v-if="selectedTask && selectedTask.last_status === 'risk_control'"
+            class="mb-3 flex-shrink-0 rounded p-3 text-[12.5px]"
+            :style="{
+              background: '#fff4eb',
+              border: '1px solid #ff8a4c',
+              color: '#c75216',
+            }"
+          >
+            <div :style="{ fontWeight: 600, marginBottom: '4px' }">
+              ⚠ 上次抓取被风控拦截
+            </div>
+            <div :style="{ color: 'var(--ink-3)', fontSize: '11px', marginBottom: '8px' }">
+              百度风控机制阻断了本次扫描，从断点续抓可继续之前进度
+            </div>
+            <button
+              type="button"
+              @click="resumeTask"
+              :disabled="resuming"
+              :style="{
+                background: '#ff8a4c',
+                color: 'white',
+                border: 'none',
+                padding: '4px 12px',
+                borderRadius: '4px',
+                cursor: resuming ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+              }"
+            >
+              {{ resuming ? '续抓中…' : '从断点续抓' }}
+            </button>
           </div>
 
           <!-- Loading -->
