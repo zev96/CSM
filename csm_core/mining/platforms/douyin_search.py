@@ -57,46 +57,22 @@ class DouyinSearchAdapter:
                 nonlocal emitted, risk_detected
                 if cancel_event.is_set() or emitted >= target_count:
                     return
-                url = response.url
-                # Wide net for future diagnostics: log every /aweme/* XHR at
-                # DEBUG. Default INFO logs stay quiet; flip the logger to
-                # DEBUG to inspect what URL pattern Douyin is actually using
-                # when something breaks. The 2026-05 round of changes (item/
-                # vs general/search/single) was caught with this.
-                if "/aweme/" in url:
-                    try:
-                        logger.debug(
-                            "[douyin-debug] aweme xhr: %s status=%s",
-                            url[:240], getattr(response, "status", "?"),
-                        )
-                    except Exception:
-                        pass
                 # 抖音视频搜索实际走 /aweme/v1/web/search/item/?...&search_channel=aweme_video_web
                 # 旧的 /aweme/v1/web/general/search/single 是综合搜索;我们 URL 带 ?type=video
                 # 落在视频 tab,走 item 端点。两个都拦,谁先来用谁。
+                # —— 如果后续抓不到 cards 怀疑 URL 又变了,临时加一行
+                # ``if "/aweme/" in response.url: logger.info(response.url)``
+                # 就能看到所有 aweme XHR 的真实 path,比再调一遍诊断流水线快。
                 if (
-                    "/aweme/v1/web/search/item/" not in url
-                    and "/aweme/v1/web/general/search/single" not in url
+                    "/aweme/v1/web/search/item/" not in response.url
+                    and "/aweme/v1/web/general/search/single" not in response.url
                 ):
                     return
                 try:
                     body = response.json()
-                except Exception as e:
-                    logger.warning(
-                        "[douyin-debug] search xhr json parse failed: %s", e,
-                    )
+                except Exception:
                     return
-                sc = body.get("status_code")
-                data = body.get("data") or []
-                first_keys: list[str] = []
-                if data and isinstance(data[0], dict):
-                    first_keys = list(data[0].keys())[:15]
-                logger.info(
-                    "[douyin-debug] search xhr matched: url_tail=%s "
-                    "status_code=%s data_items=%d first_item_keys=%s",
-                    url.rsplit("/", 1)[-1][:60], sc, len(data), first_keys,
-                )
-                if sc not in (0, None):
+                if body.get("status_code") not in (0, None):
                     return
                 for c in self._extract_cards(body):
                     if emitted >= target_count:
@@ -137,14 +113,6 @@ class DouyinSearchAdapter:
                     break
                 page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
                 time.sleep(2.0)
-
-            # DIAGNOSTIC: final state from inside the with-block, before the
-            # browser is closed. Tells us whether the scroll loop ran to its
-            # full 30-iter budget with zero emits (most common failure mode).
-            logger.info(
-                "[douyin-debug] scroll loop exited: emitted=%d risk_detected=%s",
-                emitted, risk_detected,
-            )
 
         if risk_detected:
             return SearchOutcome(
