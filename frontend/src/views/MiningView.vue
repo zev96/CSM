@@ -85,15 +85,14 @@ const platformStatusBadges = computed(() => {
   return (job.platforms as Platform[]).map((p) => {
     const phase = job.progress[p]?.phase ?? "";
     return { platform: p, phase };
-  }).filter((b) => ["needs_login", "risk_control", "done"].includes(b.phase));
+  }).filter((b) => ["needs_login", "risk_control"].includes(b.phase));
 });
 
-function goToLogin(platform: Platform) {
-  // Navigate to monitor center, comment subtab for the platform
-  const subtab = platform === "bilibili" ? "bilibili"
-    : platform === "douyin" ? "douyin"
+function goToLogin(p: Platform) {
+  const subtab = p === "bilibili" ? "bilibili"
+    : p === "douyin" ? "douyin"
     : "kuaishou";
-  router.push({ path: "/monitor", query: { tab: "comment", subtab } });
+  router.push({ path: "/monitor", query: { tab: "comment", subtab, openCookie: "1" } });
 }
 
 onMounted(async () => {
@@ -157,7 +156,7 @@ onMounted(async () => {
       <template v-for="badge in platformStatusBadges" :key="badge.platform">
         <div class="flex items-center gap-1.5">
           <Pill
-            v-if="badge.phase === 'needs_login' || badge.phase === 'login_required'"
+            v-if="badge.phase === 'needs_login'"
             tone="alert"
           >
             {{ badge.platform }} · 需重新登录
@@ -165,23 +164,12 @@ onMounted(async () => {
           <Pill v-else-if="badge.phase === 'risk_control'" tone="warn">
             {{ badge.platform }} · 已被风控
           </Pill>
-          <Pill v-else-if="badge.phase === 'done'" tone="ok">
-            {{ badge.platform }} · 正常
-          </Pill>
-          <button
-            v-if="badge.phase === 'needs_login' || badge.phase === 'login_required'"
-            type="button"
+          <Btn
+            v-if="badge.phase === 'needs_login'"
+            variant="solid"
+            small
             @click="goToLogin(badge.platform)"
-            :style="{
-              background: 'var(--primary)',
-              color: 'white',
-              border: 'none',
-              padding: '3px 10px',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '11.5px',
-            }"
-          >重新登录</button>
+          >重新登录</Btn>
         </div>
       </template>
     </div>

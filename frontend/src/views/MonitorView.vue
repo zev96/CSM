@@ -70,6 +70,33 @@ watch(
   },
 );
 
+// Watch for ?subtab=... to switch the comment subtab (e.g., mining view's
+// "重新登录" button deep-links here with the platform name).
+watch(
+  () => route.query.subtab,
+  (newSubtab) => {
+    if (typeof newSubtab === "string" && (newSubtab === "bilibili" || newSubtab === "douyin" || newSubtab === "kuaishou")) {
+      commentSubtab.value = newSubtab as CommentPlatform;
+    }
+  },
+  { immediate: true },
+);
+
+// Watch for ?openCookie=1 to auto-open the Cookie modal after deep-link (mining
+// view's "重新登录" sets this so user lands on the right login surface).
+watch(
+  () => route.query.openCookie,
+  (open) => {
+    if (open === "1" || open === "true") {
+      // Defer to next tick to ensure tab + subtab watchers fire first
+      nextTick(() => {
+        showCookieMgr.value = true;
+      });
+    }
+  },
+  { immediate: true },
+);
+
 const PLATFORM_TYPE: Record<CommentPlatform, string> = {
   bilibili: "bilibili_comment",
   douyin: "douyin_comment",
