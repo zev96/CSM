@@ -25,7 +25,8 @@ from lxml import html as lxml_html
 
 from .. import rate_limit
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
-from ..drivers.incognito_session import incognito_session, is_baidu_captcha_url
+from ..drivers.incognito_session import incognito_session
+from ..drivers.risk_detector import detect_risk, RiskControlException
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +434,9 @@ class BaiduKeywordAdapter:
         while True:
             try:
                 result = self._fetch_once(task, keywords, brand, last_attempt_headless, progress_cb, cancel_token)
+            except RiskControlException:
+                # 4 层风控命中 —— 让 runner (Task 4) 捕获写断点 + 暂停任务；不计入熔断器。
+                raise
             except Exception as e:
                 logger.exception("baidu fetch raised: %s", e)
                 breaker.record_failure()
@@ -549,11 +553,12 @@ class BaiduKeywordAdapter:
                 }
 
                 # Navigate to SERP. 45s timeout — baidu 偶尔冷启慢，20s 不够。
+                _serp_response = None
                 try:
-                    page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
+                    _serp_response = page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
                 except TypeError:
                     # Test FakePage 不接受 kwargs
-                    page.goto(serp_url)
+                    _serp_response = page.goto(serp_url)
                 except Exception as e:
                     logger.warning(
                         "baidu navigate failed (headless=%s, keyword=%r): %s",
@@ -563,13 +568,11 @@ class BaiduKeywordAdapter:
                     keyword_results.append(kw_entry)
                     continue
 
-                landed_url = getattr(page, "url", "") or ""
-                if is_baidu_captcha_url(landed_url):
-                    captcha_hit = True
-                    kw_entry["fetch_error"] = f"captcha at {landed_url[:120]}"
-                    keyword_results.append(kw_entry)
-                    # Break on captcha — return risk_control immediately
-                    break
+                # 4 层风控融合检测（URL + HTTP + DOM + text）。
+                # 任一层命中 → 抛 RiskControlException，runner (Task 4) 捕获写断点。
+                risk = detect_risk(page, _serp_response)
+                if risk is not None:
+                    raise RiskControlException(risk, progress=kw_idx)
 
                 try:
                     serp_html = page.content() or ""
