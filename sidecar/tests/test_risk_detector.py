@@ -48,6 +48,7 @@ class TestDomLayer:
         '[id^="wappass"]',
         ".security-check",
         ".mod-error",
+        ".error-page",
     ])
     def test_dom_selector_match(self, selector: str):
         page = MagicMock()

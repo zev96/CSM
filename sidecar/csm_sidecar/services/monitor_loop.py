@@ -35,6 +35,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from csm_core.monitor import storage
 from csm_core.monitor.base import MonitorResult, MonitorTask
+# Aliased to underscore-prefix style matching local _CancelledFetch convention;
+# no circular-import or name-clash reason.
 from csm_core.monitor.drivers.risk_detector import RiskControlException as _RiskControlException
 from csm_core.monitor.notify import should_alert
 from csm_core.monitor.platforms import ALL as ADAPTERS
@@ -76,6 +78,10 @@ class MonitorEvent:
     # UI shows progress bar `current / total`.
     progress_current: int | None = None
     progress_total: int | None = None
+    # For ``risk_control`` events only — breakpoint position so the frontend
+    # can render "已抓 N / 共 M · 从断点续抓" without digging into result.metric.
+    last_resumed_keyword: int | None = None  # 0-indexed; next keyword to try on resume
+    total_keywords: int | None = None        # full task keyword count
 
 
 EventSink = Callable[[MonitorEvent], None]
@@ -443,6 +449,8 @@ class MonitorLoop:
                 at=self._clock(),
                 error=err_msg,
                 result=breakpoint_result,
+                last_resumed_keyword=next_kw,
+                total_keywords=len(task.config.get("search_keywords", [])),
             ))
             return None
         except TimeoutError as e:

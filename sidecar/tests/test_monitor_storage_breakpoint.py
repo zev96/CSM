@@ -374,6 +374,9 @@ class TestRunnerRiskControlHandler:
         assert evt.result is not None
         assert evt.result.status == "risk_control"
         assert evt.result.metric["last_resumed_keyword"] == 4
+        # New top-level fields for frontend banner
+        assert risk_events[0].last_resumed_keyword == 4
+        assert risk_events[0].total_keywords == 10
 
     def test_handler_none_progress_resumes_from_zero(self, isolated_storage):
         """RiskControlException(progress=None) — non-positional risk —
