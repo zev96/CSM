@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from csm_core.monitor import storage
 from csm_core.monitor.base import MonitorTask, TaskType
 
 from ..auth import RequireToken
@@ -106,6 +107,32 @@ async def run_now(
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
     loop.run_task_now(task_id, keyword_override=keyword)
     return {"task_id": task_id, "queued": True, "keyword": keyword}
+
+
+@router.post("/api/monitor/tasks/{task_id}/resume")
+async def resume_task(task_id: int) -> dict[str, Any]:
+    """Resume a risk_control'd task from its last_resumed_keyword breakpoint.
+
+    Reads the latest result's ``metric.last_resumed_keyword`` and dispatches
+    via the same run-now path with ``resume_from`` set accordingly. If the
+    task has no breakpoint (no prior risk_control result with the key), falls
+    through to a normal full-scan starting at keyword 0.
+
+    Returns immediately — watch ``/api/monitor/events`` for the result.
+    """
+    _require_storage()
+    loop = monitor_lifecycle.get()
+    if loop is None or not loop.is_running():
+        raise HTTPException(
+            status_code=503,
+            detail="MonitorLoop not running — start the sidecar in production mode",
+        )
+    if monitor_service.get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+
+    resume_from = storage.get_last_resumed_keyword(task_id) or 0
+    loop.run_task_now(task_id, resume_from=resume_from)
+    return {"task_id": task_id, "resume_from": resume_from, "queued": True}
 
 
 @router.get("/api/monitor/running")

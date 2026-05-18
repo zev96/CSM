@@ -351,14 +351,17 @@ def test_fetch_happy_path_default_only(monkeypatch, patch_session):
     assert result.metric["matched_keywords"] >= 1
     assert result.metric["best_default_first_rank"] == 1
     assert result.rank == 1
-    assert result.metric["captcha_hit"] is False
+    # captcha_hit field removed in Task 3 refactor — auto-promotion dead code deleted
+    assert "captcha_hit" not in result.metric
     # news_present is now per-keyword in metric["keywords"][i]["news_present"]
     assert "news_present" in result.metric["keywords"][0]
 
 
-def test_fetch_captcha_returns_risk_control(monkeypatch, patch_session):
-    """SERP 落地到验证码 URL，单 task 不升级（max_promotions=0 用 monkey）→
-    立即返回 risk_control。metric 含 keywords 数组，captcha 条目有 fetch_error。"""
+def test_fetch_captcha_raises_RiskControlException(monkeypatch, patch_session):
+    """SERP 落地到验证码 URL → detect_risk(page) URL 层命中 →
+    RiskControlException 抛出（progress=0，即第一个 keyword）。"""
+    from csm_core.monitor.drivers.risk_detector import RiskControlException
+
     serp = _load("serp_default_only.html")
     patch_session["session"] = FakeSession(
         serp_html=serp,
@@ -366,28 +369,17 @@ def test_fetch_captcha_returns_risk_control(monkeypatch, patch_session):
         captcha_url="https://wappass.baidu.com/static/captcha/tuxing.html?x=y",
     )
 
-    # 把 max_promotions 暂时设成 0，避免单测里真跑升级流程
-    original = baidu_keyword.ADAPTER._captcha_max_promotions
-    try:
-        baidu_keyword.ADAPTER._captcha_max_promotions = 0
-
-        task = MonitorTask(
-            id=2,
-            type="baidu_keyword",
-            name="t",
-            target_url="https://www.baidu.com/s?wd=test",
-            config={"search_keywords": ["test"], "target_brand": "Claude"},
-        )
-        result = baidu_keyword.ADAPTER.fetch(task)
-        assert result.status == "risk_control"
-        assert result.metric["captcha_hit"] is True
-        # keywords array should have the captcha entry
-        assert len(result.metric["keywords"]) >= 1
-        captcha_kw = result.metric["keywords"][0]
-        assert captcha_kw["fetch_error"] is not None
-        assert "captcha" in captcha_kw["fetch_error"].lower()
-    finally:
-        baidu_keyword.ADAPTER._captcha_max_promotions = original
+    task = MonitorTask(
+        id=2,
+        type="baidu_keyword",
+        name="t",
+        target_url="https://www.baidu.com/s?wd=test",
+        config={"search_keywords": ["test"], "target_brand": "Claude"},
+    )
+    with pytest.raises(RiskControlException) as exc_info:
+        baidu_keyword.ADAPTER.fetch(task)
+    assert exc_info.value.progress == 0
+    assert exc_info.value.signal.layer == "url"
 
 
 def test_fetch_breaker_open_returns_risk_control(monkeypatch):
@@ -477,3 +469,67 @@ def test_build_exclude_set_merges_global_and_task():
     )
     s3 = adapter._build_exclude_set(task_empty)
     assert s3 == {"jd.com", "taobao.com"}
+
+
+# ── Task 3: 风控检测集成 ──────────────────────────────────────────────────────
+class TestRiskDetectionIntegration:
+    """Task 3: baidu adapter 命中风控时应抛 RiskControlException(progress=i)。
+
+    设计：detect_risk(page, response) 在 SERP 抓取循环里每 keyword 调用一次。
+    任一层命中 → raise RiskControlException(signal, progress=current_idx)。
+    runner（Task 4）负责捕获 + 写断点 + 暂停任务。
+    """
+
+    def test_risk_signal_triggers_RiskControlException_with_progress(
+        self, monkeypatch, patch_session
+    ):
+        """模拟在第 3 个 keyword（0-index=2）命中风控，期望 RiskControlException(progress=2)。
+
+        mock 路径：baidu_keyword.detect_risk —— 因为 baidu_keyword.py 用
+        `from ..drivers.risk_detector import detect_risk` 直接绑定到模块命名空间。
+        """
+        from csm_core.monitor.drivers.risk_detector import RiskSignal, RiskControlException
+
+        call_count = {"n": 0}
+
+        def fake_detect_risk(page, response=None):
+            call_count["n"] += 1
+            if call_count["n"] >= 3:
+                # 第 3 次及以后：DOM 层命中
+                return RiskSignal(layer="dom", detail="DOM matched '#captcha-mask'")
+            return None
+
+        # 注入 fake detect_risk 到 baidu_keyword 模块命名空间
+        monkeypatch.setattr(baidu_keyword, "detect_risk", fake_detect_risk)
+
+        # 用最简 SERP HTML（空解析结果即可，不关心品牌匹配）
+        serp = _load("serp_default_only.html")
+        # 5 个关键词；第 3 个（index=2）触发风控
+        patch_session["session"] = FakeSession(
+            serp_html=serp,
+            page_contents={},
+        )
+        # resolve_baidu_link / _cc_get 不会被调到（风控在 SERP 阶段抛出）
+        monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+
+        task = MonitorTask(
+            id=99,
+            type="baidu_keyword",
+            name="risk-test",
+            target_url="https://www.baidu.com/s?wd=kw1",
+            config={
+                "search_keywords": ["kw1", "kw2", "kw3", "kw4", "kw5"],
+                "target_brand": "Claude",
+            },
+        )
+
+        with pytest.raises(RiskControlException) as exc_info:
+            baidu_keyword.ADAPTER.fetch(task)
+
+        assert exc_info.value.progress == 2, (
+            f"expected progress=2 (0-indexed 3rd keyword), got {exc_info.value.progress}"
+        )
+        assert exc_info.value.signal.layer == "dom"
+        assert call_count["n"] == 3, (
+            f"detect_risk should have been called 3 times (one per keyword until hit), got {call_count['n']}"
+        )

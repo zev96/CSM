@@ -479,6 +479,29 @@ def get_enrichment(result_id: int) -> dict[str, Any] | None:
     }
 
 
+# ── Breakpoint helpers (Task 4: 断点续抓) ──────────────────────────────────
+def get_last_resumed_keyword(task_id: int) -> int | None:
+    """Return next-keyword-to-try from latest result's metric_json, or None.
+
+    Used by POST /api/monitor/tasks/{id}/resume to resume a risk_control'd
+    task from where it paused instead of restarting from keyword 0.
+    Returns None when:
+    - no results exist for the task
+    - the latest result has no ``last_resumed_keyword`` in metric_json
+    - the stored value is not a plain int
+    """
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT metric_json FROM monitor_results WHERE task_id=? ORDER BY checked_at DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if row is None or not row["metric_json"]:
+        return None
+    metric = json.loads(row["metric_json"])
+    v = metric.get("last_resumed_keyword")
+    return v if isinstance(v, int) else None
+
+
 # ── Maintenance ────────────────────────────────────────────────────────────
 def purge_old_results(keep_days: int = 90) -> int:
     """Delete results older than ``keep_days``, returning rows removed."""

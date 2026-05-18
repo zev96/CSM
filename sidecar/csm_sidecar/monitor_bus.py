@@ -97,6 +97,11 @@ def event_to_dict(event: MonitorEvent) -> dict[str, Any]:
         out["progress_current"] = event.progress_current
     if event.progress_total is not None:
         out["progress_total"] = event.progress_total
+    # `risk_control` events carry breakpoint position for frontend banner.
+    if event.last_resumed_keyword is not None:
+        out["last_resumed_keyword"] = event.last_resumed_keyword
+    if event.total_keywords is not None:
+        out["total_keywords"] = event.total_keywords
     if event.result is not None:
         # MonitorResult is a Pydantic v2 model; mode='json' converts datetimes.
         out["result"] = event.result.model_dump(mode="json")
