@@ -237,13 +237,20 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
 
     复用同一个 incognito context 的 Page —— SERP 抓完后，循环里
     每条 URL 在同 page 上 goto 切走（不开新 tab，避免句柄爆炸）。
+
+    Raises:
+        RiskControlException: page.goto 落到 wappass / verify.baidu / safetycheck
+            等风控页时抛出（detect_risk 4 层任一命中）。progress=None 表示文章页
+            风控不绑定具体 keyword 进度 —— 整个会话被识别，跟 SERP 命中走同一条
+            retry/breakpoint 路径，runner 端 ``(e.progress or 0)`` 自然 fallback 到 0。
     """
+    response = None
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        response = page.goto(url, wait_until="domcontentloaded", timeout=20000)
     except TypeError:
         # FakePage 不接受关键字参数：测试场景
         try:
-            page.goto(url)
+            response = page.goto(url)
         except Exception as e:
             return {
                 "content": "",
@@ -258,6 +265,13 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
             "fetch_error": f"page.goto raised: {e!r}",
             "needs_browser_fallback": False,
         }
+
+    # 文章页 4 层风控融合检测（URL + HTTP + DOM + text）。任一层命中 →
+    # 抛 RiskControlException，让 runner 跟 SERP 命中走同一条 retry/breakpoint
+    # 路径。progress=None 表示非 per-keyword 风控（不是某 keyword 卡住，是会话级）。
+    risk = detect_risk(page, response)
+    if risk is not None:
+        raise RiskControlException(risk, progress=None)
 
     try:
         raw = page.content() or ""
@@ -644,7 +658,13 @@ class BaiduKeywordAdapter:
             rank += 1
             attempt = fetch_article_http(href)
             if attempt.get("needs_browser_fallback"):
-                attempt = fetch_article_browser(page, href)
+                try:
+                    attempt = fetch_article_browser(page, href)
+                except RiskControlException:
+                    # 文章页命中风控 —— 一致地传到 _fetch_once 的 keyword 循环外，
+                    # 跟 SERP 命中走同一条 retry/breakpoint 路径。这里显式 raise 是
+                    # 防止未来在 _check_block 加宽 except 时误把 RiskControl 吞了。
+                    raise
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)

@@ -229,6 +229,40 @@ def test_fetch_article_browser_navigation_exception():
     assert "navigation timeout" in (result["fetch_error"] or "")
 
 
+def test_fetch_article_browser_risk_control_raises(monkeypatch):
+    """文章页 page.goto 落到 wappass / verify.baidu / safetycheck 等风控页时，
+    fetch_article_browser 必须抛 RiskControlException 而不是静默返回 empty content。
+
+    历史 bug：HTTP fetch 失败 → 浏览器 fallback → goto 跳到验证页 → readability 提不到
+    正文 → 返回 content="" + fetch_error="browser content empty after readability"。
+    上游误判为单条文章抓取失败，继续跑剩余 keyword，整个任务 status=ok 完成但大量
+    品牌词漏匹配。修复：detect_risk(page, response) 任一层命中即 raise，让 runner
+    跟 SERP 命中走同一条 retry/breakpoint 路径。progress=None 表示非 per-keyword 风控。
+    """
+    from csm_core.monitor.drivers.risk_detector import RiskSignal, RiskControlException
+
+    class FakePage:
+        def goto(self, url, **kw):
+            return None  # response None 也没关系，detect_risk 被 mock 了
+
+        def content(self):
+            return ""
+
+    def fake_detect_risk(page, response=None):
+        return RiskSignal(layer="url", detail="URL matches 'wappass.baidu.com'")
+
+    # 通过模块命名空间注入，跟现有 TestRiskDetectionIntegration 一样
+    monkeypatch.setattr(baidu_keyword, "detect_risk", fake_detect_risk)
+
+    with pytest.raises(RiskControlException) as exc_info:
+        baidu_keyword.fetch_article_browser(FakePage(), "https://example.com/article")
+
+    assert exc_info.value.progress is None, (
+        f"文章页风控不绑定具体 keyword 进度；期望 progress=None，实际 {exc_info.value.progress!r}"
+    )
+    assert exc_info.value.signal.layer == "url"
+
+
 # ── 完整 fetch 编排 ──────────────────────────────────────────────────────
 from csm_core.monitor.base import MonitorTask
 
@@ -493,6 +527,13 @@ class TestRiskDetectionIntegration:
         call_count = {"n": 0}
 
         def fake_detect_risk(page, response=None):
+            # 只在 SERP 阶段计数（page.url 落在 baidu.com/s 上）。
+            # fetch_article_browser 也会调 detect_risk，这里跳过文章页调用
+            # 避免污染 SERP 计数 —— 文章页风控由
+            # test_fetch_article_browser_risk_control_raises 单独验证。
+            url = getattr(page, "url", "") or ""
+            if "baidu.com/s?" not in url:
+                return None
             call_count["n"] += 1
             if call_count["n"] >= 3:
                 # 第 3 次及以后：DOM 层命中
