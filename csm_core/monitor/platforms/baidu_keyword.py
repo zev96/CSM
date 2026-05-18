@@ -284,8 +284,8 @@ class BaiduKeywordAdapter:
     新模型：config.search_keywords (list[str]) + config.target_brand (str)。
     每个 keyword 跑一次独立 SERP，结果聚合到 metric.keywords[] + task 级统计。
 
-    引擎硬绑 patchright incognito。验证码命中时尝试 headless→可见升级（最多
-    ``_captcha_max_promotions`` 次），全失败则 status=risk_control。
+    引擎硬绑 patchright incognito。风控命中抛 RiskControlException，
+    runner（Task 4）决定 retry/pause；in-task auto-promotion 已废弃。
     """
 
     platform: str = "baidu_keyword"
@@ -294,7 +294,6 @@ class BaiduKeywordAdapter:
         # 真实字段在 apply_settings 里被覆盖。
         self._headless_default = True
         self._captcha_timeout_s = 90
-        self._captcha_max_promotions = 1
         # 默认排除域名（B2B / 电商）。apply_settings 会用 config 里的值
         # 覆盖；空 list 表示「不应用全局黑名单」（用户在设置页清空时）。
         self._default_excluded_domains: tuple[str, ...] = ()
@@ -315,7 +314,9 @@ class BaiduKeywordAdapter:
 
         self._headless_default = headless_default
         self._captcha_timeout_s = captcha_visible_timeout_s
-        self._captcha_max_promotions = captcha_max_promotions
+        # captcha_max_promotions 入参保留以保持向后兼容，但值已无效。
+        # Task 3 起 auto-promotion 路径废弃，risk control 由 runner 决定 retry。
+        _ = captcha_max_promotions  # noqa: F841 — Ignored since Task 3
         # Normalize to lowercase + stripped tuple (cheap immutable snapshot
         # so the fetch path doesn't need a lock if settings re-applies
         # mid-flight).
@@ -425,51 +426,32 @@ class BaiduKeywordAdapter:
         progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: Any = None,
     ) -> MonitorResult:
-        """跑一次所有 SERP；命中验证码且还有升级机会 → headless=False 再跑一次（全重跑）。"""
+        """跑一次所有 SERP。命中 RiskControlException 直接传给 runner，
+        runner（Task 4）决定 retry 还是 pause + 写断点。此函数不再做 in-task
+        auto-promotion —— 老的 headless→可见浏览器自动升级路径已废弃。
+        """
         breaker = rate_limit.get_breaker(self.platform)
-        promotions_left = self._captcha_max_promotions
-        last_attempt_headless = headless
-        captcha_hit_overall = False
+        try:
+            result = self._fetch_once(task, keywords, brand, headless, progress_cb, cancel_token)
+        except RiskControlException:
+            # 4 层风控命中 —— 让 runner (Task 4) 捕获写断点 + 暂停任务；不计入熔断器。
+            raise
+        except Exception as e:
+            logger.exception("baidu fetch raised: %s", e)
+            breaker.record_failure()
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="failed",
+                rank=-1,
+                error_message=f"adapter exception: {e!r}",
+            )
 
-        while True:
-            try:
-                result = self._fetch_once(task, keywords, brand, last_attempt_headless, progress_cb, cancel_token)
-            except RiskControlException:
-                # 4 层风控命中 —— 让 runner (Task 4) 捕获写断点 + 暂停任务；不计入熔断器。
-                raise
-            except Exception as e:
-                logger.exception("baidu fetch raised: %s", e)
-                breaker.record_failure()
-                return MonitorResult(
-                    task_id=task.id or 0,
-                    checked_at=datetime.utcnow(),
-                    status="failed",
-                    rank=-1,
-                    error_message=f"adapter exception: {e!r}",
-                )
-
-            captcha_hit_overall = captcha_hit_overall or result.metric.get("captcha_hit", False)
-            if result.status == "risk_control" and result.metric.get("captcha_hit"):
-                if promotions_left > 0 and last_attempt_headless:
-                    logger.info(
-                        "baidu captcha hit; promoting to visible (%d promotions left)",
-                        promotions_left,
-                    )
-                    promotions_left -= 1
-                    last_attempt_headless = False
-                    continue
-                # 用尽升级机会，或者本来就在 visible 还命中
-                result.metric["captcha_hit"] = True
-                breaker.record_failure()
-                return result
-
-            if result.status == "ok":
-                breaker.record_success()
-            else:
-                breaker.record_failure()
-            # 把 captcha_hit_overall 写回去，前端用得到
-            result.metric["captcha_hit"] = captcha_hit_overall
-            return result
+        if result.status == "ok":
+            breaker.record_success()
+        else:
+            breaker.record_failure()
+        return result
 
     def _fetch_once(
         self,
@@ -483,22 +465,7 @@ class BaiduKeywordAdapter:
         """一次完整 多SERP→解 link→抓正文→打分，返回聚合 MonitorResult。"""
         now = datetime.utcnow()
 
-        # 用于 risk_control 的 minimal metric（captcha hit 时快速返回）
-        empty_metric: dict[str, Any] = {
-            "target_brand": brand,
-            "search_keywords": keywords,
-            "engine": "patchright",
-            "headless": headless,
-            "captcha_hit": False,
-            "keywords": [],
-            "total_keywords": len(keywords),
-            "matched_keywords": 0,
-            "total_default_matches": 0,
-            "best_default_first_rank": -1,
-        }
-
         keyword_results: list[dict[str, Any]] = []
-        captcha_hit = False
         total_kw = len(keywords)
         # 全局黑名单 + 任务级 exclude_domains 合并 —— 一次性算好，循环
         # 内每个关键词共用同一份；空 set 等价于不过滤。
@@ -553,12 +520,12 @@ class BaiduKeywordAdapter:
                 }
 
                 # Navigate to SERP. 45s timeout — baidu 偶尔冷启慢，20s 不够。
-                _serp_response = None
+                serp_response = None
                 try:
-                    _serp_response = page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
+                    serp_response = page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
                 except TypeError:
                     # Test FakePage 不接受 kwargs
-                    _serp_response = page.goto(serp_url)
+                    serp_response = page.goto(serp_url)
                 except Exception as e:
                     logger.warning(
                         "baidu navigate failed (headless=%s, keyword=%r): %s",
@@ -566,11 +533,13 @@ class BaiduKeywordAdapter:
                     )
                     kw_entry["fetch_error"] = f"serp navigate raised: {e!r}"
                     keyword_results.append(kw_entry)
+                    # 注意：page.goto 失败时不调 detect_risk —— 页面没加载，4 层信号都没意义。
+                    # 此 keyword 会以 fetch_error 状态记录，runner 会跳到下一个。
                     continue
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
                 # 任一层命中 → 抛 RiskControlException，runner (Task 4) 捕获写断点。
-                risk = detect_risk(page, _serp_response)
+                risk = detect_risk(page, serp_response)
                 if risk is not None:
                     raise RiskControlException(risk, progress=kw_idx)
 
@@ -612,18 +581,6 @@ class BaiduKeywordAdapter:
                     except Exception:
                         logger.exception("progress_cb(%s,%s) raised; ignoring", kw_idx + 1, total_kw)
 
-        if captcha_hit:
-            empty_metric["captcha_hit"] = True
-            empty_metric["keywords"] = keyword_results
-            return MonitorResult(
-                task_id=task.id or 0,
-                checked_at=now,
-                status="risk_control",
-                rank=-1,
-                metric=empty_metric,
-                error_message="baidu captcha hit during keyword SERP",
-            )
-
         # Compute task-level aggregations
         total_keywords = len(keywords)
         matched_keywords = sum(
@@ -638,7 +595,6 @@ class BaiduKeywordAdapter:
             "search_keywords": keywords,
             "engine": "patchright",
             "headless": headless,
-            "captcha_hit": False,
             "keywords": keyword_results,
             "total_keywords": total_keywords,
             "matched_keywords": matched_keywords,

@@ -351,7 +351,8 @@ def test_fetch_happy_path_default_only(monkeypatch, patch_session):
     assert result.metric["matched_keywords"] >= 1
     assert result.metric["best_default_first_rank"] == 1
     assert result.rank == 1
-    assert result.metric["captcha_hit"] is False
+    # captcha_hit field removed in Task 3 refactor — auto-promotion dead code deleted
+    assert "captcha_hit" not in result.metric
     # news_present is now per-keyword in metric["keywords"][i]["news_present"]
     assert "news_present" in result.metric["keywords"][0]
 
