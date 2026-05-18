@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import sys
 import tempfile
 import threading
@@ -63,14 +64,27 @@ _VIEWPORT_BUCKETS = (
 )
 
 
+# Per-thread sticky viewport cache —— 同一个 worker 线程跨 launch 保持
+# 相同 viewport，避免"同账号跨会话突然换屏幕尺寸"的检测信号。
+_thread_viewport: threading.local = threading.local()
+
+
 def _pick_viewport() -> dict[str, int]:
-    """Pick a random viewport from 3 presets so the same account doesn't always present
-    identical screen dimensions (cheap fingerprint diversification)."""
-    import random
-    return random.choice(_VIEWPORT_BUCKETS)
+    """Pick a viewport for this launch. Sticky per-thread so the same worker presents
+    consistent screen dimensions across sequential launches (avoids the "single account
+    oscillating between 3 viewports" detection signal).
+
+    Different worker threads pick independently — that's intentional, gives some
+    fingerprint diversification while preserving session-level continuity per worker."""
+    cached = getattr(_thread_viewport, "value", None)
+    if cached is not None:
+        return cached
+    chosen = random.choice(_VIEWPORT_BUCKETS)
+    _thread_viewport.value = chosen
+    return chosen
 
 
-def _build_launch_args() -> list[str]:
+def _build_launch_args(viewport: dict[str, int] | None = None) -> list[str]:
     """Pool 启动 Chromium 时的统一 launch args。基础 --no-sandbox 系列 +
     反自动化探测 flag。
 
@@ -78,22 +92,33 @@ def _build_launch_args() -> list[str]:
     --disable-blink-features=AutomationControlled 与之叠加在某些
     FingerprintJS 检测中会产生可检测组合，但仍有平台（百家号等）要求
     此 flag。综合权衡保留。
+
+    viewport: 如果传入，启动加 --window-size=W,H 使 OS 窗口尺寸匹配
+    viewport，保持 window.outerWidth ≈ window.innerWidth + chrome 真实
+    浏览器关系。不传则 Chromium 用默认大小（可能与 viewport mismatch）。
     """
-    return [
+    args = [
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",
     ]
+    if viewport is not None:
+        args.append(f"--window-size={viewport['width']},{viewport['height']}")
+    return args
 
 
 def _build_init_script() -> str:
     """每个 page navigate 前注入。屏蔽 webdriver 标记 + ChromeDriver 残留 +
     给 plugins / languages 假数据。这段 JS 由 Patchright 直接发给 Chromium 执行。"""
-    return r"""
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    return r"""Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
 Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+// 给 window.chrome 一个简单的 placeholder 对象 —— 真 Chrome 上这个是个非空 object，
+// Patchright 不同版本对它处理不一致，我们补一层兜底
+if (!window.chrome) {
+    window.chrome = { runtime: {} };
+}
 // 屏蔽 ChromeDriver 注入的全局变量
 for (const k of Object.keys(window)) {
     if (k.startsWith('cdc_') || k.startsWith('$cdc_')) {
@@ -104,13 +129,16 @@ for (const k of Object.keys(window)) {
 
 
 def _build_extra_headers() -> dict[str, str]:
-    """Context 默认 extra_http_headers。同步语言/区域避免 cookies 是国内
-    账号但浏览器是 en-US 这种露馅。sec-ch-ua 跟 UA 大版本一致即可。"""
+    """Context 默认 extra_http_headers。仅设 Accept-Language —— 这是 Patchright
+    默认 en-US、中文站点的真实 gap。
+
+    sec-ch-ua / sec-ch-ua-mobile / sec-ch-ua-platform **故意不设**：HTTP header
+    伪造的 sec-ch-ua 跟 JS 端 navigator.userAgentData.brands 报的真实 Chromium
+    版本不一致，是 FingerprintJS 一眼能识别的 cheap signal（比命中 webdriver
+    更严重）。让 Patchright 自然回应 Accept-CH 流程才一致。
+    """
     return {
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "sec-ch-ua": '"Chromium";v="120", "Not_A Brand";v="24", "Google Chrome";v="120"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
     }
 
 
@@ -364,14 +392,15 @@ def get_page() -> Any:
     # "valid token, definite automation". Soft signal > hard
     # signal.
     try:
+        _viewport = _pick_viewport()
         launch_kwargs: dict[str, Any] = {
             "user_data_dir": user_data_dir,
             # Patchright's stealth is supposed to make headless safe,
             # but zhihu's anti-bot has been seen to still flag fully
             # headless context. Headed = matches DrissionPage path.
             "headless": False,
-            "args": _build_launch_args(),
-            "viewport": _pick_viewport(),
+            "args": _build_launch_args(viewport=_viewport),
+            "viewport": _viewport,
             "extra_http_headers": _build_extra_headers(),
         }
         if _chrome_path:
