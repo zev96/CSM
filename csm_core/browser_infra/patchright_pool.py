@@ -207,6 +207,30 @@ def ensure_browsers_path() -> str | None:
     return str(candidate)
 
 
+def _get_proxy_for_launch() -> dict[str, str] | None:
+    """Read config + return Patchright launch_persistent_context's ``proxy`` param.
+
+    Returns None if proxies_path not configured, file missing, parse failed,
+    or all proxies disabled. Errors fall through to "no proxy" silently --
+    proxy is a defense-in-depth feature, never a hard requirement.
+    """
+    try:
+        from csm_sidecar.services import config_service
+        from csm_core.browser_infra.proxy_pool import ProxyPool
+        cfg = config_service.load()
+        proxies_path = getattr(cfg, "proxies_path", None)
+        if not proxies_path:
+            return None
+        pool = ProxyPool(Path(proxies_path))
+        server = pool.pick()
+        if not server:
+            return None
+        return {"server": server}
+    except Exception as e:
+        logger.debug("patchright_pool: proxy lookup failed silently: %s", e)
+        return None
+
+
 @dataclass
 class _ThreadState:
     """Per-thread Playwright resources. Lives in ``threading.local()``."""
@@ -405,6 +429,9 @@ def get_page() -> Any:
         }
         if _chrome_path:
             launch_kwargs["executable_path"] = _chrome_path
+        _proxy = _get_proxy_for_launch()
+        if _proxy:
+            launch_kwargs["proxy"] = _proxy
         state.context = state.playwright.chromium.launch_persistent_context(
             **launch_kwargs
         )

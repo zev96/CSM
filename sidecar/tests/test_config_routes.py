@@ -149,3 +149,35 @@ def _install_fake_keyring(monkeypatch):
     monkeypatch.setattr("csm_sidecar.routes.config.get_secret", fake_get)
     monkeypatch.setattr("csm_sidecar.routes.config.set_secret", fake_set)
     monkeypatch.setattr("csm_sidecar.routes.config.delete_secret", fake_delete)
+
+
+# ── Proxy route tests ────────────────────────────────────────────────────────
+
+def test_proxy_status_route_returns_disabled_when_unconfigured(client: TestClient):
+    """With no proxies_path in config, endpoint reports disabled."""
+    r = client.get("/api/proxy/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["enabled"] is False
+    assert "available_count" in data
+    assert r.headers.get("cache-control") == "no-store"
+
+
+def test_proxy_status_returns_enabled_when_configured(client: TestClient, tmp_path):
+    """When proxies_path is set to a valid proxies.json, endpoint reports enabled."""
+    import json
+    proxies_json = tmp_path / "proxies.json"
+    proxies_json.write_text(json.dumps({
+        "enabled": True,
+        "rotation_strategy": "on_risk_control",
+        "proxies": [{"server": "http://1.2.3.4:8080"}],
+    }), encoding="utf-8")
+
+    # Set proxies_path in config
+    client.patch("/api/config", json={"proxies_path": str(proxies_json)})
+    r = client.get("/api/proxy/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["enabled"] is True
+    assert data["available_count"] == 1
+    assert data["disabled_count"] == 0

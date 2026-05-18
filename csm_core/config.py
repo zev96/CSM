@@ -159,6 +159,12 @@ class AppConfig(BaseModel):
     mining_summary_prompt: str = ""
     mining_suggest_prompt: str = ""
 
+    # ── Proxy pool ──────────────────────────────────────────────────────────
+    # 用户自备 HTTP/SOCKS5 代理列表的配置文件路径（proxies.json 完整路径）。
+    # None 或空字符串 = 不启用代理池，所有爬取直连。
+    # 格式见 csm_core/browser_infra/proxy_pool.py。
+    proxies_path: str | None = Field(default=None, description="Path to proxies.json; None disables proxy pool")
+
 
 def load_config(path: Path) -> AppConfig:
     path = Path(path)

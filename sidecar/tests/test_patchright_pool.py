@@ -122,3 +122,62 @@ class TestStealthWiring:
         # If the launch happens inside `get_page` or `_create_context` or similar,
         # adapt the patch target accordingly.
         pytest.skip("TODO: implement after confirming patchright launch entry point name")
+
+
+class TestProxyInjection:
+    """Verify _get_proxy_for_launch helper returns correct values."""
+
+    def test_returns_none_when_no_proxies_path(self, monkeypatch):
+        """When AppConfig.proxies_path is None, should return None."""
+        from csm_core.browser_infra import patchright_pool
+        from unittest.mock import MagicMock
+
+        mock_cfg = MagicMock()
+        mock_cfg.proxies_path = None
+        mock_service = MagicMock()
+        mock_service.load.return_value = mock_cfg
+        monkeypatch.setattr(
+            "csm_sidecar.services.config_service.load",
+            mock_service.load,
+        )
+        result = patchright_pool._get_proxy_for_launch()
+        assert result is None
+
+    def test_returns_proxy_dict_when_configured(self, monkeypatch, tmp_path):
+        """When proxies_path is set + proxies.json valid, should return {'server': ...}."""
+        import json
+        from csm_core.browser_infra import patchright_pool
+        from unittest.mock import MagicMock
+
+        proxies_json = tmp_path / "proxies.json"
+        proxies_json.write_text(json.dumps({
+            "enabled": True,
+            "rotation_strategy": "on_risk_control",
+            "proxies": [{"server": "http://1.2.3.4:8080"}],
+        }), encoding="utf-8")
+
+        mock_cfg = MagicMock()
+        mock_cfg.proxies_path = str(proxies_json)
+        mock_service = MagicMock()
+        mock_service.load.return_value = mock_cfg
+        monkeypatch.setattr(
+            "csm_sidecar.services.config_service.load",
+            mock_service.load,
+        )
+        result = patchright_pool._get_proxy_for_launch()
+        assert result is not None
+        assert result["server"] == "http://1.2.3.4:8080"
+
+    def test_returns_none_when_config_service_unavailable(self, monkeypatch):
+        """If config_service import fails (e.g., in tests without sidecar), should return None."""
+        from csm_core.browser_infra import patchright_pool
+
+        def raise_import(*a, **kw):
+            raise ImportError("no sidecar")
+
+        monkeypatch.setattr(
+            "csm_sidecar.services.config_service.load",
+            raise_import,
+        )
+        result = patchright_pool._get_proxy_for_launch()
+        assert result is None

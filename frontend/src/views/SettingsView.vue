@@ -173,6 +173,7 @@ const SECTIONS: SectionDef[] = [
   { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL" },
   { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建" },
   { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie" },
+  { k: "proxy", l: "风控与代理", icon: "shield", sub: "用户自备 HTTP/SOCKS5 代理池" },
   { k: "account", l: "账号", icon: "user", sub: "登录态 · 工作空间" },
   { k: "about", l: "关于", icon: "info", sub: "版本与更新" },
 ];
@@ -268,11 +269,29 @@ function applyHash(hash: string) {
   if (SECTIONS.some((s) => s.k === k)) section.value = k;
 }
 
+// ── 代理池状态 ─────────────────────────────────────────────────
+const proxyStatus = ref<{ enabled: boolean; available_count: number; disabled_count: number } | null>(null);
+
+async function loadProxyStatus() {
+  try {
+    const r = await sidecar.client.get("/api/proxy/status");
+    proxyStatus.value = r.data;
+  } catch (e) {
+    proxyStatus.value = null;
+  }
+}
+
+async function onProxiesPathChange(v: string | null) {
+  setField("proxies_path", v || null);
+  await loadProxyStatus();
+}
+
 onMounted(async () => {
   if (!cfg.data) await cfg.load();
   syncDraftFromCfg();
   refreshKeyringStatus();
   applyHash(route.hash);
+  loadProxyStatus();
 });
 
 watch(
@@ -1513,6 +1532,97 @@ async function saveAccountEdit() {
                 <span>打开管理器</span>
               </Btn>
             </SettingsRow>
+          </template>
+
+          <!-- ━━━━━━━━ 风控与代理 ━━━━━━━━ -->
+          <!--
+            用户自备 HTTP/SOCKS5 代理池。proxies.json 路径写入 AppConfig.proxies_path。
+            Patchright 每次 launch_persistent_context 会从池里 pick() 一条注入。
+            rotation_strategy 写在 proxies.json 内，不在 UI 里改（少数用户用，
+            留给高级用户直接编辑 JSON）。
+          -->
+          <template v-else-if="section === 'proxy'">
+            <div class="mb-3 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
+              代理池配置
+            </div>
+            <SettingsRow
+              label="proxies.json 路径"
+              hint="填写 proxies.json 完整路径；留空则不启用代理池。格式：{ enabled, rotation_strategy, proxies: [{server: ...}] }"
+            >
+              <div class="flex items-center" :style="{ gap: '6px' }">
+                <input
+                  :value="get('proxies_path') ?? ''"
+                  placeholder="留空不启用（如 C:\Users\you\proxies.json）"
+                  class="font-mono bg-card-white px-3 outline-none"
+                  :style="{
+                    width: '340px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                    fontSize: '11px',
+                  }"
+                  @change="(e: Event) => onProxiesPathChange(((e.target as HTMLInputElement).value) || null)"
+                />
+                <button
+                  type="button"
+                  title="选择 proxies.json"
+                  class="inline-flex items-center justify-center"
+                  :style="{
+                    height: '34px',
+                    padding: '0 12px',
+                    borderRadius: '10px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--ink-2)',
+                    cursor: 'pointer',
+                    fontSize: '11.5px',
+                    gap: '5px',
+                  }"
+                  @click="async () => {
+                    const v = await pickPath({ title: '选择 proxies.json', directory: false, defaultPath: get('proxies_path') || undefined });
+                    if (v) onProxiesPathChange(v);
+                  }"
+                >
+                  <Icon name="folder" :size="13" />
+                  <span>选择</span>
+                </button>
+              </div>
+            </SettingsRow>
+            <SettingsRow label="代理池状态" hint="从当前 proxies.json 读取" last>
+              <div
+                v-if="proxyStatus"
+                :style="{ color: proxyStatus.enabled ? 'var(--ink-2)' : 'var(--ink-3)', fontSize: '12px' }"
+              >
+                <span v-if="proxyStatus.enabled">
+                  已启用 · {{ proxyStatus.available_count }} 个可用代理
+                  <span v-if="proxyStatus.disabled_count > 0">· {{ proxyStatus.disabled_count }} 个失效</span>
+                </span>
+                <span v-else>未启用代理池</span>
+              </div>
+              <div v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">加载中…</div>
+            </SettingsRow>
+            <div
+              class="mt-4 pt-4"
+              :style="{ borderTop: '1px solid var(--line)', color: 'var(--ink-3)', fontSize: '11.5px', lineHeight: '1.6' }"
+            >
+              <div class="mb-1 font-semibold" :style="{ color: 'var(--ink-2)' }">proxies.json 格式</div>
+              <pre
+                class="font-mono overflow-x-auto rounded px-3 py-2"
+                :style="{ background: 'var(--card-2)', fontSize: '11px' }"
+              >{{ `{
+  "enabled": true,
+  "rotation_strategy": "on_risk_control",
+  "proxies": [
+    { "server": "http://user:pass@1.2.3.4:8080" },
+    { "server": "socks5://1.2.3.5:1080" }
+  ]
+}` }}</pre>
+              <div class="mt-2">
+                轮换策略：<code>on_risk_control</code>（默认，命中风控再换）/
+                <code>per_request</code>（每次随机）/ <code>per_task</code>（每任务一条）/
+                <code>daily</code>（每天轮换）。连续 3 次失败的代理自动停用。
+              </div>
+            </div>
           </template>
 
           <!-- ━━━━━━━━ 账号 ━━━━━━━━ -->
