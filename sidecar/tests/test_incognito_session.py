@@ -115,29 +115,3 @@ def test_session_closes_on_exception(mock_playwright):
     mock_playwright["context"].close.assert_called_once()
     mock_playwright["browser"].close.assert_called_once()
     mock_playwright["pw_handle"].stop.assert_called_once()
-
-
-def test_is_baidu_captcha_url_detects_wappass():
-    assert incognito_session.is_baidu_captcha_url(
-        "https://wappass.baidu.com/static/captcha/tuxing.html?ak=xxx"
-    )
-
-
-def test_is_baidu_captcha_url_detects_passport():
-    assert incognito_session.is_baidu_captcha_url(
-        "https://passport.baidu.com/?login&u=https://www.baidu.com/s?wd=test"
-    )
-
-
-def test_is_baidu_captcha_url_detects_verify():
-    assert incognito_session.is_baidu_captcha_url(
-        "https://verify.baidu.com/v2/index.html"
-    )
-
-
-def test_is_baidu_captcha_url_clean_baidu_url_not_captcha():
-    assert not incognito_session.is_baidu_captcha_url(
-        "https://www.baidu.com/s?wd=test"
-    )
-    assert not incognito_session.is_baidu_captcha_url("")
-    assert not incognito_session.is_baidu_captcha_url("https://example.com")

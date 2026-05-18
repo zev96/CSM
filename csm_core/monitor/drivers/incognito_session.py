@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .patchright_pool import ensure_browsers_path
-from .risk_detector import detect_risk_by_url
 
 logger = logging.getLogger(__name__)
 
@@ -124,19 +123,3 @@ def incognito_session(*, headless: bool) -> Iterator[IncognitoSession]:
                 pw.stop()
             except Exception as e:
                 logger.debug("incognito pw.stop raised: %s", e)
-
-
-# 老的 _BAIDU_CAPTCHA_URL_MARKERS 元组已迁入 risk_detector._URL_PATTERNS
-# （4 层检测体系的 URL 子串层）。is_baidu_captcha_url 保留为向后兼容 shim；
-# 新调用点应该直接用 detect_risk_by_url 或更全的 risk_detector.detect_risk()。
-
-
-def is_baidu_captcha_url(url: str) -> bool:
-    """True iff 落地 URL 看起来是百度的反爬验证码页。
-
-    在 `page.goto` 之后立刻调一次 —— 命中说明已被百度拦下，要么走
-    headless→可见升级，要么把当前 task 标 risk_control。
-
-    向后兼容 shim：内部委托给 risk_detector.detect_risk_by_url。
-    """
-    return detect_risk_by_url(url) is not None
