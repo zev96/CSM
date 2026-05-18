@@ -72,6 +72,7 @@ watch(
 
 // Watch for ?subtab=... to switch the comment subtab (e.g., mining view's
 // "重新登录" button deep-links here with the platform name).
+// NOTE: no immediate:true — refs are declared below. Initial seed is in onMounted.
 watch(
   () => route.query.subtab,
   (newSubtab) => {
@@ -79,11 +80,11 @@ watch(
       commentSubtab.value = newSubtab as CommentPlatform;
     }
   },
-  { immediate: true },
 );
 
 // Watch for ?openCookie=1 to auto-open the Cookie modal after deep-link (mining
 // view's "重新登录" sets this so user lands on the right login surface).
+// NOTE: no immediate:true — showCookieMgr ref is declared below. Initial seed is in onMounted.
 watch(
   () => route.query.openCookie,
   (open) => {
@@ -94,7 +95,6 @@ watch(
       });
     }
   },
-  { immediate: true },
 );
 
 const PLATFORM_TYPE: Record<CommentPlatform, string> = {
@@ -1439,6 +1439,17 @@ watch(commentSubtab, () => {
 // 如需重启回归，把上面的 pill 模板 + 这里的 computed 一起恢复。
 
 onMounted(async () => {
+  // Seed deep-link state from current query at mount time, after all refs are initialized.
+  // The watch(...) callbacks above have no immediate:true to avoid TDZ on commentSubtab /
+  // showCookieMgr which are declared after the watchers.
+  const sub = route.query.subtab;
+  if (typeof sub === "string" && (sub === "bilibili" || sub === "douyin" || sub === "kuaishou")) {
+    commentSubtab.value = sub as CommentPlatform;
+  }
+  if (route.query.openCookie === "1" || route.query.openCookie === "true") {
+    showCookieMgr.value = true;
+  }
+
   try {
     await whenReady();
     if (!cfg.data) await cfg.load();

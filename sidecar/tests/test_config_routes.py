@@ -181,3 +181,36 @@ def test_proxy_status_returns_enabled_when_configured(client: TestClient, tmp_pa
     assert data["enabled"] is True
     assert data["available_count"] == 1
     assert data["disabled_count"] == 0
+
+
+def test_proxy_status_reads_singleton_disabled_count(client: TestClient, tmp_path, monkeypatch):
+    """After mark_failed on the singleton, the status endpoint must reflect disabled_count > 0."""
+    import json
+    from csm_core.browser_infra import patchright_pool
+
+    # Set up proxies.json
+    p = tmp_path / "proxies.json"
+    p.write_text(json.dumps({
+        "enabled": True,
+        "rotation_strategy": "on_risk_control",
+        "proxies": [{"server": "http://1.1.1.1:8080"}],
+    }), encoding="utf-8")
+
+    # Point config at it
+    client.patch("/api/config", json={"proxies_path": str(p)})
+
+    # Reset singleton cache so we start fresh
+    monkeypatch.setattr(patchright_pool, "_pool_cache", None)
+
+    # Create + use the singleton (simulating a real launch path)
+    pool = patchright_pool._get_or_create_pool(str(p))
+
+    # Fail one proxy 3 times to disable it
+    for _ in range(3):
+        pool.mark_failed("http://1.1.1.1:8080")
+
+    # Hit the endpoint — should see disabled_count=1 from the singleton
+    r = client.get("/api/proxy/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["disabled_count"] == 1, f"expected disabled_count=1, got {data}"

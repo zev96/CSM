@@ -13,6 +13,23 @@
   目录不再使用；cookies 在每次抓取启动时从 monitor.db 动态注入（用户在「监控中心 →
   凭据管理」配过登录后，mining 自动可用）。
 - **任务进度 SSE**：mining 任务运行时通过 SSE 实时推 `job.progress` / `job.platform_done` / `job.finished` 事件到前端进度卡。
+- **patchright_pool 反指纹加固**：统一注入 init_script 屏蔽 `navigator.webdriver` / `cdc_*`；
+  viewport 在 3 档预设随机（per-thread sticky，同账号跨会话保持一致）；`--window-size` 与
+  viewport 同步避免 `outerWidth/innerWidth` 矛盾；`--disable-blink-features=AutomationControlled`
+  在抓取登录墙时不再被绕过。`Accept-Language` 强制 `zh-CN`。所有走 pool 的 adapter
+  （评论 / 百度 / mining）自动继承。
+- **视频抓取 DOM 降级**：抖音 / 快手 XHR 路径抓 0 条时自动 fallback 到 DOM 解析
+  （`page.locator` 抽视频卡片 + 正则提 `aweme_id` / `photo_id`），与 XHR 主路径共享 dedup
+  避免双发，覆盖被 fingerprint / 签名拦截但 DOM 仍可读的场景。
+- **代理池**：新增 `<config_dir>/proxies.json` 用户自备 HTTP/SOCKS5 代理池，支持 4 种
+  rotation strategy（`on_risk_control` 默认 sticky / `per_task` / `per_request` / `daily`），
+  失败 3 次自动 disabled。设置 → 风控与代理 显示当前 pool 状态（启用 / 可用 / 失效）。
+  URL 内嵌 `user:pass` 自动拆出作为 Patchright `ProxySettings` 的 `username/password`
+  传给 Chromium（避免 `--proxy-server` 直接吞掉 URL credentials 导致 407）。
+- **前端风控 UX**：BaiduRankingPage 任务详情顶部新增 `risk_control` 橙色 banner +
+  「从断点续抓」按钮调 resume API；MiningView 任务卡新增 `needs_login` / `risk_control`
+  状态徽章 + 「重新登录」深链直跳监控中心 Cookie 管理。配色用
+  `--primary-soft` / `--primary` / `--primary-deep` 主题 token。
 
 ### Changed
 - 共享浏览器基建（`cookie_store` / `ua_pool` / `rate_limit` / `patchright_pool` / `interactive_login`）从 `csm_core/monitor/` 上提到新的顶层 `csm_core/browser_infra/` 包；`monitor` 包内保留 re-export 薄层以兼容现有调用方。

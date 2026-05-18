@@ -29,7 +29,13 @@ async def proxy_status(response: Response) -> dict[str, Any]:
         return {"enabled": False, "available_count": 0, "disabled_count": 0}
 
     try:
-        pool = ProxyPool(Path(proxies_path))
+        from csm_core.browser_infra import patchright_pool
+        pool = patchright_pool.get_current_proxy_pool()
+        if pool is None:
+            # No pool created yet (sidecar hasn't acquired a browser since last config change).
+            # Construct a transient instance to read enabled/count from config —
+            # disabled_count=0 since no runtime state to surface yet.
+            pool = ProxyPool(Path(proxies_path))
         return {
             "enabled": pool.enabled,
             "available_count": len(pool.available_proxies()),
