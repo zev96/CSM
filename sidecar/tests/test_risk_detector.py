@@ -19,6 +19,8 @@ class TestUrlLayer:
     @pytest.mark.parametrize("url", [
         "https://wappass.baidu.com/static/captcha/index.html",
         "https://passport.baidu.com/v2/?login",
+        "https://passport.baidu.com/?login&u=https%3A%2F%2Fwww.baidu.com",  # 老 marker 覆盖
+        "https://verify.baidu.com/v2/index.html",                          # 老 marker 覆盖
         "https://baijiahao.baidu.com/safetycheck?id=123",
         "https://mbd.baidu.com/safe?token=abc",
         "https://www.baidu.com/captcha?from=serp",
@@ -83,6 +85,8 @@ class TestTextLayer:
         sig = detect_risk_by_text(text)
         assert sig is not None
         assert sig.layer == "text"
+        # 确认 detail 里带上了实际命中的短语，前端 toast 才有用
+        assert any(p in sig.detail for p in ("验证码", "请完成验证", "安全验证", "网络异常", "系统繁忙"))
 
     @pytest.mark.parametrize("text", [
         "<html><body>正常文章内容</body></html>",

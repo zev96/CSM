@@ -11,9 +11,12 @@ runner 捕获暂停任务 + 推 SSE 风控事件给前端。
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
 
 RiskLayer = Literal["url", "dom", "text", "http"]
 
@@ -29,7 +32,11 @@ class RiskSignal:
 # Baidu 站内所有已知验证码 / 登录墙 URL 子串。命中即风控。
 _URL_PATTERNS: tuple[str, ...] = (
     "wappass.baidu.com/static/captcha",
-    "passport.baidu.com/v2",
+    # Match passport.baidu.com without /v2 suffix —— 老的 is_baidu_captcha_url
+    # 老 marker 集合用的就是 substring，Task 2 refactor 不能丢覆盖。
+    "passport.baidu.com",
+    # 老 marker 集合还有 verify.baidu.com —— 这是百度搜索遇到 SERP 风控时的另一个跳转域。
+    "verify.baidu.com",
     "baijiahao.baidu.com/safetycheck",
     "mbd.baidu.com/safe",
     "baidu.com/captcha",
@@ -52,7 +59,8 @@ _DOM_SELECTORS: tuple[str, ...] = (
     ".passmod",
     '[id^="wappass"]',
     ".security-check",
-    ".mod-error",
+    ".mod-error",      # 百家号 fallback 错误页
+    ".error-page",     # 百家号 fallback 错误页（更通用）—— spec §5 一 列出的两个选择器之一
 )
 
 
@@ -122,14 +130,14 @@ def detect_risk(page: Any, response: Any = None) -> RiskSignal | None:
         sig = detect_risk_by_url(url)
         if sig:
             return sig
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("detect_risk: layer raised, continuing: %s", e)
     try:
         sig = detect_risk_by_http(response)
         if sig:
             return sig
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("detect_risk: layer raised, continuing: %s", e)
     sig = detect_risk_by_dom(page)
     if sig:
         return sig
@@ -138,8 +146,8 @@ def detect_risk(page: Any, response: Any = None) -> RiskSignal | None:
         sig = detect_risk_by_text(text)
         if sig:
             return sig
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("detect_risk: layer raised, continuing: %s", e)
     return None
 
 
