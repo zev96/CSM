@@ -35,6 +35,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from csm_core.monitor import storage
 from csm_core.monitor.base import MonitorResult, MonitorTask
+from csm_core.monitor.drivers.risk_detector import RiskControlException as _RiskControlException
 from csm_core.monitor.notify import should_alert
 from csm_core.monitor.platforms import ALL as ADAPTERS
 from csm_core.monitor.rate_limit import slot
@@ -54,6 +55,7 @@ EventKind = Literal[
     "started", "finished", "alert", "failed", "tick",
     "captcha_required", "captcha_resolved", "captcha_timeout",
     "progress",
+    "risk_control",  # Task 4: adapter hit risk control mid-scan; breakpoint saved
 ]
 
 
@@ -238,6 +240,7 @@ class MonitorLoop:
         task_id: int,
         *,
         keyword_override: str | None = None,
+        resume_from: int = 0,
     ) -> Future[MonitorResult | None]:
         """Force-dispatch a single task without consulting the schedule.
 
@@ -251,11 +254,17 @@ class MonitorLoop:
         partial result is merged with the most-recent stored snapshot so
         the other keywords' data is not lost. Used by the Level 2
         «启动监测» button.
+
+        ``resume_from`` — 0-based keyword index to start from, used by
+        POST /api/monitor/tasks/{id}/resume after a risk_control pause.
+        Default 0 = normal full scan.
         """
         if self._executor is None:
             raise RuntimeError("MonitorLoop is not started")
         return self._executor.submit(
-            self._run_one_by_id, task_id, keyword_override=keyword_override,
+            self._run_one_by_id, task_id,
+            keyword_override=keyword_override,
+            resume_from=resume_from,
         )
 
     # ── tick / dispatch internals ───────────────────────────────────────
@@ -294,6 +303,7 @@ class MonitorLoop:
         task_id: int,
         *,
         keyword_override: str | None = None,
+        resume_from: int = 0,
     ) -> MonitorResult | None:
         task = storage.get_task(task_id)
         if task is None:
@@ -316,14 +326,23 @@ class MonitorLoop:
             cfg["search_keywords"] = [keyword_override]
             cfg["_keyword_override"] = keyword_override
             task.config = cfg
-        return self._run_one(task)
+        return self._run_one(task, resume_from=resume_from)
 
-    def _run_one(self, task: MonitorTask) -> MonitorResult | None:
+    def _run_one(
+        self,
+        task: MonitorTask,
+        *,
+        resume_from: int = 0,
+    ) -> MonitorResult | None:
         """Adapter dispatch + result persistence + alert decision.
 
         Mirrors the legacy :class:`csm_gui.workers.monitor_worker.MonitorWorker`
         contract verbatim — the only difference is event delivery (sink
         callback instead of pyqtSignal).
+
+        ``resume_from`` — 0-based keyword index to start from (baidu_keyword
+        only). Default 0 = normal full scan. Passed down to the adapter so
+        it can skip already-fetched keywords after a risk_control pause.
         """
         if task.id is None:
             return None
@@ -361,18 +380,26 @@ class MonitorLoop:
 
         try:
             with slot(task.type, timeout=120.0):
-                # Try the new signature first (with cancel_token + progress_cb);
-                # fall back progressively for adapters that haven't been
-                # upgraded yet. TypeError tells us the kwarg is unknown.
+                # Try the new signature first (with cancel_token + progress_cb +
+                # resume_from); fall back progressively for adapters that haven't
+                # been upgraded yet. TypeError tells us the kwarg is unknown.
                 try:
                     result: MonitorResult = adapter.fetch(
-                        task, progress_cb=_progress_cb, cancel_token=cancel_token,
+                        task,
+                        progress_cb=_progress_cb,
+                        cancel_token=cancel_token,
+                        resume_from=resume_from,
                     )
                 except TypeError:
                     try:
-                        result = adapter.fetch(task, progress_cb=_progress_cb)
+                        result = adapter.fetch(
+                            task, progress_cb=_progress_cb, cancel_token=cancel_token,
+                        )
                     except TypeError:
-                        result = adapter.fetch(task)
+                        try:
+                            result = adapter.fetch(task, progress_cb=_progress_cb)
+                        except TypeError:
+                            result = adapter.fetch(task)
         except _CancelledFetch as e:
             # Cooperative cancellation: adapter saw cancel_token set and
             # bailed out cleanly. Publish a failed event with a clear
@@ -383,6 +410,41 @@ class MonitorLoop:
                 kind="failed", task_id=task.id, at=self._clock(), error=msg,
             ))
             self._untrack_active(task_id_local)
+            return None
+        except _RiskControlException as e:
+            # Task 4: risk control hit mid-scan. Save a breakpoint result so
+            # POST /api/monitor/tasks/{id}/resume can restart from
+            # last_resumed_keyword instead of keyword 0.
+            next_kw = (e.progress if e.progress is not None else -1) + 1
+            # next_kw=0 only when progress is None (e.g. from a future adapter
+            # that doesn't report position); clamp to 0 so resume is valid.
+            next_kw = max(0, next_kw)
+            err_msg = f"风控拦截：layer={e.signal.layer} detail={e.signal.detail}"
+            logger.warning("monitor task %s: %s, saving breakpoint at %s", task.id, err_msg, next_kw)
+            breakpoint_result = MonitorResult(
+                task_id=task.id,
+                checked_at=self._clock(),
+                status="risk_control",
+                rank=-1,
+                metric={
+                    "last_resumed_keyword": next_kw,
+                    "captcha_signal_layer": e.signal.layer,
+                    "captcha_signal_detail": e.signal.detail,
+                },
+                error_message=err_msg,
+            )
+            try:
+                storage.save_result(breakpoint_result, alert_triggered=False)
+            except Exception:
+                logger.exception("monitor task %s: failed to persist risk_control breakpoint", task.id)
+            self._untrack_active(task_id_local)
+            self._publish(MonitorEvent(
+                kind="risk_control",
+                task_id=task.id,
+                at=self._clock(),
+                error=err_msg,
+                result=breakpoint_result,
+            ))
             return None
         except TimeoutError as e:
             msg = f"timeout waiting for platform slot: {e}"

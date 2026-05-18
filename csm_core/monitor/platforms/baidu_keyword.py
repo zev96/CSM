@@ -372,6 +372,7 @@ class BaiduKeywordAdapter:
         *,
         progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: Any = None,
+        resume_from: int = 0,
     ) -> MonitorResult:
         """Run one round of SERP scraping for all configured keywords.
 
@@ -387,6 +388,13 @@ class BaiduKeywordAdapter:
         loop polls it before each keyword and raises
         ``_CancelledFetch`` (imported lazily to avoid sidecar -> csm_core
         coupling) which the worker catches as cooperative cancellation.
+
+        ``resume_from`` — 0-based index of the first keyword to scrape.
+        When > 0 the adapter skips keywords 0…(resume_from-1) so the
+        user can continue after a risk_control interruption. The
+        RiskControlException.progress value is always the **absolute**
+        index (resume_from + relative_idx) so runner bookkeeping is
+        consistent regardless of whether this is a fresh or resumed run.
         """
         breaker = rate_limit.get_breaker(self.platform)
         if not breaker.allow():
@@ -415,7 +423,13 @@ class BaiduKeywordAdapter:
         headless = bool(cfg.get("headless", self._headless_default))
         rate_limit.get_pacer(self.platform).wait()
 
-        return self._fetch_with_promotion(task, keywords, brand, headless, progress_cb, cancel_token)
+        # Clamp resume_from to valid range so callers don't need to guard.
+        resume_from = max(0, min(int(resume_from), len(keywords)))
+
+        return self._fetch_with_promotion(
+            task, keywords, brand, headless, progress_cb, cancel_token,
+            resume_from=resume_from,
+        )
 
     def _fetch_with_promotion(
         self,
@@ -425,6 +439,8 @@ class BaiduKeywordAdapter:
         headless: bool,
         progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: Any = None,
+        *,
+        resume_from: int = 0,
     ) -> MonitorResult:
         """跑一次所有 SERP。命中 RiskControlException 直接传给 runner，
         runner（Task 4）决定 retry 还是 pause + 写断点。此函数不再做 in-task
@@ -432,7 +448,10 @@ class BaiduKeywordAdapter:
         """
         breaker = rate_limit.get_breaker(self.platform)
         try:
-            result = self._fetch_once(task, keywords, brand, headless, progress_cb, cancel_token)
+            result = self._fetch_once(
+                task, keywords, brand, headless, progress_cb, cancel_token,
+                resume_from=resume_from,
+            )
         except RiskControlException:
             # 4 层风控命中 —— 让 runner (Task 4) 捕获写断点 + 暂停任务；不计入熔断器。
             raise
@@ -461,12 +480,29 @@ class BaiduKeywordAdapter:
         headless: bool,
         progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: Any = None,
+        *,
+        resume_from: int = 0,
     ) -> MonitorResult:
-        """一次完整 多SERP→解 link→抓正文→打分，返回聚合 MonitorResult。"""
+        """一次完整 多SERP→解 link→抓正文→打分，返回聚合 MonitorResult。
+
+        ``resume_from`` — the absolute 0-based index of the first keyword to
+        actually process. Keywords before that index are skipped (they were
+        already fetched in a prior run that hit risk control). The
+        ``RiskControlException.progress`` value raised inside the loop is
+        always the **absolute** keyword index (``resume_from + rel_idx``), so
+        the runner's ``last_resumed_keyword = progress + 1`` bookkeeping
+        works regardless of whether this is a fresh or resumed run.
+        """
         now = datetime.utcnow()
 
+        # Apply resume offset: only iterate keywords[resume_from:]
+        # but keep the full list for aggregate stats (total_keywords should
+        # reflect the configured list, not just the resumed slice).
+        all_keywords = keywords
+        keywords_to_fetch = keywords[resume_from:]
+
         keyword_results: list[dict[str, Any]] = []
-        total_kw = len(keywords)
+        total_kw = len(all_keywords)
         # 全局黑名单 + 任务级 exclude_domains 合并 —— 一次性算好，循环
         # 内每个关键词共用同一份；空 set 等价于不过滤。
         exclude_set = self._build_exclude_set(task)
@@ -476,14 +512,17 @@ class BaiduKeywordAdapter:
         # until ~5–15s in).
         if progress_cb is not None:
             try:
-                progress_cb(0, total_kw)
+                progress_cb(resume_from, total_kw)
             except Exception:
-                logger.exception("progress_cb(0,N) raised; ignoring")
+                logger.exception("progress_cb(resume_from,N) raised; ignoring")
 
         with incognito_session(headless=headless) as session:
             page = session.page
 
-            for kw_idx, keyword in enumerate(keywords):
+            for rel_idx, keyword in enumerate(keywords_to_fetch):
+                # Absolute 0-based index into the full keyword list.
+                kw_idx = resume_from + rel_idx
+
                 # Cooperative cancellation checkpoint —— polled BEFORE we
                 # spend more time on the next SERP. The sidecar imports
                 # _CancelledFetch from monitor_loop; importing it lazily
@@ -498,12 +537,12 @@ class BaiduKeywordAdapter:
                         # it'll be reported as a generic adapter exception.
                         _CancelledFetch = RuntimeError  # type: ignore[assignment]
                     raise _CancelledFetch(
-                        f"cancelled before keyword {kw_idx + 1}/{len(keywords)}",
+                        f"cancelled before keyword {kw_idx + 1}/{total_kw}",
                     )
 
                 pacer = rate_limit.get_pacer(self.platform)
                 # Only wait between keywords (not before the first one — caller already waited)
-                if keyword != keywords[0]:
+                if kw_idx != resume_from:
                     pacer.wait()
 
                 serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)
@@ -582,7 +621,7 @@ class BaiduKeywordAdapter:
                         logger.exception("progress_cb(%s,%s) raised; ignoring", kw_idx + 1, total_kw)
 
         # Compute task-level aggregations
-        total_keywords = len(keywords)
+        total_keywords = len(all_keywords)
         matched_keywords = sum(
             1 for kw in keyword_results if kw["default_matched_count"] > 0
         )
@@ -592,7 +631,7 @@ class BaiduKeywordAdapter:
 
         metric: dict[str, Any] = {
             "target_brand": brand,
-            "search_keywords": keywords,
+            "search_keywords": all_keywords,
             "engine": "patchright",
             "headless": headless,
             "keywords": keyword_results,
