@@ -126,11 +126,19 @@ export const useMiningStore = defineStore("mining", () => {
   const videos = ref<Video[]>([])
   const total = ref(0)
   const loading = ref(false)
+  // jobs 列表(左栏渲染用)+ 当前选中的 job(右栏视频列表过滤)。
+  // currentJobId === null 表示"全部任务"(右栏聚合所有 job 的视频)。
+  const jobs = ref<MiningJob[]>([])
+  const currentJobId = ref<number | null>(null)
   const filters = ref({
     keyword: null as string | null,
     platform: null as Platform | null,
-    commented: "0" as CommentedFilter,
+    // 默认 'all' 这样 commented + uncommented 都取回来,UI 状态 pivot
+    // (待评论/已评论/全部)在客户端 reduce,counts 才能算准 — 否则
+    // 已评论 永远是 0 因为已评论的根本不会被 fetch。
+    commented: "all" as CommentedFilter,
     q: "",
+    job_id: null as number | null,
   })
   const loginStatus = ref<Record<Platform, boolean>>({
     douyin: false, bilibili: false, kuaishou: false,
@@ -158,7 +166,16 @@ export const useMiningStore = defineStore("mining", () => {
     )
     activeJob.value = resp.data.job
     subscribeToJob(resp.data.job_id)
+    // Left-column task list must show the new task immediately. Don't await
+    // — fire-and-forget; the SSE handlers will keep mirroring once it lands.
+    loadJobs().catch(() => { /* non-fatal, list refreshes again on finish */ })
     return resp.data.job_id
+  }
+
+  /** Patch one job inside jobs[] in place (reactive-safe). */
+  function _patchJobInList(jobId: number, patch: (j: MiningJob) => MiningJob) {
+    const idx = jobs.value.findIndex(j => j.id === jobId)
+    if (idx !== -1) jobs.value[idx] = patch(jobs.value[idx])
   }
 
   function subscribeToJob(jobId: number) {
@@ -170,6 +187,14 @@ export const useMiningStore = defineStore("mining", () => {
             got: d.got, target: d.target, phase: d.phase, note: d.note,
           }
         }
+        // Mirror into jobs[] so the left-column progress bar animates live.
+        _patchJobInList(d.job_id, j => ({
+          ...j,
+          progress: {
+            ...j.progress,
+            [d.platform]: { got: d.got, target: d.target, phase: d.phase, note: d.note },
+          },
+        }))
       },
       "job.platform_done": (d: any) => {
         if (activeJob.value && activeJob.value.id === d.job_id) {
@@ -180,14 +205,34 @@ export const useMiningStore = defineStore("mining", () => {
             note: d.error || "",
           }
         }
+        _patchJobInList(d.job_id, j => ({
+          ...j,
+          progress: {
+            ...j.progress,
+            [d.platform]: {
+              ...(j.progress[d.platform as Platform] || { target: 50 }),
+              got: d.count,
+              phase: d.status === "done" ? "done" : d.status,
+              note: d.error || "",
+            },
+          },
+        }))
       },
       "job.finished": (d: any) => {
         if (activeJob.value && activeJob.value.id === d.job_id) {
           activeJob.value.status = d.summary.status
           activeJob.value.finished_at = new Date().toISOString()
         }
+        _patchJobInList(d.job_id, j => ({
+          ...j,
+          status: d.summary.status,
+          finished_at: new Date().toISOString(),
+        }))
         if (stopSse) { stopSse(); stopSse = null }
         refreshVideos()
+        // Refresh the full jobs list to pick up any post-run server-side
+        // mutations (e.g. partial_done note updates) we may have missed.
+        loadJobs().catch(() => { /* non-fatal */ })
       },
       "login.required": (d: any) => {
         loginStatus.value[d.platform as Platform] = false
@@ -208,7 +253,13 @@ export const useMiningStore = defineStore("mining", () => {
     }
   }
 
-  async function refreshVideos(offset = 0, limit = 50) {
+  // Limit bumped from 50 to 500 (max allowed by backend Query le=500 in
+  // sidecar/csm_sidecar/routes/mining.py:233) so the status pills in
+  // MiningView (待评论 / 已评论 / 全部) reflect the full set — they're
+  // computed client-side from store.videos. If accumulated mining_videos
+  // ever exceeds 500 we should add a /api/mining/videos/stats endpoint
+  // and stop relying on the loaded list for counts.
+  async function refreshVideos(offset = 0, limit = 500) {
     loading.value = true
     try {
       const params: Record<string, string | number> = {
@@ -218,6 +269,7 @@ export const useMiningStore = defineStore("mining", () => {
       if (filters.value.keyword) params.keyword = filters.value.keyword
       if (filters.value.platform) params.platform = filters.value.platform
       if (filters.value.q) params.q = filters.value.q
+      if (filters.value.job_id !== null) params.job_id = filters.value.job_id
       const resp = await api().get<{ total: number; videos: Video[] }>(
         "/api/mining/videos",
         { params },
@@ -255,6 +307,42 @@ export const useMiningStore = defineStore("mining", () => {
     await api().delete(`/api/mining/videos/${id}`)
     videos.value = videos.value.filter(v => v.id !== id)
     total.value = Math.max(0, total.value - 1)
+  }
+
+  /** Loop-delete; backend has no bulk endpoint and N is small here (<=500). */
+  async function bulkDeleteVideos(ids: number[]): Promise<number> {
+    let deleted = 0
+    for (const id of ids) {
+      try {
+        await api().delete(`/api/mining/videos/${id}`)
+        deleted += 1
+      } catch {
+        // Skip individual failures (404 if another tab already removed it).
+      }
+    }
+    const idSet = new Set(ids)
+    videos.value = videos.value.filter(v => !idSet.has(v.id))
+    total.value = Math.max(0, total.value - deleted)
+    return deleted
+  }
+
+  /** Fetch the recent jobs list for the left-column task panel. */
+  async function loadJobs(limit = 50) {
+    const resp = await api().get<{ count: number; jobs: MiningJob[] }>(
+      "/api/mining/jobs",
+      { params: { limit } },
+    )
+    jobs.value = resp.data.jobs
+  }
+
+  /**
+   * Switch the right column to a specific job's videos (or "all" when id
+   * is null). Triggers a refresh under the new filter.
+   */
+  async function selectJob(id: number | null) {
+    currentJobId.value = id
+    filters.value.job_id = id
+    await refreshVideos()
   }
 
   /** Absolute CSV-export URL including baseURL + token query string. */
@@ -406,11 +494,12 @@ export const useMiningStore = defineStore("mining", () => {
 
   return {
     activeJob, videos, total, loading, filters, loginStatus,
+    jobs, currentJobId,
     commentsByVideo, aiSummaryLoading, commentSavingByVideo,
     hasRunningJob,
     startJob, cancelActive, refreshVideos,
     refreshLoginStatus, startLogin, confirmLogin,
-    deleteVideo, exportUrl,
+    deleteVideo, bulkDeleteVideos, loadJobs, selectJob, exportUrl,
     loadComments, createComment, updateComment, deleteComment,
     uploadImage, summarize, suggestComment, bulkMarkCommented,
   }
