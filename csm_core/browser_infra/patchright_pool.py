@@ -49,6 +49,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,69 @@ def ensure_browsers_path() -> str | None:
     return str(candidate)
 
 
+def _split_proxy_auth(url: str) -> dict[str, str]:
+    """Parse proxy URL into Patchright/Playwright ProxySettings shape.
+
+    Patchright expects {server, username?, password?, bypass?} — auth must be
+    separated from the URL. Chromium's --proxy-server flag silently drops
+    embedded user:pass@ credentials, so we MUST extract them here.
+    """
+    p = urlparse(url)
+    netloc = p.hostname or ""
+    if p.port is not None:
+        netloc = f"{netloc}:{p.port}"
+    # Rebuild URL without auth
+    bare_server = urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment))
+    result: dict[str, str] = {"server": bare_server}
+    if p.username:
+        result["username"] = p.username
+    if p.password:
+        result["password"] = p.password
+    return result
+
+
+# Module-level pool cache. Keyed by path so changing AppConfig.proxies_path in Settings
+# invalidates the cached pool. Mutable state (mark_failed/disabled set/_current) persists
+# across launches for the same path, which is the whole point of the rotation strategies.
+_pool_cache_lock = threading.Lock()
+_pool_cache: tuple[str, "Any"] | None = None
+
+
+def _get_or_create_pool(proxies_path: str) -> "Any":
+    """Return a cached ProxyPool for proxies_path, creating it on first request /
+    when the path changes. Singleton invalidation == path change."""
+    global _pool_cache
+    from csm_core.browser_infra.proxy_pool import ProxyPool
+    with _pool_cache_lock:
+        if _pool_cache is None or _pool_cache[0] != proxies_path:
+            _pool_cache = (proxies_path, ProxyPool(Path(proxies_path)))
+        return _pool_cache[1]
+
+
+def get_current_proxy_pool() -> "Any | None":
+    """Return the cached ProxyPool if any, else None. Used by monitor_loop to
+    call mark_failed when RiskControlException fires."""
+    try:
+        from csm_sidecar.services import config_service
+        cfg = config_service.load()
+        proxies_path = getattr(cfg, "proxies_path", None)
+        if not proxies_path:
+            return None
+        return _get_or_create_pool(proxies_path)
+    except Exception:
+        return None
+
+
+def get_current_proxy_server() -> str | None:
+    """Return the current proxy server URL the pool would pick (without actually picking).
+    Used for error reporting / status display."""
+    pool = get_current_proxy_pool()
+    if pool is None:
+        return None
+    with pool._lock:
+        return pool._current
+
+
 def _get_proxy_for_launch() -> dict[str, str] | None:
     """Read config + return Patchright launch_persistent_context's ``proxy`` param.
 
@@ -216,16 +280,15 @@ def _get_proxy_for_launch() -> dict[str, str] | None:
     """
     try:
         from csm_sidecar.services import config_service
-        from csm_core.browser_infra.proxy_pool import ProxyPool
         cfg = config_service.load()
         proxies_path = getattr(cfg, "proxies_path", None)
         if not proxies_path:
             return None
-        pool = ProxyPool(Path(proxies_path))
+        pool = _get_or_create_pool(proxies_path)
         server = pool.pick()
         if not server:
             return None
-        return {"server": server}
+        return _split_proxy_auth(server)
     except Exception as e:
         logger.debug("patchright_pool: proxy lookup failed silently: %s", e)
         return None

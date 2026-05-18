@@ -404,6 +404,43 @@ class TestRunnerRiskControlHandler:
         risk_events = [e for e in published_events if e.kind == "risk_control"]
         assert len(risk_events) == 1
 
+    def test_risk_control_marks_proxy_failed(self, isolated_storage, monkeypatch, tmp_path):
+        """When RiskControlException fires, runner should call pool.mark_failed() on the current proxy."""
+        from csm_core.monitor.drivers.risk_detector import RiskSignal, RiskControlException
+        from csm_core.browser_infra import patchright_pool
+
+        # Set up a real proxy pool with one proxy, reset cache
+        patchright_pool._pool_cache = None
+        p = tmp_path / "proxies.json"
+        p.write_text(
+            '{"enabled": true, "rotation_strategy": "on_risk_control", '
+            '"proxies": [{"server": "http://1.1.1.1:8080"}]}',
+            encoding="utf-8")
+
+        pool = patchright_pool._get_or_create_pool(str(p))
+        pool.pick()  # Sets _current to "http://1.1.1.1:8080"
+
+        # Stub config_service.load to return the proxies_path
+        class FakeConfig:
+            proxies_path = str(p)
+
+        monkeypatch.setattr("csm_sidecar.services.config_service.load", lambda: FakeConfig())
+
+        signal = RiskSignal(layer="dom", detail="#captcha-mask")
+
+        class FakeAdapter:
+            def fetch(self, t, **kwargs):
+                raise RiskControlException(signal, progress=2)
+
+        task = _make_task(n_keywords=10)
+
+        published_events: list = []
+        loop = self._make_loop(FakeAdapter(), published_events)
+        loop._run_one(task, resume_from=0)
+
+        # Verify the proxy was marked failed
+        assert pool._fail_counts.get("http://1.1.1.1:8080", 0) >= 1
+
 
 # ── POST /api/monitor/tasks/{task_id}/resume route tests ─────────────────────
 

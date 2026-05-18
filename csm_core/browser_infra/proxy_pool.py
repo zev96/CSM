@@ -21,7 +21,7 @@ import json
 import logging
 import random
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -68,9 +68,18 @@ class ProxyPool:
         self._proxies = list(data.get("proxies", []))
 
     def available_proxies(self) -> list[dict[str, Any]]:
-        """List of proxy dicts not in the disabled set."""
+        """List of proxy dicts (deep-copied to prevent caller mutation of internal state)."""
         with self._lock:
-            return [p for p in self._proxies if p["server"] not in self._disabled]
+            return [
+                {**p, "tags": list(p.get("tags", []))}  # shallow + tags copy
+                for p in self._proxies
+                if p["server"] not in self._disabled
+            ]
+
+    def disabled_count(self) -> int:
+        """Number of proxies disabled after 3 consecutive failures."""
+        with self._lock:
+            return len(self._disabled)
 
     def pick(self) -> str | None:
         """Return current proxy server URL per rotation strategy.
@@ -112,9 +121,9 @@ class ProxyPool:
                 return self._current
 
             if self._strategy == "daily":
-                # Rotate once per UTC day. Pin current_pinned_at; if same UTC date,
-                # return current. Otherwise re-pick.
-                now = datetime.now(timezone.utc)
+                # Use local time so rotation boundary is at user's midnight, not UTC midnight
+                # (UTC midnight = 8am CN, in the middle of peak scraping hours).
+                now = datetime.now()  # naive local
                 if (
                     self._current_pinned_at
                     and self._current

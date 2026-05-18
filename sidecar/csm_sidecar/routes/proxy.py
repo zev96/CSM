@@ -33,7 +33,7 @@ async def proxy_status(response: Response) -> dict[str, Any]:
         return {
             "enabled": pool.enabled,
             "available_count": len(pool.available_proxies()),
-            "disabled_count": len(getattr(pool, "_disabled", set())),
+            "disabled_count": pool.disabled_count(),
         }
     except Exception:
         return {"enabled": False, "available_count": 0, "disabled_count": 0}

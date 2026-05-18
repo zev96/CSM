@@ -149,6 +149,9 @@ class TestProxyInjection:
         from csm_core.browser_infra import patchright_pool
         from unittest.mock import MagicMock
 
+        # Reset pool cache so this test's path is fresh
+        patchright_pool._pool_cache = None
+
         proxies_json = tmp_path / "proxies.json"
         proxies_json.write_text(json.dumps({
             "enabled": True,
@@ -181,3 +184,65 @@ class TestProxyInjection:
         )
         result = patchright_pool._get_proxy_for_launch()
         assert result is None
+
+    def test_pool_cache_returns_same_instance_for_same_path(self, monkeypatch, tmp_path):
+        """_get_or_create_pool must return same ProxyPool across calls with same path."""
+        from csm_core.browser_infra import patchright_pool
+        # Reset cache state
+        patchright_pool._pool_cache = None
+
+        p = tmp_path / "proxies.json"
+        p.write_text('{"enabled": true, "proxies": [{"server": "http://1.1.1.1:8080"}]}', encoding="utf-8")
+
+        pool1 = patchright_pool._get_or_create_pool(str(p))
+        pool2 = patchright_pool._get_or_create_pool(str(p))
+        assert pool1 is pool2  # same instance
+
+        # Different path → new instance
+        p2 = tmp_path / "other.json"
+        p2.write_text('{"enabled": true, "proxies": []}', encoding="utf-8")
+        pool3 = patchright_pool._get_or_create_pool(str(p2))
+        assert pool3 is not pool1
+
+    def test_pool_state_persists_across_get_calls(self, monkeypatch, tmp_path):
+        """mark_failed state from one launch is visible to the next."""
+        from csm_core.browser_infra import patchright_pool
+        patchright_pool._pool_cache = None
+
+        p = tmp_path / "proxies.json"
+        p.write_text(
+            '{"enabled": true, "rotation_strategy": "on_risk_control", '
+            '"proxies": [{"server": "http://1.1.1.1:8080"}, {"server": "http://2.2.2.2:8080"}]}',
+            encoding="utf-8")
+
+        pool = patchright_pool._get_or_create_pool(str(p))
+        pool.mark_failed("http://1.1.1.1:8080")
+        pool.mark_failed("http://1.1.1.1:8080")
+        pool.mark_failed("http://1.1.1.1:8080")  # 3rd → disabled
+
+        # Re-acquire pool, state should persist
+        pool_again = patchright_pool._get_or_create_pool(str(p))
+        assert "http://1.1.1.1:8080" in pool_again._disabled  # state survived
+
+
+class TestSplitProxyAuth:
+    """_split_proxy_auth must correctly separate credentials from the URL."""
+
+    def test_split_proxy_auth_extracts_credentials(self):
+        from csm_core.browser_infra.patchright_pool import _split_proxy_auth
+        result = _split_proxy_auth("http://user:pass@1.2.3.4:8080")
+        assert result["server"] == "http://1.2.3.4:8080"  # no credentials
+        assert result["username"] == "user"
+        assert result["password"] == "pass"
+
+    def test_split_proxy_auth_no_credentials(self):
+        from csm_core.browser_infra.patchright_pool import _split_proxy_auth
+        result = _split_proxy_auth("http://1.2.3.4:8080")
+        assert result == {"server": "http://1.2.3.4:8080"}
+
+    def test_split_proxy_auth_socks5_with_auth(self):
+        from csm_core.browser_infra.patchright_pool import _split_proxy_auth
+        result = _split_proxy_auth("socks5://alice:wonderland@proxy.example.com:1080")
+        assert result["server"] == "socks5://proxy.example.com:1080"
+        assert result["username"] == "alice"
+        assert result["password"] == "wonderland"

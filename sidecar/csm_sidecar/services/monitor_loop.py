@@ -452,6 +452,18 @@ class MonitorLoop:
                 last_resumed_keyword=next_kw,
                 total_keywords=len(task.config.get("search_keywords", [])),
             ))
+            # Tell the proxy pool this proxy/route just failed —— on_risk_control strategy
+            # uses this to rotate to a different proxy on next launch. No-op if no pool / no current proxy.
+            try:
+                from csm_core.browser_infra import patchright_pool
+                current_proxy = patchright_pool.get_current_proxy_server()
+                if current_proxy:
+                    pool = patchright_pool.get_current_proxy_pool()
+                    if pool:
+                        pool.mark_failed(current_proxy)
+                        logger.info("proxy_pool: marked %s as failed after risk control", current_proxy)
+            except Exception as _proxy_err:
+                logger.debug("proxy mark_failed wiring failed: %s", _proxy_err)
             return None
         except TimeoutError as e:
             msg = f"timeout waiting for platform slot: {e}"
