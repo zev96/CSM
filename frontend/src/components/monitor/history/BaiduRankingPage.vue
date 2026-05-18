@@ -431,6 +431,23 @@ const prevMetric = computed<BaiduMetric | null>(
   () => (history.value.length > 1 ? history.value[1]?.metric ?? null : null),
 );
 
+// 关键词渲染源——以 config.search_keywords 为基准（93 行始终不变），
+// 用 latestMetric.keywords 按 keyword 名 dict 查找填充每行结果。
+// 这样检测中途（latestMetric 已存在但只含部分 keyword）也能正常显示
+// "未跑/已检"占位，而不是只渲染已检完的几个。
+// 修复 bug: 详情页只显示 1 条关键词，等检测完才显示 93 条。
+const keywordRows = computed(() => {
+  const base = (selectedTask.value?.config as any)?.search_keywords as string[] | undefined;
+  if (!base || base.length === 0) return [];
+  const map = new Map(
+    (latestMetric.value?.keywords ?? []).map((k) => [k.keyword, k]),
+  );
+  return base.map((name) => ({
+    keyword: name,
+    result: map.get(name) ?? null,
+  }));
+});
+
 // Trend chart: history is newest-first from API; reverse for chronological
 const chronoHistory = computed(() => [...history.value].reverse());
 
@@ -498,9 +515,12 @@ const sparkPointsPlaced = computed<number[]>(() =>
 );
 
 // Currently selected keyword's details for the right panel detail section
+// selectedKeywordIdx 现在指向 keywordRows（合并源）的索引——未跑的关键词
+// row.result 是 null，KPI 卡也跟着显示 0/选择关键词，跟原"未选中"语义一致。
 const currentKeyword = computed<BaiduPerKeyword | null>(() => {
-  if (!latestMetric.value || selectedKeywordIdx.value === null) return null;
-  return latestMetric.value.keywords[selectedKeywordIdx.value] ?? null;
+  if (selectedKeywordIdx.value === null) return null;
+  const row = keywordRows.value[selectedKeywordIdx.value];
+  return row?.result ?? null;
 });
 
 /**
@@ -1380,135 +1400,102 @@ defineExpose({ reload: loadTasks });
               加载中…
             </div>
 
-            <!-- No history: 显示配置里的关键词列表，每条状态「未跑」 -->
-            <template v-if="!latestMetric">
-              <!-- Header row -->
-              <div
-                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-                :style="{
-                  gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
-                  letterSpacing: '1.2px',
-                  color: 'var(--ink-3)',
-                  borderBottom: '1px solid var(--line)',
-                }"
-              >
-                <div>关键词</div>
-                <div>默认卡位</div>
-                <div>资讯卡位</div>
-                <div>状态</div>
-              </div>
-              <!-- 用 config.search_keywords 占位，但保持和有数据时一致的点击/选中行为 -->
-              <div
-                v-for="(kw, i) in (selectedTask?.config?.search_keywords ?? [])"
-                :key="kw + '-noresult'"
-                class="grid items-center cursor-pointer transition"
-                :style="{
-                  gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
-                  borderBottom: i < (selectedTask?.config?.search_keywords?.length ?? 0) - 1 ? '1px solid var(--line)' : 'none',
-                  padding: '12px 8px',
-                  background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
-                }"
-                @click="selectedKeywordIdx = i"
-                @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
-                @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
-              >
-                <div class="min-w-0">
-                  <div
-                    class="truncate text-[12.5px] font-medium"
-                    :style="{ color: 'var(--ink)' }"
-                  >{{ kw }}</div>
-                </div>
-                <div :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
-                <div :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
-                <div><Pill tone="info">未跑</Pill></div>
-              </div>
-              <div
-                v-if="(selectedTask?.config?.search_keywords?.length ?? 0) === 0"
-                class="py-10 text-center text-[12px]"
-                :style="{ color: 'var(--ink-3)' }"
-              >
-                此任务未配置搜索关键词
-              </div>
-            </template>
+            <!-- 关键词表：单一渲染源 keywordRows，以 config.search_keywords 为基准的 93 行，
+                 按 keyword 名从 latestMetric.keywords 查结果填充；未匹配的渲染「未跑」。 -->
+            <!-- Header row -->
+            <div
+              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+              :style="{
+                gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
+                letterSpacing: '1.2px',
+                color: 'var(--ink-3)',
+                borderBottom: '1px solid var(--line)',
+              }"
+            >
+              <div>关键词</div>
+              <div>默认卡位</div>
+              <div>资讯卡位</div>
+              <div>状态</div>
+            </div>
 
-            <template v-else>
-              <!-- Header row -->
-              <div
-                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-                :style="{
-                  gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
-                  letterSpacing: '1.2px',
-                  color: 'var(--ink-3)',
-                  borderBottom: '1px solid var(--line)',
-                }"
-              >
-                <div>关键词</div>
-                <div>默认卡位</div>
-                <div>资讯卡位</div>
-                <div>状态</div>
+            <!-- Empty state -->
+            <div
+              v-if="keywordRows.length === 0"
+              class="py-10 text-center text-[12px]"
+              :style="{ color: 'var(--ink-3)' }"
+            >
+              此任务未配置搜索关键词
+            </div>
+
+            <!-- Keyword rows -->
+            <div
+              v-for="(row, i) in keywordRows"
+              :key="row.keyword + '-' + i"
+              class="grid items-center cursor-pointer transition"
+              :style="{
+                gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
+                borderBottom: i < keywordRows.length - 1 ? '1px solid var(--line)' : 'none',
+                padding: '12px 8px',
+                background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
+              }"
+              @click="selectedKeywordIdx = i"
+              @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
+              @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
+            >
+              <!-- 关键词 -->
+              <div class="min-w-0">
+                <div
+                  class="truncate text-[12.5px] font-medium"
+                  :style="{ color: 'var(--ink)' }"
+                >{{ row.keyword }}</div>
               </div>
 
-              <!-- Keyword rows -->
-              <div
-                v-for="(kw, i) in latestMetric.keywords"
-                :key="kw.keyword"
-                class="grid items-center cursor-pointer transition"
-                :style="{
-                  gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
-                  borderBottom: i < latestMetric.keywords.length - 1 ? '1px solid var(--line)' : 'none',
-                  padding: '12px 8px',
-                  background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
-                }"
-                @click="selectedKeywordIdx = i"
-                @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
-                @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
-              >
-                <!-- 关键词 -->
-                <div class="min-w-0">
-                  <div
-                    class="truncate text-[12.5px] font-medium"
-                    :style="{ color: 'var(--ink)' }"
-                  >{{ kw.keyword }}</div>
-                </div>
-
-                <!-- 默认卡位：自家在默认搜索的命中数量 -->
-                <div>
+              <!-- 默认卡位 -->
+              <div>
+                <template v-if="row.result">
                   <div
                     class="font-display text-[13px] font-bold"
-                    :style="{ color: kw.default_matched_count > 0 ? 'var(--primary-deep)' : 'var(--ink-3)' }"
+                    :style="{ color: row.result.default_matched_count > 0 ? 'var(--primary-deep)' : 'var(--ink-3)' }"
                   >
-                    {{ kw.default_matched_count }}
+                    {{ row.result.default_matched_count }}
                   </div>
-                </div>
-
-                <!-- 资讯卡位：自家在最新资讯的命中数量；无资讯块时显示「无」 -->
-                <div>
-                  <template v-if="kw.news_present">
-                    <div
-                      class="font-display text-[13px] font-bold"
-                      :style="{ color: kw.news_results.filter(r => r.matches_brand).length > 0 ? '#4f7cff' : 'var(--ink-3)' }"
-                    >
-                      {{ kw.news_results.filter(r => r.matches_brand).length }}
-                    </div>
-                  </template>
-                  <div v-else class="font-display text-[13px] font-bold" :style="{ color: 'var(--ink-3)' }">无</div>
-                </div>
-
-                <!--
-                  状态 ＝ 是否达到任务设置的「理想卡位（数量）」。
-                  总卡位 ＝ 默认搜索命中 ＋ 最新资讯命中（无资讯块时只算默认）。
-                  ≥ idealRank → 理想，否则 → 未理想；抓取失败单独标记。
-                -->
-                <div>
-                  <Pill v-if="kw.fetch_error" tone="alert">抓取失败</Pill>
-                  <template v-else>
-                    <Pill
-                      :tone="(kw.default_matched_count + (kw.news_present ? kw.news_results.filter(r => r.matches_brand).length : 0)) >= idealRank ? 'ok' : 'warn'"
-                    >{{ (kw.default_matched_count + (kw.news_present ? kw.news_results.filter(r => r.matches_brand).length : 0)) >= idealRank ? '理想' : '未理想' }}</Pill>
-                  </template>
-                </div>
+                </template>
+                <div v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
               </div>
-            </template>
+
+              <!-- 资讯卡位 -->
+              <div>
+                <template v-if="row.result && row.result.news_present">
+                  <div
+                    class="font-display text-[13px] font-bold"
+                    :style="{ color: row.result.news_results.filter(r => r.matches_brand).length > 0 ? '#4f7cff' : 'var(--ink-3)' }"
+                  >
+                    {{ row.result.news_results.filter(r => r.matches_brand).length }}
+                  </div>
+                </template>
+                <div v-else-if="row.result && !row.result.news_present" class="font-display text-[13px] font-bold" :style="{ color: 'var(--ink-3)' }">无</div>
+                <div v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
+              </div>
+
+              <!--
+                状态 ＝ 是否达到任务设置的「理想卡位（数量）」。
+                总卡位 ＝ 默认搜索命中 ＋ 最新资讯命中（无资讯块时只算默认）。
+                ≥ idealRank → 理想，否则 → 未理想；抓取失败单独标记；未跑（row.result === null）显示「未跑」。
+              -->
+              <div>
+                <template v-if="!row.result">
+                  <Pill tone="info">未跑</Pill>
+                </template>
+                <template v-else-if="row.result.fetch_error">
+                  <Pill tone="alert">抓取失败</Pill>
+                </template>
+                <template v-else>
+                  <Pill
+                    :tone="(row.result.default_matched_count + (row.result.news_present ? row.result.news_results.filter(r => r.matches_brand).length : 0)) >= idealRank ? 'ok' : 'warn'"
+                  >{{ (row.result.default_matched_count + (row.result.news_present ? row.result.news_results.filter(r => r.matches_brand).length : 0)) >= idealRank ? '理想' : '未理想' }}</Pill>
+                </template>
+              </div>
+            </div>
           </div>
         </section>
 
