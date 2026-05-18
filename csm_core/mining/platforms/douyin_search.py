@@ -21,6 +21,7 @@ from csm_core.browser_infra import mining_browser
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
+from csm_core.mining.platforms import _risk
 from csm_core.mining.platforms._common import OnCard, OnProgress
 
 logger = logging.getLogger(__name__)
@@ -56,13 +57,46 @@ class DouyinSearchAdapter:
                 nonlocal emitted, risk_detected
                 if cancel_event.is_set() or emitted >= target_count:
                     return
-                if "/aweme/v1/web/general/search/single" not in response.url:
+                url = response.url
+                # Wide net for future diagnostics: log every /aweme/* XHR at
+                # DEBUG. Default INFO logs stay quiet; flip the logger to
+                # DEBUG to inspect what URL pattern Douyin is actually using
+                # when something breaks. The 2026-05 round of changes (item/
+                # vs general/search/single) was caught with this.
+                if "/aweme/" in url:
+                    try:
+                        logger.debug(
+                            "[douyin-debug] aweme xhr: %s status=%s",
+                            url[:240], getattr(response, "status", "?"),
+                        )
+                    except Exception:
+                        pass
+                # 抖音视频搜索实际走 /aweme/v1/web/search/item/?...&search_channel=aweme_video_web
+                # 旧的 /aweme/v1/web/general/search/single 是综合搜索;我们 URL 带 ?type=video
+                # 落在视频 tab,走 item 端点。两个都拦,谁先来用谁。
+                if (
+                    "/aweme/v1/web/search/item/" not in url
+                    and "/aweme/v1/web/general/search/single" not in url
+                ):
                     return
                 try:
                     body = response.json()
-                except Exception:
+                except Exception as e:
+                    logger.warning(
+                        "[douyin-debug] search xhr json parse failed: %s", e,
+                    )
                     return
-                if body.get("status_code") not in (0, None):
+                sc = body.get("status_code")
+                data = body.get("data") or []
+                first_keys: list[str] = []
+                if data and isinstance(data[0], dict):
+                    first_keys = list(data[0].keys())[:15]
+                logger.info(
+                    "[douyin-debug] search xhr matched: url_tail=%s "
+                    "status_code=%s data_items=%d first_item_keys=%s",
+                    url.rsplit("/", 1)[-1][:60], sc, len(data), first_keys,
+                )
+                if sc not in (0, None):
                     return
                 for c in self._extract_cards(body):
                     if emitted >= target_count:
@@ -82,14 +116,35 @@ class DouyinSearchAdapter:
             url = f"https://www.douyin.com/search/{quote(keyword)}?type=video"
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
+            # Give the React bundle a beat to hydrate + emit the first XHR
+            # before we start scrolling. Network-idle is best-effort: many
+            # pages keep periodic heartbeats running, in which case the wait
+            # times out cleanly and we proceed to the scroll loop anyway.
+            try:
+                page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception as e:
+                logger.info("douyin networkidle wait timed out: %s", e)
+
             for _ in range(30):
                 if cancel_event.is_set() or emitted >= target_count:
                     break
-                if _is_captcha_or_login(page):
+                # 4-layer detection (URL / HTTP / DOM / page text) replaces
+                # the old URL-only check, so SPA captcha modals overlaid on
+                # /search/* (which don't change the URL) get caught too.
+                # FEASIBILITY_ANALYSIS.md §1.1 Bug 2.
+                if _risk.detect(page):
                     risk_detected = True
                     break
                 page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
                 time.sleep(2.0)
+
+            # DIAGNOSTIC: final state from inside the with-block, before the
+            # browser is closed. Tells us whether the scroll loop ran to its
+            # full 30-iter budget with zero emits (most common failure mode).
+            logger.info(
+                "[douyin-debug] scroll loop exited: emitted=%d risk_detected=%s",
+                emitted, risk_detected,
+            )
 
         if risk_detected:
             return SearchOutcome(
@@ -108,7 +163,18 @@ class DouyinSearchAdapter:
         for item in body.get("data") or []:
             if not isinstance(item, dict):
                 continue
-            info = item.get("aweme_info") or {}
+            # Borrow MediaCrawler douyin/core.py:200-209 — Douyin returns
+            # either a flat aweme_info OR a mix bundle whose first slot
+            # carries the actual aweme. CSM previously only handled the flat
+            # case, which silently dropped mixed-rank results (sometimes the
+            # majority of a search page). FEASIBILITY_ANALYSIS.md §1.1 Bug 1b.
+            info = item.get("aweme_info")
+            if info is None:
+                mix = item.get("aweme_mix_info") or {}
+                items = mix.get("mix_items") or []
+                info = items[0] if items else None
+            if not isinstance(info, dict):
+                continue
             aweme_id = info.get("aweme_id")
             if not aweme_id:
                 continue
@@ -144,13 +210,9 @@ def _ts_to_iso(ts) -> str | None:
         return None
 
 
-def _is_captcha_or_login(page: Any) -> bool:
-    try:
-        url = page.url or ""
-    except Exception:
-        return False
-    if "captcha" in url.lower() or "verify" in url.lower():
-        return True
-    if url.startswith("https://www.douyin.com/passport/"):
-        return True
-    return False
+# NB: the URL-only ``_is_captcha_or_login`` helper that used to live here
+# was replaced by the 4-layer ``_risk.detect`` call in the scroll loop —
+# Douyin's slider/image captchas open as in-page modals without changing
+# the URL, so URL-only detection missed them. See FEASIBILITY_ANALYSIS.md
+# §1.1 Bug 2 + csm_core/monitor/drivers/risk_detector.py for the full
+# detection stack we now reuse.

@@ -99,7 +99,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             mining_service.init()
             from csm_core.browser_infra import mining_browser as _mb
             from csm_core import config as core_config
-            _mb.configure_profile_root(core_config.default_config_dir() / "browser_profiles")
+            # 登录态/浏览器 profile 统一放在 .auth/ 子目录下（含 cookie，不进 VCS）。
+            # FEASIBILITY_ANALYSIS.md §2 阶段 1。
+            _mb.configure_profile_root(
+                core_config.default_config_dir() / ".auth" / "browser_profiles"
+            )
         except Exception:
             logger.exception("mining_service init failed; continuing without mining")
     try:

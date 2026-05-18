@@ -78,7 +78,7 @@ function onSubmit() {
               Outreach · 新建抓取任务
             </div>
             <div class="font-display font-bold mt-1.5" style="font-size: 22px; letter-spacing: -0.5px;">
-              起一个抓取任务
+              新建抓取任务
             </div>
           </div>
           <button
@@ -106,7 +106,7 @@ function onSubmit() {
             <input
               v-model="kw"
               placeholder="例如：宠物家庭吸尘器"
-              class="flex-1 bg-transparent outline-none px-2.5"
+              class="kw-input flex-1 bg-transparent outline-none px-2.5"
               style="font-size: 14px; color: var(--ink);"
             />
             <button
@@ -231,3 +231,14 @@ function onSubmit() {
   </div>
   </Teleport>
 </template>
+
+<style scoped>
+/*
+ * 抑制全局 :focus-visible 的橙色 outline(see style.css)对模态框
+ * 关键词输入的影响 —— 视觉上和卡片化的输入框冲突,用户专门提过。
+ * 不动其他 input 的焦点环,a11y 保留。
+ */
+.kw-input:focus-visible {
+  outline: none;
+}
+</style>

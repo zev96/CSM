@@ -31,7 +31,9 @@ const meta = () => META[props.platform];
       borderRadius: '14px',
       padding: '12px 12px 11px',
       background: picked ? 'var(--card-white)' : 'var(--card-2)',
-      border: picked ? `1.5px solid ${meta().color}` : '1.5px solid transparent',
+      // 选中状态只靠卡片背景 + 右上角 check chip 表示；不再画彩色描边，
+      // 视觉更干净，跟列表里的多卡选择气质一致。
+      border: '1.5px solid transparent',
       opacity: loggedIn ? 1 : 0.62,
       transition: 'all .15s',
       cursor: 'pointer',
