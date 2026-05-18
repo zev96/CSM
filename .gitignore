@@ -41,3 +41,11 @@ build_sidecar.log
 # Superpowers brainstorming Visual Companion 运行时产物（mockup HTML
 # 文件 + 浏览器 server 状态），跨会话保留但不进 VCS。
 .superpowers/
+
+# 三平台抓取的浏览器 profile / 登录态本地落盘目录 —— 包含 cookie，
+# 绝对不能进 VCS。详见 FEASIBILITY_ANALYSIS.md §2 阶段 1。
+.auth/
+
+# 外部参考代码（MediaCrawler 等）—— 只用于读架构和 vendor 取代码片段，
+# 不当依赖、不进 VCS。详见 FEASIBILITY_ANALYSIS.md §2 阶段 0。
+reference/

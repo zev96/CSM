@@ -238,10 +238,15 @@ def _inject_monitor_cookies(context: Any, platform: str) -> int:
                 "path": "/",
                 "expires": far_future,
                 "secure": True,
-                # SameSite=None lets the cookie travel on cross-domain XHR
-                # (auth-bearing fetches against id.kuaishou.com from a www
-                # page, for example); Secure=True is required for None.
-                "sameSite": "None",
+                # Use Lax (same as patchright_pool.py:414 for monitor flows
+                # that work). SameSite=None was dropping same-site XHR
+                # cookies in some Chromium enforce modes — kuaishou SPA
+                # rendered "请登录" wall, douyin XHR didn't carry sessionid.
+                # Cross-domain auth (id.kuaishou.com from www) still works
+                # because we inject the SAME cookie under each domain in
+                # _COOKIE_DOMAINS, so the destination domain has it natively.
+                # FEASIBILITY_ANALYSIS.md §1.1 (c) / §1.2.
+                "sameSite": "Lax",
             })
     if not cookies:
         return 0
