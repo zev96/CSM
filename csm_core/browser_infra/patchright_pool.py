@@ -52,6 +52,71 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# ── Stealth hardening ──────────────────────────────────────────────────────
+# 抖音/快手/百家号风控查这些信号：navigator.webdriver、window.cdc_*、
+# 缺少 Accept-Language、UA 不一致。统一在 pool 这层处理，所有 adapter 共享。
+
+_VIEWPORT_BUCKETS = (
+    {"width": 1280, "height": 800},
+    {"width": 1440, "height": 900},
+    {"width": 1366, "height": 768},
+)
+
+
+def _pick_viewport() -> dict[str, int]:
+    """Pick a random viewport from 3 presets so the same account doesn't always present
+    identical screen dimensions (cheap fingerprint diversification)."""
+    import random
+    return random.choice(_VIEWPORT_BUCKETS)
+
+
+def _build_launch_args() -> list[str]:
+    """Pool 启动 Chromium 时的统一 launch args。基础 --no-sandbox 系列 +
+    反自动化探测 flag。
+
+    注意：Patchright 在 CDP 层已经 patch 了 navigator.webdriver，
+    --disable-blink-features=AutomationControlled 与之叠加在某些
+    FingerprintJS 检测中会产生可检测组合，但仍有平台（百家号等）要求
+    此 flag。综合权衡保留。
+    """
+    return [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+    ]
+
+
+def _build_init_script() -> str:
+    """每个 page navigate 前注入。屏蔽 webdriver 标记 + ChromeDriver 残留 +
+    给 plugins / languages 假数据。这段 JS 由 Patchright 直接发给 Chromium 执行。"""
+    return r"""
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+// 屏蔽 ChromeDriver 注入的全局变量
+for (const k of Object.keys(window)) {
+    if (k.startsWith('cdc_') || k.startsWith('$cdc_')) {
+        try { delete window[k]; } catch (e) {}
+    }
+}
+"""
+
+
+def _build_extra_headers() -> dict[str, str]:
+    """Context 默认 extra_http_headers。同步语言/区域避免 cookies 是国内
+    账号但浏览器是 en-US 这种露馅。sec-ch-ua 跟 UA 大版本一致即可。"""
+    return {
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "sec-ch-ua": '"Chromium";v="120", "Not_A Brand";v="24", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    }
+
+
+# ── /Stealth hardening ─────────────────────────────────────────────────────
+
+
 #: Same default as drission_pool for consistency. See that file for the
 #: trade-off discussion (30s = "feels closed" + cheap restart on cold
 #: tick, vs the original 5 minutes that felt like a leak).
@@ -275,26 +340,29 @@ def get_page() -> Any:
         / f"csm-patchright-chrome-{threading.get_ident()}-{state.launch_seq}"
     )
 
-    # Launch args trimmed to the minimum. Patchright's whole value-prop
-    # is "looks like a real Chrome" — every extra flag is a potential
-    # fingerprint tell:
-    #   - `--disable-blink-features=AutomationControlled` is *redundant*
-    #     with Patchright's internal CDP patches; including it changes
-    #     the Blink runtime state in a detectable way (FingerprintJS
-    #     and similar libs flag the combination).
-    #   - `--blink-settings=imagesEnabled=false` is non-standard
-    #     production usage; real users keep images on. The CSS
-    #     ``display:none`` injection we already do covers the
-    #     bandwidth/perf concern without changing browser identity.
-    # Sandbox + dev-shm flags are still useful (they're standard CI
-    # config, not bot tells). Window size matches a common laptop
-    # default.
-    launch_args: list[str] = [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--window-size=1000,700",
-    ]
-
+    # Launch args, viewport and extra headers come from the stealth helpers
+    # defined at the top of this module. They handle anti-fingerprint
+    # defaults (AutomationControlled flag, randomised viewport, sec-ch-ua
+    # header alignment, etc.) in one place so all adapters that use the
+    # pool inherit them automatically.
+    #
+    # DO NOT override user_agent here. Patchright ships Chromium
+    # ~131 (chromium-1217) and naturally reports a consistent
+    # set of identity signals: navigator.userAgent ≈ 131,
+    # navigator.userAgentData.brands ≈ 131, navigator.platform,
+    # navigator.languages — all aligned. Overriding only the
+    # HTTP UA + JS navigator.userAgent string (which is what
+    # the ``user_agent`` kwarg does) leaves userAgentData and
+    # the Client Hints headers still reporting the real version.
+    # That mismatch is one of the cheapest bot-detection
+    # signals there is: FingerprintJS flags it instantly, and
+    # zhihu's risk engine bounces the session to /signin.
+    #
+    # If the user's harvested cookies came from a different
+    # Chrome version (say Chrome 138), zhihu still treats them
+    # as "valid token, slightly elevated risk" rather than
+    # "valid token, definite automation". Soft signal > hard
+    # signal.
     try:
         launch_kwargs: dict[str, Any] = {
             "user_data_dir": user_data_dir,
@@ -302,25 +370,9 @@ def get_page() -> Any:
             # but zhihu's anti-bot has been seen to still flag fully
             # headless context. Headed = matches DrissionPage path.
             "headless": False,
-            "args": launch_args,
-            "viewport": {"width": 1000, "height": 700},
-            # DO NOT override user_agent here. Patchright ships Chromium
-            # ~131 (chromium-1217) and naturally reports a consistent
-            # set of identity signals: navigator.userAgent ≈ 131,
-            # navigator.userAgentData.brands ≈ 131, navigator.platform,
-            # navigator.languages — all aligned. Overriding only the
-            # HTTP UA + JS navigator.userAgent string (which is what
-            # the ``user_agent`` kwarg does) leaves userAgentData and
-            # the Client Hints headers still reporting the real version.
-            # That mismatch is one of the cheapest bot-detection
-            # signals there is: FingerprintJS flags it instantly, and
-            # zhihu's risk engine bounces the session to /signin.
-            #
-            # If the user's harvested cookies came from a different
-            # Chrome version (say Chrome 138), zhihu still treats them
-            # as "valid token, slightly elevated risk" rather than
-            # "valid token, definite automation". Soft signal > hard
-            # signal.
+            "args": _build_launch_args(),
+            "viewport": _pick_viewport(),
+            "extra_http_headers": _build_extra_headers(),
         }
         if _chrome_path:
             launch_kwargs["executable_path"] = _chrome_path
@@ -343,6 +395,14 @@ def get_page() -> Any:
         raise RuntimeError(
             f"failed to launch Chromium: {detail}{hint}"
         ) from e
+
+    # Inject stealth init_script on the context so every new page
+    # (including the auto-opened tab below) gets the JS injection
+    # before any navigation runs. Safe to call after launch.
+    try:
+        state.context.add_init_script(_build_init_script())
+    except Exception as _e:
+        logger.warning("pool: failed to inject init_script: %s", _e)
 
     # Reuse the auto-opened tab from launch_persistent_context — saves
     # one new_page() round trip on cold start.
