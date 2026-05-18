@@ -5,6 +5,8 @@ import Icon from "@/components/ui/Icon.vue";
 import Blob from "@/components/ui/Blob.vue";
 import PlatformPickerCard from "./PlatformPickerCard.vue";
 import type { Platform } from "@/stores/mining";
+import { useSidecar } from "@/stores/sidecar";
+import { useToast } from "@/composables/useToast";
 
 const props = defineProps<{
   loginStatus: Record<Platform, boolean>;
@@ -25,6 +27,8 @@ const picked = ref<Record<Platform, boolean>>({
 const cap = ref(50);
 const sort = ref("综合");
 const range = ref("近 1 周");
+const sidecar = useSidecar();
+const toast = useToast();
 
 const total = computed(() =>
   Object.values(picked.value).filter(Boolean).length * cap.value
@@ -38,11 +42,36 @@ function togglePlatform(p: Platform) {
   picked.value[p] = !picked.value[p];
 }
 
-function onSubmit() {
+async function onSubmit() {
   if (!canSubmit.value) return;
+  const selectedPlatforms = (["bilibili", "douyin", "kuaishou"] as Platform[]).filter(
+    (p) => picked.value[p]
+  );
+
+  // Preflight: check cookies for every selected platform before submitting.
+  for (const platform of selectedPlatforms) {
+    try {
+      const r = await sidecar.client.get(`/api/mining/credentials?platform=${platform}`);
+      if (!r.data.has_cookies) {
+        toast.error(`未配置 ${platform} 登录凭据，请先到「监控中心 → 凭据管理」登录`);
+        return;
+      }
+      if (r.data.last_used) {
+        const ageMs = Date.now() - new Date(r.data.last_used).getTime();
+        const ageDays = ageMs / (1000 * 60 * 60 * 24);
+        if (ageDays > 7) {
+          toast.warn(`${platform} cookies 已 ${Math.floor(ageDays)} 天未用，可能过期，建议先去监控中心重新登录`);
+        }
+      }
+    } catch (e: unknown) {
+      // Network/sidecar error → fall through silently, let actual POST handle it.
+      console.warn(`mining credentials preflight failed for ${platform}:`, e);
+    }
+  }
+
   emit("submit", {
     keyword: kw.value.trim(),
-    platforms: (["bilibili", "douyin", "kuaishou"] as Platform[]).filter(p => picked.value[p]),
+    platforms: selectedPlatforms,
     target: cap.value,
   });
 }

@@ -59,6 +59,7 @@ class SearchOutcome:
     status: Literal["done", "failed", "needs_login", "risk_control", "cancelled"]
     cards_emitted: int
     error_message: str = ""
+    status_detail: str | None = None
 
 
 class MiningJob(BaseModel):

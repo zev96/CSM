@@ -257,6 +257,44 @@ _login_specs = {
 }
 
 
+@router.get("/api/mining/credentials")
+async def mining_credentials(platform: str) -> dict[str, Any]:
+    """Pre-flight: do we have cookies for this platform?
+
+    Returns {has_cookies: bool, last_used: ISO timestamp | None, platform: str}.
+    Frontend's StartJobModal calls this before submitting a mining job — if
+    has_cookies is False, the user is redirected to the monitor login flow
+    instead of opening a guaranteed-to-fail mining browser.
+    """
+    if platform not in ("bilibili", "douyin", "kuaishou"):
+        raise HTTPException(status_code=400, detail=f"unsupported platform: {platform!r}")
+
+    has = mining_browser.has_login_cookie(platform)
+    last_used: str | None = None
+    if has:
+        cred_type_map = {
+            "bilibili": "bilibili_comment",
+            "douyin": "douyin_comment",
+            "kuaishou": "kuaishou_comment",
+        }
+        cred_type = cred_type_map.get(platform)
+        if cred_type:
+            try:
+                from csm_core.monitor import storage as monitor_storage
+                conn = monitor_storage.get_conn()
+                row = conn.execute(
+                    "SELECT last_used_at FROM platform_credentials "
+                    "WHERE platform=? AND enabled=1 "
+                    "ORDER BY last_used_at DESC LIMIT 1",
+                    (cred_type,),
+                ).fetchone()
+                if row and row["last_used_at"]:
+                    last_used = row["last_used_at"]
+            except Exception:
+                pass  # graceful: still return has_cookies even if DB query fails
+    return {"has_cookies": has, "last_used": last_used, "platform": platform}
+
+
 @router.get("/api/mining/login/status")
 async def login_status() -> dict[str, Any]:
     return {

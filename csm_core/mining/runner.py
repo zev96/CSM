@@ -21,12 +21,77 @@ from csm_core.mining.platforms._common import SearchAdapter
 from csm_core.mining.platforms.bilibili_search import BilibiliSearchAdapter
 from csm_core.mining.platforms.douyin_search import DouyinSearchAdapter
 from csm_core.mining.platforms.kuaishou_search import KuaishouSearchAdapter
+from csm_core.monitor.drivers.risk_detector import RiskControlException
 
 logger = logging.getLogger(__name__)
 
 
 PUBLISH_EVERY_N_CARDS = 5
 PUBLISH_EVERY_N_SECONDS = 10.0
+
+# Domains that indicate a login-wall redirect (non-Baidu — Baidu is handled
+# by the baidu adapter's own risk_detector).  Matched as substrings in
+# the page URL after a 0-result search.
+_LOGIN_WALL_DOMAINS = (
+    "passport.douyin.com",
+    "passport.kuaishou.com",
+    "passport.bilibili.com",
+    "id.kuaishou.com",
+    "login.douyin.com",
+    "login.bilibili.com",
+)
+
+
+def _call_adapter_with_status(
+    adapter: SearchAdapter,
+    *,
+    keyword: str,
+    target_count: int,
+    on_card: "Callable",
+    on_progress: "Callable",
+    cancel_event: "threading.Event",
+    get_current_url: "Callable[[], str] | None" = None,
+) -> SearchOutcome:
+    """Call adapter.search() and map risk / login exceptions to SearchOutcome.status.
+
+    ``get_current_url``: optional zero-arg callable that returns the browser's
+    current URL after the search call.  Passed by the runner for platforms where
+    the page is managed externally (e.g. Task-6 pool); left None for adapters
+    that manage their own page internally (all current adapters do this, so
+    login-wall detection via URL is only opportunistic here — the adapters
+    themselves already return needs_login / risk_control in those cases).
+    """
+    try:
+        outcome = adapter.search(
+            keyword=keyword,
+            target_count=target_count,
+            on_card=on_card,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
+        )
+    except RiskControlException as e:
+        return SearchOutcome(
+            platform=adapter.platform,
+            status="risk_control",
+            cards_emitted=0,
+            error_message=str(e),
+            status_detail=f"{e.signal.layer}: {e.signal.detail}",
+        )
+
+    # Opportunistic login-wall detection: if the adapter returned 0 cards and
+    # the page ended up on a login wall URL, upgrade to login_required.
+    if outcome.cards_emitted == 0 and outcome.status not in ("cancelled", "failed"):
+        current_url = ""
+        if get_current_url is not None:
+            try:
+                current_url = get_current_url() or ""
+            except Exception:
+                pass
+        if current_url and any(d in current_url for d in _LOGIN_WALL_DOMAINS):
+            outcome.status = "needs_login"
+            outcome.status_detail = f"page redirected to login wall: {current_url}"
+
+    return outcome
 
 
 EventPublisher = Callable[[str, dict], None]
@@ -114,7 +179,8 @@ class MiningRunner:
                     self.publish("login.required", {"job_id": job_id, "platform": platform})
 
             try:
-                outcome: SearchOutcome = adapter.search(
+                outcome: SearchOutcome = _call_adapter_with_status(
+                    adapter,
                     keyword=job["keyword"],
                     target_count=job["target_per_platform"],
                     on_card=_on_card,
