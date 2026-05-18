@@ -7,7 +7,7 @@ import logging
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -258,7 +258,7 @@ _login_specs = {
 
 
 @router.get("/api/mining/credentials")
-async def mining_credentials(platform: str) -> dict[str, Any]:
+async def mining_credentials(platform: str, response: Response) -> dict[str, Any]:
     """Pre-flight: do we have cookies for this platform?
 
     Returns {has_cookies: bool, last_used: ISO timestamp | None, platform: str}.
@@ -266,6 +266,7 @@ async def mining_credentials(platform: str) -> dict[str, Any]:
     has_cookies is False, the user is redirected to the monitor login flow
     instead of opening a guaranteed-to-fail mining browser.
     """
+    response.headers["Cache-Control"] = "no-store"
     if platform not in ("bilibili", "douyin", "kuaishou"):
         raise HTTPException(status_code=400, detail=f"unsupported platform: {platform!r}")
 

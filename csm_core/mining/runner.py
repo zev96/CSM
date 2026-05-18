@@ -29,18 +29,6 @@ logger = logging.getLogger(__name__)
 PUBLISH_EVERY_N_CARDS = 5
 PUBLISH_EVERY_N_SECONDS = 10.0
 
-# Domains that indicate a login-wall redirect (non-Baidu — Baidu is handled
-# by the baidu adapter's own risk_detector).  Matched as substrings in
-# the page URL after a 0-result search.
-_LOGIN_WALL_DOMAINS = (
-    "passport.douyin.com",
-    "passport.kuaishou.com",
-    "passport.bilibili.com",
-    "id.kuaishou.com",
-    "login.douyin.com",
-    "login.bilibili.com",
-)
-
 
 def _call_adapter_with_status(
     adapter: SearchAdapter,
@@ -50,16 +38,12 @@ def _call_adapter_with_status(
     on_card: "Callable",
     on_progress: "Callable",
     cancel_event: "threading.Event",
-    get_current_url: "Callable[[], str] | None" = None,
 ) -> SearchOutcome:
-    """Call adapter.search() and map risk / login exceptions to SearchOutcome.status.
+    """Wrap adapter.search() to convert RiskControlException → SearchOutcome(status='risk_control').
 
-    ``get_current_url``: optional zero-arg callable that returns the browser's
-    current URL after the search call.  Passed by the runner for platforms where
-    the page is managed externally (e.g. Task-6 pool); left None for adapters
-    that manage their own page internally (all current adapters do this, so
-    login-wall detection via URL is only opportunistic here — the adapters
-    themselves already return needs_login / risk_control in those cases).
+    Adapters already emit status='needs_login' / 'risk_control' directly when they detect
+    those states; this wrapper only adds RiskControlException→outcome conversion since
+    the exception bypasses the adapter's normal return path.
     """
     try:
         outcome = adapter.search(
@@ -77,19 +61,6 @@ def _call_adapter_with_status(
             error_message=str(e),
             status_detail=f"{e.signal.layer}: {e.signal.detail}",
         )
-
-    # Opportunistic login-wall detection: if the adapter returned 0 cards and
-    # the page ended up on a login wall URL, upgrade to login_required.
-    if outcome.cards_emitted == 0 and outcome.status not in ("cancelled", "failed"):
-        current_url = ""
-        if get_current_url is not None:
-            try:
-                current_url = get_current_url() or ""
-            except Exception:
-                pass
-        if current_url and any(d in current_url for d in _LOGIN_WALL_DOMAINS):
-            outcome.status = "needs_login"
-            outcome.status_detail = f"page redirected to login wall: {current_url}"
 
     return outcome
 

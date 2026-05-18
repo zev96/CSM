@@ -30,6 +30,12 @@ const range = ref("近 1 周");
 const sidecar = useSidecar();
 const toast = useToast();
 
+const PLATFORM_LABEL: Record<Platform, string> = {
+  bilibili: "B 站",
+  douyin: "抖音",
+  kuaishou: "快手",
+};
+
 const total = computed(() =>
   Object.values(picked.value).filter(Boolean).length * cap.value
 );
@@ -53,14 +59,14 @@ async function onSubmit() {
     try {
       const r = await sidecar.client.get(`/api/mining/credentials?platform=${platform}`);
       if (!r.data.has_cookies) {
-        toast.error(`未配置 ${platform} 登录凭据，请先到「监控中心 → 凭据管理」登录`);
+        toast.error(`未配置 ${PLATFORM_LABEL[platform]} 登录凭据，请先到「监控中心 → 凭据管理」登录`);
         return;
       }
       if (r.data.last_used) {
         const ageMs = Date.now() - new Date(r.data.last_used).getTime();
         const ageDays = ageMs / (1000 * 60 * 60 * 24);
         if (ageDays > 7) {
-          toast.warn(`${platform} cookies 已 ${Math.floor(ageDays)} 天未用，可能过期，建议先去监控中心重新登录`);
+          toast.warn(`${PLATFORM_LABEL[platform]} cookies 已 ${Math.floor(ageDays)} 天未用，可能过期，建议先去监控中心重新登录`);
         }
       }
     } catch (e: unknown) {
