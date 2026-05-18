@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -121,10 +122,69 @@ class KuaishouSearchAdapter:
                 page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
                 time.sleep(1.5)
 
+            # DOM fallback (Layer 5a): page.evaluate(_EXTRACT_JS) returned nothing,
+            # likely due to SPA fingerprint detection (see KNOWN ISSUE comment above).
+            # Reuse the same page and fall back to Playwright locator-based DOM scrape.
+            # Only fires when the JS-eval path produced nothing; never overrides results.
+            if emitted == 0 and not cancel_event.is_set():
+                logger.info(
+                    "kuaishou_search: evaluate returned 0 items, falling back to DOM scrape"
+                )
+                dom_cards = self._scrape_dom(page, target_count, on_card)
+                emitted += len(dom_cards)
+
         if cancel_event.is_set():
             return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
         on_progress(ProgressUpdate(platform=self.platform, phase="done", got=emitted, target=target_count))
         return SearchOutcome(platform=self.platform, status="done", cards_emitted=emitted)
+
+    def _scrape_dom(self, page: Any, target_count: int, on_card: Any) -> list[VideoCard]:
+        """Fallback: scrape video cards from Kuaishou search page via Playwright locators.
+
+        Kuaishou search SPA has known fingerprint-based bot detection — this fallback
+        uses page.locator() instead of page.evaluate(_EXTRACT_JS). Loses precise
+        play/like counts (DOM doesn't expose them) but bypasses fingerprint blocks.
+        """
+        items: list[VideoCard] = []
+        try:
+            anchors = page.locator('a[href*="/short-video/"]').all()
+        except Exception as e:
+            logger.warning("kuaishou_search: DOM locator query failed: %s", e)
+            return items
+
+        seen_ids: set[str] = set()
+        for loc in anchors:
+            if len(items) >= target_count:
+                break
+            try:
+                href = loc.get_attribute("href") or ""
+                if not href:
+                    continue
+                photo_id = _extract_photo_id(href)
+                if not photo_id or photo_id in seen_ids:
+                    continue
+                seen_ids.add(photo_id)
+
+                title = (loc.text_content() or "").strip()[:200]
+                url = href if href.startswith("http") else f"https://www.kuaishou.com{href}"
+
+                card = VideoCard(
+                    platform="kuaishou",
+                    platform_video_id=photo_id,
+                    url=url,
+                    title=title,
+                )
+                items.append(card)
+                try:
+                    on_card(card)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.debug("kuaishou_search: skip DOM locator: %s", e)
+                continue
+
+        logger.info("kuaishou_search: DOM fallback yielded %d cards", len(items))
+        return items
 
     def _extract_from_dom(self, html: str, *, exclude_ids: set[str]) -> list[VideoCard]:
         """Parse Kuaishou search DOM into cards. Uses lxml for speed."""
@@ -206,11 +266,19 @@ def _first_attr(els: list[Any], attr: str) -> str:
     return els[0].get(attr, "") or ""
 
 
+_PHOTO_ID_RE = re.compile(r"/short-video/([A-Za-z0-9_-]+)")
+
+
+def _extract_photo_id(href: str) -> str:
+    """Extract Kuaishou photo ID from href like '/short-video/3xabc123'."""
+    m = _PHOTO_ID_RE.search(href or "")
+    return m.group(1) if m else ""
+
+
 def _href_to_photo_id(href: str) -> str:
     if not href:
         return ""
-    import re
-    m = re.search(r"/short-video/([0-9a-zA-Z]+)", href)
+    m = _PHOTO_ID_RE.search(href)
     return m.group(1) if m else ""
 
 

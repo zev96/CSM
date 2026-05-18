@@ -12,6 +12,7 @@ captcha on first load when fingerprint looks fresh. Strategy:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -91,6 +92,18 @@ class DouyinSearchAdapter:
                 page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
                 time.sleep(2.0)
 
+            # DOM fallback (Layer 5a): XHR interception was blocked by signature /
+            # fingerprint checks — the response handler never fired. Reuse the same
+            # page (already on the search URL) and scrape the DOM directly. Loses
+            # precise play/like counts but bypasses signature + fingerprint blocks.
+            # Only fires when XHR produced nothing; never overrides populated results.
+            if emitted == 0 and not risk_detected and not cancel_event.is_set():
+                logger.info(
+                    "douyin_search: XHR returned 0 items, falling back to DOM scrape"
+                )
+                dom_cards = self._scrape_dom(page, target_count, on_card)
+                emitted += len(dom_cards)
+
         if risk_detected:
             return SearchOutcome(
                 platform=self.platform, status="risk_control",
@@ -98,8 +111,57 @@ class DouyinSearchAdapter:
             )
         if cancel_event.is_set():
             return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
+
         on_progress(ProgressUpdate(platform=self.platform, phase="done", got=emitted, target=target_count))
         return SearchOutcome(platform=self.platform, status="done", cards_emitted=emitted)
+
+    def _scrape_dom(self, page: Any, target_count: int, on_card: Any) -> list[VideoCard]:
+        """Fallback: scrape video cards from search page DOM when XHR returns nothing.
+
+        Slower than XHR (~30%) but bypasses signature/fingerprint blocks. Loses precise
+        play/like counts (DOM doesn't expose them on the search SERP), uses inner text
+        for title.
+        """
+        items: list[VideoCard] = []
+        try:
+            anchors = page.locator('a[href*="/video/"]').all()
+        except Exception as e:
+            logger.warning("douyin_search: DOM locator query failed: %s", e)
+            return items
+
+        seen_ids: set[str] = set()
+        for loc in anchors:
+            if len(items) >= target_count:
+                break
+            try:
+                href = loc.get_attribute("href") or ""
+                if not href:
+                    continue
+                aweme_id = _extract_aweme_id(href)
+                if not aweme_id or aweme_id in seen_ids:
+                    continue
+                seen_ids.add(aweme_id)
+
+                title = (loc.text_content() or "").strip()[:200]
+                url = href if href.startswith("http") else f"https://www.douyin.com{href}"
+
+                card = VideoCard(
+                    platform="douyin",
+                    platform_video_id=aweme_id,
+                    url=url,
+                    title=title,
+                )
+                items.append(card)
+                try:
+                    on_card(card)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.debug("douyin_search: skip DOM locator: %s", e)
+                continue
+
+        logger.info("douyin_search: DOM fallback yielded %d cards", len(items))
+        return items
 
     def _extract_cards(self, body: dict[str, Any]) -> list[VideoCard]:
         if not isinstance(body, dict):
@@ -132,6 +194,15 @@ class DouyinSearchAdapter:
                 raw=info,
             ))
         return cards
+
+
+_AWEME_ID_RE = re.compile(r"/video/(\d+)")
+
+
+def _extract_aweme_id(href: str) -> str:
+    """Extract Douyin video ID from href like '/video/7123456789012345678'."""
+    m = _AWEME_ID_RE.search(href or "")
+    return m.group(1) if m else ""
 
 
 def _ts_to_iso(ts) -> str | None:
