@@ -62,7 +62,7 @@ class TestDouyinDomFallback:
 
         dom_calls = {"n": 0}
 
-        def fake_scrape_dom(page, target_count, on_card):
+        def fake_scrape_dom(page, target_count, on_card, *, seen=None):
             dom_calls["n"] += 1
             cards = [
                 VideoCard(
@@ -143,7 +143,7 @@ class TestDouyinDomFallback:
 
         dom_calls = {"n": 0}
 
-        def fake_scrape_dom(page, target_count, on_card):
+        def fake_scrape_dom(page, target_count, on_card, *, seen=None):
             dom_calls["n"] += 1
             return []
 
@@ -221,3 +221,40 @@ class TestDouyinDomFallback:
         )
         assert len(cards_received) == 1
         assert cards_received[0].platform_video_id == "7999999999999999999"
+
+    def test_dom_fallback_does_not_re_emit_xhr_dedup_ids(self):
+        """If aweme_id was already emitted via XHR (in `seen`), DOM fallback must skip it.
+        Validates shared dedup set prevents double-emission when late XHR responses
+        arrive during DOM scrape (Playwright drains events on every page call)."""
+        adapter = DouyinSearchAdapter()
+
+        # Mock page with 2 anchors: aweme IDs "111" and "222"
+        anchor1 = MagicMock()
+        anchor1.get_attribute.return_value = "https://www.douyin.com/video/111"
+        anchor1.text_content.return_value = "card 111"
+        anchor2 = MagicMock()
+        anchor2.get_attribute.return_value = "https://www.douyin.com/video/222"
+        anchor2.text_content.return_value = "card 222"
+
+        mock_locator = MagicMock()
+        mock_locator.all.return_value = [anchor1, anchor2]
+
+        page = MagicMock()
+        page.locator.return_value = mock_locator
+
+        # Pre-seed `seen` with "111" — simulating XHR already emitted it
+        shared_seen: set[str] = {"111"}
+        cards_emitted: list = []
+
+        result = adapter._scrape_dom(
+            page,
+            target_count=10,
+            on_card=lambda c: cards_emitted.append(c),
+            seen=shared_seen,
+        )
+
+        assert len(result) == 1, f"Should skip aweme_id 111 (already in seen), got {len(result)}"
+        assert result[0].platform_video_id == "222"
+        assert shared_seen == {"111", "222"}, (
+            f"seen must be updated with new id, got {shared_seen}"
+        )

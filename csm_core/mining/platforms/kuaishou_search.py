@@ -126,11 +126,17 @@ class KuaishouSearchAdapter:
             # likely due to SPA fingerprint detection (see KNOWN ISSUE comment above).
             # Reuse the same page and fall back to Playwright locator-based DOM scrape.
             # Only fires when the JS-eval path produced nothing; never overrides results.
+            # Note: no `risk_detected` guard here — kuaishou's captcha detection
+            # short-circuits via early `return` from the with block above (see
+            # _looks_like_captcha), so by definition we only reach this fallback
+            # path when no captcha was hit.
+            # Pass the evaluate path's `seen` set so any late evaluate calls that
+            # Playwright drains during DOM scrape don't re-emit the same photo_id.
             if emitted == 0 and not cancel_event.is_set():
                 logger.info(
                     "kuaishou_search: evaluate returned 0 items, falling back to DOM scrape"
                 )
-                dom_cards = self._scrape_dom(page, target_count, on_card)
+                dom_cards = self._scrape_dom(page, target_count, on_card, seen=seen)
                 emitted += len(dom_cards)
 
         if cancel_event.is_set():
@@ -138,13 +144,26 @@ class KuaishouSearchAdapter:
         on_progress(ProgressUpdate(platform=self.platform, phase="done", got=emitted, target=target_count))
         return SearchOutcome(platform=self.platform, status="done", cards_emitted=emitted)
 
-    def _scrape_dom(self, page: Any, target_count: int, on_card: Any) -> list[VideoCard]:
+    def _scrape_dom(
+        self,
+        page: Any,
+        target_count: int,
+        on_card: Any,
+        *,
+        seen: set[str] | None = None,
+    ) -> list[VideoCard]:
         """Fallback: scrape video cards from Kuaishou search page via Playwright locators.
 
         Kuaishou search SPA has known fingerprint-based bot detection — this fallback
         uses page.locator() instead of page.evaluate(_EXTRACT_JS). Loses precise
         play/like counts (DOM doesn't expose them) but bypasses fingerprint blocks.
+
+        seen: optional pre-populated dedup set (passed from evaluate path to share state).
+        Late evaluate results arriving during DOM scrape won't cause double-emission
+        if the evaluate path's `seen` set is shared here.
         """
+        if seen is None:
+            seen = set()
         items: list[VideoCard] = []
         try:
             anchors = page.locator('a[href*="/short-video/"]').all()
@@ -152,7 +171,6 @@ class KuaishouSearchAdapter:
             logger.warning("kuaishou_search: DOM locator query failed: %s", e)
             return items
 
-        seen_ids: set[str] = set()
         for loc in anchors:
             if len(items) >= target_count:
                 break
@@ -161,9 +179,9 @@ class KuaishouSearchAdapter:
                 if not href:
                     continue
                 photo_id = _extract_photo_id(href)
-                if not photo_id or photo_id in seen_ids:
+                if not photo_id or photo_id in seen:
                     continue
-                seen_ids.add(photo_id)
+                seen.add(photo_id)
 
                 title = (loc.text_content() or "").strip()[:200]
                 url = href if href.startswith("http") else f"https://www.kuaishou.com{href}"
@@ -197,7 +215,7 @@ class KuaishouSearchAdapter:
         tree = lxml_html.fromstring(html)
         cards: list[VideoCard] = []
         for item in tree.cssselect("a.search-result-item"):
-            pid = item.get("data-photo-id") or _href_to_photo_id(item.get("href", ""))
+            pid = item.get("data-photo-id") or _extract_photo_id(item.get("href", ""))
             if not pid or pid in exclude_ids:
                 continue
             title = _first_text(item.cssselect(".photo-title"))
@@ -225,7 +243,7 @@ class KuaishouSearchAdapter:
         soup = BeautifulSoup(html, "html.parser")
         cards: list[VideoCard] = []
         for item in soup.select("a.search-result-item"):
-            pid = item.get("data-photo-id") or _href_to_photo_id(item.get("href", ""))
+            pid = item.get("data-photo-id") or _extract_photo_id(item.get("href", ""))
             if not pid or pid in exclude_ids:
                 continue
             def _t(sel: str) -> str:
@@ -270,15 +288,13 @@ _PHOTO_ID_RE = re.compile(r"/short-video/([A-Za-z0-9_-]+)")
 
 
 def _extract_photo_id(href: str) -> str:
-    """Extract Kuaishou photo ID from href like '/short-video/3xabc123'."""
+    """Extract Kuaishou photo ID from href like '/short-video/3xabc123'.
+
+    Accepts hyphens and underscores in addition to alphanumerics — real Kuaishou
+    photo IDs include hyphens (e.g. "3xa1b2c-def-456"). Regex matches _EXTRACT_JS
+    and storage.py _VIDEO_ID_PATTERNS so all code paths agree on platform_video_id.
+    """
     m = _PHOTO_ID_RE.search(href or "")
-    return m.group(1) if m else ""
-
-
-def _href_to_photo_id(href: str) -> str:
-    if not href:
-        return ""
-    m = _PHOTO_ID_RE.search(href)
     return m.group(1) if m else ""
 
 

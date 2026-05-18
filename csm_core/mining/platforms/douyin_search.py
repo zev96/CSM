@@ -97,11 +97,14 @@ class DouyinSearchAdapter:
             # page (already on the search URL) and scrape the DOM directly. Loses
             # precise play/like counts but bypasses signature + fingerprint blocks.
             # Only fires when XHR produced nothing; never overrides populated results.
+            # Pass the XHR path's `seen` set so late XHR responses arriving during
+            # DOM scrape (Playwright sync API drains events on every page call)
+            # don't cause the same aweme_id to be emitted twice.
             if emitted == 0 and not risk_detected and not cancel_event.is_set():
                 logger.info(
                     "douyin_search: XHR returned 0 items, falling back to DOM scrape"
                 )
-                dom_cards = self._scrape_dom(page, target_count, on_card)
+                dom_cards = self._scrape_dom(page, target_count, on_card, seen=seen)
                 emitted += len(dom_cards)
 
         if risk_detected:
@@ -115,13 +118,26 @@ class DouyinSearchAdapter:
         on_progress(ProgressUpdate(platform=self.platform, phase="done", got=emitted, target=target_count))
         return SearchOutcome(platform=self.platform, status="done", cards_emitted=emitted)
 
-    def _scrape_dom(self, page: Any, target_count: int, on_card: Any) -> list[VideoCard]:
+    def _scrape_dom(
+        self,
+        page: Any,
+        target_count: int,
+        on_card: Any,
+        *,
+        seen: set[str] | None = None,
+    ) -> list[VideoCard]:
         """Fallback: scrape video cards from search page DOM when XHR returns nothing.
 
         Slower than XHR (~30%) but bypasses signature/fingerprint blocks. Loses precise
         play/like counts (DOM doesn't expose them on the search SERP), uses inner text
         for title.
+
+        seen: optional pre-populated dedup set (passed from XHR path to share state).
+        Late XHR responses arriving during DOM scrape won't cause double-emission
+        if the XHR path's `seen` set is shared here.
         """
+        if seen is None:
+            seen = set()
         items: list[VideoCard] = []
         try:
             anchors = page.locator('a[href*="/video/"]').all()
@@ -129,7 +145,6 @@ class DouyinSearchAdapter:
             logger.warning("douyin_search: DOM locator query failed: %s", e)
             return items
 
-        seen_ids: set[str] = set()
         for loc in anchors:
             if len(items) >= target_count:
                 break
@@ -138,9 +153,9 @@ class DouyinSearchAdapter:
                 if not href:
                     continue
                 aweme_id = _extract_aweme_id(href)
-                if not aweme_id or aweme_id in seen_ids:
+                if not aweme_id or aweme_id in seen:
                     continue
-                seen_ids.add(aweme_id)
+                seen.add(aweme_id)
 
                 title = (loc.text_content() or "").strip()[:200]
                 url = href if href.startswith("http") else f"https://www.douyin.com{href}"

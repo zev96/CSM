@@ -358,9 +358,11 @@ _VIDEO_ID_PATTERNS: dict[str, list[_re.Pattern[str]]] = {
         _re.compile(r"/video/av(\d+)"),
     ],
     "kuaishou": [
-        _re.compile(r"/short-video/([0-9a-zA-Z]+)"),
-        _re.compile(r"photoId=([0-9a-zA-Z]+)"),
-        _re.compile(r"/profile/[^/]+/photo/([0-9a-zA-Z]+)"),
+        # Note: real Kuaishou photo IDs include hyphens; widened from [0-9a-zA-Z] to match
+        # _EXTRACT_JS regex in kuaishou_search.py and _PHOTO_ID_RE there.
+        _re.compile(r"/short-video/([0-9a-zA-Z_-]+)"),
+        _re.compile(r"photoId=([0-9a-zA-Z_-]+)"),
+        _re.compile(r"/profile/[^/]+/photo/([0-9a-zA-Z_-]+)"),
     ],
 }
 
