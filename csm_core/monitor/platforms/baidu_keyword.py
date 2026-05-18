@@ -542,7 +542,7 @@ class BaiduKeywordAdapter:
 
                 pacer = rate_limit.get_pacer(self.platform)
                 # Only wait between keywords (not before the first one — caller already waited)
-                if kw_idx != resume_from:
+                if rel_idx > 0:  # skip wait for first iteration of this scan (caller already waited)
                     pacer.wait()
 
                 serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)

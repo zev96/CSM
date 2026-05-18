@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from csm_core.monitor import storage
 from csm_core.monitor.base import MonitorTask, TaskType
 
 from ..auth import RequireToken
@@ -119,8 +120,6 @@ async def resume_task(task_id: int) -> dict[str, Any]:
 
     Returns immediately — watch ``/api/monitor/events`` for the result.
     """
-    from csm_core.monitor import storage
-
     _require_storage()
     loop = monitor_lifecycle.get()
     if loop is None or not loop.is_running():

@@ -415,10 +415,9 @@ class MonitorLoop:
             # Task 4: risk control hit mid-scan. Save a breakpoint result so
             # POST /api/monitor/tasks/{id}/resume can restart from
             # last_resumed_keyword instead of keyword 0.
-            next_kw = (e.progress if e.progress is not None else -1) + 1
-            # next_kw=0 only when progress is None (e.g. from a future adapter
-            # that doesn't report position); clamp to 0 so resume is valid.
-            next_kw = max(0, next_kw)
+            # progress=None means non-positional risk (e.g., fetch_article_browser future case);
+            # treat as "resume from beginning" → next_kw=0.
+            next_kw = (e.progress + 1) if e.progress is not None else 0
             err_msg = f"风控拦截：layer={e.signal.layer} detail={e.signal.detail}"
             logger.warning("monitor task %s: %s, saving breakpoint at %s", task.id, err_msg, next_kw)
             breakpoint_result = MonitorResult(
