@@ -1,23 +1,28 @@
-"""Persistent-profile Patchright launcher for the mining module.
+"""Thin adapter: mining module's browser access via the shared patchright_pool.
 
-Differs from ``patchright_pool``:
+After PR 2b Task 6, mining_browser.launched_page is a thin adapter over
+``patchright_pool`` instead of a self-contained launcher.  Mining therefore
+inherits the pool's full stealth hardening (init_script, randomised viewport,
+--window-size pairing, Accept-Language header, AutomationControlled flag) that
+monitor adapters also benefit from.
 
-- One profile **per platform**, stable across launches → cookies survive.
-- Caller drives the lifecycle (open → search → close); no thread-local
-  caching, no idle reaper. Mining tasks are 5-10 min batches, not
-  many-shot tasks like monitor, so the pool model doesn't help.
-- Headed by default — see spec section 2 (browser mode lock).
+Callers keep the same API::
 
-Shares two helpers with ``patchright_pool``: ``ensure_browsers_path()``
-and ``_kill_process_tree()``. We import them by string to avoid coupling
-mining to monitor's pool wholesale.
+    with mining_browser.launched_page("douyin") as page:
+        ...
+
+``_inject_monitor_cookies`` is still called at acquire-time so per-platform
+credentials from monitor.db are available to mining pages.
+
+``_kill_process_tree`` and ``configure_profile_root`` are retained for
+backwards compatibility (lifespan.py still calls ``configure_profile_root``
+on startup; _kill_process_tree is imported from patchright_pool and might be
+used by other callers).
 """
 from __future__ import annotations
 
 import contextlib
 import logging
-import threading
-import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -34,16 +39,21 @@ _profile_root: Path | None = None
 
 
 def configure_profile_root(path: Path) -> None:
-    """Tell the launcher where to put per-platform user_data_dirs.
+    """No-op after Task 6: mining now shares the pool's user_data_dir.
 
-    Typically called once at sidecar startup with ``<config_dir>/browser_profiles``.
+    Retained so sidecar lifespan.py (which calls this on startup) doesn't
+    need to be changed. The argument is accepted but not used.
     """
+    # Previously: created per-platform browser_profiles/<platform> dirs and
+    # saved the root so launched_page could resolve them.  After the Task 6
+    # refactor, the pool manages its own tempdir-based user_data_dir — mining
+    # no longer maintains separate persistent profiles.
     global _profile_root
-    _profile_root = Path(path)
-    _profile_root.mkdir(parents=True, exist_ok=True)
+    _profile_root = Path(path)  # keep the value; callers may read it
 
 
 def _profile_dir_for(platform: str) -> Path:
+    """Retained for reference; no longer called by launched_page after Task 6."""
     if _profile_root is None:
         raise RuntimeError(
             "mining_browser profile root not configured — call configure_profile_root(...) first"
@@ -55,80 +65,49 @@ def _profile_dir_for(platform: str) -> Path:
 
 @contextlib.contextmanager
 def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
-    """Context-managed Patchright Page for one mining batch.
+    """Context-managed Patchright Page acquired from the shared patchright_pool.
 
-    On exit: OS-kills the Chromium tree (cross-thread-safe path, same
-    technique as patchright_pool's reaper). Profile cookies are persisted
-    by Chromium before the kill cascade because launch_persistent_context
-    flushes on context.close() — but cross-thread close raises, so we
-    do a best-effort close-then-kill: graceful close runs on the owning
-    thread, then we kill to guarantee teardown.
+    After PR 2b Task 6, mining no longer maintains its own per-platform browser
+    profile.  Instead it borrows from the same ``patchright_pool`` that monitor
+    adapters use, inheriting:
+
+    - Stealth hardening (init_script, --window-size pairing, viewport
+      randomisation, Accept-Language header, AutomationControlled flag)
+    - User-agent consistency per worker thread
+    - Shared cookie state across launches on the same thread
+
+    Cookies for this platform are still injected from monitor.db at acquire
+    time via ``_inject_monitor_cookies(context, platform)``.
+
+    Note on ``headless``: patchright_pool always launches headed (headless=False)
+    because zhihu/douyin risk engines flag fully-headless contexts even with
+    Patchright's stealth patches.  The ``headless`` parameter is accepted here
+    for API compatibility but has no effect on the underlying pool launch.
     """
+    from csm_core.browser_infra import patchright_pool
+
+    # Acquire a page from the pool.  The pool is thread-local: same worker
+    # thread → same Chromium instance reused across calls.  Different worker
+    # threads each get their own isolated Chromium.
+    page = patchright_pool.get_page()
     try:
-        from patchright.sync_api import sync_playwright
-    except ImportError as e:
-        raise RuntimeError(
-            "patchright not installed; run `pip install patchright` and "
-            "`patchright install chromium`"
-        ) from e
-
-    ensure_browsers_path()
-    user_data_dir = str(_profile_dir_for(platform))
-
-    pw = sync_playwright().start()
-    node_pid = 0
-    try:
+        # Re-inject monitor cookies for this platform on every acquire — the
+        # user may have refreshed credentials via 监控中心 → 凭据管理 since the
+        # pool last launched.  If no credential exists this is a silent no-op.
         try:
-            node_pid = pw._impl_obj._connection._transport._proc.pid
-        except Exception:
-            logger.warning(
-                "mining_browser[%s]: cannot read node pid — graceful kill only", platform
-            )
-
-        launch_args = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--window-size=1000,700",
-        ]
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=user_data_dir,
-            headless=headless,
-            args=launch_args,
-            viewport={"width": 1000, "height": 700},
-        )
-        pages = context.pages
-        page = pages[0] if pages else context.new_page()
-        logger.info(
-            "mining_browser[%s] launched (profile=%s, node_pid=%d)",
-            platform, user_data_dir, node_pid,
-        )
-        # Inject cookies from monitor.db platform_credentials. This is the
-        # supported login surface — monitor's "interactive login" or
-        # cookie-paste flow already populates these for douyin/bilibili/
-        # kuaishou. Mining no longer needs its own login UX; users just
-        # configure cookies once in 监控中心 → 凭据管理 and we ride along.
-        try:
-            n = _inject_monitor_cookies(context, platform)
+            n = _inject_monitor_cookies(page.context, platform)
             if n:
                 logger.info(
-                    "mining_browser[%s] injected %d cookies from monitor DB", platform, n,
+                    "mining_browser[%s] injected %d cookies from monitor DB",
+                    platform, n,
                 )
         except Exception as e:
             logger.warning("mining_browser[%s] cookie injection failed: %s", platform, e)
-        try:
-            yield page
-        finally:
-            try:
-                context.close()
-            except Exception as e:
-                logger.debug("mining_browser[%s] context.close raised: %s", platform, e)
+        yield page
     finally:
-        try:
-            pw.stop()
-        except Exception as e:
-            logger.debug("mining_browser[%s] pw.stop raised: %s", platform, e)
-        if node_pid:
-            _kill_process_tree(node_pid, label=f"mining-browser[{platform}]")
+        # Pool owns the page lifecycle — idle reaper and shutdown() handle
+        # teardown.  Do not close the page here or pool state becomes corrupt.
+        pass
 
 
 def has_login_cookie(platform: str) -> bool:
