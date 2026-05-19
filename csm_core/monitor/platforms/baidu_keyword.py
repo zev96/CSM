@@ -151,17 +151,21 @@ def _cc_get(url: str, *, session: Any = None, **kwargs: Any) -> Any:
     return cc_requests.get(url, **kwargs)
 
 
-def resolve_baidu_link(url: str) -> str:
+def resolve_baidu_link(url: str, *, session: Any = None) -> str:
     """如果是 baidu.com/link?url=... 跳转，跟随 redirect 拿真实 URL。
 
     非百度跳转 URL 直接返回。任何异常 → 返回原 URL（adapter 自然把它当
     抓取失败 source）。
+
+    ``session`` —— 可选 curl_cffi.Session 复用 cookie / connection pool。
+    None 时走 stateless 旧路径（保留给单测 monkeypatch _cc_get 用）。
     """
     if not url or "baidu.com/link?" not in url:
         return url
     try:
         resp = _cc_get(
             url,
+            session=session,
             impersonate="chrome120",
             allow_redirects=True,
             timeout=10,
@@ -177,8 +181,11 @@ def resolve_baidu_link(url: str) -> str:
 _HTTP_MIN_CONTENT_CHARS = 200
 
 
-def fetch_article_http(url: str) -> dict[str, Any]:
+def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
     """用 curl_cffi + readability 抓单篇文章，返回纯文本正文。
+
+    ``session`` —— 可选 curl_cffi.Session 复用 cookie / connection pool。
+    None 时走 stateless 旧路径（保留给单测 monkeypatch _cc_get 用）。
 
     Returns:
         dict 含:
@@ -190,6 +197,7 @@ def fetch_article_http(url: str) -> dict[str, Any]:
     try:
         resp = _cc_get(
             url,
+            session=session,
             impersonate="chrome120",
             allow_redirects=True,
             timeout=15,
