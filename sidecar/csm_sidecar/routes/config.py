@@ -33,14 +33,30 @@ async def patch_config(updates: dict[str, Any]) -> AppConfig:
         {"vault_root": "/path/to/vault"}
         {"monitor": {"alert_top_n": 7}}
         {"default_provider": "anthropic", "default_model": {"anthropic": "claude-opus-4-7"}}
+
+    When ``monitor.*`` fields change, the live adapters are reconfigured
+    so users don't need to restart sidecar after editing default exclude
+    domains / pacing / breaker thresholds. reconfigure() is idempotent
+    and swallows internal exceptions, so PATCH still returns 200 even if
+    an adapter rejected the new value.
     """
     try:
-        return config_service.patch(updates)
+        new_cfg = config_service.patch(updates)
     except ValueError as e:  # pydantic ValidationError subclasses ValueError
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
         ) from e
+
+    # Hot-reload adapter settings only when monitor.* actually changed.
+    # Lazy import: routes are imported during app boot before
+    # monitor_lifecycle is fully ready; module-level import would create
+    # a circular dep with config_service.
+    if "monitor" in updates:
+        from ..services import monitor_lifecycle
+        monitor_lifecycle.reconfigure(new_cfg)
+
+    return new_cfg
 
 
 # ── Keyring sub-routes ──────────────────────────────────────────────────────
