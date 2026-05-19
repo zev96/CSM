@@ -627,6 +627,7 @@ class BaiduKeywordAdapter:
         cancel_token: Any = None,
         *,
         resume_from: int = 0,
+        session: Any = None,
     ) -> MonitorResult:
         """跑一次所有 SERP。命中 RiskControlException 直接传给 runner，
         runner（Task 4）决定 retry 还是 pause + 写断点。此函数不再做 in-task
@@ -637,6 +638,7 @@ class BaiduKeywordAdapter:
             result = self._fetch_once(
                 task, keywords, brand, headless, progress_cb, cancel_token,
                 resume_from=resume_from,
+                session=session,
             )
         except RiskControlException:
             # 4 层风控命中 —— 让 runner (Task 4) 捕获写断点 + 暂停任务；不计入熔断器。
@@ -668,6 +670,7 @@ class BaiduKeywordAdapter:
         cancel_token: Any = None,
         *,
         resume_from: int = 0,
+        session: Any = None,
     ) -> MonitorResult:
         """一次完整 多SERP→解 link→抓正文→打分，返回聚合 MonitorResult。
 
@@ -783,10 +786,12 @@ class BaiduKeywordAdapter:
                 default_results = self._check_block(
                     page, parsed["default_links"], [brand], block="default",
                     exclude_set=exclude_set,
+                    session=session,
                 )
                 news_results = self._check_block(
                     page, parsed["news_links"], [brand], block="news",
                     exclude_set=exclude_set,
+                    session=session,
                 )
 
                 kw_entry["default_results"] = default_results
