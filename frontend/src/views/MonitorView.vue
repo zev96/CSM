@@ -3284,7 +3284,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
     />
     <BatchImportTaskModal
       v-model:open="showBatchImport"
-      :default-type="currentTaskType"
+      :default-type="(currentTaskType as any)"
       @imported="onTaskMutatedReload"
     />
     <CookieManagerModal
