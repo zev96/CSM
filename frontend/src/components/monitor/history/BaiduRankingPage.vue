@@ -1453,23 +1453,42 @@ defineExpose({ reload: loadTasks });
             时显示。metric 在这种结果里是 captcha 简化 schema，没 keywords 字段
             (见 monitor_loop.py 的 risk_control breakpoint 分支)；提示用户在哪一
             个 keyword 卡断的，点 Level 2 底部「启动监测」会从断点续抓。
+
+            分层：当 layer=auth 时表示账户未登录或已过期，显示专用提示+设置链接；
+            其他 layer 表示验证码或其他风控，显示通用提示。
           -->
           <div
             v-if="riskControlMeta"
             class="mb-3 flex-shrink-0 rounded text-[11.5px]"
             :style="{
-              background: 'rgba(238, 106, 42, 0.10)',
+              background: riskControlMeta.layer === 'auth'
+                ? 'rgba(220, 38, 38, 0.08)'
+                : 'rgba(238, 106, 42, 0.10)',
               color: 'var(--primary-deep)',
-              borderLeft: '3px solid var(--primary)',
+              borderLeft: riskControlMeta.layer === 'auth'
+                ? '3px solid #dc2626'
+                : '3px solid var(--primary)',
               padding: '10px 12px',
             }"
           >
-            上次抓取被百度风控拦截
-            <template v-if="riskControlMeta.layer">
-              （{{ riskControlMeta.layer }}<template v-if="riskControlMeta.detail"> / {{ riskControlMeta.detail }}</template>）
+            <template v-if="riskControlMeta.layer === 'auth'">
+              百度账号未登录或已过期。请到设置页重新登录后点「启动监测」从断点继续抓取。
+              <a
+                href="#"
+                class="ml-2 underline"
+                @click.prevent="router.push({ name: 'settings' })"
+              >
+                前往设置
+              </a>
             </template>
-            。断点位置：keyword #{{ riskControlMeta.lastResumedKeyword }}。
-            点击右下方「启动监测」可从断点继续。
+            <template v-else>
+              上次抓取被百度风控拦截
+              <template v-if="riskControlMeta.layer">
+                （{{ riskControlMeta.layer }}<template v-if="riskControlMeta.detail"> / {{ riskControlMeta.detail }}</template>）
+              </template>
+              。断点位置：keyword #{{ riskControlMeta.lastResumedKeyword }}。
+              点击右下方「启动监测」可从断点继续。
+            </template>
           </div>
 
           <!-- Table -->
