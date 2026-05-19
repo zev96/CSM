@@ -23,7 +23,11 @@ CloseAction = Literal["minimize_to_tray", "quit"]
 class BaiduKeywordConfig(BaseModel):
     """settings.monitor.baidu_keyword.*"""
 
-    headless_default: bool = True
+    # False 默认 = 抓取也开可见 Chromium，跟登录 webview 同 fingerprint。
+    # 之前 True (headless) → 登录用 headed，抓取用 headless，baidu 检测到
+    # fingerprint 不一致直接把 BDUSS 当被劫持，强制重新登录，每次都 layer=auth
+    # risk_control。详见 docs/superpowers/specs/2026-05-19-baidu-login-profile-design.md
+    headless_default: bool = False
     captcha_visible_timeout_s: int = 90
     captcha_max_promotions: int = 1
     serp_pacing_seconds: int = 5

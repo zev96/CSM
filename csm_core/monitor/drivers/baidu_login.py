@@ -227,14 +227,21 @@ def open_login_window(
     context = None
     try:
         pw = _sync_playwright().start()
+        # viewport + window-size 必须跟 baidu_browser.baidu_browser_session 完全
+        # 对齐（1366×768）—— BDUSS 是绑到 fingerprint 的，两边 viewport 不一致
+        # 时 baidu 会把后续 SERP 请求当作"被劫持的会话"，强制重新登录。
+        # 不加 --blink-settings=imagesEnabled=false：登录窗口要能扫码 QR，关图
+        # 会让 QR 加载不出来。等关闭后 fetch 那边再开 imagesEnabled=false，
+        # 这层 fingerprint 差异 baidu 仅在 JS 探测时才看得到，SERP 请求阶段不
+        # 影响 cookie 有效性。
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(target_dir),
             headless=False,
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": 1366, "height": 768},
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-                "--window-size=1280,800",
+                "--window-size=1366,768",
             ],
         )
         page = context.pages[0] if context.pages else context.new_page()
