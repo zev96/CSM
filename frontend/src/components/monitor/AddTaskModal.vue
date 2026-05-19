@@ -489,7 +489,7 @@ async function submit() {
 
                 <FormField
                   label="自定义排除域名"
-                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。会和上方"默认黑名单"合并去重。"
+                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。会和上方「默认黑名单」合并去重。"
                 >
                   <textarea
                     v-model="baiduExcludeDomainsRaw"
