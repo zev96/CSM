@@ -374,3 +374,23 @@ async def reset_baidu_profile() -> None:
             detail="有正在运行的百度任务，先停止再重置",
         )
     reset_profile()
+
+
+@router.post("/api/monitor/baidu/login")
+async def baidu_login_open() -> dict[str, Any]:
+    """Open a visible patchright window so the user can log in to Baidu.
+    Persistent cookies land in the same profile dir that fetch tasks use.
+
+    Refuses (409) if a baidu task is running — they share the same
+    user_data_dir lock.
+    """
+    from csm_core.monitor.drivers.baidu_login import open_login_window
+    from ..services import monitor_lifecycle
+
+    loop = monitor_lifecycle.get()
+    if loop is not None and loop.has_active_baidu_task():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="有正在运行的百度任务，先停止再登录",
+        )
+    return open_login_window()
