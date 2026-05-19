@@ -107,6 +107,24 @@ def stop() -> None:
         _loop = None
 
 
+def reconfigure(cfg: AppConfig | None = None) -> None:
+    """Re-push monitor settings into adapters without restarting the loop.
+
+    Called from PATCH /api/config when ``monitor.*`` fields change so the
+    user doesn't need to restart sidecar after editing default exclude
+    domains / pacing / breaker thresholds / etc.
+
+    No-op if start() hasn't been called yet — lifespan order ensures
+    start() runs before HTTP routes accept requests, but defensive.
+
+    ``cfg=None`` re-reads the latest from config_service (the usual path).
+    Passing an explicit cfg is for tests that want to skip the disk read.
+    """
+    if _loop is None:
+        return
+    _apply_runtime_settings(cfg or config_service.load())
+
+
 def get() -> MonitorLoop | None:
     return _loop
 
