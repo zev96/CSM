@@ -475,12 +475,21 @@ async function submit() {
                   hint="默认过滤 jd / 1688 / taobao / pinduoduo 等采购与电商站点（这些命中目标品牌也不是软文）。如果你确实要监测这些站，关掉。"
                   inline
                 >
-                  <FormToggle v-model="baiduUseDefaultExcludes" />
+                  <div class="flex items-center gap-2">
+                    <FormToggle v-model="baiduUseDefaultExcludes" />
+                    <button
+                      type="button"
+                      class="text-[11px] text-[var(--ink-2)] hover:text-[var(--primary-deep)] underline-offset-2 hover:underline"
+                      @click="showDefaultDomainsPopover = true"
+                    >
+                      查看名单（{{ defaultExcludeDomains.length }}）
+                    </button>
+                  </div>
                 </FormField>
 
                 <FormField
                   label="自定义排除域名"
-                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。"
+                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。会和上方"默认黑名单"合并去重。"
                 >
                   <textarea
                     v-model="baiduExcludeDomainsRaw"
@@ -592,6 +601,48 @@ async function submit() {
               }}
             </span>
           </Btn>
+        </div>
+      </div>
+    </div>
+
+    <!-- 默认排除域名展示弹层（modal-in-modal） -->
+    <div
+      v-if="showDefaultDomainsPopover"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/30"
+      @click.self="showDefaultDomainsPopover = false"
+    >
+      <div class="w-[400px] max-h-[60vh] flex flex-col rounded-lg bg-[var(--card)] p-4 shadow-xl">
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-[13px] font-medium">默认排除域名（{{ defaultExcludeDomains.length }}）</div>
+          <button
+            type="button"
+            class="text-[16px] leading-none"
+            @click="showDefaultDomainsPopover = false"
+          >×</button>
+        </div>
+
+        <div class="flex-1 overflow-auto text-[12px] font-mono space-y-1">
+          <div v-if="defaultExcludeDomains.length === 0" class="text-[var(--ink-3)]">
+            （空 —— 去应用设置里添加）
+          </div>
+          <div v-for="d in defaultExcludeDomains" :key="d">{{ d }}</div>
+        </div>
+
+        <div class="mt-3 pt-3 border-t border-[var(--line)] flex justify-between items-center">
+          <button
+            type="button"
+            class="text-[11.5px] text-[var(--primary-deep)] hover:underline"
+            @click="goToSettingsExcludeDomains"
+          >
+            去应用设置编辑 →
+          </button>
+          <button
+            type="button"
+            class="text-[11.5px] px-3 py-1 rounded bg-[var(--card-2)]"
+            @click="showDefaultDomainsPopover = false"
+          >
+            关闭
+          </button>
         </div>
       </div>
     </div>
