@@ -985,10 +985,10 @@ def test_navigate_to_serp_first_keyword_goes_home(monkeypatch):
             calls.append(("goto", url))
         def wait_for_timeout(self, ms):
             calls.append(("wait_for_timeout", ms))
-        def fill(self, selector, value):
-            calls.append(("fill", (selector, value)))
-        def click(self, selector):
-            calls.append(("click", selector))
+        def fill(self, selector, value, **kwargs):
+            calls.append(("fill", (selector, value), kwargs))
+        def click(self, selector, **kwargs):
+            calls.append(("click", selector, kwargs))
         def expect_navigation(self, **kwargs):
             calls.append(("expect_navigation", kwargs))
             return FakeNavCtx()
@@ -1008,7 +1008,7 @@ def test_navigate_to_serp_first_keyword_goes_home(monkeypatch):
     fill_call = next(c for c in calls if c[0] == "fill")
     assert fill_call[1] == ("input#kw", "吸尘器")
     # Then expect_navigation wrapping click on input#su
-    assert ("click", "input#su") in calls
+    assert any(c[0] == "click" and c[1] == "input#su" for c in calls)
     assert "expect_navigation" in op_names
 
 
@@ -1036,10 +1036,10 @@ def test_navigate_to_serp_subsequent_keyword_skips_home(monkeypatch):
             calls.append(("goto", url))
         def wait_for_timeout(self, ms):
             calls.append(("wait_for_timeout", ms))
-        def fill(self, selector, value):
-            calls.append(("fill", (selector, value)))
-        def click(self, selector):
-            calls.append(("click", selector))
+        def fill(self, selector, value, **kwargs):
+            calls.append(("fill", (selector, value), kwargs))
+        def click(self, selector, **kwargs):
+            calls.append(("click", selector, kwargs))
         def expect_navigation(self, **kwargs):
             calls.append(("expect_navigation", kwargs))
             return FakeNavCtx()
@@ -1054,7 +1054,56 @@ def test_navigate_to_serp_subsequent_keyword_skips_home(monkeypatch):
 
     fill_call = next(c for c in calls if c[0] == "fill")
     assert fill_call[1] == ("input#kw", "洗碗机")
-    assert ("click", "input#su") in calls
+    assert any(c[0] == "click" and c[1] == "input#su" for c in calls)
+
+
+def test_navigate_to_serp_passes_force_true_to_fill_and_click():
+    """fill/click 必须传 force=True 跳过 actionability check。
+
+    根因：stealth 策略把 Chrome 窗口推到 (-32000,-32000) 屏外 + start-minimized，
+    OS 把 layout 视为 invalid，所有元素 getBoundingClientRect 返回 0×0，
+    patchright 内部的 visibility check 把 #kw / #su 判定为 not visible →
+    page.fill 30s timeout 失败。force=True 跳过 visibility/enabled/stable/editable
+    check，元素仍在 DOM + 事件序列保留 stealth。
+    """
+    from typing import Any
+    from csm_core.monitor.platforms import baidu_keyword
+
+    calls: list[tuple] = []
+
+    class FakeNavInfo:
+        @property
+        def value(self):
+            return "fake-response"
+
+    class FakeNavCtx:
+        def __enter__(self):
+            return FakeNavInfo()
+        def __exit__(self, *a):
+            return False
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            pass
+        def wait_for_timeout(self, ms):
+            pass
+        def fill(self, selector, value, **kwargs):
+            calls.append(("fill", selector, kwargs))
+        def click(self, selector, **kwargs):
+            calls.append(("click", selector, kwargs))
+        def expect_navigation(self, **kwargs):
+            return FakeNavCtx()
+
+    baidu_keyword._navigate_to_serp(FakePage(), keyword="test", is_first_keyword=True)
+
+    fill_call = next(c for c in calls if c[0] == "fill")
+    assert fill_call[2].get("force") is True, (
+        f"fill 必须传 force=True，got kwargs: {fill_call[2]}"
+    )
+    click_call = next(c for c in calls if c[0] == "click")
+    assert click_call[2].get("force") is True, (
+        f"click 必须传 force=True，got kwargs: {click_call[2]}"
+    )
 
 
 def test_apply_settings_forces_baidu_concurrency_to_one():

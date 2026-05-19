@@ -390,14 +390,21 @@ def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any
         page.wait_for_timeout(_random_dwell_ms())
 
     # 找搜索框 + 输入 keyword
-    # patchright stealth 会模拟真实 keystroke 事件序列
-    page.fill("input#kw", keyword)
+    # patchright stealth 会模拟真实 keystroke 事件序列。
+    # force=True 跳过 patchright 内部的 actionability check（visibility / stable /
+    # editable / enabled）。原因：stealth 策略把 Chrome 窗口推到 -32000,-32000
+    # 屏外 + start-minimized，OS 把 layout 视为 invalid，所有元素 getBoundingClientRect
+    # 返回 0×0，patchright 把 #kw / #su 判定为 not visible → fill/click 30s timeout。
+    # 元素在 DOM 里 + enabled + editable（百度主页 #kw/#su 是静态输入框 + 按钮），
+    # force=True 不会引入 false-positive 风险。它只跳过 actionability check，事件
+    # dispatch 链（keystroke / mousedown / mouseup / click）依然完整 stealth。
+    page.fill("input#kw", keyword, force=True)
     page.wait_for_timeout(_random_dwell_ms(short=True))
 
     # 用 expect_navigation 同步等 click 后的页面切换
     # patchright 会发真实 mousedown/mouseup/click 事件序列
     with page.expect_navigation(wait_until="domcontentloaded", timeout=45000) as nav_info:
-        page.click("input#su")
+        page.click("input#su", force=True)
     return nav_info.value
 
 
