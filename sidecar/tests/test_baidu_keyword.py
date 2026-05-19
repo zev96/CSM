@@ -785,10 +785,10 @@ def test_get_session_caches_per_task(monkeypatch):
         def close(self):
             self.closed = True
 
+    import sys
     fake_cc = type("M", (), {"Session": FakeSession})()
     # Replace the module-attribute import path used by _get_session
-    import sys
-    sys.modules["curl_cffi.requests"] = fake_cc
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_cc)
 
     adapter = baidu_keyword.BaiduKeywordAdapter()
     s1 = adapter._get_session(42)
@@ -813,9 +813,9 @@ def test_get_session_warmup_failure_not_fatal(monkeypatch, caplog):
         def close(self):
             pass
 
-    fake_cc = type("M", (), {"Session": FakeSession})()
     import sys
-    sys.modules["curl_cffi.requests"] = fake_cc
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_cc)
 
     adapter = baidu_keyword.BaiduKeywordAdapter()
     with caplog.at_level("INFO", logger="csm_core.monitor.platforms.baidu_keyword"):
@@ -839,9 +839,9 @@ def test_drop_session_removes_and_closes(monkeypatch):
         def close(self):
             self.closed = True
 
-    fake_cc = type("M", (), {"Session": FakeSession})()
     import sys
-    sys.modules["curl_cffi.requests"] = fake_cc
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_cc)
 
     adapter = baidu_keyword.BaiduKeywordAdapter()
     sess = adapter._get_session(7)
