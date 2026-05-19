@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 from datetime import datetime
 from typing import Any, Callable
@@ -358,6 +359,46 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
         "fetch_error": None if text else "browser content empty after readability",
         "needs_browser_fallback": False,
     }
+
+
+def _random_dwell_ms(*, short: bool = False) -> int:
+    """模拟真人 dwell time。
+
+    short=True 用于打字与点击之间（输入完到点搜索按钮，200-500ms）；
+    否则用于看页面停留（800-2000ms）。
+    """
+    if short:
+        return random.randint(200, 500)
+    return random.randint(800, 2000)
+
+
+def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any:
+    """模拟真人搜索路径。
+
+    第 1 个 keyword：完整走「goto baidu.com 首页 → wait → fill input → click search」
+    后续 keyword：直接复用当前 SERP 页面的顶部搜索框（fill + click），保留
+        Referer: https://www.baidu.com/s?wd=上一个词 的自然链路。
+
+    Returns:
+        page.expect_navigation 拿到的 Response 对象（兼容现有 detect_risk
+        的入参）。
+    """
+    if is_first_keyword:
+        # 从主页开始 —— 让 BAIDUID 被 set + Referer 自然形成
+        page.goto("https://www.baidu.com/", wait_until="domcontentloaded", timeout=30000)
+        # 真人会停留几百毫秒看页面
+        page.wait_for_timeout(_random_dwell_ms())
+
+    # 找搜索框 + 输入 keyword
+    # patchright stealth 会模拟真实 keystroke 事件序列
+    page.fill("input#kw", keyword)
+    page.wait_for_timeout(_random_dwell_ms(short=True))
+
+    # 用 expect_navigation 同步等 click 后的页面切换
+    # patchright 会发真实 mousedown/mouseup/click 事件序列
+    with page.expect_navigation(wait_until="domcontentloaded", timeout=45000) as nav_info:
+        page.click("input#su")
+    return nav_info.value
 
 
 class BaiduKeywordAdapter:

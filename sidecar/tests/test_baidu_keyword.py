@@ -954,3 +954,104 @@ def test_fetch_drops_session_on_risk_control(monkeypatch):
     with pytest.raises(RiskControlException):
         adapter.fetch(task)
     assert drops == [202], "session should be dropped even when RiskControlException propagates"
+
+
+# ── _navigate_to_serp / _random_dwell_ms ───────────────────────────────
+
+
+def test_navigate_to_serp_first_keyword_goes_home(monkeypatch):
+    """First keyword: goto baidu.com home → fill kw → click su.
+
+    Verifies the full real-user simulation flow runs for is_first_keyword=True.
+    """
+    from typing import Any
+    from csm_core.monitor.platforms import baidu_keyword
+
+    calls: list[tuple[str, Any]] = []
+
+    class FakeNavInfo:
+        @property
+        def value(self):
+            return "fake-response"
+
+    class FakeNavCtx:
+        def __enter__(self):
+            return FakeNavInfo()
+        def __exit__(self, *a):
+            return False
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            calls.append(("goto", url))
+        def wait_for_timeout(self, ms):
+            calls.append(("wait_for_timeout", ms))
+        def fill(self, selector, value):
+            calls.append(("fill", (selector, value)))
+        def click(self, selector):
+            calls.append(("click", selector))
+        def expect_navigation(self, **kwargs):
+            calls.append(("expect_navigation", kwargs))
+            return FakeNavCtx()
+
+    response = baidu_keyword._navigate_to_serp(
+        FakePage(), keyword="吸尘器", is_first_keyword=True,
+    )
+
+    assert response == "fake-response"
+    # Required ordering: home goto comes FIRST
+    op_names = [c[0] for c in calls]
+    assert op_names[0] == "goto"
+    assert "baidu.com" in calls[0][1]
+    # Then a wait (dwell)
+    assert "wait_for_timeout" in op_names[:3]
+    # Then fill with the keyword
+    fill_call = next(c for c in calls if c[0] == "fill")
+    assert fill_call[1] == ("input#kw", "吸尘器")
+    # Then expect_navigation wrapping click on input#su
+    assert ("click", "input#su") in calls
+    assert "expect_navigation" in op_names
+
+
+def test_navigate_to_serp_subsequent_keyword_skips_home(monkeypatch):
+    """is_first_keyword=False: do NOT goto home; just fill + click in the
+    existing SERP page's top searchbox."""
+    from typing import Any
+    from csm_core.monitor.platforms import baidu_keyword
+
+    calls: list[tuple[str, Any]] = []
+
+    class FakeNavInfo:
+        @property
+        def value(self):
+            return "fake-response"
+
+    class FakeNavCtx:
+        def __enter__(self):
+            return FakeNavInfo()
+        def __exit__(self, *a):
+            return False
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            calls.append(("goto", url))
+        def wait_for_timeout(self, ms):
+            calls.append(("wait_for_timeout", ms))
+        def fill(self, selector, value):
+            calls.append(("fill", (selector, value)))
+        def click(self, selector):
+            calls.append(("click", selector))
+        def expect_navigation(self, **kwargs):
+            calls.append(("expect_navigation", kwargs))
+            return FakeNavCtx()
+
+    baidu_keyword._navigate_to_serp(
+        FakePage(), keyword="洗碗机", is_first_keyword=False,
+    )
+
+    # NO goto should happen — we reuse the existing SERP's top searchbox
+    goto_calls = [c for c in calls if c[0] == "goto"]
+    assert goto_calls == [], f"expected no goto, got {goto_calls}"
+
+    fill_call = next(c for c in calls if c[0] == "fill")
+    assert fill_call[1] == ("input#kw", "洗碗机")
+    assert ("click", "input#su") in calls
