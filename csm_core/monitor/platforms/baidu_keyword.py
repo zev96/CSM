@@ -843,6 +843,7 @@ class BaiduKeywordAdapter:
         *,
         block: str,
         exclude_set: set[str] | None = None,
+        session: Any = None,
     ) -> list[dict[str, Any]]:
         """对一组链接逐条抓正文 + 判命中。返回 1-based rank 的 dict 列表。
 
@@ -856,7 +857,7 @@ class BaiduKeywordAdapter:
         out: list[dict[str, Any]] = []
         rank = 0
         for link in links:
-            href = resolve_baidu_link(link["href"])
+            href = resolve_baidu_link(link["href"], session=session)
             host = urlparse(href).netloc or "baidu.com"
 
             # 早过滤：命中黑名单直接跳过 —— 既不计 rank 也不发文章请求，
@@ -886,7 +887,7 @@ class BaiduKeywordAdapter:
             _rl.get_pacer(pacer_key).wait()
 
             rank += 1
-            attempt = fetch_article_http(href)
+            attempt = fetch_article_http(href, session=session)
             if attempt.get("needs_browser_fallback"):
                 try:
                     attempt = fetch_article_browser(page, href)

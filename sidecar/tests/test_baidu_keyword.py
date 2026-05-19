@@ -348,7 +348,7 @@ def test_fetch_happy_path_default_only(monkeypatch, patch_session):
         serp_html=serp, page_contents=page_contents,
     )
     # resolve_baidu_link → 原样返回（mock）
-    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
     # 走 HTTP-first 直接命中（不绕浏览器）
     def fake_cc_get(url, **kw):
         return _FakeResp(text=page_contents.get(url, ""))
@@ -551,7 +551,7 @@ class TestRiskDetectionIntegration:
             page_contents={},
         )
         # resolve_baidu_link / _cc_get 不会被调到（风控在 SERP 阶段抛出）
-        monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+        monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
 
         task = MonitorTask(
             id=99,
@@ -610,7 +610,7 @@ def _make_pacer_tracker():
 
 def _setup_check_block_mocks(monkeypatch):
     """让 _check_block 内部走纯 HTTP 路径、resolve_baidu_link 不发请求。"""
-    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
     # 长 HTML → readability 提到 ≥200 字 → fetch_article_http 成功（不走 fallback）
     long_html = (
         "<html><body><article>"
