@@ -9,8 +9,14 @@ user_data_dir。caller 在 sidecar route 里先 has_active_baidu_task 409 拦截
 """
 from __future__ import annotations
 
+import json
 import logging
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+from .patchright_pool import ensure_browsers_path
 
 
 logger = logging.getLogger(__name__)
@@ -73,3 +79,109 @@ def detect_login_required(response: Any, page: Any) -> bool:
         return False
 
     return False
+
+
+# ── module-level indirection for monkeypatching in tests ──────────────
+
+
+def _sync_playwright() -> Any:
+    """Indirection so unit tests can monkeypatch a fake. Mirrors the
+    same pattern in baidu_browser._sync_playwright."""
+    from patchright.sync_api import sync_playwright
+    return sync_playwright()
+
+
+def _default_user_data_dir() -> Path:
+    """Same path as baidu_browser._default_user_data_dir — single profile
+    shared between login window and fetch tasks."""
+    from csm_sidecar.services import config_service
+    return config_service.get_path().parent / "baidu_browser_profile"
+
+
+_META_FILENAME = ".csm_login_meta.json"
+
+
+# ── get_login_status ───────────────────────────────────────────────────
+
+
+def get_login_status(user_data_dir: Path | None = None) -> dict[str, Any]:
+    """读 persistent profile 看登录态。不弹窗。
+
+    实现：launch_persistent_context(headless=True) 短时启动，读
+    cookies("https://www.baidu.com/")，立刻关。开销 ~2s，settings 页
+    打开时调一次能接受。
+
+    BDUSS 不在 → logged_in=False。
+    BDUSS 在但 expires < now → logged_in=False (cookie 已过期)。
+    BDUSS 在且未过期 → logged_in=True，username 从 user_data_dir /
+        ".csm_login_meta.json" 读取（open_login_window 成功时写入）。
+
+    Returns:
+        {"logged_in": bool, "username": str | None, "expires_at": str | None}
+    """
+    ensure_browsers_path()
+    target_dir = user_data_dir or _default_user_data_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    pw = None
+    context = None
+    try:
+        pw = _sync_playwright().start()
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=str(target_dir),
+            headless=True,
+        )
+        try:
+            cookies = context.cookies("https://www.baidu.com/")
+        except Exception as e:
+            logger.debug("get_login_status cookies() raised: %s", e)
+            cookies = []
+    finally:
+        if context is not None:
+            try:
+                context.close()
+            except Exception as e:
+                logger.debug("get_login_status context.close raised: %s", e)
+        if pw is not None:
+            try:
+                pw.stop()
+            except Exception as e:
+                logger.debug("get_login_status pw.stop raised: %s", e)
+
+    return _status_from_cookies(cookies, target_dir)
+
+
+def _status_from_cookies(
+    cookies: list[dict[str, Any]], user_data_dir: Path,
+) -> dict[str, Any]:
+    """Cookie 列表 → status dict。pure logic，单独抽出便于测。"""
+    bduss = next((c for c in cookies if c.get("name") == "BDUSS"), None)
+    if bduss is None:
+        return {"logged_in": False, "username": None, "expires_at": None}
+
+    # expires = -1 表示 session cookie，对登录态来说视为有效（baidu 实际
+    # 用 -1 标记长效凭据），expires_at 返回 None。
+    expires = bduss.get("expires")
+    if expires is not None and expires != -1 and expires < time.time():
+        return {"logged_in": False, "username": None, "expires_at": None}
+
+    expires_at: str | None = None
+    if expires is not None and expires != -1:
+        expires_at = datetime.fromtimestamp(expires, tz=timezone.utc).isoformat()
+
+    username = _read_username(user_data_dir)
+    return {"logged_in": True, "username": username, "expires_at": expires_at}
+
+
+def _read_username(user_data_dir: Path) -> str | None:
+    """Read .csm_login_meta.json. Missing file or parse failure → None."""
+    meta_path = user_data_dir / _META_FILENAME
+    try:
+        if not meta_path.exists():
+            return None
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        name = data.get("username")
+        return name if isinstance(name, str) and name else None
+    except Exception as e:
+        logger.debug("read .csm_login_meta.json failed: %s", e)
+        return None
