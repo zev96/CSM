@@ -623,6 +623,19 @@ function saveExcludeDomains() {
   excludeDomainsModalOpen.value = false;
 }
 
+async function confirmResetBaiduProfile() {
+  if (!confirm("确认重置百度浏览器 profile？\n下次任务会冷启重建，前几次抓取可能仍触发风控（cookie 需要慢慢累积）。")) {
+    return;
+  }
+  try {
+    await sidecar.client.post("/api/monitor/baidu/reset-profile");
+    toast.success("百度浏览器 profile 已重置");
+  } catch (e: any) {
+    const detail = e.response?.data?.detail ?? e.message ?? "未知错误";
+    toast.error(`重置失败：${detail}`);
+  }
+}
+
 // 通知设置弹窗的 ref 在文件上方声明（applyHash 需要先用）。
 
 // ── 账号编辑弹窗 ─────────────────────────────────────────────
@@ -1528,7 +1541,6 @@ async function saveAccountEdit() {
                 <SettingsRow
                   label="默认排除域名（全局黑名单）"
                   hint="所有百度任务默认应用的 SERP 过滤名单。常见 B2B/电商站点（jd.com / 1688.com / taobao.com 等）已经预置；任务级可再加自家品牌官网。"
-                  last
                 >
                   <div class="flex items-center gap-2">
                     <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
@@ -1539,6 +1551,16 @@ async function saveAccountEdit() {
                       <span>管理排除域名</span>
                     </Btn>
                   </div>
+                </SettingsRow>
+                <SettingsRow
+                  label="重置百度浏览器 profile"
+                  hint="如果连续触发百度风控、cookie 已经烫坏，点这里清空浏览器数据从头来。期间不能有运行中的百度任务。"
+                  last
+                >
+                  <Btn variant="danger" small @click="confirmResetBaiduProfile">
+                    <Icon name="trash" :size="12" />
+                    <span>重置</span>
+                  </Btn>
                 </SettingsRow>
               </div>
             </div>
