@@ -749,15 +749,24 @@ class BaiduKeywordAdapter:
             except Exception:
                 logger.exception("progress_cb(resume_from,N) raised; ignoring")
 
-        with baidu_browser_session(headless=headless) as session:
-            page = session.page
+        # CRITICAL: bind the browser session to `bsession`, NOT `session`.
+        # Outer `session` is the curl_cffi.Session passed in by fetch() for
+        # article HTTP fetches + baidu link resolution. Shadowing it with
+        # the BaiduBrowserSession dataclass caused resolve_baidu_link(...,
+        # session=session) to receive the wrong type and silently fall
+        # through to its default branch (no cookie reuse, no UA pinning),
+        # producing the
+        #   'BaiduBrowserSession' object has no attribute 'get'
+        # warning storm in production logs.
+        with baidu_browser_session(headless=headless) as bsession:
+            page = bsession.page
 
             # Login-state pre-flight: an anonymous fetch will burn quickly
             # against baidu 风控. Refuse fast and let the runner pause the
             # task + write a breakpoint; the UI shows "百度账号未登录" + a
             # "前往设置" button. Reusing the live context's cookies avoids
             # opening a second short-lived browser just to read BDUSS.
-            cookies = session.context.cookies("https://www.baidu.com/")
+            cookies = bsession.context.cookies("https://www.baidu.com/")
             self._assert_baidu_logged_in(cookies, resume_from=resume_from)
 
             for rel_idx, keyword in enumerate(keywords_to_fetch):
@@ -955,14 +964,23 @@ class BaiduKeywordAdapter:
 
             rank += 1
             attempt = fetch_article_http(href, session=session)
+            # NOTE: browser fallback (fetch_article_browser) is intentionally
+            # disabled here. It used to upgrade short-content fetches to a
+            # patchright open in the SAME baidu profile, which shares the
+            # logged-in BDUSS cookie. baidu treats 10 rapid baijiahao opens
+            # by a logged-in user as bot behaviour → captcha on the article
+            # page → detect_risk_by_text catches "验证码" → RiskControlException
+            # → entire task aborts at breakpoint 0 even though SERP succeeded.
+            # HTTP-only article fetches with curl_cffi keep article retrieval
+            # decoupled from the baidu session. Short / JS-heavy pages just
+            # get content_preview=""; matches_brand judgement degrades to
+            # title+summary, which is acceptable. Proper fix is the two-phase
+            # design in docs/superpowers/specs/2026-05-19-baidu-two-phase-fetch-design.md.
             if attempt.get("needs_browser_fallback"):
-                try:
-                    attempt = fetch_article_browser(page, href)
-                except RiskControlException:
-                    # 文章页命中风控 —— 一致地传到 _fetch_once 的 keyword 循环外，
-                    # 跟 SERP 命中走同一条 retry/breakpoint 路径。这里显式 raise 是
-                    # 防止未来在 _check_block 加宽 except 时误把 RiskControl 吞了。
-                    raise
+                attempt["fetch_error"] = (
+                    attempt.get("fetch_error")
+                    or "HTTP extraction failed; browser fallback disabled to avoid 风控"
+                )
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
