@@ -16,7 +16,8 @@
  * Schedule format follows csm_core/monitor/scheduler.py: "manual" or
  * "HH:MM" (daily). Anything else is rejected by the parser.
  */
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 
 import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -27,6 +28,7 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 import FormToggle from "@/components/forms/FormToggle.vue";
 
 import { useSidecar } from "@/stores/sidecar";
+import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 
 type TaskType = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
@@ -83,6 +85,25 @@ const baiduIdealRank = ref<number>(5);
 // 用户在这里加自家品牌官网 / 其他不算"软文"的域名即可。
 const baiduExcludeDomainsRaw = ref("");
 const baiduUseDefaultExcludes = ref(true);
+
+// Popover that shows the current global default_excluded_domains
+// (read-only, with a button to jump to the Settings section for editing).
+// Data is pulled live from useConfig — the store is hydrated at app boot,
+// but onMounted in this component is a defensive fallback if a user opens
+// the modal before the config has loaded.
+const cfgStore = useConfig();
+const router = useRouter();
+const showDefaultDomainsPopover = ref(false);
+const defaultExcludeDomains = computed<string[]>(
+  () => cfgStore.data?.monitor?.baidu_keyword?.default_excluded_domains ?? []
+);
+
+function goToSettingsExcludeDomains() {
+  showDefaultDomainsPopover.value = false;
+  emit("update:open", false); // close AddTaskModal first so the Settings view is visible
+  router.push({ name: "settings", hash: "#baidu-default-excludes" });
+}
+
 // Schedule
 const scheduleMode = ref<"manual" | "daily">("manual");
 const dailyTime = ref("09:00");
@@ -181,6 +202,19 @@ watch(
     if (t && props.open) hydrateFromTask(t);
   },
 );
+
+onMounted(async () => {
+  // If the config store wasn't hydrated yet (rare race in cold start),
+  // load it now so the popover's count badge shows the right number.
+  if (!cfgStore.data) {
+    try {
+      await cfgStore.load();
+    } catch {
+      // Non-fatal: popover will show "(空)" — the user can still proceed
+      // with the rest of the form. Logging handled by the store itself.
+    }
+  }
+});
 
 function validate(): string | null {
   if (!name.value.trim()) return "任务名不能为空";
