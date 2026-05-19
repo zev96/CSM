@@ -364,12 +364,35 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
 def _random_dwell_ms(*, short: bool = False) -> int:
     """模拟真人 dwell time。
 
-    short=True 用于打字与点击之间（输入完到点搜索按钮，200-500ms）；
-    否则用于看页面停留（800-2000ms）。
+    short=True 用于打字与点击之间（输入完到按 Enter，800-1500ms）；
+    否则用于看页面停留（3000-6000ms）。
+
+    实战中老 dwell（800-2000 / 200-500）让 home → fill → Enter 整个流程
+    在 ~1.5 秒内完成，被 baidu 风控判定为机器人模式（真人通常 5-10 秒）。
+    加长到秒级符合"真人看完页面再输入再回车"的速度。
     """
     if short:
-        return random.randint(200, 500)
-    return random.randint(800, 2000)
+        return random.randint(800, 1500)
+    return random.randint(3000, 6000)
+
+
+def _simulate_user_browsing(page: Any) -> None:
+    """在主页/SERP 加载后模拟真人 idle 行为：鼠标晃几下。
+
+    patchright stealth 默认不发 mousemove 事件 —— 这本身是 bot 信号
+    （真人浏览页面时鼠标几乎总在动）。每次 move 是绝对坐标，不针对具体
+    element，无 actionability check，headless 下也能正常 dispatch。
+
+    Fail-soft：任何异常吞掉（stealth 增强失效但不影响主流程）。
+    """
+    try:
+        for _ in range(random.randint(2, 4)):
+            x = random.randint(100, 1200)
+            y = random.randint(100, 600)
+            page.mouse.move(x, y)
+            page.wait_for_timeout(random.randint(100, 300))
+    except Exception as e:
+        logger.debug("simulated browsing mouse move failed: %s", e)
 
 
 def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any:
@@ -399,8 +422,10 @@ def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any
             )
         except Exception as _diag_err:
             logger.debug("baidu home instrumentation failed: %s", _diag_err)
-        # 真人会停留几百毫秒看页面
+        # 真人会停留几秒钟看页面 + 鼠标晃动几下（patchright 默认无 mousemove
+        # 事件 → bot 信号，必须显式 simulate）
         page.wait_for_timeout(_random_dwell_ms())
+        _simulate_user_browsing(page)
 
     # 找搜索框 + 输入 keyword
     # patchright stealth 会模拟真实 keystroke 事件序列。force=True 跳过
