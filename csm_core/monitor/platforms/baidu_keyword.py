@@ -390,6 +390,58 @@ class BaiduKeywordAdapter:
         self._ua_idx += 1
         return ua
 
+    def _get_session(self, task_id: int) -> Any:
+        """Get-or-create curl_cffi.Session for this task. First call warm-ups
+        by GET https://www.baidu.com/ to seed BAIDUID/BIDUPSID baseline cookies.
+
+        Thread safety: BAIDU_ADAPTER is a module singleton and the ThreadPool
+        in monitor_loop runs multiple tasks concurrently. The lock guards the
+        dict only — the Session itself is used single-threaded inside one
+        task's _fetch_once → _check_block path, so per-session calls don't
+        need synchronization.
+
+        Warm-up failure is non-fatal: subsequent real requests will build
+        cookies naturally; warm-up only reduces the "naked cookie" risk on
+        the first article fetch.
+        """
+        with self._http_sessions_lock:
+            sess = self._http_sessions.get(task_id)
+            if sess is not None:
+                return sess
+            import importlib
+            cc_requests = importlib.import_module("curl_cffi.requests")
+            sess = cc_requests.Session(impersonate="chrome120")
+            sess.headers.update({
+                "User-Agent": self._next_ua(),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            })
+            try:
+                sess.get("https://www.baidu.com/", timeout=8)
+            except Exception as e:
+                logger.info("baidu session warmup failed (task=%d): %s", task_id, e)
+            self._http_sessions[task_id] = sess
+            return sess
+
+    def _drop_session(self, task_id: int) -> None:
+        """Drop and close the per-task Session. Called from fetch()'s finally
+        block so every task gets a fresh session next time — long-lived
+        sessions accumulate request-count signals that baidu uses to flag
+        bots. Idempotent: dropping an absent task_id is a no-op."""
+        with self._http_sessions_lock:
+            sess = self._http_sessions.pop(task_id, None)
+        if sess is not None:
+            try:
+                sess.close()
+            except Exception:
+                pass
+
     def apply_settings(
         self,
         *,

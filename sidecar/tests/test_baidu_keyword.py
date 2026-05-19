@@ -750,3 +750,104 @@ def test_apply_settings_configures_article_and_baijiahao_pacers(monkeypatch):
     assert configs["baidu_keyword"] == (5.0, 10.0)
     assert configs["baidu_keyword:article"] == (4.0, 8.0)
     assert configs["baidu_keyword:baijiahao"] == (10.0, 20.0)
+
+
+# ── _get_session / _drop_session / _next_ua ────────────────────────────
+
+
+def test_next_ua_rotates_through_pool():
+    """连续调用应该至少覆盖 3 个不同 UA (pool 有 4 条 + Mac 1 条)."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    seen = {adapter._next_ua() for _ in range(8)}
+    assert len(seen) >= 3, f"expected >=3 distinct UAs across 8 rotations, got {seen}"
+
+
+def test_get_session_caches_per_task(monkeypatch):
+    """同一 task_id 调两次 _get_session 返回同一对象；不同 task_id 返回不同对象."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from typing import Any
+
+    # Avoid real curl_cffi calls. Build a fake Session class that records
+    # warmup GETs and exposes a .close().
+    created: list[Any] = []
+
+    class FakeSession:
+        def __init__(self, *a, **kw):
+            self.headers = {}
+            self.closed = False
+            created.append(self)
+
+        def get(self, url, **kwargs):
+            return type("R", (), {"status_code": 200})()
+
+        def close(self):
+            self.closed = True
+
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    # Replace the module-attribute import path used by _get_session
+    import sys
+    sys.modules["curl_cffi.requests"] = fake_cc
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    s1 = adapter._get_session(42)
+    s2 = adapter._get_session(42)
+    s3 = adapter._get_session(43)
+    assert s1 is s2, "same task_id should get cached session"
+    assert s1 is not s3, "different task_id should get different session"
+    assert len(created) == 2
+
+
+def test_get_session_warmup_failure_not_fatal(monkeypatch, caplog):
+    """warm-up GET baidu.com 抛异常时 _get_session 仍正常返回 session."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    class FakeSession:
+        def __init__(self, *a, **kw):
+            self.headers = {}
+
+        def get(self, url, **kwargs):
+            raise RuntimeError("simulated network failure")
+
+        def close(self):
+            pass
+
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    import sys
+    sys.modules["curl_cffi.requests"] = fake_cc
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    with caplog.at_level("INFO", logger="csm_core.monitor.platforms.baidu_keyword"):
+        sess = adapter._get_session(99)
+    assert sess is not None
+    assert "warmup failed" in caplog.text.lower()
+
+
+def test_drop_session_removes_and_closes(monkeypatch):
+    """_drop_session 应该从 dict 里移除并调 close。重复调用 idempotent."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    class FakeSession:
+        def __init__(self, *a, **kw):
+            self.headers = {}
+            self.closed = False
+
+        def get(self, url, **kwargs):
+            return type("R", (), {"status_code": 200})()
+
+        def close(self):
+            self.closed = True
+
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    import sys
+    sys.modules["curl_cffi.requests"] = fake_cc
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    sess = adapter._get_session(7)
+    assert 7 in adapter._http_sessions
+    adapter._drop_session(7)
+    assert 7 not in adapter._http_sessions
+    assert sess.closed is True
+    # Idempotent: second call is no-op, doesn't raise
+    adapter._drop_session(7)
