@@ -306,3 +306,62 @@ def test_open_login_window_success(monkeypatch, tmp_path):
     data = json.loads(meta_path.read_text(encoding="utf-8"))
     assert data["username"] == "puseruser"
     assert "logged_in_at" in data
+
+
+def test_open_login_window_cancelled(monkeypatch, tmp_path):
+    """User closes the webview before logging in → status='cancelled'.
+    Meta file is NOT written."""
+    from csm_core.monitor.drivers import baidu_login
+
+    # Cookies never return BDUSS, but we simulate the user-close event
+    # firing on the first poll tick.
+    ctx = _PollingCtx(bduss_appears_after_polls=10_000)
+    pw = _PollingPW(ctx)
+    monkeypatch.setattr(baidu_login, "_sync_playwright", lambda: _FakeSyncPW(pw))
+    monkeypatch.setattr(baidu_login, "ensure_browsers_path", lambda: None)
+    monkeypatch.setattr(baidu_login, "_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(baidu_login, "_POST_LOGIN_SETTLE_S", 0.0)
+
+    # Trigger the user-close event after the first poll. We register
+    # a sentinel handler on the fake context that toggles the state.
+    original_on = ctx.on
+    captured_state: dict[str, Any] = {}
+    def _on(event_name, handler):
+        original_on(event_name, handler)
+        if event_name == "close":
+            captured_state["handler"] = handler
+    ctx.on = _on  # type: ignore[assignment]
+
+    # Patch the poll loop to fire the close event mid-flight.
+    real_poll = baidu_login._open_login_poll
+    def _intercept_poll(context, state, timeout_s):
+        # Simulate user closing the window after one tick: just flip the
+        # state flag the real poll loop checks.
+        state["closed_by_user"] = True
+        return real_poll(context, state, timeout_s)
+    monkeypatch.setattr(baidu_login, "_open_login_poll", _intercept_poll)
+
+    profile = tmp_path / "profile"
+    result = baidu_login.open_login_window(user_data_dir=profile, timeout_s=5)
+
+    assert result == {"status": "cancelled", "username": None}
+    assert not (profile / ".csm_login_meta.json").exists()
+
+
+def test_open_login_window_timeout(monkeypatch, tmp_path):
+    """timeout_s elapses without BDUSS → status='timeout'."""
+    from csm_core.monitor.drivers import baidu_login
+
+    ctx = _PollingCtx(bduss_appears_after_polls=10_000)
+    pw = _PollingPW(ctx)
+    monkeypatch.setattr(baidu_login, "_sync_playwright", lambda: _FakeSyncPW(pw))
+    monkeypatch.setattr(baidu_login, "ensure_browsers_path", lambda: None)
+    monkeypatch.setattr(baidu_login, "_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(baidu_login, "_POST_LOGIN_SETTLE_S", 0.0)
+
+    profile = tmp_path / "profile"
+    # Sub-second timeout so the test finishes fast
+    result = baidu_login.open_login_window(user_data_dir=profile, timeout_s=0.05)
+
+    assert result == {"status": "timeout", "username": None}
+    assert not (profile / ".csm_login_meta.json").exists()
