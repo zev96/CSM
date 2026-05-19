@@ -383,7 +383,14 @@ async def baidu_login_open() -> dict[str, Any]:
 
     Refuses (409) if a baidu task is running — they share the same
     user_data_dir lock.
+
+    Runs the (sync) playwright call in a thread so FastAPI's asyncio loop
+    isn't blocked. patchright's sync API explicitly refuses to run inside
+    an asyncio event loop, so a direct call from this `async def` handler
+    raises "It looks like you are using Playwright Sync API inside the
+    asyncio loop." — to_thread sidesteps that.
     """
+    import asyncio
     from csm_core.monitor.drivers.baidu_login import open_login_window
     from ..services import monitor_lifecycle
 
@@ -393,7 +400,7 @@ async def baidu_login_open() -> dict[str, Any]:
             status_code=status.HTTP_409_CONFLICT,
             detail="有正在运行的百度任务，先停止再登录",
         )
-    return open_login_window()
+    return await asyncio.to_thread(open_login_window)
 
 
 @router.get("/api/monitor/baidu/login-status")
@@ -403,11 +410,15 @@ async def baidu_login_status() -> dict[str, Any]:
     Briefly launches a headless persistent context (~2s) to read cookies.
     Failures degrade to {logged_in: False} rather than 5xx — settings UI
     shouldn't blow up if the profile is corrupt.
+
+    Same to_thread reasoning as baidu_login_open — sync patchright cannot
+    run in the asyncio loop.
     """
+    import asyncio
     from csm_core.monitor.drivers.baidu_login import get_login_status
 
     try:
-        return get_login_status()
+        return await asyncio.to_thread(get_login_status)
     except Exception as e:
         # Soft fallback so the UI keeps functioning
         import logging
