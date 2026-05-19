@@ -27,6 +27,7 @@ from lxml import html as lxml_html
 from .. import rate_limit
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
 from ..drivers.baidu_browser import baidu_browser_session
+from ..drivers.baidu_login import detect_login_required
 from ..drivers.risk_detector import (
     detect_risk,
     detect_risk_by_http,
@@ -811,6 +812,20 @@ class BaiduKeywordAdapter:
                     # _navigate_to_serp 失败时不调 detect_risk —— 页面没加载，
                     # 4 层信号都没意义。此 keyword 以 fetch_error 状态记录。
                     continue
+
+                # SERP-level login-wall check. Cookie may still be in the
+                # jar but baidu's server-side session has expired and the
+                # SERP redirects to wappass / passport / shows "请登录" body.
+                # Raise auth risk_control so the runner pauses + writes a
+                # breakpoint at this keyword index (resume continues here).
+                if detect_login_required(serp_response, page):
+                    raise RiskControlException(
+                        RiskSignal(
+                            layer="auth",
+                            detail="登录态失效（SERP 跳转登录页），请到设置页重新登录",
+                        ),
+                        progress=kw_idx,
+                    )
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
                 # 任一层命中 → 抛 RiskControlException，runner (Task 4) 捕获写断点。

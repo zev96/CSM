@@ -1118,3 +1118,64 @@ def test_fetch_raises_auth_risk_control_when_not_logged_in(monkeypatch):
         assert e.progress == 1
     else:
         raise AssertionError("expected RiskControlException")
+
+
+def test_fetch_raises_auth_when_serp_redirects_to_login(monkeypatch):
+    """BDUSS in cookies but SERP comes back as a wappass redirect →
+    raise RiskControlException(layer='auth') with progress=kw_idx
+    (so resume continues from this keyword, not from the start)."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from csm_core.monitor.drivers.risk_detector import RiskControlException
+
+    class FakeResp:
+        def __init__(self, url: str):
+            self.url = url
+
+    class FakeContext:
+        def cookies(self, url=None):
+            return [{"name": "BDUSS", "value": "x"}]
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            # baidu redirected SERP to the login wall
+            return FakeResp("https://wappass.baidu.com/static/captcha/tuxing.html?...")
+        def content(self):
+            return ""
+
+    class FakeSession:
+        def __init__(self):
+            self.page = FakePage()
+            self.context = FakeContext()
+
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_session(*, headless, user_data_dir=None):
+        yield FakeSession()
+
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", fake_session)
+    # Prevent _check_block + article fetches from running
+    monkeypatch.setattr(baidu_keyword, "parse_serp", lambda html: {"default_links": [], "news_links": [], "news_present": False})
+    # Disable the article-level fetches and pacer so the test runs in <1s
+    from csm_core.monitor import rate_limit
+    monkeypatch.setattr(rate_limit, "get_pacer", lambda key: type(
+        "P", (), {"wait": lambda self: None})())
+    monkeypatch.setattr(rate_limit, "get_breaker", lambda key: type(
+        "B", (), {"allow": lambda self: True,
+                  "record_success": lambda self: None,
+                  "record_failure": lambda self: None})())
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    task = MonitorTask(
+        id=99, type="baidu_keyword", name="test",
+        target_url="https://www.baidu.com/s?wd=test",
+        config={"search_keywords": ["aaa", "bbb"], "target_brand": "X"},
+    )
+
+    try:
+        adapter.fetch(task, resume_from=0)
+    except RiskControlException as e:
+        assert e.signal.layer == "auth"
+        assert e.progress == 0  # failed on first keyword
+    else:
+        raise AssertionError("expected RiskControlException(layer='auth')")
