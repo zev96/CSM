@@ -395,82 +395,15 @@ def _simulate_user_browsing(page: Any) -> None:
         logger.debug("simulated browsing mouse move failed: %s", e)
 
 
-def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any:
-    """模拟真人搜索路径。
+def _navigate_to_serp(page: Any, keyword: str) -> Any:
+    """直接 goto SERP url。返回 navigation response 给 detect_risk 用。
 
-    第 1 个 keyword：完整走「goto baidu.com 首页 → wait → fill input → click search」
-    后续 keyword：直接复用当前 SERP 页面的顶部搜索框（fill + click），保留
-        Referer: https://www.baidu.com/s?wd=上一个词 的自然链路。
-
-    Returns:
-        page.expect_navigation 拿到的 Response 对象（兼容现有 detect_risk
-        的入参）。
+    回归原架构 —— 三段式 home/fill/Enter 的时间 pattern 反而是 bot 信号。
+    带登录态（BDUSS）的直接 goto 看起来像真实用户从书签或外链进 SERP，
+    是 baidu organic 流量的主要形态。
     """
-    if is_first_keyword:
-        # 从主页开始 —— 让 BAIDUID 被 set + Referer 自然形成
-        page.goto("https://www.baidu.com/", wait_until="domcontentloaded", timeout=30000)
-        # Instrumentation：log baidu.com 实际加载的 url + title + html 头部，
-        # 帮诊断 silent 风控（脏 cookie redirect）或 baidu 改版导致 #kw selector
-        # 找不到的问题。fail-soft：诊断本身不能 raise。
-        try:
-            _diag_url = page.url
-            _diag_title = page.title() if hasattr(page, "title") else "N/A"
-            _diag_has_kw = page.locator("input#kw").count() if hasattr(page, "locator") else -1
-            logger.info(
-                "baidu home loaded: url=%s, title=%r, has_input#kw=%s",
-                _diag_url, str(_diag_title)[:120], _diag_has_kw,
-            )
-        except Exception as _diag_err:
-            logger.debug("baidu home instrumentation failed: %s", _diag_err)
-        # 真人会停留几秒钟看页面 + 鼠标晃动几下（patchright 默认无 mousemove
-        # 事件 → bot 信号，必须显式 simulate）
-        page.wait_for_timeout(_random_dwell_ms())
-        _simulate_user_browsing(page)
-
-    # 找搜索框 + 输入 keyword
-    # patchright stealth 会模拟真实 keystroke 事件序列。force=True 跳过
-    # patchright 内部的 actionability check（visibility / stable / editable /
-    # enabled）；元素在 DOM 里 + enabled + editable（百度主页 #kw 是静态输入
-    # 框），force=True 不会引入 false-positive 风险。
-    try:
-        page.fill("input#kw", keyword, force=True)
-    except Exception as _fill_err:
-        # Surface page state on fill timeout (typically means baidu redirected
-        # to a captcha / wappass page that has no input#kw). Re-raise so
-        # adapter记 fetch_error 正常 propagate；diag 仅 log。
-        try:
-            _diag_url = page.url
-            _diag_title = page.title() if hasattr(page, "title") else "N/A"
-            _diag_html = (page.content()[:500] if hasattr(page, "content") else "")
-            logger.warning(
-                "baidu fill failed (keyword=%r): %s\n  url=%s\n  title=%r\n  html_head=%r",
-                keyword, type(_fill_err).__name__,
-                _diag_url, str(_diag_title)[:120], _diag_html,
-            )
-        except Exception:
-            pass
-        raise
-    page.wait_for_timeout(_random_dwell_ms(short=True))
-
-    # 用 keyboard.press("Enter") 触发 form submit，避开 page.click("input#su")。
-    #
-    # 为什么不用 click：patchright 的 click 是多阶段（actionability check →
-    # scrollIntoViewIfNeeded → mousedown/move/up）。force=True 只跳过 actionability
-    # check，scrollIntoViewIfNeeded 内部仍依赖元素的 boundingClientRect，patchright
-    # stealth fork 在 headless / hidden window 下 layout 计算异常会让 #su
-    # boundingClientRect=0×0 → click 失败 "Element is not visible"。
-    #
-    # keyboard.press 是 page-level keyboard input：不针对具体 element，
-    # 无 actionability check，无 scrollIntoView。fill() 之后 input#kw 已经
-    # focused（patchright fill 内部触发 focus event），Enter 键按下时 page
-    # 把 keydown/keyup 路由给 focused element，#form 默认行为是 submit。
-    #
-    # stealth-wise：keyboard.press 发的是 untrusted-but-real keydown/keyup 事件
-    # 序列（跟用户真按 Enter 一致），form.submit 是用户输入完按 Enter 的自然
-    # 路径，比 click 提交按钮还更接近"键盘党"真人行为。
-    with page.expect_navigation(wait_until="domcontentloaded", timeout=45000) as nav_info:
-        page.keyboard.press("Enter")
-    return nav_info.value
+    serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)
+    return page.goto(serp_url, wait_until="domcontentloaded", timeout=30000)
 
 
 class BaiduKeywordAdapter:
