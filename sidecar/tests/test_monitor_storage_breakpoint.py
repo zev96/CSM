@@ -37,7 +37,12 @@ class _TrackingSession:
         self._visited = visited
         self._current_url = ""
         self.page = self
-        self.context = None
+        # Stub context.cookies returning BDUSS so _fetch_once's login pre-flight
+        # check passes. These tests focus on resume/breakpoint logic, not on
+        # login state — BDUSS check is exercised in test_baidu_keyword.py.
+        self.context = type("_Ctx", (), {
+            "cookies": lambda self, url=None: [{"name": "BDUSS", "value": "fake"}],
+        })()
         self.browser = None
         self.pw = None
 
