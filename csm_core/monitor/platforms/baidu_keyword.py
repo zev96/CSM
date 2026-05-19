@@ -570,17 +570,18 @@ class BaiduKeywordAdapter:
 
         ``cancel_token`` is a duck-typed object exposing ``is_set() -> bool``
         (we accept ``threading.Event`` from the sidecar; ``None`` skips
-        cancellation entirely so unit tests don't need to fake it). The
-        loop polls it before each keyword and raises
-        ``_CancelledFetch`` (imported lazily to avoid sidecar -> csm_core
-        coupling) which the worker catches as cooperative cancellation.
+        cancellation entirely so unit tests don't need to fake it).
 
         ``resume_from`` — 0-based index of the first keyword to scrape.
-        When > 0 the adapter skips keywords 0…(resume_from-1) so the
-        user can continue after a risk_control interruption. The
-        RiskControlException.progress value is always the **absolute**
-        index (resume_from + relative_idx) so runner bookkeeping is
-        consistent regardless of whether this is a fresh or resumed run.
+
+        Session lifecycle: a per-task curl_cffi.Session is created up-front
+        (warm-up GET baidu.com seeds BAIDUID baseline cookies), threaded
+        through _fetch_with_promotion → _fetch_once → _check_block →
+        fetch_article_http / resolve_baidu_link, and ALWAYS dropped in
+        finally — both on normal completion (don't accumulate request-count
+        signal that bots get flagged for) and on RiskControlException
+        (dirty cookies that already triggered captcha must not be reused).
+        ``_drop_session`` is idempotent (uses dict.pop with default).
         """
         breaker = rate_limit.get_breaker(self.platform)
         if not breaker.allow():
@@ -612,10 +613,18 @@ class BaiduKeywordAdapter:
         # Clamp resume_from to valid range so callers don't need to guard.
         resume_from = max(0, min(int(resume_from), len(keywords)))
 
-        return self._fetch_with_promotion(
-            task, keywords, brand, headless, progress_cb, cancel_token,
-            resume_from=resume_from,
-        )
+        session = self._get_session(task.id or 0)
+        try:
+            return self._fetch_with_promotion(
+                task, keywords, brand, headless, progress_cb, cancel_token,
+                resume_from=resume_from,
+                session=session,
+            )
+        finally:
+            # Drop on every exit path (normal return / RiskControlException /
+            # any other adapter exception). Idempotent so even if something
+            # downstream already called _drop_session, this is safe.
+            self._drop_session(task.id or 0)
 
     def _fetch_with_promotion(
         self,

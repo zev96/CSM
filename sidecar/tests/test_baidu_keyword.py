@@ -851,3 +851,106 @@ def test_drop_session_removes_and_closes(monkeypatch):
     assert sess.closed is True
     # Idempotent: second call is no-op, doesn't raise
     adapter._drop_session(7)
+
+
+# ── fetch() session lifecycle ──────────────────────────────────────────
+
+
+def test_fetch_drops_session_on_normal_return(monkeypatch):
+    """正常完成时 fetch() 在 finally 里释放 session（_http_sessions 不留残)."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask, MonitorResult
+    from datetime import datetime
+    from typing import Any
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(default_excluded_domains=())
+
+    # Short-circuit fetch's heavy path: return a MonitorResult immediately
+    # from _fetch_with_promotion. We're only verifying the session-cleanup
+    # contract here, not the full SERP pipeline.
+    captured: dict[str, Any] = {}
+
+    def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
+                       *, resume_from, session):
+        captured["session"] = session
+        captured["task_id"] = task.id
+        return MonitorResult(
+            task_id=task.id or 0,
+            checked_at=datetime.utcnow(),
+            status="ok", rank=1, metric={},
+        )
+
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_fetch_with_promotion",
+        fake_promotion,
+    )
+    # Bypass curl_cffi by stubbing _get_session to a sentinel
+    sentinel = object()
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_get_session",
+        lambda self, tid: sentinel,
+    )
+    drops: list[int] = []
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_drop_session",
+        lambda self, tid: drops.append(tid),
+    )
+
+    task = MonitorTask(
+        id=101, type="baidu_keyword", name="t",
+        target_url="https://www.baidu.com/s?wd=x",
+        config={"search_keywords": ["x"], "target_brand": "y"},
+    )
+    result = adapter.fetch(task)
+    assert result.status == "ok"
+    assert captured["session"] is sentinel
+    assert drops == [101]
+
+
+def test_fetch_drops_session_on_risk_control(monkeypatch):
+    """RiskControlException 时 session 也被 drop (脏 cookie 不能复用)."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from csm_core.monitor.drivers.risk_detector import (
+        RiskControlException, RiskSignal,
+    )
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(default_excluded_domains=())
+
+    def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
+                       *, resume_from, session):
+        raise RiskControlException(
+            RiskSignal(layer="url", detail="wappass triggered"), progress=2,
+        )
+
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_fetch_with_promotion",
+        fake_promotion,
+    )
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_get_session",
+        lambda self, tid: object(),
+    )
+    drops: list[int] = []
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_drop_session",
+        lambda self, tid: drops.append(tid),
+    )
+
+    task = MonitorTask(
+        id=202, type="baidu_keyword", name="t",
+        target_url="https://www.baidu.com/s?wd=x",
+        config={"search_keywords": ["x"], "target_brand": "y"},
+    )
+    import pytest
+    with pytest.raises(RiskControlException):
+        adapter.fetch(task)
+    assert drops == [202], "session should be dropped even when RiskControlException propagates"
