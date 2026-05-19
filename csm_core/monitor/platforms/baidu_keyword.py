@@ -134,7 +134,19 @@ def match_brand(content: str, brands: list[str]) -> str | None:
 
 
 # Indirection 给单测 monkeypatch 用。真实调用走 curl_cffi。
-def _cc_get(url: str, **kwargs: Any) -> Any:
+def _cc_get(url: str, *, session: Any = None, **kwargs: Any) -> Any:
+    """HTTP GET via curl_cffi.
+
+    ``session=None`` (legacy) → stateless single-request curl_cffi.requests.get
+    ``session=<Session>``      → session.get keeping cookie jar / connection pool
+
+    Indirection retained for single-test monkeypatching. Session-mode
+    drops any ``impersonate=`` kwarg since the Session was already
+    constructed with one.
+    """
+    if session is not None:
+        kwargs.pop("impersonate", None)
+        return session.get(url, **kwargs)
     from curl_cffi import requests as cc_requests
     return cc_requests.get(url, **kwargs)
 
