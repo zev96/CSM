@@ -270,6 +270,12 @@ from csm_core.monitor.base import MonitorTask
 class FakeSession:
     """假装 IncognitoSession，只暴露 page。支持多关键词顺序 goto。"""
 
+    class FakeContext:
+        """Mock context with cookies() method that returns BDUSS for logged-in state."""
+        def cookies(self, url=None):
+            # Return a list with BDUSS to simulate logged-in state
+            return [{"name": "BDUSS", "value": "mock_bduss_token"}]
+
     def __init__(self, *, serp_html: str, page_contents: dict[str, str],
                  captcha_url: str | None = None):
         self._serp_html = serp_html
@@ -278,7 +284,7 @@ class FakeSession:
         self._current_url = ""
         # adapter 通过 .page.goto / .page.content 读取
         self.page = self  # type: ignore[assignment]
-        self.context = None
+        self.context = self.FakeContext()
         self.browser = None
         self.pw = None
 
@@ -312,7 +318,7 @@ def patch_session(monkeypatch):
         yield holder["session"]
 
     monkeypatch.setattr(
-        baidu_keyword, "incognito_session", fake_ctx
+        baidu_keyword, "baidu_browser_session", fake_ctx
     )
     # Also mock the pacer so wait() is instant for subsequent keywords
     from csm_core.monitor import rate_limit as _rl
@@ -348,7 +354,7 @@ def test_fetch_happy_path_default_only(monkeypatch, patch_session):
         serp_html=serp, page_contents=page_contents,
     )
     # resolve_baidu_link → 原样返回（mock）
-    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
     # 走 HTTP-first 直接命中（不绕浏览器）
     def fake_cc_get(url, **kw):
         return _FakeResp(text=page_contents.get(url, ""))
@@ -551,7 +557,7 @@ class TestRiskDetectionIntegration:
             page_contents={},
         )
         # resolve_baidu_link / _cc_get 不会被调到（风控在 SERP 阶段抛出）
-        monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+        monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
 
         task = MonitorTask(
             id=99,
@@ -574,3 +580,602 @@ class TestRiskDetectionIntegration:
         assert call_count["n"] == 3, (
             f"detect_risk should have been called 3 times (one per keyword until hit), got {call_count['n']}"
         )
+
+
+# ── Article-level pacing（防百家号验证码） ──────────────────────────────────
+#
+# 这一层节流是为了防 baidu 风控：原来 _check_block 对 SERP 解析出的
+# N 条链接做裸 for 循环，秒级连发 N 条 baidu.com/link?url= 跳转 + N 次
+# article HTTP 请求，百家号（baidu 自家子域反爬最严）很容易因此触发验
+# 证码 → fetch_article_http 拿回验证码 HTML → content_preview 污染 +
+# matches_brand 判错。修法：
+#   - "baidu_keyword:article"   pacer 控普通 host
+#   - "baidu_keyword:baijiahao" pacer 控 baidu 自家子域（更宽窗口）
+#   - 被 exclude_set 命中的 host 跳过、不调 pacer（不计 rank 也不空耗）
+
+def _make_pacer_tracker():
+    """生成一个 get_pacer 替代实现 + calls 列表。
+    返回 (fake_get_pacer, calls)。每次 wait 把对应 pacer name 追加到 calls。"""
+    calls: list[str] = []
+
+    class _Tracker:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def wait(self) -> None:
+            calls.append(self.name)
+
+        def configure(self, **kw) -> None:  # configure 会在 apply_settings 里被调
+            pass
+
+    def _fake_get_pacer(name: str):
+        return _Tracker(name)
+
+    return _fake_get_pacer, calls
+
+
+def _setup_check_block_mocks(monkeypatch):
+    """让 _check_block 内部走纯 HTTP 路径、resolve_baidu_link 不发请求。"""
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    # 长 HTML → readability 提到 ≥200 字 → fetch_article_http 成功（不走 fallback）
+    long_html = (
+        "<html><body><article>"
+        + ("这是一篇关于产品评测的文章。" * 30)
+        + "</article></body></html>"
+    )
+    monkeypatch.setattr(
+        baidu_keyword, "_cc_get",
+        lambda url, **kw: _FakeResp(text=long_html),
+    )
+
+
+def test_check_block_calls_article_pacer_per_link(monkeypatch):
+    """正常 host 走 article pacer；每条 link 调一次 wait。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "a", "href": "https://example.com/a"},
+        {"title": "b", "href": "https://zhihu.com/p/1"},
+        {"title": "c", "href": "https://sohu.com/n/2"},
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    assert len(out) == 3
+    assert calls == [
+        "baidu_keyword:article",
+        "baidu_keyword:article",
+        "baidu_keyword:article",
+    ]
+
+
+def test_check_block_uses_baijiahao_pacer_for_baidu_subdomains(monkeypatch):
+    """baijiahao.baidu.com / mbd.baidu.com / mp.baidu.com 都走 baijiahao pacer。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "bjh", "href": "https://baijiahao.baidu.com/s?id=123"},
+        {"title": "mbd", "href": "https://mbd.baidu.com/newspage/x"},
+        {"title": "mp",  "href": "https://mp.baidu.com/foo"},
+    ]
+    adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    assert calls == [
+        "baidu_keyword:baijiahao",
+        "baidu_keyword:baijiahao",
+        "baidu_keyword:baijiahao",
+    ]
+
+
+def test_check_block_picks_pacer_per_link_host(monkeypatch):
+    """混合 host 时按 host 逐条切 pacer：百家号用 baijiahao，其它用 article。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "1", "href": "https://example.com/a"},
+        {"title": "2", "href": "https://baijiahao.baidu.com/s?id=1"},
+        {"title": "3", "href": "https://zhihu.com/p/1"},
+        {"title": "4", "href": "https://mbd.baidu.com/newspage/2"},
+    ]
+    adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    assert calls == [
+        "baidu_keyword:article",
+        "baidu_keyword:baijiahao",
+        "baidu_keyword:article",
+        "baidu_keyword:baijiahao",
+    ]
+
+
+def test_check_block_excluded_host_skips_pacer(monkeypatch):
+    """exclude_set 命中的 host 不调 pacer（不计 rank 也不空耗节流时间）。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "jd ad",   "href": "https://item.jd.com/123.html"},  # excluded
+        {"title": "article", "href": "https://example.com/a"},
+        {"title": "tmall",   "href": "https://detail.tmall.com/x"},    # excluded
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        exclude_set={"jd.com", "tmall.com"},
+    )
+    # 只有 example.com 被实际抓 + 计 rank + 调 pacer
+    assert len(out) == 1
+    assert out[0]["host"] == "example.com"
+    assert calls == ["baidu_keyword:article"]
+
+
+def test_apply_settings_configures_article_and_baijiahao_pacers(monkeypatch):
+    """apply_settings 把 SERP / article / baijiahao 三个 pacer 都配上对应的
+    [N, 2N] jitter 窗口。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    configs: dict[str, tuple[float, float]] = {}
+
+    class _ConfigSpy:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def wait(self) -> None:
+            pass
+
+        def configure(self, *, delay_min: float, delay_max: float) -> None:
+            configs[self.name] = (delay_min, delay_max)
+
+    monkeypatch.setattr(_rl, "get_pacer", lambda name: _ConfigSpy(name))
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(
+        serp_pacing_seconds=5,
+        article_pacing_seconds=4,
+        baijiahao_pacing_seconds=10,
+    )
+    assert configs["baidu_keyword"] == (5.0, 10.0)
+    assert configs["baidu_keyword:article"] == (4.0, 8.0)
+    assert configs["baidu_keyword:baijiahao"] == (10.0, 20.0)
+
+
+# ── _get_session / _drop_session / _next_ua ────────────────────────────
+
+
+def test_next_ua_rotates_through_pool():
+    """连续调用应该至少覆盖 3 个不同 UA (pool 有 4 条 + Mac 1 条)."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    seen = {adapter._next_ua() for _ in range(8)}
+    assert len(seen) >= 3, f"expected >=3 distinct UAs across 8 rotations, got {seen}"
+
+
+def test_get_session_caches_per_task(monkeypatch):
+    """同一 task_id 调两次 _get_session 返回同一对象；不同 task_id 返回不同对象."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from typing import Any
+
+    # Avoid real curl_cffi calls. Build a fake Session class that records
+    # warmup GETs and exposes a .close().
+    created: list[Any] = []
+
+    class FakeSession:
+        def __init__(self, *a, **kw):
+            self.headers = {}
+            self.closed = False
+            created.append(self)
+
+        def get(self, url, **kwargs):
+            return type("R", (), {"status_code": 200})()
+
+        def close(self):
+            self.closed = True
+
+    import sys
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    # Replace the module-attribute import path used by _get_session
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_cc)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    s1 = adapter._get_session(42)
+    s2 = adapter._get_session(42)
+    s3 = adapter._get_session(43)
+    assert s1 is s2, "same task_id should get cached session"
+    assert s1 is not s3, "different task_id should get different session"
+    assert len(created) == 2
+
+
+def test_get_session_warmup_failure_not_fatal(monkeypatch, caplog):
+    """warm-up GET baidu.com 抛异常时 _get_session 仍正常返回 session."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    class FakeSession:
+        def __init__(self, *a, **kw):
+            self.headers = {}
+
+        def get(self, url, **kwargs):
+            raise RuntimeError("simulated network failure")
+
+        def close(self):
+            pass
+
+    import sys
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_cc)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    with caplog.at_level("INFO", logger="csm_core.monitor.platforms.baidu_keyword"):
+        sess = adapter._get_session(99)
+    assert sess is not None
+    assert "warmup failed" in caplog.text.lower()
+
+
+def test_drop_session_removes_and_closes(monkeypatch):
+    """_drop_session 应该从 dict 里移除并调 close。重复调用 idempotent."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    class FakeSession:
+        def __init__(self, *a, **kw):
+            self.headers = {}
+            self.closed = False
+
+        def get(self, url, **kwargs):
+            return type("R", (), {"status_code": 200})()
+
+        def close(self):
+            self.closed = True
+
+    import sys
+    fake_cc = type("M", (), {"Session": FakeSession})()
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_cc)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    sess = adapter._get_session(7)
+    assert 7 in adapter._http_sessions
+    adapter._drop_session(7)
+    assert 7 not in adapter._http_sessions
+    assert sess.closed is True
+    # Idempotent: second call is no-op, doesn't raise
+    adapter._drop_session(7)
+
+
+# ── fetch() session lifecycle ──────────────────────────────────────────
+
+
+def test_fetch_drops_session_on_normal_return(monkeypatch):
+    """正常完成时 fetch() 在 finally 里释放 session（_http_sessions 不留残)."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask, MonitorResult
+    from datetime import datetime
+    from typing import Any
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(default_excluded_domains=())
+
+    # Short-circuit fetch's heavy path: return a MonitorResult immediately
+    # from _fetch_with_promotion. We're only verifying the session-cleanup
+    # contract here, not the full SERP pipeline.
+    captured: dict[str, Any] = {}
+
+    def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
+                       *, resume_from, session):
+        captured["session"] = session
+        captured["task_id"] = task.id
+        return MonitorResult(
+            task_id=task.id or 0,
+            checked_at=datetime.utcnow(),
+            status="ok", rank=1, metric={},
+        )
+
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_fetch_with_promotion",
+        fake_promotion,
+    )
+    # Bypass curl_cffi by stubbing _get_session to a sentinel
+    sentinel = object()
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_get_session",
+        lambda self, tid: sentinel,
+    )
+    drops: list[int] = []
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_drop_session",
+        lambda self, tid: drops.append(tid),
+    )
+
+    task = MonitorTask(
+        id=101, type="baidu_keyword", name="t",
+        target_url="https://www.baidu.com/s?wd=x",
+        config={"search_keywords": ["x"], "target_brand": "y"},
+    )
+    result = adapter.fetch(task)
+    assert result.status == "ok"
+    assert captured["session"] is sentinel
+    assert drops == [101]
+
+
+def test_fetch_drops_session_on_risk_control(monkeypatch):
+    """RiskControlException 时 session 也被 drop (脏 cookie 不能复用)."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from csm_core.monitor.drivers.risk_detector import (
+        RiskControlException, RiskSignal,
+    )
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(default_excluded_domains=())
+
+    def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
+                       *, resume_from, session):
+        raise RiskControlException(
+            RiskSignal(layer="url", detail="wappass triggered"), progress=2,
+        )
+
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_fetch_with_promotion",
+        fake_promotion,
+    )
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_get_session",
+        lambda self, tid: object(),
+    )
+    drops: list[int] = []
+    monkeypatch.setattr(
+        baidu_keyword.BaiduKeywordAdapter,
+        "_drop_session",
+        lambda self, tid: drops.append(tid),
+    )
+
+    task = MonitorTask(
+        id=202, type="baidu_keyword", name="t",
+        target_url="https://www.baidu.com/s?wd=x",
+        config={"search_keywords": ["x"], "target_brand": "y"},
+    )
+    import pytest
+    with pytest.raises(RiskControlException):
+        adapter.fetch(task)
+    assert drops == [202], "session should be dropped even when RiskControlException propagates"
+
+
+# ── _navigate_to_serp (simplified: direct goto(serp_url)) ──────────────
+
+
+def test_navigate_to_serp_direct_goto():
+    """_navigate_to_serp performs exactly one page.goto on the SERP url.
+
+    The 3-stage home→fill→Enter flow was retired — its stable timing
+    pattern was itself a bot signal. With persistent BDUSS the direct
+    goto looks like a real user opening SERP from a bookmark / external
+    link.
+    """
+    from csm_core.monitor.platforms import baidu_keyword
+
+    calls: list[tuple] = []
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            calls.append(("goto", url, kwargs))
+            return "fake-response"
+
+    response = baidu_keyword._navigate_to_serp(FakePage(), keyword="吸尘器")
+
+    assert response == "fake-response"
+    assert len(calls) == 1
+    op, url, kwargs = calls[0]
+    assert op == "goto"
+    assert url.startswith("https://www.baidu.com/s?wd=")
+    # quote() encodes 吸尘器 as %E5%90%B8%E5%B0%98%E5%99%A8
+    assert "%E5%90%B8%E5%B0%98%E5%99%A8" in url
+    assert kwargs.get("wait_until") == "domcontentloaded"
+    assert kwargs.get("timeout") == 30000
+
+
+def test_navigate_to_serp_does_not_touch_input_or_keyboard():
+    """Guard against future regression: the function must NOT call
+    fill / click / keyboard / mouse / wait_for_timeout — those were
+    the bot-signal-leaking ops.
+    """
+    from csm_core.monitor.platforms import baidu_keyword
+
+    forbidden_calls: list[str] = []
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            return "fake-response"
+        def fill(self, *a, **kw):
+            forbidden_calls.append("fill")
+        def click(self, *a, **kw):
+            forbidden_calls.append("click")
+        def wait_for_timeout(self, *a, **kw):
+            forbidden_calls.append("wait_for_timeout")
+        def expect_navigation(self, **kw):
+            forbidden_calls.append("expect_navigation")
+            raise AssertionError("should not be called")
+
+    baidu_keyword._navigate_to_serp(FakePage(), keyword="test")
+
+    assert forbidden_calls == [], (
+        f"_navigate_to_serp should only call page.goto, got: {forbidden_calls}"
+    )
+
+
+def test_apply_settings_forces_baidu_concurrency_to_one():
+    """persistent_context profile lock requires serial baidu execution.
+    apply_settings should reconfigure rate_limit accordingly."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.browser_infra import rate_limit
+
+    # Clean slate — clear any prior configuration for this platform
+    with rate_limit._sem_lock:
+        rate_limit._sems.pop(baidu_keyword.BaiduKeywordAdapter.platform, None)
+        rate_limit._max_concurrent.pop(baidu_keyword.BaiduKeywordAdapter.platform, None)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(default_excluded_domains=())
+
+    assert rate_limit._max_concurrent[baidu_keyword.BaiduKeywordAdapter.platform] == 1
+
+
+# ── fetch BDUSS pre-flight check (Layer 3) ─────────────────────────────
+
+
+def test_assert_baidu_logged_in_passes_when_bduss_present():
+    """The pure helper used by _fetch_once must NOT raise when BDUSS
+    is in the cookie list."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cookies = [
+        {"name": "BAIDUID", "value": "irrelevant"},
+        {"name": "BDUSS", "value": "abc"},
+    ]
+    # Should not raise
+    adapter._assert_baidu_logged_in(cookies, resume_from=0)
+
+
+def test_assert_baidu_logged_in_raises_auth_when_bduss_missing():
+    """Same helper raises RiskControlException(layer='auth') when BDUSS
+    is missing, with progress = resume_from passed through."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.drivers.risk_detector import RiskControlException
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cookies = [{"name": "BAIDUID", "value": "no_bduss_here"}]
+    try:
+        adapter._assert_baidu_logged_in(cookies, resume_from=3)
+    except RiskControlException as e:
+        assert e.signal.layer == "auth"
+        assert e.progress == 3
+    else:
+        raise AssertionError("expected RiskControlException")
+
+
+def test_fetch_raises_auth_risk_control_when_not_logged_in(monkeypatch):
+    """If session.context.cookies returns no BDUSS, fetch must raise
+    RiskControlException(layer='auth') with progress=resume_from before
+    making a single SERP request."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from csm_core.monitor.drivers.risk_detector import RiskControlException
+
+    class FakeContext:
+        def cookies(self, url=None):
+            return []  # no BDUSS — logged out
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            raise AssertionError("should not reach goto when not logged in")
+
+    class FakeSession:
+        def __init__(self):
+            self.page = FakePage()
+            self.context = FakeContext()
+
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_session(*, headless, user_data_dir=None):
+        yield FakeSession()
+
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", fake_session)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    task = MonitorTask(
+        id=42, type="baidu_keyword", name="test",
+        target_url="https://www.baidu.com/s?wd=test",
+        config={"search_keywords": ["吸尘器", "洗碗机"], "target_brand": "CEWEY"},
+    )
+
+    try:
+        adapter.fetch(task, resume_from=1)
+    except RiskControlException as e:
+        assert e.signal.layer == "auth"
+        assert "登录" in e.signal.detail or "BDUSS" in e.signal.detail
+        assert e.progress == 1
+    else:
+        raise AssertionError("expected RiskControlException")
+
+
+def test_fetch_raises_auth_when_serp_redirects_to_login(monkeypatch):
+    """BDUSS in cookies but SERP comes back as a wappass redirect →
+    raise RiskControlException(layer='auth') with progress=kw_idx
+    (so resume continues from this keyword, not from the start)."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from csm_core.monitor.drivers.risk_detector import RiskControlException
+
+    class FakeResp:
+        def __init__(self, url: str):
+            self.url = url
+
+    class FakeContext:
+        def cookies(self, url=None):
+            return [{"name": "BDUSS", "value": "x"}]
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            # baidu redirected SERP to the login wall
+            return FakeResp("https://wappass.baidu.com/static/captcha/tuxing.html?...")
+        def content(self):
+            return ""
+
+    class FakeSession:
+        def __init__(self):
+            self.page = FakePage()
+            self.context = FakeContext()
+
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_session(*, headless, user_data_dir=None):
+        yield FakeSession()
+
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", fake_session)
+    # Prevent _check_block + article fetches from running
+    monkeypatch.setattr(baidu_keyword, "parse_serp", lambda html: {"default_links": [], "news_links": [], "news_present": False})
+    # Disable the article-level fetches and pacer so the test runs in <1s
+    from csm_core.monitor import rate_limit
+    monkeypatch.setattr(rate_limit, "get_pacer", lambda key: type(
+        "P", (), {"wait": lambda self: None})())
+    monkeypatch.setattr(rate_limit, "get_breaker", lambda key: type(
+        "B", (), {"allow": lambda self: True,
+                  "record_success": lambda self: None,
+                  "record_failure": lambda self: None})())
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    task = MonitorTask(
+        id=99, type="baidu_keyword", name="test",
+        target_url="https://www.baidu.com/s?wd=test",
+        config={"search_keywords": ["aaa", "bbb"], "target_brand": "X"},
+    )
+
+    try:
+        adapter.fetch(task, resume_from=0)
+    except RiskControlException as e:
+        assert e.signal.layer == "auth"
+        assert e.progress == 0  # failed on first keyword
+    else:
+        raise AssertionError("expected RiskControlException(layer='auth')")

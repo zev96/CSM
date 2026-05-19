@@ -351,3 +351,76 @@ async def stream_events():
                 ),
             }
     return EventSourceResponse(_gen())
+
+
+# ── Baidu browser profile management ──────────────────────────────────────
+@router.post("/api/monitor/baidu/reset-profile", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_baidu_profile() -> None:
+    """Delete the persistent baidu browser profile dir.
+
+    Use case: profile has been hit by 百度风控 multiple times and cookies
+    are "burnt"; rather than wait for cooldown, user wipes and starts fresh.
+
+    Safety: refuses (409) if any baidu task is currently running — would
+    corrupt the live profile mid-write.
+    """
+    from csm_core.monitor.drivers.baidu_browser import reset_profile
+    from ..services import monitor_lifecycle
+
+    loop = monitor_lifecycle.get()
+    if loop is not None and loop.has_active_baidu_task():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="有正在运行的百度任务，先停止再重置",
+        )
+    reset_profile()
+
+
+@router.post("/api/monitor/baidu/login")
+async def baidu_login_open() -> dict[str, Any]:
+    """Open a visible patchright window so the user can log in to Baidu.
+    Persistent cookies land in the same profile dir that fetch tasks use.
+
+    Refuses (409) if a baidu task is running — they share the same
+    user_data_dir lock.
+
+    Runs the (sync) playwright call in a thread so FastAPI's asyncio loop
+    isn't blocked. patchright's sync API explicitly refuses to run inside
+    an asyncio event loop, so a direct call from this `async def` handler
+    raises "It looks like you are using Playwright Sync API inside the
+    asyncio loop." — to_thread sidesteps that.
+    """
+    import asyncio
+    from csm_core.monitor.drivers.baidu_login import open_login_window
+    from ..services import monitor_lifecycle
+
+    loop = monitor_lifecycle.get()
+    if loop is not None and loop.has_active_baidu_task():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="有正在运行的百度任务，先停止再登录",
+        )
+    return await asyncio.to_thread(open_login_window)
+
+
+@router.get("/api/monitor/baidu/login-status")
+async def baidu_login_status() -> dict[str, Any]:
+    """Read-only login state probe used by the settings page.
+
+    Briefly launches a headless persistent context (~2s) to read cookies.
+    Failures degrade to {logged_in: False} rather than 5xx — settings UI
+    shouldn't blow up if the profile is corrupt.
+
+    Same to_thread reasoning as baidu_login_open — sync patchright cannot
+    run in the asyncio loop.
+    """
+    import asyncio
+    from csm_core.monitor.drivers.baidu_login import get_login_status
+
+    try:
+        return await asyncio.to_thread(get_login_status)
+    except Exception as e:
+        # Soft fallback so the UI keeps functioning
+        import logging
+        logging.getLogger(__name__).warning("baidu login-status read failed: %s", e)
+        return {"logged_in": False, "username": None, "expires_at": None}

@@ -16,7 +16,8 @@
  * Schedule format follows csm_core/monitor/scheduler.py: "manual" or
  * "HH:MM" (daily). Anything else is rejected by the parser.
  */
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 
 import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -27,6 +28,7 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 import FormToggle from "@/components/forms/FormToggle.vue";
 
 import { useSidecar } from "@/stores/sidecar";
+import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 
 type TaskType = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
@@ -83,6 +85,25 @@ const baiduIdealRank = ref<number>(5);
 // 用户在这里加自家品牌官网 / 其他不算"软文"的域名即可。
 const baiduExcludeDomainsRaw = ref("");
 const baiduUseDefaultExcludes = ref(true);
+
+// Popover that shows the current global default_excluded_domains
+// (read-only, with a button to jump to the Settings section for editing).
+// Data is pulled live from useConfig — the store is hydrated at app boot,
+// but onMounted in this component is a defensive fallback if a user opens
+// the modal before the config has loaded.
+const cfgStore = useConfig();
+const router = useRouter();
+const showDefaultDomainsPopover = ref(false);
+const defaultExcludeDomains = computed<string[]>(
+  () => cfgStore.data?.monitor?.baidu_keyword?.default_excluded_domains ?? []
+);
+
+function goToSettingsExcludeDomains() {
+  showDefaultDomainsPopover.value = false;
+  emit("update:open", false); // close AddTaskModal first so the Settings view is visible
+  router.push({ name: "settings", hash: "#baidu-default-excludes" });
+}
+
 // Schedule
 const scheduleMode = ref<"manual" | "daily">("manual");
 const dailyTime = ref("09:00");
@@ -181,6 +202,19 @@ watch(
     if (t && props.open) hydrateFromTask(t);
   },
 );
+
+onMounted(async () => {
+  // If the config store wasn't hydrated yet (rare race in cold start),
+  // load it now so the popover's count badge shows the right number.
+  if (!cfgStore.data) {
+    try {
+      await cfgStore.load();
+    } catch {
+      // Non-fatal: popover will show "(空)" — the user can still proceed
+      // with the rest of the form. Logging handled by the store itself.
+    }
+  }
+});
 
 function validate(): string | null {
   if (!name.value.trim()) return "任务名不能为空";
@@ -441,12 +475,21 @@ async function submit() {
                   hint="默认过滤 jd / 1688 / taobao / pinduoduo 等采购与电商站点（这些命中目标品牌也不是软文）。如果你确实要监测这些站，关掉。"
                   inline
                 >
-                  <FormToggle v-model="baiduUseDefaultExcludes" />
+                  <div class="flex items-center gap-2">
+                    <FormToggle v-model="baiduUseDefaultExcludes" />
+                    <button
+                      type="button"
+                      class="text-[11px] text-[var(--ink-2)] hover:text-[var(--primary-deep)] underline-offset-2 hover:underline"
+                      @click="showDefaultDomainsPopover = true"
+                    >
+                      查看名单（{{ defaultExcludeDomains.length }}）
+                    </button>
+                  </div>
                 </FormField>
 
                 <FormField
                   label="自定义排除域名"
-                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。"
+                  hint="一行一个；自家品牌官网 / 其他非软文站点写这里。可写 cewey.com 或 https://www.cewey.com/，会按 host 后缀匹配（cewey.com 同时命中 www.cewey.com / shop.cewey.com）。会和上方「默认黑名单」合并去重。"
                 >
                   <textarea
                     v-model="baiduExcludeDomainsRaw"
@@ -558,6 +601,48 @@ async function submit() {
               }}
             </span>
           </Btn>
+        </div>
+      </div>
+    </div>
+
+    <!-- 默认排除域名展示弹层（modal-in-modal） -->
+    <div
+      v-if="showDefaultDomainsPopover"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/30"
+      @click.self="showDefaultDomainsPopover = false"
+    >
+      <div class="w-[400px] max-h-[60vh] flex flex-col rounded-lg bg-[var(--card)] p-4 shadow-xl">
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-[13px] font-medium">默认排除域名（{{ defaultExcludeDomains.length }}）</div>
+          <button
+            type="button"
+            class="text-[16px] leading-none"
+            @click="showDefaultDomainsPopover = false"
+          >×</button>
+        </div>
+
+        <div class="flex-1 overflow-auto text-[12px] font-mono space-y-1">
+          <div v-if="defaultExcludeDomains.length === 0" class="text-[var(--ink-3)]">
+            （空 —— 去应用设置里添加）
+          </div>
+          <div v-for="d in defaultExcludeDomains" :key="d">{{ d }}</div>
+        </div>
+
+        <div class="mt-3 pt-3 border-t border-[var(--line)] flex justify-between items-center">
+          <button
+            type="button"
+            class="text-[11.5px] text-[var(--primary-deep)] hover:underline"
+            @click="goToSettingsExcludeDomains"
+          >
+            去应用设置编辑 →
+          </button>
+          <button
+            type="button"
+            class="text-[11.5px] px-3 py-1 rounded bg-[var(--card-2)]"
+            @click="showDefaultDomainsPopover = false"
+          >
+            关闭
+          </button>
         </div>
       </div>
     </div>

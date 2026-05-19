@@ -1,6 +1,7 @@
 """Config + keyring HTTP routes."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -10,6 +11,8 @@ from csm_core.config import AppConfig, delete_secret, get_secret, set_secret
 
 from ..auth import RequireToken
 from ..services import config_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["config"], dependencies=[RequireToken])
 
@@ -33,14 +36,38 @@ async def patch_config(updates: dict[str, Any]) -> AppConfig:
         {"vault_root": "/path/to/vault"}
         {"monitor": {"alert_top_n": 7}}
         {"default_provider": "anthropic", "default_model": {"anthropic": "claude-opus-4-7"}}
+
+    When ``monitor.*`` fields change, the live adapters are reconfigured
+    so users don't need to restart sidecar after editing default exclude
+    domains / pacing / breaker thresholds. reconfigure() is idempotent
+    and swallows internal exceptions, so PATCH still returns 200 even if
+    an adapter rejected the new value.
     """
     try:
-        return config_service.patch(updates)
+        new_cfg = config_service.patch(updates)
     except ValueError as e:  # pydantic ValidationError subclasses ValueError
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
         ) from e
+
+    # Hot-reload adapter settings only when monitor.* actually changed.
+    # Lazy import: routes are imported during app boot before
+    # monitor_lifecycle is fully ready; module-level import would create
+    # a circular dep with config_service. Wrap in try/except so an
+    # adapter that rejects the new value doesn't bubble up to a 500
+    # response — the docstring promises "still returns 200" and tests
+    # rely on that contract. _apply_runtime_settings already swallows
+    # adapter-level failures internally; this catches anything ELSE
+    # (e.g. a future refactor that adds a top-level check).
+    if "monitor" in updates:
+        from ..services import monitor_lifecycle
+        try:
+            monitor_lifecycle.reconfigure(new_cfg)
+        except Exception:
+            logger.exception("monitor_lifecycle.reconfigure raised; PATCH still returns 200")
+
+    return new_cfg
 
 
 # ── Keyring sub-routes ──────────────────────────────────────────────────────

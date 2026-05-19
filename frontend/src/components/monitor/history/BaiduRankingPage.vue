@@ -4,7 +4,7 @@
  * 左：富任务表（搜索关键词 / 上次 / 变化 / 状态 / 操作）
  * 右：3 KPI + sparkline + 每关键词折叠结果段
  */
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, onErrorCaptured, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useSidecar } from "@/stores/sidecar";
 import { useMonitorStatus } from "@/stores/monitorStatus";
@@ -170,7 +170,7 @@ function _idealCountForMetric(metric: BaiduMetric | null, idealN: number): numbe
   for (const kw of metric.keywords) {
     const def = Number(kw.default_matched_count) || 0;
     const news = kw.news_present
-      ? kw.news_results.filter((r) => r.matches_brand).length
+      ? (kw.news_results ?? []).filter((r) => r.matches_brand).length
       : 0;
     if (def + news >= idealN) n += 1;
   }
@@ -292,7 +292,7 @@ function _missingForMetric(metric: BaiduMetric | null, idealN: number): number {
   for (const kw of metric.keywords) {
     const def = Number(kw.default_matched_count) || 0;
     const news = kw.news_present
-      ? kw.news_results.filter((r) => r.matches_brand).length
+      ? (kw.news_results ?? []).filter((r) => r.matches_brand).length
       : 0;
     if (def + news < idealN) n += 1;
   }
@@ -318,14 +318,14 @@ function _buildBaiduAlertHero(task: TaskItem): BaiduAlertHero | null {
   if (prev?.metric?.keywords) {
     for (const kw of prev.metric.keywords) {
       const def = Number(kw.default_matched_count) || 0;
-      const news = kw.news_present ? kw.news_results.filter((r) => r.matches_brand).length : 0;
+      const news = kw.news_present ? (kw.news_results ?? []).filter((r) => r.matches_brand).length : 0;
       prevByKw.set(kw.keyword, def + news);
     }
   }
   const critical: BaiduAlertHero["critical"] = [];
   for (const kw of latest.metric.keywords ?? []) {
     const def = Number(kw.default_matched_count) || 0;
-    const news = kw.news_present ? kw.news_results.filter((r) => r.matches_brand).length : 0;
+    const news = kw.news_present ? (kw.news_results ?? []).filter((r) => r.matches_brand).length : 0;
     const placed = def + news;
     if (placed === 0) {
       const prevPlaced = prevByKw.has(kw.keyword) ? prevByKw.get(kw.keyword)! : null;
@@ -427,6 +427,27 @@ const latestMetric = computed<BaiduMetric | null>(
   () => latestResult.value?.metric ?? null,
 );
 
+/**
+ * 风控断点 meta —— 当 latestResult.status === "risk_control" 时，metric
+ * 不是 BaiduMetric 而是 {last_resumed_keyword, captcha_signal_layer,
+ * captcha_signal_detail} (见 monitor_loop.py:429-440 的 breakpoint_result)。
+ * 走 ResultItem.metric: BaiduMetric|null 的类型口子拿这几个字段需要 cast，
+ * 集中在一处避免散落。返回 null 时表示当前不是风控状态。
+ */
+const riskControlMeta = computed<{
+  layer: string | null;
+  detail: string | null;
+  lastResumedKeyword: number;
+} | null>(() => {
+  if (latestResult.value?.status !== "risk_control") return null;
+  const m = (latestResult.value.metric ?? {}) as Record<string, unknown>;
+  return {
+    layer: typeof m.captcha_signal_layer === "string" ? m.captcha_signal_layer : null,
+    detail: typeof m.captcha_signal_detail === "string" ? m.captcha_signal_detail : null,
+    lastResumedKeyword: typeof m.last_resumed_keyword === "number" ? m.last_resumed_keyword : 0,
+  };
+});
+
 const prevMetric = computed<BaiduMetric | null>(
   () => (history.value.length > 1 ? history.value[1]?.metric ?? null : null),
 );
@@ -486,9 +507,13 @@ const idealRank = computed<number>(() => {
 });
 
 // 本次卡位数量: how many keywords have default_first_rank within ideal_rank
+//
+// keywords ?? [] 的保护跟 sparkPointsPlaced 同理 —— 风控触发后写的
+// breakpoint result 的 metric 里只有 last_resumed_keyword + captcha_signal_*，
+// 没有 keywords 数组，undefined.filter 会让整个 Level 2 render crash 白屏。
 const placedCountCurrent = computed<number>(() => {
   if (!latestMetric.value) return 0;
-  return latestMetric.value.keywords.filter(
+  return (latestMetric.value.keywords ?? []).filter(
     (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
   ).length;
 });
@@ -496,7 +521,7 @@ void placedCountCurrent; // suppress unused warning
 
 const placedCountPrev = computed<number>(() => {
   if (!prevMetric.value) return 0;
-  return prevMetric.value.keywords.filter(
+  return (prevMetric.value.keywords ?? []).filter(
     (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
   ).length;
 });
@@ -505,10 +530,15 @@ void placedCountPrev; // suppress unused warning
 // Sparkline: 卡位 count (not matched_keywords) over last 14 days
 // 按本地日历日聚合 —— 同一天多次跑取最后一次，缺失天用 0 占位（Sparkline
 // 的 points: number[] 不接受 null）。跟 sparkLabels 的 14 天 bucket 对齐。
+//
+// keywords ?? [] 的保护：风控触发时后端会写一份 status="risk_control" 的
+// breakpoint result（metric 只含 last_resumed_keyword + captcha_signal_* 字段，
+// 没有 keywords 数组），sparkline 在 14 天窗口里遍历到这条 record 时
+// undefined.filter 会让整个 Level 2 render crash 白屏。
 const sparkPointsPlaced = computed<number[]>(() =>
   levelTwoCalendarBuckets.value.map((b) => {
     if (!b.record?.metric) return 0;
-    return b.record.metric.keywords.filter(
+    return (b.record.metric.keywords ?? []).filter(
       (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
     ).length;
   }),
@@ -747,7 +777,7 @@ function exportPreviewCsv(): void {
   for (const kw of latest.metric.keywords) {
     const def = Number(kw.default_matched_count) || 0;
     const news = kw.news_present
-      ? kw.news_results.filter((r) => r.matches_brand).length
+      ? (kw.news_results ?? []).filter((r) => r.matches_brand).length
       : 0;
     const total = def + news;
     // CSV-escape quotes + comma in keyword text
@@ -783,6 +813,16 @@ function openScheduleEditor(): void {
 function backToList(): void {
   selectedId.value = null;
   selectedKeywordIdx.value = null;
+}
+
+/**
+ * 点任务名字进 Level 2 —— 先把 history 拉到位再切 selectedId，避免 Level 2
+ * 渲染期间 history 仍是上一任务的脏数据 / 空数组造成 KPI 卡 0、sparkline 空闪。
+ * loadHistory 失败时它内部已经 toast.error，这里不再重复提示。
+ */
+async function enterDetail(id: number): Promise<void> {
+  await loadHistory(id);
+  selectedId.value = id;
 }
 
 // ──────────────────────────── lifecycle ────────────────────────────
@@ -821,6 +861,18 @@ function startSse(): void {
   });
 }
 
+// 兜底渲染异常 —— Level 2 任意 computed / template 抛出时不再让整个
+// router-view 白屏。最常见触发：上次抓取被风控 → 后端写 status="risk_control"
+// 的 breakpoint result，metric 缺 keywords 字段 → sparkPointsPlaced 之类
+// 的 computed 访问 undefined.filter 抛 TypeError。已经给已知点加了 null
+// guard，但保留这层兜底防御未来 schema 漂移再次复发。
+onErrorCaptured((err, _instance, info) => {
+  console.error("[BaiduRankingPage]", info, err);
+  toast.error(`详情页渲染错误：${(err as Error)?.message ?? String(err)}`);
+  // 阻止冒泡到全局 errorHandler；后者会再把组件树卸载一次，造成"关掉对话框二级菜单完全没有"。
+  return false;
+});
+
 onMounted(() => {
   loadTasks();
   startSse();
@@ -828,6 +880,17 @@ onMounted(() => {
   // "navigate away → come back" case. The store also polls every 30 s,
   // but mount-time hydrate eliminates the visible delay.
   void monitorStatus.hydrate();
+});
+
+// Fan-in for task mutations triggered from anywhere in the app (single
+// add via AddTaskModal, batch import via BatchImportTaskModal, edit via
+// AddTaskModal-edit mode). MonitorView's onTaskMutatedReload bumps this
+// nonce; we react by reloading our own tasks list. Bypasses the
+// baiduPageRef.value?.reload?.() chain which can silently no-op when
+// the parent's template ref isn't wired in time (HMR re-mount race or
+// modal lifecycle ordering).
+watch(() => monitorStatus.taskMutationNonce, () => {
+  void loadTasks();
 });
 
 onUnmounted(() => {
@@ -1127,7 +1190,7 @@ defineExpose({ reload: loadTasks });
                     type="button"
                     class="truncate text-[13px] font-medium text-left w-full"
                     :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
-                    @click.stop="selectedId = t.id"
+                    @click.stop="enterDetail(t.id)"
                   >{{ t.name }}</button>
                   <div
                     class="truncate text-[11px] mt-0.5"
@@ -1389,6 +1452,49 @@ defineExpose({ reload: loadTasks });
             </div>
           </div>
 
+          <!--
+            风控状态提示条 —— 当上次抓取因百度反爬被中断（status=risk_control）
+            时显示。metric 在这种结果里是 captcha 简化 schema，没 keywords 字段
+            (见 monitor_loop.py 的 risk_control breakpoint 分支)；提示用户在哪一
+            个 keyword 卡断的，点 Level 2 底部「启动监测」会从断点续抓。
+
+            分层：当 layer=auth 时表示账户未登录或已过期，显示专用提示+设置链接；
+            其他 layer 表示验证码或其他风控，显示通用提示。
+          -->
+          <div
+            v-if="riskControlMeta"
+            class="mb-3 flex-shrink-0 rounded text-[11.5px]"
+            :style="{
+              background: riskControlMeta.layer === 'auth'
+                ? 'rgba(220, 38, 38, 0.08)'
+                : 'rgba(238, 106, 42, 0.10)',
+              color: 'var(--primary-deep)',
+              borderLeft: riskControlMeta.layer === 'auth'
+                ? '3px solid #dc2626'
+                : '3px solid var(--primary)',
+              padding: '10px 12px',
+            }"
+          >
+            <template v-if="riskControlMeta.layer === 'auth'">
+              百度账号未登录或已过期。请到设置页重新登录后点「启动监测」从断点继续抓取。
+              <a
+                href="#"
+                class="ml-2 underline"
+                @click.prevent="router.push({ name: 'settings' })"
+              >
+                前往设置
+              </a>
+            </template>
+            <template v-else>
+              上次抓取被百度风控拦截
+              <template v-if="riskControlMeta.layer">
+                （{{ riskControlMeta.layer }}<template v-if="riskControlMeta.detail"> / {{ riskControlMeta.detail }}</template>）
+              </template>
+              。断点位置：keyword #{{ riskControlMeta.lastResumedKeyword }}。
+              点击右下方「启动监测」可从断点继续。
+            </template>
+          </div>
+
           <!-- Table -->
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <!-- Loading -->
@@ -1468,9 +1574,9 @@ defineExpose({ reload: loadTasks });
                 <template v-if="row.result && row.result.news_present">
                   <div
                     class="font-display text-[13px] font-bold"
-                    :style="{ color: row.result.news_results.filter(r => r.matches_brand).length > 0 ? '#4f7cff' : 'var(--ink-3)' }"
+                    :style="{ color: (row.result.news_results ?? []).filter(r => r.matches_brand).length > 0 ? '#4f7cff' : 'var(--ink-3)' }"
                   >
-                    {{ row.result.news_results.filter(r => r.matches_brand).length }}
+                    {{ (row.result.news_results ?? []).filter(r => r.matches_brand).length }}
                   </div>
                 </template>
                 <div v-else-if="row.result && !row.result.news_present" class="font-display text-[13px] font-bold" :style="{ color: 'var(--ink-3)' }">无</div>
@@ -1491,8 +1597,8 @@ defineExpose({ reload: loadTasks });
                 </template>
                 <template v-else>
                   <Pill
-                    :tone="(row.result.default_matched_count + (row.result.news_present ? row.result.news_results.filter(r => r.matches_brand).length : 0)) >= idealRank ? 'ok' : 'warn'"
-                  >{{ (row.result.default_matched_count + (row.result.news_present ? row.result.news_results.filter(r => r.matches_brand).length : 0)) >= idealRank ? '理想' : '未理想' }}</Pill>
+                    :tone="(row.result.default_matched_count + (row.result.news_present ? (row.result.news_results ?? []).filter(r => r.matches_brand).length : 0)) >= idealRank ? 'ok' : 'warn'"
+                  >{{ (row.result.default_matched_count + (row.result.news_present ? (row.result.news_results ?? []).filter(r => r.matches_brand).length : 0)) >= idealRank ? '理想' : '未理想' }}</Pill>
                 </template>
               </div>
             </div>
@@ -1544,7 +1650,7 @@ defineExpose({ reload: loadTasks });
               <div class="font-display text-[20px] font-bold">
                 <template v-if="!currentKeyword">0</template>
                 <template v-else-if="!currentKeyword.news_present">无</template>
-                <template v-else>{{ currentKeyword.news_results.filter(r => r.matches_brand).length }}</template>
+                <template v-else>{{ (currentKeyword.news_results ?? []).filter(r => r.matches_brand).length }}</template>
               </div>
               <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">
                 <template v-if="!currentKeyword || !currentKeyword.news_present">该关键词无最新资讯</template>
@@ -1639,7 +1745,7 @@ defineExpose({ reload: loadTasks });
                 <div class="text-[12px] font-semibold mb-2">最新资讯排名</div>
                 <div class="flex flex-col gap-1">
                   <a
-                    v-for="r in currentKeyword.news_results"
+                    v-for="r in (currentKeyword.news_results ?? [])"
                     :key="r.url"
                     :href="r.url"
                     target="_blank"

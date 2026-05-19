@@ -37,7 +37,12 @@ class _TrackingSession:
         self._visited = visited
         self._current_url = ""
         self.page = self
-        self.context = None
+        # Stub context.cookies returning BDUSS so _fetch_once's login pre-flight
+        # check passes. These tests focus on resume/breakpoint logic, not on
+        # login state — BDUSS check is exercised in test_baidu_keyword.py.
+        self.context = type("_Ctx", (), {
+            "cookies": lambda self, url=None: [{"name": "BDUSS", "value": "fake"}],
+        })()
         self.browser = None
         self.pw = None
 
@@ -175,7 +180,7 @@ def test_get_last_resumed_keyword_returns_zero():
 def test_fetch_with_resume_from_skips_initial_keywords(monkeypatch, no_wait_pacer):
     """resume_from=3 causes adapter to visit only kw3-kw9 (7 keywords)."""
     visited: list[str] = []
-    monkeypatch.setattr(baidu_keyword, "incognito_session", _make_fake_session_ctx(visited))
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", _make_fake_session_ctx(visited))
     monkeypatch.setattr(baidu_keyword, "detect_risk", lambda page, response=None: None)
     monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
     monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp())
@@ -206,7 +211,7 @@ def test_fetch_with_resume_from_skips_initial_keywords(monkeypatch, no_wait_pace
 def test_fetch_resume_from_zero_visits_all_keywords(monkeypatch, no_wait_pacer):
     """resume_from=0 (default) visits every configured keyword."""
     visited: list[str] = []
-    monkeypatch.setattr(baidu_keyword, "incognito_session", _make_fake_session_ctx(visited))
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", _make_fake_session_ctx(visited))
     monkeypatch.setattr(baidu_keyword, "detect_risk", lambda page, response=None: None)
     monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
     monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp())
@@ -239,7 +244,7 @@ def test_fetch_risk_exception_has_absolute_progress_after_resume(monkeypatch, no
             return RiskSignal(layer="dom", detail="DOM matched '#captcha-mask'")
         return None
 
-    monkeypatch.setattr(baidu_keyword, "incognito_session", _make_fake_session_ctx([]))
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", _make_fake_session_ctx([]))
     monkeypatch.setattr(baidu_keyword, "detect_risk", fake_detect_risk)
     monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
     monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp())
@@ -275,7 +280,7 @@ def test_resume_from_breakpoint_uses_stored_position(monkeypatch, no_wait_pacer)
     assert storage.get_last_resumed_keyword(task.id) == 3
 
     visited: list[str] = []
-    monkeypatch.setattr(baidu_keyword, "incognito_session", _make_fake_session_ctx(visited))
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", _make_fake_session_ctx(visited))
     monkeypatch.setattr(baidu_keyword, "detect_risk", lambda page, response=None: None)
     monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
     monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp())
@@ -294,7 +299,7 @@ def test_resume_from_breakpoint_uses_stored_position(monkeypatch, no_wait_pacer)
 def test_resume_from_greater_than_keyword_count_yields_empty_scan(monkeypatch, no_wait_pacer):
     """resume_from >= len(keywords) → adapter clamps, scan visits nothing, status='ok'."""
     visited: list[str] = []
-    monkeypatch.setattr(baidu_keyword, "incognito_session", _make_fake_session_ctx(visited))
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", _make_fake_session_ctx(visited))
     monkeypatch.setattr(baidu_keyword, "detect_risk", lambda page, response=None: None)
     monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
     monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp())

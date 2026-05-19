@@ -30,15 +30,44 @@ import { ref } from "vue";
 import { subscribe } from "@/api/client";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
+import { useToast } from "@/composables/useToast";
 
 interface ProgressEntry {
   current: number;
   total: number;
 }
 
+// Grace window for the markRunning → backend-enroll race.
+//
+// `run_task_now` POST returns 200 the moment the task is submitted to the
+// sidecar's ThreadPoolExecutor, but the worker thread may sit in the
+// platform slot semaphore for up to 120 s before publishing `started`
+// and calling `_track_active`. If the user navigates away and back
+// during that window, BaiduRankingPage's onMounted triggers
+// `hydrate()` → GET /api/monitor/running → empty Set → clobbers the
+// optimistic mark. The backend now pre-registers in run_task_now (so
+// /running is honest), but we keep this client-side grace as
+// defense-in-depth in case the optimistic mark beats the POST round-trip.
+const _OPTIMISTIC_GRACE_MS = 5000;
+const _optimisticMarkedAt = new Map<number, number>();
+
 export const useMonitorStatus = defineStore("monitorStatus", () => {
   const runningTaskIds = ref<Set<number>>(new Set());
   const taskProgress = ref<Record<number, ProgressEntry>>({});
+  const toast = useToast();
+  // Bumped after any task create / update / batch-import to fan out "go
+  // reload your tasks list" signals across mounted monitor pages without
+  // relying on template ref chains. BaiduRankingPage / MonitorView watch
+  // this nonce in setup. The original baiduPageRef.value?.reload?.()
+  // path silently no-ops if the ref hasn't been wired by the time a
+  // batch-import emit fires (HMR re-mount race, or modal lifecycle
+  // ordering), which is why batch-import wasn't refreshing the baidu
+  // tab even though @imported was bound. Nonce-based fanout doesn't
+  // care about ref order.
+  const taskMutationNonce = ref(0);
+  function bumpTaskMutation(): void {
+    taskMutationNonce.value += 1;
+  }
 
   // Internal singletons — store is created once per app, so these are
   // effectively module-level.
@@ -55,6 +84,11 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
   }
 
   function markRunning(taskId: number): void {
+    // Stamp the optimistic-mark time so hydrate() can ride out the race
+    // where /api/monitor/running hasn't enrolled this task yet (slot
+    // wait / executor queue). Always update — even if already running —
+    // so a re-dispatched task gets a fresh grace window.
+    _optimisticMarkedAt.set(taskId, Date.now());
     if (runningTaskIds.value.has(taskId)) return;
     const s = new Set(runningTaskIds.value);
     s.add(taskId);
@@ -62,6 +96,10 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
   }
 
   function clearRunning(taskId: number): void {
+    // Clear the optimistic ledger entry regardless of whether the task
+    // was in runningTaskIds — callers that clear after a failed POST
+    // need this too.
+    _optimisticMarkedAt.delete(taskId);
     if (!runningTaskIds.value.has(taskId)) {
       // Even if not in the set, drop any stale progress entry.
       if (taskId in taskProgress.value) {
@@ -108,12 +146,34 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
         ? r.data.running_task_ids
         : [];
       const backendSet = new Set(ids);
-      runningTaskIds.value = backendSet;
-      // Drop progress entries for tasks no longer running on the backend
+      // Merge instead of overwrite: tasks the user just optimistically
+      // marked (within _OPTIMISTIC_GRACE_MS) but the backend hasn't
+      // enrolled in /running yet should survive this hydrate. Without
+      // this, navigating away+back right after clicking 立刻监测 would
+      // clobber the optimistic mark.
+      const now = Date.now();
+      const next = new Set<number>(backendSet);
+      for (const id of runningTaskIds.value) {
+        if (backendSet.has(id)) continue;
+        const at = _optimisticMarkedAt.get(id);
+        if (at !== undefined && now - at < _OPTIMISTIC_GRACE_MS) next.add(id);
+      }
+      runningTaskIds.value = next;
+      // Prune optimistic timestamps: backend confirmed OR grace expired.
+      // The expired ones get dropped from runningTaskIds above as a
+      // side-effect (they're not added to `next`), so this is just
+      // ledger maintenance.
+      for (const id of Array.from(_optimisticMarkedAt.keys())) {
+        const at = _optimisticMarkedAt.get(id);
+        if (backendSet.has(id) || at === undefined || now - at >= _OPTIMISTIC_GRACE_MS) {
+          _optimisticMarkedAt.delete(id);
+        }
+      }
+      // Drop progress entries for tasks no longer running per the merged set
       const nextProgress: Record<number, ProgressEntry> = {};
       for (const [k, v] of Object.entries(taskProgress.value)) {
         const numK = Number(k);
-        if (backendSet.has(numK)) nextProgress[numK] = v;
+        if (next.has(numK)) nextProgress[numK] = v;
       }
       taskProgress.value = nextProgress;
     } catch {
@@ -155,6 +215,9 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
       started: (d: any) => {
         if (typeof d.task_id === "number" && d.task_id > 0) {
           markRunning(d.task_id);
+          // Backend has now confirmed the task is running; the optimistic
+          // grace window is no longer needed.
+          _optimisticMarkedAt.delete(d.task_id);
         }
       },
       progress: (d: any) => {
@@ -167,7 +230,23 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
         if (typeof d.task_id === "number") clearRunning(d.task_id);
       },
       failed: (d: any) => {
-        if (typeof d.task_id === "number") clearRunning(d.task_id);
+        if (typeof d.task_id !== "number") return;
+        clearRunning(d.task_id);
+        // Triage the failure reason so the user gets a useful toast.
+        // - cancelled by user: they clicked 停止, no surprise — stay silent
+        // - risk control: a separate SSE `risk_control` event carries the
+        //   recovery UI (resume from breakpoint), no toast from here to
+        //   avoid double-notifying
+        // - slot timeout: friendly hint about queue saturation
+        // - everything else: surface the first line so failures during
+        //   navigated-away periods don't vanish silently
+        const err = String(d.error ?? "");
+        if (err.includes("cancelled by user")) return;
+        if (err.startsWith("风控拦截") || err.includes("captcha")) return;
+        const reason = err.includes("timeout waiting for platform slot")
+          ? "队列繁忙，请稍后重试或减少同时运行的任务"
+          : (err.split("\n")[0] || "未知原因");
+        toast.error(`监测任务 #${d.task_id} 失败：${reason}`);
       },
     });
     // Initial sync + periodic safety net. 30 s is conservative — covers
@@ -201,5 +280,7 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     cancel,
     start,
     stop,
+    taskMutationNonce,
+    bumpTaskMutation,
   };
 });

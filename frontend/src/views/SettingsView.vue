@@ -272,6 +272,7 @@ onMounted(async () => {
   if (!cfg.data) await cfg.load();
   syncDraftFromCfg();
   refreshKeyringStatus();
+  refreshBaiduLoginStatus();
   applyHash(route.hash);
 });
 
@@ -621,6 +622,69 @@ function saveExcludeDomains() {
   }
   setField("monitor.baidu_keyword.default_excluded_domains", dedup);
   excludeDomainsModalOpen.value = false;
+}
+
+async function confirmResetBaiduProfile() {
+  if (!confirm("确认重置百度浏览器 profile？\n下次任务会冷启重建，前几次抓取可能仍触发风控（cookie 需要慢慢累积）。")) {
+    return;
+  }
+  try {
+    await sidecar.client.post("/api/monitor/baidu/reset-profile");
+    toast.success("百度浏览器 profile 已重置");
+  } catch (e: any) {
+    const detail = e.response?.data?.detail ?? e.message ?? "未知错误";
+    toast.error(`重置失败：${detail}`);
+  }
+}
+
+// ── Baidu account login state ────────────────────────────────────────
+const baiduLoginStatus = ref<{
+  logged_in: boolean;
+  username: string | null;
+  expires_at: string | null;
+}>({ logged_in: false, username: null, expires_at: null });
+const baiduLoginBusy = ref(false);
+
+async function refreshBaiduLoginStatus() {
+  try {
+    const r = await sidecar.client.get("/api/monitor/baidu/login-status");
+    baiduLoginStatus.value = {
+      logged_in: !!r.data?.logged_in,
+      username: r.data?.username ?? null,
+      expires_at: r.data?.expires_at ?? null,
+    };
+  } catch (e) {
+    // Settings page shouldn't blow up if sidecar is wedged; just show "未登录"
+    baiduLoginStatus.value = { logged_in: false, username: null, expires_at: null };
+  }
+}
+
+async function startBaiduLogin() {
+  const msg = baiduLoginStatus.value.logged_in
+    ? "重新登录百度账号？\n会打开一个浏览器窗口，登录新账号后旧登录态会被覆盖。"
+    : "登录百度账号？\n会打开一个浏览器窗口，登录后 CSM 抓取任务自动用登录态访问。\n建议使用专用账号，避免日常使用的账号被风控。";
+  if (!confirm(msg)) return;
+
+  baiduLoginBusy.value = true;
+  try {
+    const r = await sidecar.client.post("/api/monitor/baidu/login");
+    const status = r.data?.status;
+    if (status === "success") {
+      toast.success("百度账号登录成功");
+    } else if (status === "cancelled") {
+      toast.info("登录已取消");
+    } else if (status === "timeout") {
+      toast.error("登录超时（窗口已关闭）");
+    } else {
+      toast.error(`登录失败：未知状态 ${status}`);
+    }
+  } catch (e: any) {
+    const detail = e.response?.data?.detail ?? e.message ?? "未知错误";
+    toast.error(`登录失败：${detail}`);
+  } finally {
+    baiduLoginBusy.value = false;
+    await refreshBaiduLoginStatus();
+  }
 }
 
 // 通知设置弹窗的 ref 在文件上方声明（applyHash 需要先用）。
@@ -1443,6 +1507,44 @@ async function saveAccountEdit() {
                 />
               </SettingsRow>
               <SettingsRow
+                label="文章节流（秒）"
+                hint="SERP 解析完后逐条抓正文之间的最小间隔（抖动 [N, 2N]）；防止 10 条链接秒级连发触发 baidu 风控。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.article_pacing_seconds') ?? 3"
+                  type="number"
+                  min="0"
+                  max="30"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.article_pacing_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="百家号节流（秒）"
+                hint="百家号 / mbd / mp 子域专用更宽间隔。百度自家子域反爬最严，建议比文章节流大 2–3 倍。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.baijiahao_pacing_seconds') ?? 8"
+                  type="number"
+                  min="0"
+                  max="60"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.baijiahao_pacing_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
                 label="熔断失败阈值"
                 hint="连续失败达到此次数后触发熔断，暂停该平台的请求。"
               >
@@ -1486,21 +1588,62 @@ async function saveAccountEdit() {
                 +「管理排除域名」弹窗，row 高度保持跟其它字段一致。
                 count 标显当前已配置的域名数，让用户不打开也知道规模。
               -->
-              <SettingsRow
-                label="默认排除域名（全局黑名单）"
-                hint="所有百度任务默认应用的 SERP 过滤名单。常见 B2B/电商站点（jd.com / 1688.com / taobao.com 等）已经预置；任务级可再加自家品牌官网。"
-                last
-              >
-                <div class="flex items-center gap-2">
-                  <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                    {{ (get('monitor.baidu_keyword.default_excluded_domains') ?? []).length }} 条
-                  </span>
-                  <Btn variant="solid" small @click="excludeDomainsModalOpen = true">
-                    <Icon name="edit" :size="12" />
-                    <span>管理排除域名</span>
+              <div id="baidu-default-excludes">
+                <SettingsRow
+                  label="默认排除域名（全局黑名单）"
+                  hint="所有百度任务默认应用的 SERP 过滤名单。常见 B2B/电商站点（jd.com / 1688.com / taobao.com 等）已经预置；任务级可再加自家品牌官网。"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+                      {{ (get('monitor.baidu_keyword.default_excluded_domains') ?? []).length }} 条
+                    </span>
+                    <Btn variant="solid" small @click="excludeDomainsModalOpen = true">
+                      <Icon name="edit" :size="12" />
+                      <span>管理排除域名</span>
+                    </Btn>
+                  </div>
+                </SettingsRow>
+                <SettingsRow
+                  label="百度账号"
+                  hint="CSM 抓取任务用登录态访问百度，显著降低风控触发率。建议使用专用账号 —— 万一被风控，不会影响你日常使用的账号。"
+                >
+                  <div class="flex items-center gap-3">
+                    <span
+                      v-if="baiduLoginStatus.logged_in"
+                      class="text-[11.5px]"
+                      :style="{ color: 'var(--success, #16a34a)' }"
+                    >
+                      已登录{{ baiduLoginStatus.username ? ` @${baiduLoginStatus.username}` : "" }}
+                    </span>
+                    <span
+                      v-else
+                      class="text-[11.5px]"
+                      :style="{ color: 'var(--ink-3)' }"
+                    >
+                      未登录
+                    </span>
+                    <Btn
+                      variant="solid"
+                      small
+                      :disabled="baiduLoginBusy"
+                      @click="startBaiduLogin"
+                    >
+                      <Icon name="user" :size="12" />
+                      <span>{{ baiduLoginStatus.logged_in ? "重新登录" : "登录百度" }}</span>
+                    </Btn>
+                  </div>
+                </SettingsRow>
+                <SettingsRow
+                  label="重置百度浏览器 profile"
+                  hint="如果连续触发百度风控、cookie 已经烫坏，点这里清空浏览器数据从头来。期间不能有运行中的百度任务。"
+                  last
+                >
+                  <Btn variant="danger" small @click="confirmResetBaiduProfile">
+                    <Icon name="trash" :size="12" />
+                    <span>重置</span>
                   </Btn>
-                </div>
-              </SettingsRow>
+                </SettingsRow>
+              </div>
             </div>
 
             <SettingsRow
