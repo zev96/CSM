@@ -956,186 +956,65 @@ def test_fetch_drops_session_on_risk_control(monkeypatch):
     assert drops == [202], "session should be dropped even when RiskControlException propagates"
 
 
-# ── _navigate_to_serp / _random_dwell_ms ───────────────────────────────
+# ── _navigate_to_serp (simplified: direct goto(serp_url)) ──────────────
 
 
-def test_navigate_to_serp_first_keyword_goes_home(monkeypatch):
-    """First keyword: goto baidu.com home → fill kw → click su.
+def test_navigate_to_serp_direct_goto():
+    """_navigate_to_serp performs exactly one page.goto on the SERP url.
 
-    Verifies the full real-user simulation flow runs for is_first_keyword=True.
+    The 3-stage home→fill→Enter flow was retired — its stable timing
+    pattern was itself a bot signal. With persistent BDUSS the direct
+    goto looks like a real user opening SERP from a bookmark / external
+    link.
     """
-    from typing import Any
-    from csm_core.monitor.platforms import baidu_keyword
-
-    calls: list[tuple[str, Any]] = []
-
-    class FakeNavInfo:
-        @property
-        def value(self):
-            return "fake-response"
-
-    class FakeNavCtx:
-        def __enter__(self):
-            return FakeNavInfo()
-        def __exit__(self, *a):
-            return False
-
-    _outer_calls = calls
-
-    class FakeKeyboard:
-        def press(self, key, **kwargs):
-            _outer_calls.append(("keyboard_press", key))
-
-    class FakePage:
-        def __init__(self):
-            self.keyboard = FakeKeyboard()
-        def goto(self, url, **kwargs):
-            calls.append(("goto", url))
-        def wait_for_timeout(self, ms):
-            calls.append(("wait_for_timeout", ms))
-        def fill(self, selector, value, **kwargs):
-            calls.append(("fill", (selector, value), kwargs))
-        def click(self, selector, **kwargs):
-            calls.append(("click", selector, kwargs))
-        def expect_navigation(self, **kwargs):
-            calls.append(("expect_navigation", kwargs))
-            return FakeNavCtx()
-
-    response = baidu_keyword._navigate_to_serp(
-        FakePage(), keyword="吸尘器", is_first_keyword=True,
-    )
-
-    assert response == "fake-response"
-    # Required ordering: home goto comes FIRST
-    op_names = [c[0] for c in calls]
-    assert op_names[0] == "goto"
-    assert "baidu.com" in calls[0][1]
-    # Then a wait (dwell)
-    assert "wait_for_timeout" in op_names[:3]
-    # Then fill with the keyword
-    fill_call = next(c for c in calls if c[0] == "fill")
-    assert fill_call[1] == ("input#kw", "吸尘器")
-    # Then expect_navigation wrapping keyboard.press("Enter") to submit form.
-    # Click on input#su was abandoned because patchright's click path fails
-    # on stealth-launched hidden windows (scrollIntoViewIfNeeded → not visible).
-    assert ("keyboard_press", "Enter") in calls
-    assert "expect_navigation" in op_names
-
-
-def test_navigate_to_serp_subsequent_keyword_skips_home(monkeypatch):
-    """is_first_keyword=False: do NOT goto home; just fill + click in the
-    existing SERP page's top searchbox."""
-    from typing import Any
-    from csm_core.monitor.platforms import baidu_keyword
-
-    calls: list[tuple[str, Any]] = []
-
-    class FakeNavInfo:
-        @property
-        def value(self):
-            return "fake-response"
-
-    class FakeNavCtx:
-        def __enter__(self):
-            return FakeNavInfo()
-        def __exit__(self, *a):
-            return False
-
-    _outer_calls = calls
-
-    class FakeKeyboard:
-        def press(self, key, **kwargs):
-            _outer_calls.append(("keyboard_press", key))
-
-    class FakePage:
-        def __init__(self):
-            self.keyboard = FakeKeyboard()
-        def goto(self, url, **kwargs):
-            calls.append(("goto", url))
-        def wait_for_timeout(self, ms):
-            calls.append(("wait_for_timeout", ms))
-        def fill(self, selector, value, **kwargs):
-            calls.append(("fill", (selector, value), kwargs))
-        def click(self, selector, **kwargs):
-            calls.append(("click", selector, kwargs))
-        def expect_navigation(self, **kwargs):
-            calls.append(("expect_navigation", kwargs))
-            return FakeNavCtx()
-
-    baidu_keyword._navigate_to_serp(
-        FakePage(), keyword="洗碗机", is_first_keyword=False,
-    )
-
-    # NO goto should happen — we reuse the existing SERP's top searchbox
-    goto_calls = [c for c in calls if c[0] == "goto"]
-    assert goto_calls == [], f"expected no goto, got {goto_calls}"
-
-    fill_call = next(c for c in calls if c[0] == "fill")
-    assert fill_call[1] == ("input#kw", "洗碗机")
-    # Submit via keyboard.press("Enter") on the focused input (form auto-submits)
-    assert ("keyboard_press", "Enter") in calls
-
-
-def test_navigate_to_serp_fills_with_force_and_submits_via_keyboard():
-    """fill 必须传 force=True 跳过 actionability check；submit 走 keyboard.press
-    而不是 click，绕开 patchright click 的多阶段 actionability + scrollIntoView。
-
-    根因 (real-test 暴露)：stealth 策略让 Chrome 窗口在 OS 层 layout invalid，
-    所有元素 getBoundingClientRect=0×0：
-    - page.fill 内部 visibility check fail → force=True 跳过
-    - page.click 多阶段：force=True 跳过 actionability，但后续
-      scrollIntoViewIfNeeded 独立 check visibility，依然 fail
-    - 解法：fill (force=True) → keyboard.press("Enter") 触发 form submit。
-      keyboard.press 是 page-level keyboard，无 per-element actionability check。
-    """
-    from typing import Any
     from csm_core.monitor.platforms import baidu_keyword
 
     calls: list[tuple] = []
-    _outer_calls = calls
-
-    class FakeNavInfo:
-        @property
-        def value(self):
-            return "fake-response"
-
-    class FakeNavCtx:
-        def __enter__(self):
-            return FakeNavInfo()
-        def __exit__(self, *a):
-            return False
-
-    class FakeKeyboard:
-        def press(self, key, **kwargs):
-            _outer_calls.append(("keyboard_press", key, kwargs))
 
     class FakePage:
-        def __init__(self):
-            self.keyboard = FakeKeyboard()
         def goto(self, url, **kwargs):
-            pass
-        def wait_for_timeout(self, ms):
-            pass
-        def fill(self, selector, value, **kwargs):
-            calls.append(("fill", selector, kwargs))
-        def click(self, selector, **kwargs):
-            calls.append(("click", selector, kwargs))
-        def expect_navigation(self, **kwargs):
-            return FakeNavCtx()
+            calls.append(("goto", url, kwargs))
+            return "fake-response"
 
-    baidu_keyword._navigate_to_serp(FakePage(), keyword="test", is_first_keyword=True)
+    response = baidu_keyword._navigate_to_serp(FakePage(), keyword="吸尘器")
 
-    fill_call = next(c for c in calls if c[0] == "fill")
-    assert fill_call[2].get("force") is True, (
-        f"fill 必须传 force=True，got kwargs: {fill_call[2]}"
-    )
-    # click should NOT be called — submit goes via keyboard.press now
-    assert not any(c[0] == "click" for c in calls), (
-        f"submit 应该走 keyboard.press 而不是 click，got: {[c for c in calls if c[0] == 'click']}"
-    )
-    keyboard_call = next(c for c in calls if c[0] == "keyboard_press")
-    assert keyboard_call[1] == "Enter", (
-        f"应该按 Enter 触发 form submit，got: {keyboard_call[1]}"
+    assert response == "fake-response"
+    assert len(calls) == 1
+    op, url, kwargs = calls[0]
+    assert op == "goto"
+    assert url.startswith("https://www.baidu.com/s?wd=")
+    # quote() encodes 吸尘器 as %E5%90%B8%E5%B0%98%E5%99%A8
+    assert "%E5%90%B8%E5%B0%98%E5%99%A8" in url
+    assert kwargs.get("wait_until") == "domcontentloaded"
+    assert kwargs.get("timeout") == 30000
+
+
+def test_navigate_to_serp_does_not_touch_input_or_keyboard():
+    """Guard against future regression: the function must NOT call
+    fill / click / keyboard / mouse / wait_for_timeout — those were
+    the bot-signal-leaking ops.
+    """
+    from csm_core.monitor.platforms import baidu_keyword
+
+    forbidden_calls: list[str] = []
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            return "fake-response"
+        def fill(self, *a, **kw):
+            forbidden_calls.append("fill")
+        def click(self, *a, **kw):
+            forbidden_calls.append("click")
+        def wait_for_timeout(self, *a, **kw):
+            forbidden_calls.append("wait_for_timeout")
+        def expect_navigation(self, **kw):
+            forbidden_calls.append("expect_navigation")
+            raise AssertionError("should not be called")
+
+    baidu_keyword._navigate_to_serp(FakePage(), keyword="test")
+
+    assert forbidden_calls == [], (
+        f"_navigate_to_serp should only call page.goto, got: {forbidden_calls}"
     )
 
 
