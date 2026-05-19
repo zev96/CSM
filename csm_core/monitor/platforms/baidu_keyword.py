@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import logging
-import random
 import threading
 from datetime import datetime
 from typing import Any, Callable
@@ -359,40 +358,6 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
         "fetch_error": None if text else "browser content empty after readability",
         "needs_browser_fallback": False,
     }
-
-
-def _random_dwell_ms(*, short: bool = False) -> int:
-    """模拟真人 dwell time。
-
-    short=True 用于打字与点击之间（输入完到按 Enter，800-1500ms）；
-    否则用于看页面停留（3000-6000ms）。
-
-    实战中老 dwell（800-2000 / 200-500）让 home → fill → Enter 整个流程
-    在 ~1.5 秒内完成，被 baidu 风控判定为机器人模式（真人通常 5-10 秒）。
-    加长到秒级符合"真人看完页面再输入再回车"的速度。
-    """
-    if short:
-        return random.randint(800, 1500)
-    return random.randint(3000, 6000)
-
-
-def _simulate_user_browsing(page: Any) -> None:
-    """在主页/SERP 加载后模拟真人 idle 行为：鼠标晃几下。
-
-    patchright stealth 默认不发 mousemove 事件 —— 这本身是 bot 信号
-    （真人浏览页面时鼠标几乎总在动）。每次 move 是绝对坐标，不针对具体
-    element，无 actionability check，headless 下也能正常 dispatch。
-
-    Fail-soft：任何异常吞掉（stealth 增强失效但不影响主流程）。
-    """
-    try:
-        for _ in range(random.randint(2, 4)):
-            x = random.randint(100, 1200)
-            y = random.randint(100, 600)
-            page.mouse.move(x, y)
-            page.wait_for_timeout(random.randint(100, 300))
-    except Exception as e:
-        logger.debug("simulated browsing mouse move failed: %s", e)
 
 
 def _navigate_to_serp(page: Any, keyword: str) -> Any:
@@ -807,23 +772,9 @@ class BaiduKeywordAdapter:
                     "fetch_error": None,
                 }
 
-                # Real-user simulation: rel_idx == 0 means first keyword in this session,
-                # which is also the cold-start state (page just got opened by
-                # baidu_browser_session). On subsequent keywords we reuse the SERP's
-                # top searchbox to preserve the natural Referer chain.
                 serp_response = None
                 try:
-                    serp_response = _navigate_to_serp(
-                        page, keyword, is_first_keyword=(rel_idx == 0),
-                    )
-                except (TypeError, AttributeError):
-                    # FakePage / FakeSession (in tests) may not implement
-                    # fill / expect_navigation / wait_for_timeout;
-                    # fall back to direct goto so unrelated tests still work.
-                    try:
-                        serp_response = page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
-                    except TypeError:
-                        serp_response = page.goto(serp_url)
+                    serp_response = _navigate_to_serp(page, keyword)
                 except Exception as e:
                     logger.warning(
                         "baidu navigate failed (headless=%s, keyword=%r): %s",
@@ -831,8 +782,8 @@ class BaiduKeywordAdapter:
                     )
                     kw_entry["fetch_error"] = f"serp navigate raised: {e!r}"
                     keyword_results.append(kw_entry)
-                    # 注意：_navigate_to_serp 失败时不调 detect_risk —— 页面没加载，
-                    # 4 层信号都没意义。此 keyword 以 fetch_error 状态记录，runner 跳到下一个。
+                    # _navigate_to_serp 失败时不调 detect_risk —— 页面没加载，
+                    # 4 层信号都没意义。此 keyword 以 fetch_error 状态记录。
                     continue
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
