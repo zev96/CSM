@@ -185,3 +185,137 @@ def _read_username(user_data_dir: Path) -> str | None:
     except Exception as e:
         logger.debug("read .csm_login_meta.json failed: %s", e)
         return None
+
+
+# ── open_login_window ──────────────────────────────────────────────────
+
+
+# Tunable in tests via monkeypatch
+_POLL_INTERVAL_S = 3.0
+# After BDUSS shows up, sleep this long so the rest of the login cookies
+# (PTOKEN/STOKEN/PASS_TICKET) finish landing on disk before we close.
+_POST_LOGIN_SETTLE_S = 2.0
+
+
+def open_login_window(
+    user_data_dir: Path | None = None,
+    *,
+    timeout_s: int = 600,
+) -> dict[str, Any]:
+    """开一个可见 patchright headed 窗口让用户登录百度。
+
+    流程：
+    1. launch_persistent_context(headless=False) 在 baidu profile 上开窗
+    2. page.goto("https://www.baidu.com/") + bring_to_front
+    3. 每 _POLL_INTERVAL_S 秒 poll context.cookies，检测 BDUSS 是否出现
+    4. 同时监听 BrowserContext "close" 事件（用户手动关窗）
+    5. BDUSS 命中 → 等 _POST_LOGIN_SETTLE_S 让其他登录 cookie 落盘 → close
+    6. 用户关窗 → 立即返回 cancelled
+    7. timeout_s 达到 → 关窗 + 返回 timeout
+
+    success 时写 user_data_dir / .csm_login_meta.json，供 get_login_status
+    后续读取。
+
+    Returns:
+        {"status": "success" | "cancelled" | "timeout", "username": str | None}
+    """
+    ensure_browsers_path()
+    target_dir = user_data_dir or _default_user_data_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    pw = None
+    context = None
+    try:
+        pw = _sync_playwright().start()
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=str(target_dir),
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--window-size=1280,800",
+            ],
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+
+        # User-closed flag — toggled via the context "close" event listener
+        # below. _open_login_poll respects it.
+        state = {"closed_by_user": False}
+        def _on_close(_evt=None):
+            state["closed_by_user"] = True
+        try:
+            context.on("close", _on_close)
+        except Exception as e:
+            # FakeContext in tests may not implement on(). Log + continue.
+            logger.debug("context.on('close') not available: %s", e)
+
+        try:
+            page.goto("https://www.baidu.com/")
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("open_login_window goto failed: %s", e)
+
+        outcome = _open_login_poll(context, state, timeout_s)
+        if outcome == "success":
+            time.sleep(_POST_LOGIN_SETTLE_S)
+            username = _fetch_username_from_passport(context)
+            _write_login_meta(target_dir, username)
+            return {"status": "success", "username": username}
+        return {"status": outcome, "username": None}
+    finally:
+        if context is not None:
+            try:
+                context.close()
+            except Exception as e:
+                logger.debug("open_login_window context.close raised: %s", e)
+        if pw is not None:
+            try:
+                pw.stop()
+            except Exception as e:
+                logger.debug("open_login_window pw.stop raised: %s", e)
+
+
+def _open_login_poll(context: Any, state: dict[str, bool], timeout_s: int) -> str:
+    """Poll until BDUSS appears, user closes window, or timeout. Returns
+    one of: 'success', 'cancelled', 'timeout'."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if state.get("closed_by_user"):
+            return "cancelled"
+        try:
+            cookies = context.cookies("https://www.baidu.com/")
+        except Exception as e:
+            logger.debug("poll cookies() raised: %s", e)
+            cookies = []
+        if any(c.get("name") == "BDUSS" for c in cookies):
+            return "success"
+        time.sleep(_POLL_INTERVAL_S)
+    return "timeout"
+
+
+def _fetch_username_from_passport(context: Any) -> str | None:
+    """Best-effort: hit baidu passport's logininfo endpoint inside the
+    same context (cookies attached) to retrieve the username. Failure
+    is non-fatal — success without a username still counts as logged in.
+    """
+    # passport API is unstable/private; defer real impl. Returning None
+    # is fine — the frontend falls back to "已登录" without name.
+    return None
+
+
+def _write_login_meta(user_data_dir: Path, username: str | None) -> None:
+    """Write the meta file get_login_status reads."""
+    meta = {
+        "username": username,
+        "logged_in_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    try:
+        (user_data_dir / _META_FILENAME).write_text(
+            json.dumps(meta, ensure_ascii=False), encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("write .csm_login_meta.json failed: %s", e)

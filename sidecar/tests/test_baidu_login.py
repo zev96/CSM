@@ -207,3 +207,102 @@ def test_get_login_status_session_cookie_no_expires(fake_pw_factory, tmp_path):
 
     assert status["logged_in"] is True
     assert status["expires_at"] is None  # no fixed expiry to surface
+
+
+# ── open_login_window ──────────────────────────────────────────────────
+
+
+class _PollingCtx:
+    """Cookies start empty, then return BDUSS after N polls. Mimics user
+    completing login mid-window. Tracks goto/close/headers for assertion."""
+
+    def __init__(self, bduss_appears_after_polls: int = 1):
+        self._counter = 0
+        self._threshold = bduss_appears_after_polls
+        self.close_called = False
+        self.goto_urls: list[str] = []
+        # Simulate the BrowserContext lifecycle handler API
+        self._close_listeners: list[Any] = []
+        self.pages: list[Any] = []
+        # Pre-create one page (persistent context returns one by default)
+        self.pages.append(self._make_page())
+
+    def _make_page(self):
+        outer = self
+        class P:
+            def goto(self, url, **kwargs):
+                outer.goto_urls.append(url)
+            def bring_to_front(self):
+                pass
+        return P()
+
+    def new_page(self):
+        page = self._make_page()
+        self.pages.append(page)
+        return page
+
+    def cookies(self, url: str | None = None):
+        self._counter += 1
+        if self._counter > self._threshold:
+            return [{"name": "BDUSS", "value": "xyz",
+                     "expires": time.time() + 86400 * 30,
+                     "domain": ".baidu.com"}]
+        return []
+
+    def close(self):
+        self.close_called = True
+
+    def on(self, event_name: str, handler: Any):
+        if event_name == "close":
+            self._close_listeners.append(handler)
+
+
+class _PollingChromium:
+    def __init__(self, ctx: _PollingCtx):
+        self.context = ctx
+        self.last_kwargs: dict[str, Any] = {}
+    def launch_persistent_context(self, user_data_dir, **kwargs):
+        self.last_kwargs = kwargs
+        return self.context
+
+
+class _PollingPW:
+    def __init__(self, ctx: _PollingCtx):
+        self.chromium = _PollingChromium(ctx)
+        self.stop_called = False
+    def stop(self):
+        self.stop_called = True
+
+
+def test_open_login_window_success(monkeypatch, tmp_path):
+    """BDUSS appears on second poll → status='success', context closed,
+    meta file written, headless=False, baidu.com goto'd."""
+    from csm_core.monitor.drivers import baidu_login
+
+    ctx = _PollingCtx(bduss_appears_after_polls=1)
+    pw = _PollingPW(ctx)
+    monkeypatch.setattr(baidu_login, "_sync_playwright", lambda: _FakeSyncPW(pw))
+    monkeypatch.setattr(baidu_login, "ensure_browsers_path", lambda: None)
+    # Short poll interval so the test runs fast
+    monkeypatch.setattr(baidu_login, "_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(baidu_login, "_POST_LOGIN_SETTLE_S", 0.01)
+    # Stub out the optional username-fetch — keep it pure
+    monkeypatch.setattr(baidu_login, "_fetch_username_from_passport",
+                        lambda ctx: "puseruser")
+
+    profile = tmp_path / "profile"
+    result = baidu_login.open_login_window(user_data_dir=profile, timeout_s=5)
+
+    assert result["status"] == "success"
+    assert result["username"] == "puseruser"
+    assert ctx.close_called is True
+    # The window was opened on baidu.com so user can click 登录
+    assert any("baidu.com" in u for u in ctx.goto_urls)
+    # Must be headed (so user can interact)
+    assert pw.chromium.last_kwargs.get("headless") is False
+    # Meta file persisted for get_login_status to read later
+    meta_path = profile / ".csm_login_meta.json"
+    assert meta_path.exists()
+    data = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert data["username"] == "puseruser"
+    assert "logged_in_at" in data
