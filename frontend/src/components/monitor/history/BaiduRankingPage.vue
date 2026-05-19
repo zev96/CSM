@@ -507,9 +507,13 @@ const idealRank = computed<number>(() => {
 });
 
 // 本次卡位数量: how many keywords have default_first_rank within ideal_rank
+//
+// keywords ?? [] 的保护跟 sparkPointsPlaced 同理 —— 风控触发后写的
+// breakpoint result 的 metric 里只有 last_resumed_keyword + captcha_signal_*，
+// 没有 keywords 数组，undefined.filter 会让整个 Level 2 render crash 白屏。
 const placedCountCurrent = computed<number>(() => {
   if (!latestMetric.value) return 0;
-  return latestMetric.value.keywords.filter(
+  return (latestMetric.value.keywords ?? []).filter(
     (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
   ).length;
 });
@@ -517,7 +521,7 @@ void placedCountCurrent; // suppress unused warning
 
 const placedCountPrev = computed<number>(() => {
   if (!prevMetric.value) return 0;
-  return prevMetric.value.keywords.filter(
+  return (prevMetric.value.keywords ?? []).filter(
     (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
   ).length;
 });
