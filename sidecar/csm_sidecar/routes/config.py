@@ -1,6 +1,7 @@
 """Config + keyring HTTP routes."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -10,6 +11,8 @@ from csm_core.config import AppConfig, delete_secret, get_secret, set_secret
 
 from ..auth import RequireToken
 from ..services import config_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["config"], dependencies=[RequireToken])
 
@@ -51,10 +54,18 @@ async def patch_config(updates: dict[str, Any]) -> AppConfig:
     # Hot-reload adapter settings only when monitor.* actually changed.
     # Lazy import: routes are imported during app boot before
     # monitor_lifecycle is fully ready; module-level import would create
-    # a circular dep with config_service.
+    # a circular dep with config_service. Wrap in try/except so an
+    # adapter that rejects the new value doesn't bubble up to a 500
+    # response — the docstring promises "still returns 200" and tests
+    # rely on that contract. _apply_runtime_settings already swallows
+    # adapter-level failures internally; this catches anything ELSE
+    # (e.g. a future refactor that adds a top-level check).
     if "monitor" in updates:
         from ..services import monitor_lifecycle
-        monitor_lifecycle.reconfigure(new_cfg)
+        try:
+            monitor_lifecycle.reconfigure(new_cfg)
+        except Exception:
+            logger.exception("monitor_lifecycle.reconfigure raised; PATCH still returns 200")
 
     return new_cfg
 

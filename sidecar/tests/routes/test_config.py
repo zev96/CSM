@@ -66,3 +66,20 @@ def test_patch_default_excluded_domains_visible_to_adapter(client: TestClient):
         assert "bug3-test.example" in BAIDU_ADAPTER._default_excluded_domains  # noqa: SLF001
     finally:
         monitor_lifecycle._loop = None  # noqa: SLF001 -- reset for other tests
+
+
+def test_patch_reconfigure_swallows_exception(client):
+    """If reconfigure raises, PATCH still returns 200 and the new config.
+
+    The docstring on patch_config promises this — we test the contract
+    so a future refactor that removes the try/except gets caught.
+    """
+    with patch.object(monitor_lifecycle, "reconfigure", side_effect=RuntimeError("adapter explosion")):
+        resp = client.patch(
+            "/api/config",
+            json={"monitor": {"baidu_keyword": {"default_excluded_domains": ["swallow-test.example"]}}},
+        )
+    assert resp.status_code == 200
+    # The new config was still persisted — only the reconfigure side-effect failed
+    body = resp.json()
+    assert "swallow-test.example" in body["monitor"]["baidu_keyword"]["default_excluded_domains"]
