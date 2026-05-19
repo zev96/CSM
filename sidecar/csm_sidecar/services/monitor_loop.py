@@ -267,11 +267,29 @@ class MonitorLoop:
         """
         if self._executor is None:
             raise RuntimeError("MonitorLoop is not started")
-        return self._executor.submit(
-            self._run_one_by_id, task_id,
-            keyword_override=keyword_override,
-            resume_from=resume_from,
-        )
+        # Pre-register active so /api/monitor/running reports this task
+        # the moment the POST returns. Without this, a worker thread that
+        # gets stuck waiting on the platform-slot semaphore (default cap 2,
+        # 120 s timeout) won't have called _track_active yet, and the
+        # frontend's hydrate-on-mount during page navigation will clobber
+        # the optimistic markRunning with an empty Set.
+        #
+        # _track_active is idempotent under _active_lock — the worker
+        # calls it again on entry to _run_one and gets the same Event,
+        # so cancel signals issued in this pre-register window are not
+        # lost (see _track_active docstring).
+        self._track_active(task_id)
+        try:
+            return self._executor.submit(
+                self._run_one_by_id, task_id,
+                keyword_override=keyword_override,
+                resume_from=resume_from,
+            )
+        except Exception:
+            # If submit itself raises (e.g. pool shutting down), undo the
+            # pre-register so /running doesn't lie indefinitely.
+            self._untrack_active(task_id)
+            raise
 
     # ── tick / dispatch internals ───────────────────────────────────────
     def _tick(self) -> None:

@@ -26,7 +26,13 @@ from lxml import html as lxml_html
 from .. import rate_limit
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
 from ..drivers.incognito_session import incognito_session
-from ..drivers.risk_detector import detect_risk, RiskControlException
+from ..drivers.risk_detector import (
+    detect_risk,
+    detect_risk_by_http,
+    detect_risk_by_text,
+    detect_risk_by_url,
+    RiskControlException,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +196,36 @@ def fetch_article_http(url: str) -> dict[str, Any]:
         }
 
     raw = getattr(resp, "text", "") or ""
+
+    # Article-level 风控检测（与 fetch_article_browser 的 detect_risk 对齐，
+    # 但跳过 DOM 层 —— 我们没有 page，只有 raw HTML + Response）。
+    #
+    # 没这层时百家号的 https://baijiahao.baidu.com/safetycheck 这类验证码页
+    # 会返回 200 OK + 一段 HTML：readability 提出来 > 200 字（验证码说明 +
+    # 按钮文本），整段被当成"真实文章正文"存进 content_preview，污染下游
+    # match_brand 判断（虽然验证码页通常不含品牌词，但 content_preview
+    # 本身已是脏数据，用户看不到真实文章内容）。
+    #
+    # 粒度：article-level fetch_error，不 raise RiskControlException。curl_cffi
+    # 是无状态单次请求，单条 URL 触发风控不等于整个 session 被识别（不像
+    # browser fallback 共享 cookie）。fetch_error 写"百度风控"让上层标该
+    # 条 fetch 失败但继续抓其他文章；needs_browser_fallback=False 因为
+    # browser fallback 触发风控会 raise → 整个 task pause，比 article-level
+    # fail 影响大得多。
+    final_url = getattr(resp, "url", url) or url
+    risk = (
+        detect_risk_by_url(final_url)
+        or detect_risk_by_http(resp)
+        or detect_risk_by_text(raw)
+    )
+    if risk is not None:
+        return {
+            "content": "",
+            "source": "http",
+            "fetch_error": f"百度风控：layer={risk.layer} {risk.detail}",
+            "needs_browser_fallback": False,
+        }
+
     content = _extract_readable_text(raw)
     if len(content) < _HTTP_MIN_CONTENT_CHARS:
         return {
@@ -304,6 +340,22 @@ class BaiduKeywordAdapter:
 
     platform: str = "baidu_keyword"
 
+    # Pacer keys 给 _check_block 用：跟 SERP 间 pacer ("baidu_keyword")
+    # 分开，因为 SERP 间隔窗口 5-10s 是为整页跳转设的，对 10 条 article
+    # 链接级别太重；article 间需要独立、更短（默认 2-5s）的节奏窗口。
+    # 同时单独切出 baijiahao 是因为它是 baidu 自家子域反爬最严的（第三
+    # 方软文站秒抓不触发，百家号秒抓必触发），需要比普通 article 更长
+    # 的间隔（默认 5-10s 抖动）。
+    _ARTICLE_PACER_KEY = "baidu_keyword:article"
+    _BAIJIAHAO_PACER_KEY = "baidu_keyword:baijiahao"
+    # 用 host endswith 匹配，覆盖 baijiahao.baidu.com / mbd.baidu.com /
+    # 偶发的 mp.baidu.com 等百度生态内容站；都共享一个 cookie / 风控池。
+    _BAIJIAHAO_HOSTS: tuple[str, ...] = (
+        "baijiahao.baidu.com",
+        "mbd.baidu.com",
+        "mp.baidu.com",
+    )
+
     def __init__(self) -> None:
         # 真实字段在 apply_settings 里被覆盖。
         self._headless_default = True
@@ -319,11 +371,22 @@ class BaiduKeywordAdapter:
         captcha_visible_timeout_s: int = 90,
         captcha_max_promotions: int = 1,
         serp_pacing_seconds: int = 5,
+        article_pacing_seconds: int = 3,
+        baijiahao_pacing_seconds: int = 8,
         breaker_failures: int = 3,
         breaker_cooldown_seconds: int = 600,
         default_excluded_domains: list[str] | tuple[str, ...] | None = None,
     ) -> None:
-        """挂接 settings.monitor.baidu_keyword.*。lifecycle 启动 + 设置页保存时各调一次。"""
+        """挂接 settings.monitor.baidu_keyword.*。lifecycle 启动 + 设置页保存时各调一次。
+
+        ``article_pacing_seconds`` —— SERP 解析完 N 条链接后，逐条抓正文之间
+        要等多久（min）；max = min * 2 抖动。默认 3-6s。原来这一层没有节流，
+        10 条链接秒级连发到 baidu 网域，是百家号触发验证码的主要诱因。
+
+        ``baijiahao_pacing_seconds`` —— 同上但**仅对百家号/mbd/mp 子域生效**，
+        独立的 pacer 实例。百家号是 baidu 自家子域反爬最严的（第三方软文站
+        高速抓没事），需要比普通 article 更宽的窗口。默认 8-16s。
+        """
         from ..rate_limit import get_pacer, get_breaker
 
         self._headless_default = headless_default
@@ -345,6 +408,17 @@ class BaiduKeywordAdapter:
         pacer.configure(
             delay_min=float(serp_pacing_seconds),
             delay_max=float(serp_pacing_seconds * 2),
+        )
+        # Article-level pacers —— 跟 SERP 间 pacer ("baidu_keyword") 完全独立的
+        # 单例实例，by name 区分。jitter 窗口 (min, max*2) 复用 serp 同款映射，
+        # 让"配 5s 实际 5-10s 抖"的直觉跟用户原有的 serp_pacing_seconds 一致。
+        get_pacer(self._ARTICLE_PACER_KEY).configure(
+            delay_min=float(article_pacing_seconds),
+            delay_max=float(article_pacing_seconds * 2),
+        )
+        get_pacer(self._BAIJIAHAO_PACER_KEY).configure(
+            delay_min=float(baijiahao_pacing_seconds),
+            delay_max=float(baijiahao_pacing_seconds * 2),
         )
         breaker = get_breaker(self.platform)
         breaker.failure_threshold = breaker_failures
@@ -679,6 +753,8 @@ class BaiduKeywordAdapter:
         指定的「自家门户」域名），过滤掉的条目不计入 rank、不占数。
         这样最终的 rank 1, 2, 3 都是"软文/媒体"性质的链接。
         """
+        from .. import rate_limit as _rl  # 本地 import 避免循环；rate_limit 是 re-export shim
+
         out: list[dict[str, Any]] = []
         rank = 0
         for link in links:
@@ -686,13 +762,30 @@ class BaiduKeywordAdapter:
             host = urlparse(href).netloc or "baidu.com"
 
             # 早过滤：命中黑名单直接跳过 —— 既不计 rank 也不发文章请求，
-            # 节省 1 次 article HTTP 调用。
+            # 节省 1 次 article HTTP 调用。也不调 pacer.wait，避免在被跳过的
+            # 条目上空耗几秒。
             if exclude_set and self._is_host_excluded(host, exclude_set):
                 logger.debug(
                     "baidu _check_block: skip excluded host %s (link %s)",
                     host, link.get("title", "")[:40],
                 )
                 continue
+
+            # Article-level pacer —— 关键反爬节流，原来这里就是裸 for 循环
+            # 秒级连发 N 条 baidu.com/link 解析 + N 条文章 HTTP 请求，正是
+            # 百家号触发验证码的主要诱因。host 是百家号/mbd/mp 时换更宽的
+            # 独立 pacer；其它站走 article pacer。RequestPacer 内部维护
+            # last_request_at，所以第一条不阻塞（_last_request_at=0 → elapsed
+            # 视作 delay_max → sleep_for=0），后续才生效。
+            host_lower = host.lower()
+            is_baijiahao = any(
+                host_lower == h or host_lower.endswith("." + h)
+                for h in self._BAIJIAHAO_HOSTS
+            )
+            pacer_key = (
+                self._BAIJIAHAO_PACER_KEY if is_baijiahao else self._ARTICLE_PACER_KEY
+            )
+            _rl.get_pacer(pacer_key).wait()
 
             rank += 1
             attempt = fetch_article_http(href)

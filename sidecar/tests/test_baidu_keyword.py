@@ -574,3 +574,179 @@ class TestRiskDetectionIntegration:
         assert call_count["n"] == 3, (
             f"detect_risk should have been called 3 times (one per keyword until hit), got {call_count['n']}"
         )
+
+
+# ── Article-level pacing（防百家号验证码） ──────────────────────────────────
+#
+# 这一层节流是为了防 baidu 风控：原来 _check_block 对 SERP 解析出的
+# N 条链接做裸 for 循环，秒级连发 N 条 baidu.com/link?url= 跳转 + N 次
+# article HTTP 请求，百家号（baidu 自家子域反爬最严）很容易因此触发验
+# 证码 → fetch_article_http 拿回验证码 HTML → content_preview 污染 +
+# matches_brand 判错。修法：
+#   - "baidu_keyword:article"   pacer 控普通 host
+#   - "baidu_keyword:baijiahao" pacer 控 baidu 自家子域（更宽窗口）
+#   - 被 exclude_set 命中的 host 跳过、不调 pacer（不计 rank 也不空耗）
+
+def _make_pacer_tracker():
+    """生成一个 get_pacer 替代实现 + calls 列表。
+    返回 (fake_get_pacer, calls)。每次 wait 把对应 pacer name 追加到 calls。"""
+    calls: list[str] = []
+
+    class _Tracker:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def wait(self) -> None:
+            calls.append(self.name)
+
+        def configure(self, **kw) -> None:  # configure 会在 apply_settings 里被调
+            pass
+
+    def _fake_get_pacer(name: str):
+        return _Tracker(name)
+
+    return _fake_get_pacer, calls
+
+
+def _setup_check_block_mocks(monkeypatch):
+    """让 _check_block 内部走纯 HTTP 路径、resolve_baidu_link 不发请求。"""
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+    # 长 HTML → readability 提到 ≥200 字 → fetch_article_http 成功（不走 fallback）
+    long_html = (
+        "<html><body><article>"
+        + ("这是一篇关于产品评测的文章。" * 30)
+        + "</article></body></html>"
+    )
+    monkeypatch.setattr(
+        baidu_keyword, "_cc_get",
+        lambda url, **kw: _FakeResp(text=long_html),
+    )
+
+
+def test_check_block_calls_article_pacer_per_link(monkeypatch):
+    """正常 host 走 article pacer；每条 link 调一次 wait。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "a", "href": "https://example.com/a"},
+        {"title": "b", "href": "https://zhihu.com/p/1"},
+        {"title": "c", "href": "https://sohu.com/n/2"},
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    assert len(out) == 3
+    assert calls == [
+        "baidu_keyword:article",
+        "baidu_keyword:article",
+        "baidu_keyword:article",
+    ]
+
+
+def test_check_block_uses_baijiahao_pacer_for_baidu_subdomains(monkeypatch):
+    """baijiahao.baidu.com / mbd.baidu.com / mp.baidu.com 都走 baijiahao pacer。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "bjh", "href": "https://baijiahao.baidu.com/s?id=123"},
+        {"title": "mbd", "href": "https://mbd.baidu.com/newspage/x"},
+        {"title": "mp",  "href": "https://mp.baidu.com/foo"},
+    ]
+    adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    assert calls == [
+        "baidu_keyword:baijiahao",
+        "baidu_keyword:baijiahao",
+        "baidu_keyword:baijiahao",
+    ]
+
+
+def test_check_block_picks_pacer_per_link_host(monkeypatch):
+    """混合 host 时按 host 逐条切 pacer：百家号用 baijiahao，其它用 article。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "1", "href": "https://example.com/a"},
+        {"title": "2", "href": "https://baijiahao.baidu.com/s?id=1"},
+        {"title": "3", "href": "https://zhihu.com/p/1"},
+        {"title": "4", "href": "https://mbd.baidu.com/newspage/2"},
+    ]
+    adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    assert calls == [
+        "baidu_keyword:article",
+        "baidu_keyword:baijiahao",
+        "baidu_keyword:article",
+        "baidu_keyword:baijiahao",
+    ]
+
+
+def test_check_block_excluded_host_skips_pacer(monkeypatch):
+    """exclude_set 命中的 host 不调 pacer（不计 rank 也不空耗节流时间）。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "jd ad",   "href": "https://item.jd.com/123.html"},  # excluded
+        {"title": "article", "href": "https://example.com/a"},
+        {"title": "tmall",   "href": "https://detail.tmall.com/x"},    # excluded
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        exclude_set={"jd.com", "tmall.com"},
+    )
+    # 只有 example.com 被实际抓 + 计 rank + 调 pacer
+    assert len(out) == 1
+    assert out[0]["host"] == "example.com"
+    assert calls == ["baidu_keyword:article"]
+
+
+def test_apply_settings_configures_article_and_baijiahao_pacers(monkeypatch):
+    """apply_settings 把 SERP / article / baijiahao 三个 pacer 都配上对应的
+    [N, 2N] jitter 窗口。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    configs: dict[str, tuple[float, float]] = {}
+
+    class _ConfigSpy:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def wait(self) -> None:
+            pass
+
+        def configure(self, *, delay_min: float, delay_max: float) -> None:
+            configs[self.name] = (delay_min, delay_max)
+
+    monkeypatch.setattr(_rl, "get_pacer", lambda name: _ConfigSpy(name))
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(
+        serp_pacing_seconds=5,
+        article_pacing_seconds=4,
+        baijiahao_pacing_seconds=10,
+    )
+    assert configs["baidu_keyword"] == (5.0, 10.0)
+    assert configs["baidu_keyword:article"] == (4.0, 8.0)
+    assert configs["baidu_keyword:baijiahao"] == (10.0, 20.0)

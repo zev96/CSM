@@ -476,11 +476,25 @@ function clearEditOnClose() {
 const baiduPageRef = ref<{ reload: () => Promise<void> } | null>(null);
 
 async function onTaskMutatedReload() {
-  const typeKey = activeTab.value === "zhihu" ? "zhihu_question" : PLATFORM_TYPE[commentSubtab.value];
+  // Pick typeKey by activeTab — including "baidu" so the call isn't a
+  // wasted fetch against a comment-tab type. MonitorView.tasks isn't
+  // rendered on baidu tab but the loadTasks call is cheap and keeps
+  // the store consistent if the user pivots tabs right after.
+  const typeKey =
+    activeTab.value === "zhihu" ? "zhihu_question"
+    : activeTab.value === "baidu" ? "baidu_keyword"
+    : PLATFORM_TYPE[commentSubtab.value];
+  // Fan out the mutation signal BEFORE awaiting anything so subscribed
+  // pages (e.g. BaiduRankingPage) start their own reload in parallel
+  // rather than waiting for MonitorView's loadTasks/snapshots round-trip.
+  // The previous baiduPageRef.value?.reload?.() chain silently no-op'd
+  // for batch-import on the baidu tab — refs are brittle across HMR
+  // re-mounts and modal close timing. Store nonce is the source of truth.
+  monitorStatus.bumpTaskMutation();
   await loadTasks(typeKey);
   await loadTaskSnapshots();
-  // BaiduRankingPage maintains its own tasks list; ask it to refresh too
-  // so a baidu task just created/edited shows up without tab-switching.
+  // Keep the ref-based call as belt-and-suspenders for the comment/zhihu
+  // tabs where BaiduRankingPage isn't mounted at all (it's a no-op there).
   await baiduPageRef.value?.reload?.();
 }
 
@@ -3271,7 +3285,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
     <BatchImportTaskModal
       v-model:open="showBatchImport"
       :default-type="currentTaskType"
-      @imported="loadTasks(currentTaskType)"
+      @imported="onTaskMutatedReload"
     />
     <CookieManagerModal
       v-model:open="showCookieMgr"

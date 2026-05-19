@@ -1443,6 +1443,44 @@ async function saveAccountEdit() {
                 />
               </SettingsRow>
               <SettingsRow
+                label="文章节流（秒）"
+                hint="SERP 解析完后逐条抓正文之间的最小间隔（抖动 [N, 2N]）；防止 10 条链接秒级连发触发 baidu 风控。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.article_pacing_seconds') ?? 3"
+                  type="number"
+                  min="0"
+                  max="30"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.article_pacing_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="百家号节流（秒）"
+                hint="百家号 / mbd / mp 子域专用更宽间隔。百度自家子域反爬最严，建议比文章节流大 2–3 倍。"
+              >
+                <input
+                  :value="get('monitor.baidu_keyword.baijiahao_pacing_seconds') ?? 8"
+                  type="number"
+                  min="0"
+                  max="60"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '80px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.baidu_keyword.baijiahao_pacing_seconds', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+              <SettingsRow
                 label="熔断失败阈值"
                 hint="连续失败达到此次数后触发熔断，暂停该平台的请求。"
               >
@@ -1486,21 +1524,23 @@ async function saveAccountEdit() {
                 +「管理排除域名」弹窗，row 高度保持跟其它字段一致。
                 count 标显当前已配置的域名数，让用户不打开也知道规模。
               -->
-              <SettingsRow
-                label="默认排除域名（全局黑名单）"
-                hint="所有百度任务默认应用的 SERP 过滤名单。常见 B2B/电商站点（jd.com / 1688.com / taobao.com 等）已经预置；任务级可再加自家品牌官网。"
-                last
-              >
-                <div class="flex items-center gap-2">
-                  <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                    {{ (get('monitor.baidu_keyword.default_excluded_domains') ?? []).length }} 条
-                  </span>
-                  <Btn variant="solid" small @click="excludeDomainsModalOpen = true">
-                    <Icon name="edit" :size="12" />
-                    <span>管理排除域名</span>
-                  </Btn>
-                </div>
-              </SettingsRow>
+              <div id="baidu-default-excludes">
+                <SettingsRow
+                  label="默认排除域名（全局黑名单）"
+                  hint="所有百度任务默认应用的 SERP 过滤名单。常见 B2B/电商站点（jd.com / 1688.com / taobao.com 等）已经预置；任务级可再加自家品牌官网。"
+                  last
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+                      {{ (get('monitor.baidu_keyword.default_excluded_domains') ?? []).length }} 条
+                    </span>
+                    <Btn variant="solid" small @click="excludeDomainsModalOpen = true">
+                      <Icon name="edit" :size="12" />
+                      <span>管理排除域名</span>
+                    </Btn>
+                  </div>
+                </SettingsRow>
+              </div>
             </div>
 
             <SettingsRow

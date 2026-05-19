@@ -27,6 +27,14 @@ class BaiduKeywordConfig(BaseModel):
     captcha_visible_timeout_s: int = 90
     captcha_max_promotions: int = 1
     serp_pacing_seconds: int = 5
+    # Article-level pacing —— SERP 解析完后逐条抓正文之间的间隔（min；
+    # 实际抖动到 min*2）。3-6s 是「不会被 baidu 风控」的实测下限；用户
+    # 可以在设置页拉到 5-10s 保稳，或缩到 2-4s 抢速度。原来这一层
+    # 没有节流是百家号验证码的主要诱因。
+    article_pacing_seconds: int = 3
+    # 百家号专用 article pacer 上限 —— baidu 自家子域反爬最严，比普通
+    # 软文站需要更宽的间隔窗口。8-16s 实测能稳定避开验证码。
+    baijiahao_pacing_seconds: int = 8
     breaker_failures: int = 3
     breaker_cooldown_seconds: int = 600
 
