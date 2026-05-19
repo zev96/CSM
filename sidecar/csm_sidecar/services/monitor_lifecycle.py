@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from csm_core.config import AppConfig
 from csm_core.monitor import storage
 from csm_core.monitor.drivers import browser_driver
 from csm_core.monitor.platforms.baidu_keyword import ADAPTER as BAIDU_ADAPTER
@@ -22,6 +23,50 @@ from ..monitor_bus import monitor_bus
 logger = logging.getLogger(__name__)
 
 _loop: MonitorLoop | None = None
+
+
+def _apply_runtime_settings(cfg: AppConfig) -> None:
+    """Push runtime-mutable monitor settings into the live adapters.
+
+    Called from start() (first boot) and reconfigure() (every PATCH that
+    touches monitor.*). NEVER raises — invalid config logs & old values
+    stay in place, so PATCH /api/config still returns 200 with whatever
+    the user wrote, and we don't surprise them with stale runtime state
+    after a partial failure.
+
+    Each adapter gets its own try/except so a failure in one (e.g. the
+    browser driver can't find chrome.exe at the new path) doesn't stop
+    the others from picking up the new pacing / exclude-domain values.
+    """
+    mcfg = cfg.monitor
+    try:
+        browser_driver.configure(mcfg.browser_engine, mcfg.chrome_path or "")
+    except Exception as e:
+        logger.exception("browser_driver.configure failed: %s", e)
+    try:
+        ZHIHU_ADAPTER.apply_settings(
+            engine=mcfg.browser_engine,
+            rotation_enabled=mcfg.multi_account_rotation,
+            tasks_per_account=mcfg.tasks_per_account,
+            cooldown_seconds=mcfg.cookie_cooldown_minutes * 60,
+        )
+    except Exception as e:
+        logger.exception("ZHIHU_ADAPTER.apply_settings failed: %s", e)
+    try:
+        bcfg = mcfg.baidu_keyword
+        BAIDU_ADAPTER.apply_settings(
+            headless_default=bcfg.headless_default,
+            captcha_visible_timeout_s=bcfg.captcha_visible_timeout_s,
+            captcha_max_promotions=bcfg.captcha_max_promotions,
+            serp_pacing_seconds=bcfg.serp_pacing_seconds,
+            article_pacing_seconds=bcfg.article_pacing_seconds,
+            baijiahao_pacing_seconds=bcfg.baijiahao_pacing_seconds,
+            breaker_failures=bcfg.breaker_failures,
+            breaker_cooldown_seconds=bcfg.breaker_cooldown_seconds,
+            default_excluded_domains=bcfg.default_excluded_domains,
+        )
+    except Exception as e:
+        logger.exception("BAIDU_ADAPTER.apply_settings failed: %s", e)
 
 
 def start(*, db_path: Path | None = None) -> MonitorLoop:
@@ -41,36 +86,11 @@ def start(*, db_path: Path | None = None) -> MonitorLoop:
         logger.info("monitor storage initialised at %s", target)
 
     cfg = config_service.load()
-    mcfg = cfg.monitor
-    # 配置两个浏览器池 —— Patchright（默认）+ DrissionPage（兜底）。
-    # browser_driver.configure 内部对两边都调 configure()，用户在 UI 切
-    # 引擎不需要重启 sidecar。
-    browser_driver.configure(mcfg.browser_engine, mcfg.chrome_path or "")
-    # 推设置给 zhihu adapter —— 引擎选择 + 多账号轮换参数。
-    # adapter 是 module-level singleton，apply_settings 重建 CookieStore 但
-    # 不动 DB 行，所以多次调用安全。
-    ZHIHU_ADAPTER.apply_settings(
-        engine=mcfg.browser_engine,
-        rotation_enabled=mcfg.multi_account_rotation,
-        tasks_per_account=mcfg.tasks_per_account,
-        cooldown_seconds=mcfg.cookie_cooldown_minutes * 60,
-    )
-    bcfg = mcfg.baidu_keyword
-    BAIDU_ADAPTER.apply_settings(
-        headless_default=bcfg.headless_default,
-        captcha_visible_timeout_s=bcfg.captcha_visible_timeout_s,
-        captcha_max_promotions=bcfg.captcha_max_promotions,
-        serp_pacing_seconds=bcfg.serp_pacing_seconds,
-        breaker_failures=bcfg.breaker_failures,
-        breaker_cooldown_seconds=bcfg.breaker_cooldown_seconds,
-        # 默认黑名单：B2B / 电商域名（jd / 1688 / taobao …）。
-        # 任务级 exclude_domains 跟它合并使用 —— 见 BaiduKeywordAdapter._build_exclude_set。
-        default_excluded_domains=bcfg.default_excluded_domains,
-    )
+    _apply_runtime_settings(cfg)
     _loop = MonitorLoop(
         event_sink=monitor_bus.publish,
-        alert_top_n=mcfg.alert_top_n,
-        cooldown_hours=mcfg.alert_cooldown_hours,
+        alert_top_n=cfg.monitor.alert_top_n,
+        cooldown_hours=cfg.monitor.alert_cooldown_hours,
         # tick_seconds left at default 60 — APScheduler handles drift.
     )
     _loop.start()
