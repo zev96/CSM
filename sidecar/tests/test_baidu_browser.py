@@ -82,7 +82,7 @@ def fake_pw(monkeypatch):
 
 def test_baidu_browser_session_uses_persistent_context(fake_pw, tmp_path):
     """Confirms launch_persistent_context is called with our user_data_dir
-    + the stealth-required args (headed, viewport, image-disabled blink flag)."""
+    + the right kwargs (headless honored, viewport, image-disabled blink flag)."""
     from csm_core.monitor.drivers import baidu_browser
 
     user_dir = tmp_path / "profile"
@@ -92,15 +92,19 @@ def test_baidu_browser_session_uses_persistent_context(fake_pw, tmp_path):
 
     chromium = fake_pw.chromium
     assert chromium.last_user_data_dir == str(user_dir)
-    # headless=True is downgraded to headed because stealth needs headed
-    assert chromium.last_kwargs["headless"] is False
+    # headless=True is passed through verbatim (no longer downgraded — the
+    # old "stealth needs headed" hack caused off-screen layout invalidation
+    # which broke fill/click)
+    assert chromium.last_kwargs["headless"] is True
     # viewport is propagated
     assert chromium.last_kwargs["viewport"] == {"width": 1366, "height": 768}
-    # launch flags include the off-screen + minimized + image-disabled stealth tricks
+    # launch flags include the image-disabled blink flag (keeps SERP抓取轻量).
+    # The off-screen + minimized hacks were removed — they made elements
+    # report 0×0 boundingClientRect which broke patchright actionability.
     args = chromium.last_kwargs["args"]
-    assert "--window-position=-32000,-32000" in args
-    assert "--start-minimized" in args
     assert "--blink-settings=imagesEnabled=false" in args
+    assert "--window-position=-32000,-32000" not in args
+    assert "--start-minimized" not in args
 
 
 def test_baidu_browser_session_closes_on_exit(fake_pw, tmp_path):

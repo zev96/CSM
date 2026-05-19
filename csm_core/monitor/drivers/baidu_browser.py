@@ -81,25 +81,27 @@ def baidu_browser_session(
     try:
         pw = _sync_playwright().start()
 
-        # ── Launch flags（沿用原 incognito_session 的策略） ────────────
+        # ── Launch flags ────────────────────────────────────────────────
+        # 原 incognito_session 强制 effective_headless=False + 推屏外 +
+        # start-minimized 是基于「patchright stealth 不能真 headless」的老
+        # 经验。但现代 patchright stealth fork（navigator.webdriver / CDP /
+        # UA / WebGL fingerprint patches）跟 headless mode 兼容；老 hack
+        # 反而让 OS 把窗口 layout 视为 invalid，所有元素 getBoundingClientRect
+        # 返回 0×0，patchright fill / click 内部的 visibility check + scroll-
+        # into-view 都触发 "Element is not visible"，30s timeout。
+        #
+        # 这里直接用 headless=headless 原值。用户传 True → 真 headless（后台
+        # 跑、layout 正常 calc）；传 False → headed visible（验证码升级场景）。
         launch_args: list[str] = [
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--window-size=1366,768",
             "--blink-settings=imagesEnabled=false",
         ]
-        effective_headless = headless
-        if headless:
-            # 始终以 headed 启动（stealth 才能工作），位置推到屏外。
-            launch_args.extend([
-                "--window-position=-32000,-32000",
-                "--start-minimized",
-            ])
-            effective_headless = False
 
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(target_dir),
-            headless=effective_headless,
+            headless=headless,
             args=launch_args,
             viewport={"width": 1366, "height": 768},
         )
