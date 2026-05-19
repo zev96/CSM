@@ -216,7 +216,6 @@ class MonitorLoop:
         active_ids = self.get_active_task_ids()
         if not active_ids:
             return False
-        from csm_core.monitor import storage
         for tid in active_ids:
             try:
                 task = storage.get_task(tid)
