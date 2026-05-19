@@ -1,10 +1,11 @@
 """跨平台风控信号检测。
 
-提供 4 层信号融合：
+提供 5 层信号融合：
 - URL 模式（passport / captcha / wappass / safetycheck / mbd safe）
 - DOM 元素（#captcha-mask / .passmod / [id^="wappass"] / .security-check / 百家号 .mod-error）
 - 页面文案（"验证码" / "请完成验证" / "安全验证" / "网络异常" / "系统繁忙"）
 - HTTP 状态 + 响应头（403/451/503 + BAIDUID_BFESS=deleted）
+- 登录状态（login cookie 过期或缺失）
 
 任一层命中即判定为风控。adapter 命中后 raise RiskControlException，
 runner 捕获暂停任务 + 推 SSE 风控事件给前端。
@@ -18,7 +19,7 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-RiskLayer = Literal["url", "dom", "text", "http"]
+RiskLayer = Literal["url", "dom", "text", "http", "auth"]
 
 
 @dataclass(frozen=True)
@@ -120,9 +121,9 @@ def detect_risk_by_http(response: Any) -> RiskSignal | None:
 
 # ── Fusion ────────────────────────────────────────────────────────────────
 def detect_risk(page: Any, response: Any = None) -> RiskSignal | None:
-    """对 page + response 跑 4 层检测，返回第一个命中。
+    """对 page + response 跑 5 层检测，返回第一个命中。
 
-    顺序：url → http → dom → text（按计算成本升序，先便宜的）。
+    顺序：url → http → dom → text → auth（按计算成本升序，先便宜的）。
     所有内部异常都吞掉 —— 检测本身崩了不应该把抓取流程一起带崩。
     """
     try:
