@@ -26,7 +26,7 @@ from lxml import html as lxml_html
 
 from .. import rate_limit
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
-from ..drivers.incognito_session import incognito_session
+from ..drivers.baidu_browser import baidu_browser_session
 from ..drivers.risk_detector import (
     detect_risk,
     detect_risk_by_http,
@@ -714,7 +714,7 @@ class BaiduKeywordAdapter:
             except Exception:
                 logger.exception("progress_cb(resume_from,N) raised; ignoring")
 
-        with incognito_session(headless=headless) as session:
+        with baidu_browser_session(headless=headless) as session:
             page = session.page
 
             for rel_idx, keyword in enumerate(keywords_to_fetch):

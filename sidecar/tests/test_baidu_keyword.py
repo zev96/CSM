@@ -312,7 +312,7 @@ def patch_session(monkeypatch):
         yield holder["session"]
 
     monkeypatch.setattr(
-        baidu_keyword, "incognito_session", fake_ctx
+        baidu_keyword, "baidu_browser_session", fake_ctx
     )
     # Also mock the pacer so wait() is instant for subsequent keywords
     from csm_core.monitor import rate_limit as _rl
