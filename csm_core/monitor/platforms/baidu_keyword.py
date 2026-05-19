@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import urlparse, quote
@@ -55,6 +56,17 @@ _XPATH_NEWS = (
     "//div[contains(@class, 'cos-space')]"
     "/div[contains(@class, 'cos-row')]"
     "//h3//a"
+)
+
+# Chrome 子版本 UA 轮换池。curl_cffi 的 impersonate="chrome120" 在
+# _get_session 里保持不变（控制 TLS/H2 fingerprint，跨大版本切换会
+# 让 TLS 与 UA header 矛盾更可疑），只换 User-Agent header 在 Chrome
+# 119-122 之间轮转。
+_UA_POOL: tuple[str, ...] = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 )
 
 
@@ -363,6 +375,20 @@ class BaiduKeywordAdapter:
         # 默认排除域名（B2B / 电商）。apply_settings 会用 config 里的值
         # 覆盖；空 list 表示「不应用全局黑名单」（用户在设置页清空时）。
         self._default_excluded_domains: tuple[str, ...] = ()
+        # UA 轮换游标 + per-task curl_cffi.Session 池。Session 内含 cookie jar，
+        # per-task 复用让 BAIDUID / BIDUPSID baseline cookie 不被频繁丢弃 →
+        # 大幅降低百度风控触发率（参考 bilibili_comment 同款模式）。
+        self._ua_idx = 0
+        self._http_sessions: dict[int, Any] = {}
+        self._http_sessions_lock = threading.Lock()
+
+    def _next_ua(self) -> str:
+        """Round-robin pick from _UA_POOL. Called only by _get_session
+        so each Session gets a stable UA for its lifetime — switching UA
+        mid-session would itself be a bot signal."""
+        ua = _UA_POOL[self._ua_idx % len(_UA_POOL)]
+        self._ua_idx += 1
+        return ua
 
     def apply_settings(
         self,
