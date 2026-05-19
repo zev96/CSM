@@ -386,6 +386,19 @@ def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any
     if is_first_keyword:
         # 从主页开始 —— 让 BAIDUID 被 set + Referer 自然形成
         page.goto("https://www.baidu.com/", wait_until="domcontentloaded", timeout=30000)
+        # Instrumentation：log baidu.com 实际加载的 url + title + html 头部，
+        # 帮诊断 silent 风控（脏 cookie redirect）或 baidu 改版导致 #kw selector
+        # 找不到的问题。fail-soft：诊断本身不能 raise。
+        try:
+            _diag_url = page.url
+            _diag_title = page.title() if hasattr(page, "title") else "N/A"
+            _diag_has_kw = page.locator("input#kw").count() if hasattr(page, "locator") else -1
+            logger.info(
+                "baidu home loaded: url=%s, title=%r, has_input#kw=%s",
+                _diag_url, str(_diag_title)[:120], _diag_has_kw,
+            )
+        except Exception as _diag_err:
+            logger.debug("baidu home instrumentation failed: %s", _diag_err)
         # 真人会停留几百毫秒看页面
         page.wait_for_timeout(_random_dwell_ms())
 
@@ -394,7 +407,24 @@ def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any
     # patchright 内部的 actionability check（visibility / stable / editable /
     # enabled）；元素在 DOM 里 + enabled + editable（百度主页 #kw 是静态输入
     # 框），force=True 不会引入 false-positive 风险。
-    page.fill("input#kw", keyword, force=True)
+    try:
+        page.fill("input#kw", keyword, force=True)
+    except Exception as _fill_err:
+        # Surface page state on fill timeout (typically means baidu redirected
+        # to a captcha / wappass page that has no input#kw). Re-raise so
+        # adapter记 fetch_error 正常 propagate；diag 仅 log。
+        try:
+            _diag_url = page.url
+            _diag_title = page.title() if hasattr(page, "title") else "N/A"
+            _diag_html = (page.content()[:500] if hasattr(page, "content") else "")
+            logger.warning(
+                "baidu fill failed (keyword=%r): %s\n  url=%s\n  title=%r\n  html_head=%r",
+                keyword, type(_fill_err).__name__,
+                _diag_url, str(_diag_title)[:120], _diag_html,
+            )
+        except Exception:
+            pass
+        raise
     page.wait_for_timeout(_random_dwell_ms(short=True))
 
     # 用 keyboard.press("Enter") 触发 form submit，避开 page.click("input#su")。
