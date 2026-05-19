@@ -390,21 +390,31 @@ def _navigate_to_serp(page: Any, keyword: str, *, is_first_keyword: bool) -> Any
         page.wait_for_timeout(_random_dwell_ms())
 
     # 找搜索框 + 输入 keyword
-    # patchright stealth 会模拟真实 keystroke 事件序列。
-    # force=True 跳过 patchright 内部的 actionability check（visibility / stable /
-    # editable / enabled）。原因：stealth 策略把 Chrome 窗口推到 -32000,-32000
-    # 屏外 + start-minimized，OS 把 layout 视为 invalid，所有元素 getBoundingClientRect
-    # 返回 0×0，patchright 把 #kw / #su 判定为 not visible → fill/click 30s timeout。
-    # 元素在 DOM 里 + enabled + editable（百度主页 #kw/#su 是静态输入框 + 按钮），
-    # force=True 不会引入 false-positive 风险。它只跳过 actionability check，事件
-    # dispatch 链（keystroke / mousedown / mouseup / click）依然完整 stealth。
+    # patchright stealth 会模拟真实 keystroke 事件序列。force=True 跳过
+    # patchright 内部的 actionability check（visibility / stable / editable /
+    # enabled）；元素在 DOM 里 + enabled + editable（百度主页 #kw 是静态输入
+    # 框），force=True 不会引入 false-positive 风险。
     page.fill("input#kw", keyword, force=True)
     page.wait_for_timeout(_random_dwell_ms(short=True))
 
-    # 用 expect_navigation 同步等 click 后的页面切换
-    # patchright 会发真实 mousedown/mouseup/click 事件序列
+    # 用 keyboard.press("Enter") 触发 form submit，避开 page.click("input#su")。
+    #
+    # 为什么不用 click：patchright 的 click 是多阶段（actionability check →
+    # scrollIntoViewIfNeeded → mousedown/move/up）。force=True 只跳过 actionability
+    # check，scrollIntoViewIfNeeded 内部仍依赖元素的 boundingClientRect，patchright
+    # stealth fork 在 headless / hidden window 下 layout 计算异常会让 #su
+    # boundingClientRect=0×0 → click 失败 "Element is not visible"。
+    #
+    # keyboard.press 是 page-level keyboard input：不针对具体 element，
+    # 无 actionability check，无 scrollIntoView。fill() 之后 input#kw 已经
+    # focused（patchright fill 内部触发 focus event），Enter 键按下时 page
+    # 把 keydown/keyup 路由给 focused element，#form 默认行为是 submit。
+    #
+    # stealth-wise：keyboard.press 发的是 untrusted-but-real keydown/keyup 事件
+    # 序列（跟用户真按 Enter 一致），form.submit 是用户输入完按 Enter 的自然
+    # 路径，比 click 提交按钮还更接近"键盘党"真人行为。
     with page.expect_navigation(wait_until="domcontentloaded", timeout=45000) as nav_info:
-        page.click("input#su", force=True)
+        page.keyboard.press("Enter")
     return nav_info.value
 
 

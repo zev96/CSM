@@ -980,7 +980,15 @@ def test_navigate_to_serp_first_keyword_goes_home(monkeypatch):
         def __exit__(self, *a):
             return False
 
+    _outer_calls = calls
+
+    class FakeKeyboard:
+        def press(self, key, **kwargs):
+            _outer_calls.append(("keyboard_press", key))
+
     class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
         def goto(self, url, **kwargs):
             calls.append(("goto", url))
         def wait_for_timeout(self, ms):
@@ -1007,8 +1015,10 @@ def test_navigate_to_serp_first_keyword_goes_home(monkeypatch):
     # Then fill with the keyword
     fill_call = next(c for c in calls if c[0] == "fill")
     assert fill_call[1] == ("input#kw", "吸尘器")
-    # Then expect_navigation wrapping click on input#su
-    assert any(c[0] == "click" and c[1] == "input#su" for c in calls)
+    # Then expect_navigation wrapping keyboard.press("Enter") to submit form.
+    # Click on input#su was abandoned because patchright's click path fails
+    # on stealth-launched hidden windows (scrollIntoViewIfNeeded → not visible).
+    assert ("keyboard_press", "Enter") in calls
     assert "expect_navigation" in op_names
 
 
@@ -1031,7 +1041,15 @@ def test_navigate_to_serp_subsequent_keyword_skips_home(monkeypatch):
         def __exit__(self, *a):
             return False
 
+    _outer_calls = calls
+
+    class FakeKeyboard:
+        def press(self, key, **kwargs):
+            _outer_calls.append(("keyboard_press", key))
+
     class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
         def goto(self, url, **kwargs):
             calls.append(("goto", url))
         def wait_for_timeout(self, ms):
@@ -1054,22 +1072,27 @@ def test_navigate_to_serp_subsequent_keyword_skips_home(monkeypatch):
 
     fill_call = next(c for c in calls if c[0] == "fill")
     assert fill_call[1] == ("input#kw", "洗碗机")
-    assert any(c[0] == "click" and c[1] == "input#su" for c in calls)
+    # Submit via keyboard.press("Enter") on the focused input (form auto-submits)
+    assert ("keyboard_press", "Enter") in calls
 
 
-def test_navigate_to_serp_passes_force_true_to_fill_and_click():
-    """fill/click 必须传 force=True 跳过 actionability check。
+def test_navigate_to_serp_fills_with_force_and_submits_via_keyboard():
+    """fill 必须传 force=True 跳过 actionability check；submit 走 keyboard.press
+    而不是 click，绕开 patchright click 的多阶段 actionability + scrollIntoView。
 
-    根因：stealth 策略把 Chrome 窗口推到 (-32000,-32000) 屏外 + start-minimized，
-    OS 把 layout 视为 invalid，所有元素 getBoundingClientRect 返回 0×0，
-    patchright 内部的 visibility check 把 #kw / #su 判定为 not visible →
-    page.fill 30s timeout 失败。force=True 跳过 visibility/enabled/stable/editable
-    check，元素仍在 DOM + 事件序列保留 stealth。
+    根因 (real-test 暴露)：stealth 策略让 Chrome 窗口在 OS 层 layout invalid，
+    所有元素 getBoundingClientRect=0×0：
+    - page.fill 内部 visibility check fail → force=True 跳过
+    - page.click 多阶段：force=True 跳过 actionability，但后续
+      scrollIntoViewIfNeeded 独立 check visibility，依然 fail
+    - 解法：fill (force=True) → keyboard.press("Enter") 触发 form submit。
+      keyboard.press 是 page-level keyboard，无 per-element actionability check。
     """
     from typing import Any
     from csm_core.monitor.platforms import baidu_keyword
 
     calls: list[tuple] = []
+    _outer_calls = calls
 
     class FakeNavInfo:
         @property
@@ -1082,7 +1105,13 @@ def test_navigate_to_serp_passes_force_true_to_fill_and_click():
         def __exit__(self, *a):
             return False
 
+    class FakeKeyboard:
+        def press(self, key, **kwargs):
+            _outer_calls.append(("keyboard_press", key, kwargs))
+
     class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
         def goto(self, url, **kwargs):
             pass
         def wait_for_timeout(self, ms):
@@ -1100,9 +1129,13 @@ def test_navigate_to_serp_passes_force_true_to_fill_and_click():
     assert fill_call[2].get("force") is True, (
         f"fill 必须传 force=True，got kwargs: {fill_call[2]}"
     )
-    click_call = next(c for c in calls if c[0] == "click")
-    assert click_call[2].get("force") is True, (
-        f"click 必须传 force=True，got kwargs: {click_call[2]}"
+    # click should NOT be called — submit goes via keyboard.press now
+    assert not any(c[0] == "click" for c in calls), (
+        f"submit 应该走 keyboard.press 而不是 click，got: {[c for c in calls if c[0] == 'click']}"
+    )
+    keyboard_call = next(c for c in calls if c[0] == "keyboard_press")
+    assert keyboard_call[1] == "Enter", (
+        f"应该按 Enter 触发 form submit，got: {keyboard_call[1]}"
     )
 
 
