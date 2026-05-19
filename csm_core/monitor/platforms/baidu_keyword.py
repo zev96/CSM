@@ -33,6 +33,7 @@ from ..drivers.risk_detector import (
     detect_risk_by_text,
     detect_risk_by_url,
     RiskControlException,
+    RiskSignal,
 )
 
 logger = logging.getLogger(__name__)
@@ -685,6 +686,23 @@ class BaiduKeywordAdapter:
             breaker.record_failure()
         return result
 
+    def _assert_baidu_logged_in(self, cookies: list[dict[str, Any]], *, resume_from: int) -> None:
+        """Raise RiskControlException(layer='auth') if BDUSS is missing.
+
+        Caller passes the cookies it already read on the live persistent
+        context. Keeping this a pure function makes it cheap to unit test.
+
+        ``progress=resume_from`` so the runner's breakpoint bookkeeping
+        (already_fetched + 1 == next-to-resume) stays consistent —
+        nothing was fetched in this run; resume from the same index.
+        """
+        has_bduss = any(c.get("name") == "BDUSS" for c in cookies)
+        if not has_bduss:
+            raise RiskControlException(
+                RiskSignal(layer="auth", detail="百度账号未登录或已过期，请到设置页登录"),
+                progress=resume_from,
+            )
+
     def _fetch_once(
         self,
         task: MonitorTask,
@@ -732,6 +750,14 @@ class BaiduKeywordAdapter:
 
         with baidu_browser_session(headless=headless) as session:
             page = session.page
+
+            # Login-state pre-flight: an anonymous fetch will burn quickly
+            # against baidu 风控. Refuse fast and let the runner pause the
+            # task + write a breakpoint; the UI shows "百度账号未登录" + a
+            # "前往设置" button. Reusing the live context's cookies avoids
+            # opening a second short-lived browser just to read BDUSS.
+            cookies = session.context.cookies("https://www.baidu.com/")
+            self._assert_baidu_logged_in(cookies, resume_from=resume_from)
 
             for rel_idx, keyword in enumerate(keywords_to_fetch):
                 # Absolute 0-based index into the full keyword list.

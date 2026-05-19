@@ -270,6 +270,12 @@ from csm_core.monitor.base import MonitorTask
 class FakeSession:
     """假装 IncognitoSession，只暴露 page。支持多关键词顺序 goto。"""
 
+    class FakeContext:
+        """Mock context with cookies() method that returns BDUSS for logged-in state."""
+        def cookies(self, url=None):
+            # Return a list with BDUSS to simulate logged-in state
+            return [{"name": "BDUSS", "value": "mock_bduss_token"}]
+
     def __init__(self, *, serp_html: str, page_contents: dict[str, str],
                  captcha_url: str | None = None):
         self._serp_html = serp_html
@@ -278,7 +284,7 @@ class FakeSession:
         self._current_url = ""
         # adapter 通过 .page.goto / .page.content 读取
         self.page = self  # type: ignore[assignment]
-        self.context = None
+        self.context = self.FakeContext()
         self.browser = None
         self.pw = None
 
@@ -1033,3 +1039,82 @@ def test_apply_settings_forces_baidu_concurrency_to_one():
     adapter.apply_settings(default_excluded_domains=())
 
     assert rate_limit._max_concurrent[baidu_keyword.BaiduKeywordAdapter.platform] == 1
+
+
+# ── fetch BDUSS pre-flight check (Layer 3) ─────────────────────────────
+
+
+def test_assert_baidu_logged_in_passes_when_bduss_present():
+    """The pure helper used by _fetch_once must NOT raise when BDUSS
+    is in the cookie list."""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cookies = [
+        {"name": "BAIDUID", "value": "irrelevant"},
+        {"name": "BDUSS", "value": "abc"},
+    ]
+    # Should not raise
+    adapter._assert_baidu_logged_in(cookies, resume_from=0)
+
+
+def test_assert_baidu_logged_in_raises_auth_when_bduss_missing():
+    """Same helper raises RiskControlException(layer='auth') when BDUSS
+    is missing, with progress = resume_from passed through."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.drivers.risk_detector import RiskControlException
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cookies = [{"name": "BAIDUID", "value": "no_bduss_here"}]
+    try:
+        adapter._assert_baidu_logged_in(cookies, resume_from=3)
+    except RiskControlException as e:
+        assert e.signal.layer == "auth"
+        assert e.progress == 3
+    else:
+        raise AssertionError("expected RiskControlException")
+
+
+def test_fetch_raises_auth_risk_control_when_not_logged_in(monkeypatch):
+    """If session.context.cookies returns no BDUSS, fetch must raise
+    RiskControlException(layer='auth') with progress=resume_from before
+    making a single SERP request."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from csm_core.monitor.drivers.risk_detector import RiskControlException
+
+    class FakeContext:
+        def cookies(self, url=None):
+            return []  # no BDUSS — logged out
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            raise AssertionError("should not reach goto when not logged in")
+
+    class FakeSession:
+        def __init__(self):
+            self.page = FakePage()
+            self.context = FakeContext()
+
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_session(*, headless, user_data_dir=None):
+        yield FakeSession()
+
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", fake_session)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    task = MonitorTask(
+        id=42, type="baidu_keyword", name="test",
+        target_url="https://www.baidu.com/s?wd=test",
+        config={"search_keywords": ["吸尘器", "洗碗机"], "target_brand": "CEWEY"},
+    )
+
+    try:
+        adapter.fetch(task, resume_from=1)
+    except RiskControlException as e:
+        assert e.signal.layer == "auth"
+        assert "登录" in e.signal.detail or "BDUSS" in e.signal.detail
+        assert e.progress == 1
+    else:
+        raise AssertionError("expected RiskControlException")
