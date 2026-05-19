@@ -797,13 +797,23 @@ class BaiduKeywordAdapter:
                     "fetch_error": None,
                 }
 
-                # Navigate to SERP. 45s timeout — baidu 偶尔冷启慢，20s 不够。
+                # Real-user simulation: rel_idx == 0 means first keyword in this session,
+                # which is also the cold-start state (page just got opened by
+                # baidu_browser_session). On subsequent keywords we reuse the SERP's
+                # top searchbox to preserve the natural Referer chain.
                 serp_response = None
                 try:
-                    serp_response = page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
-                except TypeError:
-                    # Test FakePage 不接受 kwargs
-                    serp_response = page.goto(serp_url)
+                    serp_response = _navigate_to_serp(
+                        page, keyword, is_first_keyword=(rel_idx == 0),
+                    )
+                except (TypeError, AttributeError):
+                    # FakePage / FakeSession (in tests) may not implement
+                    # fill / expect_navigation / wait_for_timeout;
+                    # fall back to direct goto so unrelated tests still work.
+                    try:
+                        serp_response = page.goto(serp_url, wait_until="domcontentloaded", timeout=45000)
+                    except TypeError:
+                        serp_response = page.goto(serp_url)
                 except Exception as e:
                     logger.warning(
                         "baidu navigate failed (headless=%s, keyword=%r): %s",
@@ -811,8 +821,8 @@ class BaiduKeywordAdapter:
                     )
                     kw_entry["fetch_error"] = f"serp navigate raised: {e!r}"
                     keyword_results.append(kw_entry)
-                    # 注意：page.goto 失败时不调 detect_risk —— 页面没加载，4 层信号都没意义。
-                    # 此 keyword 会以 fetch_error 状态记录，runner 会跳到下一个。
+                    # 注意：_navigate_to_serp 失败时不调 detect_risk —— 页面没加载，
+                    # 4 层信号都没意义。此 keyword 以 fetch_error 状态记录，runner 跳到下一个。
                     continue
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
