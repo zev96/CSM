@@ -205,6 +205,27 @@ class MonitorLoop:
         with self._active_lock:
             return sorted(self._active_task_ids)
 
+    def has_active_baidu_task(self) -> bool:
+        """Return True if any currently-active task is type=baidu_keyword.
+
+        Used by routes/monitor.py reset-profile route to avoid corrupting
+        a live persistent profile mid-write. Safe to call without callers
+        holding _active_lock — we take a snapshot then resolve types via
+        storage.
+        """
+        active_ids = self.get_active_task_ids()
+        if not active_ids:
+            return False
+        from csm_core.monitor import storage
+        for tid in active_ids:
+            try:
+                task = storage.get_task(tid)
+            except Exception:
+                continue
+            if task is not None and task.type == "baidu_keyword":
+                return True
+        return False
+
     def cancel_task(self, task_id: int) -> bool:
         """Signal the worker thread for ``task_id`` to bail out at its
         next cooperative check point. Returns True if a cancel signal
