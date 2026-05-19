@@ -351,3 +351,26 @@ async def stream_events():
                 ),
             }
     return EventSourceResponse(_gen())
+
+
+# ── Baidu browser profile management ──────────────────────────────────────
+@router.post("/api/monitor/baidu/reset-profile", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_baidu_profile() -> None:
+    """Delete the persistent baidu browser profile dir.
+
+    Use case: profile has been hit by 百度风控 multiple times and cookies
+    are "burnt"; rather than wait for cooldown, user wipes and starts fresh.
+
+    Safety: refuses (409) if any baidu task is currently running — would
+    corrupt the live profile mid-write.
+    """
+    from csm_core.monitor.drivers.baidu_browser import reset_profile
+    from ..services import monitor_lifecycle
+
+    loop = monitor_lifecycle.get()
+    if loop is not None and loop.has_active_baidu_task():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="有正在运行的百度任务，先停止再重置",
+        )
+    reset_profile()
