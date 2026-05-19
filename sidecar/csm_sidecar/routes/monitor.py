@@ -394,3 +394,22 @@ async def baidu_login_open() -> dict[str, Any]:
             detail="有正在运行的百度任务，先停止再登录",
         )
     return open_login_window()
+
+
+@router.get("/api/monitor/baidu/login-status")
+async def baidu_login_status() -> dict[str, Any]:
+    """Read-only login state probe used by the settings page.
+
+    Briefly launches a headless persistent context (~2s) to read cookies.
+    Failures degrade to {logged_in: False} rather than 5xx — settings UI
+    shouldn't blow up if the profile is corrupt.
+    """
+    from csm_core.monitor.drivers.baidu_login import get_login_status
+
+    try:
+        return get_login_status()
+    except Exception as e:
+        # Soft fallback so the UI keeps functioning
+        import logging
+        logging.getLogger(__name__).warning("baidu login-status read failed: %s", e)
+        return {"logged_in": False, "username": None, "expires_at": None}

@@ -78,3 +78,27 @@ def test_baidu_login_success_proxies_result(client):
         mock_open.assert_called_once()
     finally:
         monitor_lifecycle._loop = None  # noqa: SLF001
+
+
+def test_baidu_login_status_proxies_result(client):
+    """GET login-status returns whatever get_login_status produced.
+    No 409 gate — read-only operation, safe even with a baidu task running."""
+    from unittest.mock import patch
+
+    with patch(
+        "csm_core.monitor.drivers.baidu_login.get_login_status",
+        return_value={
+            "logged_in": True,
+            "username": "testuser",
+            "expires_at": "2026-07-01T00:00:00+00:00",
+        },
+    ) as mock_status:
+        resp = client.get("/api/monitor/baidu/login-status")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "logged_in": True,
+        "username": "testuser",
+        "expires_at": "2026-07-01T00:00:00+00:00",
+    }
+    mock_status.assert_called_once()
