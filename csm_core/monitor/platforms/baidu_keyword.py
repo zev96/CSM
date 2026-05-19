@@ -526,7 +526,7 @@ class BaiduKeywordAdapter:
         独立的 pacer 实例。百家号是 baidu 自家子域反爬最严的（第三方软文站
         高速抓没事），需要比普通 article 更宽的窗口。默认 8-16s。
         """
-        from ..rate_limit import get_pacer, get_breaker
+        from ..rate_limit import get_pacer, get_breaker, configure_concurrency
 
         self._headless_default = headless_default
         self._captcha_timeout_s = captcha_visible_timeout_s
@@ -562,6 +562,11 @@ class BaiduKeywordAdapter:
         breaker = get_breaker(self.platform)
         breaker.failure_threshold = breaker_failures
         breaker.cool_off_seconds = float(breaker_cooldown_seconds)
+        # persistent_context profile lock requires exclusive user_data_dir
+        # access — force baidu task serial execution. configure_concurrency
+        # is idempotent (replaces the semaphore object); calling on every
+        # apply_settings is safe.
+        configure_concurrency(self.platform, 1)
 
     # ── exclude-domain helpers ──────────────────────────────────────
     def _build_exclude_set(self, task: MonitorTask) -> set[str]:

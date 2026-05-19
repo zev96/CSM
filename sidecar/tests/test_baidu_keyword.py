@@ -1055,3 +1055,20 @@ def test_navigate_to_serp_subsequent_keyword_skips_home(monkeypatch):
     fill_call = next(c for c in calls if c[0] == "fill")
     assert fill_call[1] == ("input#kw", "洗碗机")
     assert ("click", "input#su") in calls
+
+
+def test_apply_settings_forces_baidu_concurrency_to_one():
+    """persistent_context profile lock requires serial baidu execution.
+    apply_settings should reconfigure rate_limit accordingly."""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.browser_infra import rate_limit
+
+    # Clean slate — clear any prior configuration for this platform
+    with rate_limit._sem_lock:
+        rate_limit._sems.pop(baidu_keyword.BaiduKeywordAdapter.platform, None)
+        rate_limit._max_concurrent.pop(baidu_keyword.BaiduKeywordAdapter.platform, None)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.apply_settings(default_excluded_domains=())
+
+    assert rate_limit._max_concurrent[baidu_keyword.BaiduKeywordAdapter.platform] == 1
