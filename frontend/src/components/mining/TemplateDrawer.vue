@@ -77,17 +77,27 @@ function cancelEdit() {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // Esc: cancel inline edit first; only close drawer when not editing.
   if (e.key === "Escape") {
-    emit("close")
+    if (editingId.value !== null) {
+      cancelEdit()
+    } else {
+      emit("close")
+    }
     return
   }
+  // Arrow keys / Enter only navigate list when NOT inline-editing —
+  // otherwise the cursor in the edit textarea can't move and Enter
+  // wouldn't be able to insert newlines.
+  if (editingId.value !== null) return
+
   if (e.key === "ArrowDown") {
     activeIndex.value = Math.min(activeIndex.value + 1, store.items.length - 1)
     e.preventDefault()
   } else if (e.key === "ArrowUp") {
     activeIndex.value = Math.max(activeIndex.value - 1, 0)
     e.preventDefault()
-  } else if (e.key === "Enter" && !editingId.value) {
+  } else if (e.key === "Enter") {
     const tpl = store.items[activeIndex.value]
     if (tpl) pick(tpl)
     e.preventDefault()
@@ -101,6 +111,9 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   document.removeEventListener("keydown", onKeydown)
+  // If a search debounce is pending, kill it so it doesn't fire
+  // post-unmount and clobber another component's list call.
+  if (searchTimer) window.clearTimeout(searchTimer)
 })
 </script>
 
