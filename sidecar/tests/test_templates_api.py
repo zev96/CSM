@@ -42,3 +42,18 @@ def test_list_used_tags(client: TestClient, monitor_db: Path):
     mining_storage.create_template(text="y", tags=["b", "c"])
     r = client.get("/api/mining/templates/tags")
     assert r.json() == {"tags": ["a", "b", "c"]}
+
+
+def test_list_templates_strips_empty_tags(client: TestClient, monitor_db: Path):
+    """?tags=,A, should be ["A"] not ["", "A", ""] (silent-failure fix)."""
+    mining_storage.create_template(text="只有种草", tags=["种草"])
+
+    # Comma garbage in tags should be ignored, not poison the filter
+    r = client.get("/api/mining/templates?tags=,种草,")
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+
+    # All-empty tags string treated as no filter
+    r = client.get("/api/mining/templates?tags=,,")
+    # Falls through to "tags=None" semantics → returns everything
+    assert r.json()["total"] == 1

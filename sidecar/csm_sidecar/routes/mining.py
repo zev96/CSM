@@ -614,7 +614,9 @@ async def list_templates(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
-    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+    # Filter out empty strings — `?tags=,A,` should be treated as `["A"]`,
+    # not `["", "A", ""]` which would silently match zero templates.
+    tag_list = [t for t in (s.strip() for s in tags.split(",")) if t] if tags else None
     return mining_storage.list_templates(
         search=search,
         tags=tag_list,
