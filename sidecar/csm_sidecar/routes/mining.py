@@ -649,6 +649,7 @@ class UpdateTemplateBody(BaseModel):
 _MAX_TEXT_LEN = 2000
 _MAX_TAGS = 10
 _MAX_TAG_LEN = 12
+_MAX_BULK = 500
 
 
 def _validate_template_input(text: str | None, tags: list[str] | None) -> None:
@@ -728,9 +729,6 @@ class BulkImportBody(BaseModel):
     texts: list[str] = Field(..., min_length=1)
     tags: list[str] = Field(default_factory=list)
     source_platform: str | None = None
-
-
-_MAX_BULK = 500
 
 
 @router.post("/api/mining/templates/bulk-import")
