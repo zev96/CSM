@@ -121,3 +121,28 @@ def test_use_bumps_count_and_returns_text(client: TestClient, monitor_db: Path):
     from csm_core.monitor.storage import get_conn
     row = get_conn().execute("SELECT use_count FROM comment_templates WHERE id=?", (tid,)).fetchone()
     assert row[0] == 1
+
+
+def test_bulk_import(client, monitor_db):
+    r = client.post(
+        "/api/mining/templates/bulk-import",
+        json={"texts": ["A", "B", "C"], "tags": ["导入"], "source_platform": "manual"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"created": 3, "skipped_duplicates": 0}
+
+    # 再来一次 — 全部重复
+    r2 = client.post(
+        "/api/mining/templates/bulk-import",
+        json={"texts": ["A", "B"]},
+    )
+    assert r2.json() == {"created": 0, "skipped_duplicates": 2}
+
+
+def test_bulk_import_too_many_returns_400(client, monitor_db):
+    r = client.post(
+        "/api/mining/templates/bulk-import",
+        json={"texts": [f"item-{i}" for i in range(501)]},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "max_batch_exceeded"

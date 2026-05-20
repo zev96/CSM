@@ -722,3 +722,26 @@ async def use_template(template_id: int) -> dict[str, Any]:
     if text is None:
         raise HTTPException(status_code=404, detail="template not found")
     return {"text": text}
+
+
+class BulkImportBody(BaseModel):
+    texts: list[str] = Field(..., min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    source_platform: str | None = None
+
+
+_MAX_BULK = 500
+
+
+@router.post("/api/mining/templates/bulk-import")
+async def bulk_import_templates(body: BulkImportBody) -> dict[str, int]:
+    if len(body.texts) > _MAX_BULK:
+        raise HTTPException(status_code=400, detail="max_batch_exceeded")
+    _validate_template_input(text=None, tags=body.tags)
+    # text-level length check on each item
+    for t in body.texts:
+        if len(t) > _MAX_TEXT_LEN:
+            raise HTTPException(status_code=400, detail="text_too_long")
+    return mining_storage.bulk_import_templates(
+        texts=body.texts, tags=body.tags, source_platform=body.source_platform,
+    )
