@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.5.3] - 2026-05-20
 
 ### Fixed
 - **其他用户装 release 包后浏览器相关功能全炸 —— 评论抓取、Cookie 内置浏览器登录、百度账号登录弹窗一起报错**：根因是 NSIS 安装包从来没带过 Chromium 二进制。Patchright 的 `collect_data_files("patchright")` 只 bundle 了 `driver/node.exe`（Node.js 驱动），真正的 Chromium 浏览器二进制位于 `%LOCALAPPDATA%\ms-playwright\chromium-XXXX\`，由 `patchright install chromium` 单独装。dev 机有这个目录（开发时跑过一次），fresh 用户机没有 —— 所以每次 `pw.chromium.launch_persistent_context(...)` 都炸 `Executable doesn't exist`，前端看到 503 / 弹窗失败 / 评论抓取无果。本次：① release.yml 加 `python -m patchright install chromium` 步骤；② 把 `chromium-XXXX/` 目录（~408MB，跳过 headless-shell）通过 Tauri `bundle.resources` 拷到 NSIS 安装包的 `<install>/binaries/ms-playwright/`；③ `csm_core/browser_infra/patchright_pool.ensure_browsers_path` 加优先级：env var → `<sidecar-exe-dir>/binaries/ms-playwright/`（release） → `%LOCALAPPDATA%\ms-playwright`（dev/legacy）。**体积变化**：NSIS 安装包从 ~50MB 涨到 ~450MB；热更新 zip 同步变大（updater `zf.extractall()` + atomic rename 包含整个 install dir，所以 chromium 会随 hot-update 一起替换 —— 从 0.5.2 → 0.5.3 的热更新下载量会突涨到 ~450MB，但后续 0.5.3 → 0.5.4 同样涨，**目前没做"chromium 不变就跳过"的分层 zip 优化**，后续若需可在 `build_manifest.py` 加 chromium hash 字段 + updater 走条件下载）。0.5.1 及以下用户仍按 v0.5.2 CHANGELOG 说明走一次 NSIS setup.exe（旧 updater image-lock bug）。
