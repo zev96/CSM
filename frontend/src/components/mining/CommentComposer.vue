@@ -42,6 +42,7 @@ import TemplateChipsRow from "@/components/mining/TemplateChipsRow.vue";
 import TemplateDrawer from "@/components/mining/TemplateDrawer.vue";
 import Icon from "@/components/ui/Icon.vue";
 import { useToast } from "@/composables/useToast";
+import { useStaleGuard } from "@/composables/useStaleGuard";
 import { useMiningStore, LLMNotConfiguredError, type Comment } from "@/stores/mining";
 import { useSidecar } from "@/stores/sidecar";
 import { useTemplatesStore, type Template } from "@/stores/templates";
@@ -215,8 +216,16 @@ function removeImage(idx: number) {
   images.value.splice(idx, 1);
 }
 
+// Guards anything async that wants to write text.value. ``onSuggest``
+// issues a token before awaiting the LLM; ``handlePick`` and
+// ``confirmPick`` issue (without checking) so any in-flight suggestion
+// is invalidated the moment the user picks a template instead — the
+// late-arriving suggestion no longer clobbers the template they chose.
+const textWriteGuard = useStaleGuard();
+
 async function onSuggest() {
   if (isSuggesting.value) return;
+  const my = textWriteGuard.issue();
   isSuggesting.value = true;
   try {
     // In edit mode, we still let the user 续写 — the suggestion will
@@ -230,12 +239,14 @@ async function onSuggest() {
       tierForSuggest,
       props.previousTiers,
     );
+    if (textWriteGuard.isStale(my)) return;
     text.value = suggestion;
     lastSuggestion.value = suggestion;
     await nextTick();
     autosize(textareaRef.value);
     textareaRef.value?.focus();
   } catch (e) {
+    if (textWriteGuard.isStale(my)) return;
     if (e instanceof LLMNotConfiguredError) {
       toast.error(e.message || "请先在设置中配置 AI 服务", {
         actionLabel: "去设置",
@@ -312,6 +323,9 @@ function onCancelEdit() {
 // useTemplate() server-bumps use_count + last_used_at so chip ranking
 // updates on next mount of TemplateChipsRow.
 async function handlePick(tpl: Template) {
+  // Invalidate any pending onSuggest — the user is choosing a template
+  // instead, and a late-arriving suggestion would overwrite their pick.
+  textWriteGuard.issue();
   if (text.value.trim().length === 0) {
     text.value = await templatesStore.useTemplate(tpl.id);
     await nextTick();
@@ -325,6 +339,7 @@ async function handlePick(tpl: Template) {
 
 async function confirmPick(action: "replace" | "append") {
   if (!pendingPick.value) return;
+  textWriteGuard.issue();
   const filledText = await templatesStore.useTemplate(pendingPick.value.id);
   if (action === "replace") {
     text.value = filledText;
