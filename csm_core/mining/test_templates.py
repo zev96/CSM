@@ -165,3 +165,37 @@ def test_update_comment_status_unchanged_no_trigger(conn):
 
     n = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
     assert n == 0  # no trigger — only draft→done triggers
+
+
+def test_apply_v5_migration_backfill_runs_once(tmp_path, monkeypatch):
+    """apply_v5_migration should run backfill exactly once across calls.
+
+    Regression test for the T3 follow-up gate: ``_migrate`` re-runs every
+    migration on every ``init_db()`` (i.e. every app launch). Without the
+    schema_meta marker, every done comment's ``use_count`` would be bumped
+    +1 per startup — inflating the chips top-5 sort. The fix uses a
+    ``templates_v5_backfilled`` marker row to short-circuit the backfill
+    after first run.
+    """
+    db = tmp_path / "gate.db"
+    monkeypatch.setattr(monitor_storage, "_initialized", False, raising=False)
+    monkeypatch.setattr(monitor_storage, "_db_path", None, raising=False)
+    monkeypatch.setattr(monitor_storage, "_local", threading.local(), raising=False)
+    monitor_storage.init_db(str(db))
+    conn = monitor_storage.get_conn()
+    # Seed a done comment AFTER the initial migration (so the marker was
+    # set without seeing this row). If the gate works, calling
+    # apply_v5_migration again must NOT pick up this row.
+    conn.execute("INSERT INTO videos(platform, platform_video_id, url) VALUES('kuaishou','v1','http://1')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 1, 'X', 'done')")
+
+    mining_storage.apply_v5_migration(conn)
+
+    n = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n == 0  # backfill gated; no template created from the post-migration row
+
+    # Also: the marker row exists (set on first init_db).
+    marker = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='templates_v5_backfilled'"
+    ).fetchone()
+    assert marker is not None

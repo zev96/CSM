@@ -168,11 +168,28 @@ def apply_v5_migration(conn: sqlite3.Connection) -> None:
     """Called by monitor.storage._migrate when bumping v4 → v5.
 
     Idempotent: CREATE TABLE / CREATE INDEX use IF NOT EXISTS;
-    backfill uses UPSERT so re-runs are safe.
+    backfill is gated by a schema_meta marker so it runs exactly once.
+
+    Why the marker: ``_migrate`` is invoked on every ``init_db()`` (i.e.
+    every app launch) and re-runs every migration function unconditionally
+    — there's no ``current_version < target`` guard. Other v3/v4 migrations
+    are safe under this regime because they're pure CREATE/PRAGMA-ALTER
+    with no side effects. T3's backfill IS a side effect: without the
+    gate, every done comment would bump its template's ``use_count`` by
+    +1 on each startup, inflating counts and breaking the chips top-5
+    sort. Spec §3.4 calls this out as "一次性回填".
     """
     for stmt in _DDL_V5_TEMPLATES:
         conn.execute(stmt)
-    _backfill_v5_templates(conn)
+    # One-time backfill, gated by schema_meta marker.
+    already_done = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='templates_v5_backfilled'"
+    ).fetchone()
+    if not already_done:
+        _backfill_v5_templates(conn)
+        conn.execute(
+            "INSERT INTO schema_meta(key, value) VALUES('templates_v5_backfilled', '1')"
+        )
 
 
 def _backfill_v5_templates(conn: sqlite3.Connection) -> None:
