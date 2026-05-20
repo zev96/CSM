@@ -594,3 +594,38 @@ class BulkMarkBody(BaseModel):
 async def bulk_mark_commented(body: BulkMarkBody) -> dict[str, Any]:
     updated = mining_storage.bulk_mark_commented(body.video_ids, body.value)
     return {"updated": updated}
+
+
+# ── Comment templates (v5) ─────────────────────────────────────────────
+
+
+class TemplateListResponse(BaseModel):
+    items: list[dict[str, Any]]
+    total: int
+
+
+@router.get("/api/mining/templates", response_model=TemplateListResponse)
+async def list_templates(
+    search: str | None = None,
+    tags: str | None = Query(default=None, description="CSV of tag names, intersection"),
+    platform: str | None = None,
+    starred: bool | None = None,
+    hidden: str = Query(default="0", pattern="^(0|1|all)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+    return mining_storage.list_templates(
+        search=search,
+        tags=tag_list,
+        platform=platform,
+        starred=starred,
+        hidden=hidden,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/api/mining/templates/tags")
+async def list_template_tags() -> dict[str, list[str]]:
+    return {"tags": mining_storage.list_used_tags()}
