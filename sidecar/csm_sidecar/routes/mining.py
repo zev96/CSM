@@ -8,7 +8,7 @@ import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -594,3 +594,152 @@ class BulkMarkBody(BaseModel):
 async def bulk_mark_commented(body: BulkMarkBody) -> dict[str, Any]:
     updated = mining_storage.bulk_mark_commented(body.video_ids, body.value)
     return {"updated": updated}
+
+
+# ── Comment templates (v5) ─────────────────────────────────────────────
+
+
+class TemplateListResponse(BaseModel):
+    items: list[dict[str, Any]]
+    total: int
+
+
+@router.get("/api/mining/templates", response_model=TemplateListResponse)
+async def list_templates(
+    search: str | None = None,
+    tags: str | None = Query(default=None, description="CSV of tag names, intersection"),
+    platform: str | None = None,
+    starred: bool | None = None,
+    hidden: str = Query(default="0", pattern="^(0|1|all)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    # Filter out empty strings — `?tags=,A,` should be treated as `["A"]`,
+    # not `["", "A", ""]` which would silently match zero templates.
+    tag_list = [t for t in (s.strip() for s in tags.split(",")) if t] if tags else None
+    return mining_storage.list_templates(
+        search=search,
+        tags=tag_list,
+        platform=platform,
+        starred=starred,
+        hidden=hidden,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/api/mining/templates/tags")
+async def list_template_tags() -> dict[str, list[str]]:
+    return {"tags": mining_storage.list_used_tags()}
+
+
+class CreateTemplateBody(BaseModel):
+    text: str = Field(..., min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    source_platform: str | None = None
+
+
+class UpdateTemplateBody(BaseModel):
+    text: str | None = None
+    tags: list[str] | None = None
+    starred: bool | None = None
+    hidden: bool | None = None
+
+
+_MAX_TEXT_LEN = 2000
+_MAX_TAGS = 10
+_MAX_TAG_LEN = 12
+_MAX_BULK = 500
+
+
+def _validate_template_input(text: str | None, tags: list[str] | None) -> None:
+    if text is not None and len(text) > _MAX_TEXT_LEN:
+        raise HTTPException(status_code=400, detail="text_too_long")
+    if tags is not None:
+        if len(tags) > _MAX_TAGS:
+            raise HTTPException(status_code=400, detail="too_many_tags")
+        for t in tags:
+            if len(t) > _MAX_TAG_LEN:
+                raise HTTPException(status_code=400, detail="tag_too_long")
+
+
+def _fetch_template_dict(template_id: int) -> dict[str, Any] | None:
+    """Fetch a single template row + convert to API dict."""
+    from csm_core.monitor.storage import get_conn
+    r = get_conn().execute(
+        "SELECT * FROM comment_templates WHERE id=?", (template_id,),
+    ).fetchone()
+    return mining_storage._row_to_template_dict(r) if r else None
+
+
+@router.post("/api/mining/templates", status_code=201)
+async def create_template(body: CreateTemplateBody):
+    _validate_template_input(body.text, body.tags)
+    try:
+        tid = mining_storage.create_template(
+            text=body.text, tags=body.tags, source_platform=body.source_platform,
+        )
+    except mining_storage.TemplateDuplicateError as e:
+        # Use JSONResponse (not HTTPException) so the 409 body is flat —
+        # tests expect {"detail": "duplicate", "existing_id": N}, not
+        # {"detail": {"detail": "duplicate", "existing_id": N}}.
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "duplicate", "existing_id": e.existing_id},
+        )
+    return {"template": _fetch_template_dict(tid)}
+
+
+@router.patch("/api/mining/templates/{template_id}")
+async def patch_template(template_id: int, body: UpdateTemplateBody):
+    _validate_template_input(body.text, body.tags)
+    try:
+        tpl = mining_storage.update_template(
+            template_id,
+            text=body.text, tags=body.tags,
+            starred=body.starred, hidden=body.hidden,
+        )
+    except mining_storage.TemplateDuplicateError as e:
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "duplicate", "existing_id": e.existing_id},
+        )
+    if tpl is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    return {"template": tpl}
+
+
+@router.delete("/api/mining/templates/{template_id}")
+async def delete_template(template_id: int) -> dict[str, Any]:
+    ok = mining_storage.delete_template(template_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="template not found")
+    return {"ok": True}
+
+
+@router.post("/api/mining/templates/{template_id}/use")
+async def use_template(template_id: int) -> dict[str, Any]:
+    text = mining_storage.bump_template_use(template_id)
+    if text is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    return {"text": text}
+
+
+class BulkImportBody(BaseModel):
+    texts: list[str] = Field(..., min_length=1)
+    tags: list[str] = Field(default_factory=list)
+    source_platform: str | None = None
+
+
+@router.post("/api/mining/templates/bulk-import")
+async def bulk_import_templates(body: BulkImportBody) -> dict[str, int]:
+    if len(body.texts) > _MAX_BULK:
+        raise HTTPException(status_code=400, detail="max_batch_exceeded")
+    _validate_template_input(text=None, tags=body.tags)
+    # text-level length check on each item
+    for t in body.texts:
+        if len(t) > _MAX_TEXT_LEN:
+            raise HTTPException(status_code=400, detail="text_too_long")
+    return mining_storage.bulk_import_templates(
+        texts=body.texts, tags=body.tags, source_platform=body.source_platform,
+    )

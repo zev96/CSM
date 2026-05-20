@@ -2,6 +2,11 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+- **评论模板库（mining）**：评论编辑器上方新增模板 chips 行（Top 5 高频/精选 + 抽屉按钮），右侧抽屉支持全量浏览/搜索/标签筛选/inline 管理（Ctrl+/ 快捷键唤起）。设置 → 评论模板库 提供完整 CRUD + 批量导入 + JSON 导出 + 隐藏切换 + 标签过滤 + 分页。已发出的评论通过 DAO 钩子自动入库（文本归一化去重）。
+
 ## [0.5.0] - 2026-05-17
 
 ### Added

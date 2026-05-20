@@ -38,10 +38,13 @@
 import { computed, nextTick, ref, useTemplateRef, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import TemplateChipsRow from "@/components/mining/TemplateChipsRow.vue";
+import TemplateDrawer from "@/components/mining/TemplateDrawer.vue";
 import Icon from "@/components/ui/Icon.vue";
 import { useToast } from "@/composables/useToast";
 import { useMiningStore, LLMNotConfiguredError, type Comment } from "@/stores/mining";
 import { useSidecar } from "@/stores/sidecar";
+import { useTemplatesStore, type Template } from "@/stores/templates";
 
 const props = defineProps<{
   videoId: number;
@@ -66,8 +69,14 @@ const store = useMiningStore();
 const toast = useToast();
 const router = useRouter();
 const sidecar = useSidecar();
+const templatesStore = useTemplatesStore();
 
 const MAX_IMAGES = 9;
+
+// Template library state — drawer toggle + pending pick for replace/append confirm.
+const drawerOpen = ref(false);
+const pendingPick = ref<Template | null>(null);
+const showPickConfirm = ref(false);
 
 function resolveUrl(u: string): string {
   if (!u) return "";
@@ -294,6 +303,54 @@ function onCancelEdit() {
   // changed".
   emit("cancel-edit");
 }
+
+// ── Template library: pick / replace / append flow ─────────────────
+//
+// Empty textarea → direct fill (no confirm dialog needed).
+// Non-empty textarea → stash pending pick + show 3-button popover
+//   (替换 / 追加 / 取消) so the user doesn't lose what they typed.
+// useTemplate() server-bumps use_count + last_used_at so chip ranking
+// updates on next mount of TemplateChipsRow.
+async function handlePick(tpl: Template) {
+  if (text.value.trim().length === 0) {
+    text.value = await templatesStore.useTemplate(tpl.id);
+    await nextTick();
+    autosize(textareaRef.value);
+    textareaRef.value?.focus();
+  } else {
+    pendingPick.value = tpl;
+    showPickConfirm.value = true;
+  }
+}
+
+async function confirmPick(action: "replace" | "append") {
+  if (!pendingPick.value) return;
+  const filledText = await templatesStore.useTemplate(pendingPick.value.id);
+  if (action === "replace") {
+    text.value = filledText;
+  } else {
+    text.value = text.value.trim() + "\n" + filledText;
+  }
+  showPickConfirm.value = false;
+  pendingPick.value = null;
+  await nextTick();
+  autosize(textareaRef.value);
+  textareaRef.value?.focus();
+}
+
+function cancelPick() {
+  showPickConfirm.value = false;
+  pendingPick.value = null;
+}
+
+function onTextareaKeydown(e: KeyboardEvent) {
+  // Ctrl+/ or Cmd+/ opens the template drawer. Doesn't fire if user is
+  // mid-IME composition (browser handles that automatically).
+  if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+    drawerOpen.value = true;
+    e.preventDefault();
+  }
+}
 </script>
 
 <template>
@@ -341,12 +398,21 @@ function onCancelEdit() {
       </button>
     </div>
 
+    <!-- 模板 chips（onMounted 拉取 top-N，picked 后命中 handlePick） -->
+    <div :style="{ padding: '7px 9px 0' }">
+      <TemplateChipsRow
+        @pick="handlePick"
+        @open-drawer="drawerOpen = true"
+      />
+    </div>
+
     <!-- textarea -->
     <textarea
       ref="textareaRef"
       :value="text"
       @input="onInput"
       @focus="onFocus"
+      @keydown="onTextareaKeydown"
       :placeholder="placeholder"
       :rows="mode === 'empty' ? 2 : 1"
       class="w-full bg-transparent outline-none resize-none"
@@ -518,5 +584,86 @@ function onCancelEdit() {
       style="display: none"
       @change="onFilesPicked"
     />
+
+    <!-- 替换/追加确认 popover — only when textarea has content -->
+    <div
+      v-if="showPickConfirm"
+      class="pick-confirm-overlay"
+      @click.self="cancelPick"
+    >
+      <div class="pick-confirm-card">
+        <div class="confirm-title">输入框已有内容</div>
+        <div class="confirm-preview">{{ pendingPick?.text }}</div>
+        <div class="confirm-actions">
+          <button @click="confirmPick('replace')">替换</button>
+          <button @click="confirmPick('append')">追加</button>
+          <button @click="cancelPick">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模板抽屉（T11 实装；当前 stub 只满足导入） -->
+    <TemplateDrawer
+      v-if="drawerOpen"
+      @close="drawerOpen = false"
+      @pick="async (tpl: Template) => { drawerOpen = false; await handlePick(tpl) }"
+    />
   </div>
 </template>
+
+<style scoped>
+/* Replace/append confirm popover — only renders when textarea has content
+ * and user clicks a chip. Click-on-overlay or 取消 button dismisses. */
+.pick-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.pick-confirm-card {
+  background: var(--card, #fff);
+  border-radius: 10px;
+  padding: 18px 20px;
+  min-width: 320px;
+  max-width: 480px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+.confirm-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--ink, #2a2017);
+}
+.confirm-preview {
+  background: var(--card-2, #fff5dc);
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--ink, #2a2017);
+  margin-bottom: 14px;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.confirm-actions button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--line, #d4c8a8);
+  background: var(--card, #fff);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+.confirm-actions button:first-child {
+  background: var(--ink, #2a2017);
+  color: #fff;
+  border-color: var(--ink, #2a2017);
+}
+</style>
