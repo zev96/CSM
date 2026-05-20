@@ -12,6 +12,7 @@ sidecar/tests/test_mining_storage_v4.py).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 
@@ -223,3 +224,86 @@ def test_apply_v5_migration_backfill_runs_once(tmp_path, monkeypatch):
         "SELECT value FROM schema_meta WHERE key='templates_v5_backfilled'"
     ).fetchone()
     assert marker2 is not None
+
+
+# ── T4: public template DAO surface ──────────────────────────────────────
+
+
+def test_create_template_manual(conn):
+    tid = mining_storage.create_template(
+        text="手动新建一条", tags=["种草", "测试"], source_platform=None,
+    )
+    row = conn.execute("SELECT * FROM comment_templates WHERE id=?", (tid,)).fetchone()
+    assert row["text"] == "手动新建一条"
+    assert json.loads(row["tags_json"]) == ["种草", "测试"]
+    assert row["source_platform"] is None
+    assert row["use_count"] == 0
+
+
+def test_create_template_duplicate_raises(conn):
+    mining_storage.create_template(text="重复条目")
+    with pytest.raises(mining_storage.TemplateDuplicateError) as exc:
+        mining_storage.create_template(text="重复条目")
+    assert exc.value.existing_id > 0
+
+
+def test_update_template_partial(conn):
+    tid = mining_storage.create_template(text="原文本", tags=["a"])
+    mining_storage.update_template(tid, text="新文本", starred=True)
+    row = conn.execute("SELECT text, starred, hidden FROM comment_templates WHERE id=?", (tid,)).fetchone()
+    assert row["text"] == "新文本"
+    assert row["starred"] == 1
+    assert row["hidden"] == 0
+
+
+def test_delete_template(conn):
+    tid = mining_storage.create_template(text="删我")
+    assert mining_storage.delete_template(tid) is True
+    assert mining_storage.delete_template(tid) is False  # already gone
+
+
+def test_list_templates_filters_and_orders(conn):
+    a = mining_storage.create_template(text="A 种草", tags=["种草"])
+    b = mining_storage.create_template(text="B 对比", tags=["对比"])
+    c = mining_storage.create_template(text="C 种草对比", tags=["种草", "对比"])
+    mining_storage.update_template(b, starred=True)
+
+    res = mining_storage.list_templates(limit=10, offset=0)
+    assert res["total"] == 3
+    # starred first
+    assert res["items"][0]["id"] == b
+
+    res = mining_storage.list_templates(tags=["种草", "对比"])
+    assert {r["id"] for r in res["items"]} == {c}  # 取交集
+
+    res = mining_storage.list_templates(search="种草")
+    assert {r["id"] for r in res["items"]} == {a, c}
+
+
+def test_bump_use(conn):
+    tid = mining_storage.create_template(text="复用我")
+    text = mining_storage.bump_template_use(tid)
+    assert text == "复用我"
+    row = conn.execute("SELECT use_count FROM comment_templates WHERE id=?", (tid,)).fetchone()
+    assert row["use_count"] == 1
+    mining_storage.bump_template_use(tid)
+    row = conn.execute("SELECT use_count FROM comment_templates WHERE id=?", (tid,)).fetchone()
+    assert row["use_count"] == 2
+
+
+def test_bulk_import_with_dedup(conn):
+    mining_storage.create_template(text="已存在 1")
+    res = mining_storage.bulk_import_templates(
+        texts=["新条目 1", "新条目 2", "已存在 1", "新条目 1"],
+        tags=["导入"],
+        source_platform="manual",
+    )
+    assert res["created"] == 2  # "新条目 1" / "新条目 2"
+    assert res["skipped_duplicates"] == 2  # "已存在 1" (db) + "新条目 1" (dupe in batch)
+
+
+def test_list_used_tags(conn):
+    mining_storage.create_template(text="x", tags=["a", "b"])
+    mining_storage.create_template(text="y", tags=["b", "c"])
+    tags = mining_storage.list_used_tags()
+    assert tags == ["a", "b", "c"]  # dedup + sorted

@@ -795,3 +795,228 @@ def next_tier(video_id: int) -> int:
         (video_id,),
     ).fetchone()
     return int(row["next"]) if row else 1
+
+
+# ── Template DAO (v5) ──────────────────────────────────────────────────
+
+class TemplateDuplicateError(Exception):
+    """Raised by create_template/update_template when text_hash already exists.
+
+    Has .existing_id to allow callers to surface "go to the existing one" UX.
+    """
+    def __init__(self, existing_id: int):
+        super().__init__(f"template already exists (id={existing_id})")
+        self.existing_id = existing_id
+
+
+def _row_to_template_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "text": row["text"],
+        "tags": json.loads(row["tags_json"]),
+        "source_platform": row["source_platform"],
+        "source_comment_id": row["source_comment_id"],
+        "starred": bool(row["starred"]),
+        "hidden": bool(row["hidden"]),
+        "use_count": row["use_count"],
+        "first_seen_at": row["first_seen_at"],
+        "last_used_at": row["last_used_at"],
+    }
+
+
+def create_template(
+    *,
+    text: str,
+    tags: list[str] | None = None,
+    source_platform: str | None = None,
+) -> int:
+    """Manually create a template. Raises TemplateDuplicateError on dup."""
+    conn = get_conn()
+    text_hash = _hash_text(text)
+    existing = conn.execute(
+        "SELECT id FROM comment_templates WHERE text_hash=?", (text_hash,),
+    ).fetchone()
+    if existing:
+        raise TemplateDuplicateError(existing["id"])
+    cur = conn.execute(
+        """
+        INSERT INTO comment_templates
+          (text, text_hash, tags_json, source_platform)
+        VALUES(?, ?, ?, ?)
+        RETURNING id
+        """,
+        (text, text_hash, json.dumps(tags or [], ensure_ascii=False), source_platform),
+    )
+    return int(cur.fetchone()[0])
+
+
+def update_template(
+    template_id: int,
+    *,
+    text: str | None = None,
+    tags: list[str] | None = None,
+    starred: bool | None = None,
+    hidden: bool | None = None,
+) -> dict[str, Any] | None:
+    conn = get_conn()
+    sets: list[str] = []
+    args: list[Any] = []
+    if text is not None:
+        sets.append("text=?")
+        args.append(text)
+        sets.append("text_hash=?")
+        args.append(_hash_text(text))
+    if tags is not None:
+        sets.append("tags_json=?")
+        args.append(json.dumps(tags, ensure_ascii=False))
+    if starred is not None:
+        sets.append("starred=?")
+        args.append(1 if starred else 0)
+    if hidden is not None:
+        sets.append("hidden=?")
+        args.append(1 if hidden else 0)
+    if not sets:
+        row = conn.execute("SELECT * FROM comment_templates WHERE id=?", (template_id,)).fetchone()
+        return _row_to_template_dict(row) if row else None
+    args.append(template_id)
+    try:
+        conn.execute(
+            f"UPDATE comment_templates SET {', '.join(sets)} WHERE id=?", args,
+        )
+    except sqlite3.IntegrityError as e:
+        if "UNIQUE" in str(e):
+            existing = conn.execute(
+                "SELECT id FROM comment_templates WHERE text_hash=? AND id!=?",
+                (_hash_text(text or ""), template_id),
+            ).fetchone()
+            if existing:
+                raise TemplateDuplicateError(existing["id"]) from e
+        raise
+    row = conn.execute("SELECT * FROM comment_templates WHERE id=?", (template_id,)).fetchone()
+    return _row_to_template_dict(row) if row else None
+
+
+def delete_template(template_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.execute("DELETE FROM comment_templates WHERE id=?", (template_id,))
+    return cur.rowcount > 0
+
+
+def list_templates(
+    *,
+    search: str | None = None,
+    tags: list[str] | None = None,
+    platform: str | None = None,    # 'manual' = NULL source_platform
+    starred: bool | None = None,
+    hidden: str = "0",              # "0" (default), "1", or "all"
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    conn = get_conn()
+    where: list[str] = []
+    args: list[Any] = []
+
+    if search:
+        where.append("text LIKE ?")
+        args.append(f"%{search}%")
+    if platform == "manual":
+        where.append("source_platform IS NULL")
+    elif platform:
+        where.append("source_platform=?")
+        args.append(platform)
+    if starred is True:
+        where.append("starred=1")
+    if hidden == "0":
+        where.append("hidden=0")
+    elif hidden == "1":
+        where.append("hidden=1")
+    # "all" → no hidden filter
+    if tags:
+        for tag in tags:
+            where.append(
+                "EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value=?)"
+            )
+            args.append(tag)
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM comment_templates {where_sql}", args,
+    ).fetchone()[0]
+    rows = conn.execute(
+        f"""
+        SELECT * FROM comment_templates {where_sql}
+        ORDER BY starred DESC, last_used_at DESC, use_count DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*args, limit, offset),
+    ).fetchall()
+    return {"items": [_row_to_template_dict(r) for r in rows], "total": total}
+
+
+def bump_template_use(template_id: int) -> str | None:
+    """Returns the template's text after bumping use_count + last_used_at."""
+    conn = get_conn()
+    row = conn.execute(
+        """
+        UPDATE comment_templates
+        SET use_count = use_count + 1,
+            last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id=?
+        RETURNING text
+        """,
+        (template_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def bulk_import_templates(
+    *,
+    texts: list[str],
+    tags: list[str] | None = None,
+    source_platform: str | None = None,
+) -> dict[str, int]:
+    """Insert N rows, deduping by text_hash both within batch and vs DB.
+
+    Returns {"created": N, "skipped_duplicates": M}.
+    Empty / whitespace-only texts count as duplicates (skipped).
+    """
+    conn = get_conn()
+    tags_json = json.dumps(tags or [], ensure_ascii=False)
+    seen_hashes: set[str] = set()
+    created = 0
+    skipped = 0
+    for raw in texts:
+        text = raw.strip()
+        if not text:
+            skipped += 1
+            continue
+        h = _hash_text(text)
+        if h in seen_hashes:
+            skipped += 1
+            continue
+        seen_hashes.add(h)
+        existing = conn.execute(
+            "SELECT 1 FROM comment_templates WHERE text_hash=?", (h,),
+        ).fetchone()
+        if existing:
+            skipped += 1
+            continue
+        conn.execute(
+            """
+            INSERT INTO comment_templates
+              (text, text_hash, tags_json, source_platform)
+            VALUES(?, ?, ?, ?)
+            """,
+            (text, h, tags_json, source_platform),
+        )
+        created += 1
+    return {"created": created, "skipped_duplicates": skipped}
+
+
+def list_used_tags() -> list[str]:
+    """Return all distinct tags across all templates, alphabetically."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT value FROM comment_templates, json_each(tags_json) ORDER BY value"
+    ).fetchall()
+    return [r[0] for r in rows]
