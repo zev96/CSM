@@ -342,6 +342,15 @@ function cancelPick() {
   showPickConfirm.value = false;
   pendingPick.value = null;
 }
+
+function onTextareaKeydown(e: KeyboardEvent) {
+  // Ctrl+/ or Cmd+/ opens the template drawer. Doesn't fire if user is
+  // mid-IME composition (browser handles that automatically).
+  if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+    drawerOpen.value = true;
+    e.preventDefault();
+  }
+}
 </script>
 
 <template>
@@ -403,6 +412,7 @@ function cancelPick() {
       :value="text"
       @input="onInput"
       @focus="onFocus"
+      @keydown="onTextareaKeydown"
       :placeholder="placeholder"
       :rows="mode === 'empty' ? 2 : 1"
       class="w-full bg-transparent outline-none resize-none"
