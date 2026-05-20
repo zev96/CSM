@@ -88,6 +88,13 @@ def test_create_template_too_many_tags(client: TestClient, monitor_db: Path):
     assert r.json()["detail"] == "too_many_tags"
 
 
+def test_create_template_tag_too_long(client: TestClient, monitor_db: Path):
+    """A single tag longer than 12 chars should return 400 tag_too_long."""
+    r = client.post("/api/mining/templates", json={"text": "ok", "tags": ["x" * 13]})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "tag_too_long"
+
+
 def test_patch_template(client: TestClient, monitor_db: Path):
     tid = mining_storage.create_template(text="原")
     r = client.patch(f"/api/mining/templates/{tid}", json={"starred": True, "text": "新"})
