@@ -150,17 +150,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             mining_service.shutdown()
         except Exception:
             logger.exception("mining_service shutdown raised; ignoring")
-        # generate/batch/dedup/updater services each own their own
-        # module-level ThreadPoolExecutor. We deliberately do NOT shut
-        # them down here: they're created at import time as singletons,
-        # and once shut down can't be revived without a lazy-init refactor
-        # across the four modules. The v0.5.2 audit (C4) flagged "corrupt
-        # updater .bin after hard kill" — that concern is already covered
-        # by ``download_with_verification`` atomically deleting the target
-        # on any failure, plus ``POST /api/shutdown`` now routing through
-        # uvicorn's SIGINT path so this very lifespan ``finally`` block
-        # actually runs to completion before process exit. A follow-up PR
-        # can lazy-init those pools so they can be safely cycled.
+        # Drain the four service-owned ThreadPoolExecutors. Each service
+        # exposes an idempotent ``shutdown()`` that cancels queued work
+        # and nulls its module-level executor; the next ``submit()`` call
+        # lazy-recreates the pool. This means we can safely run shutdown
+        # under pytest's repeated TestClient lifecycle without poisoning
+        # subsequent tests — which is exactly what blocked the first
+        # attempt at this fix back in #38.
+        for mod_name in ("generate_service", "batch_service", "dedup_service", "updater_service"):
+            try:
+                mod = __import__(
+                    f"csm_sidecar.services.{mod_name}",
+                    fromlist=["shutdown"],
+                )
+                mod.shutdown()
+            except Exception:
+                logger.exception("%s shutdown raised; ignoring", mod_name)
 
 
 async def _periodic_reap_stale(interval_s: float = 60.0) -> None:

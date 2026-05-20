@@ -28,10 +28,26 @@ DedupKind = Literal["history", "vault"]
 
 _analyzer: DedupAnalyzer | None = None
 _lock = threading.Lock()
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dedup")
+# Lazy-init: shutdown() nulls the pool; next submit_build() recreates.
+_executor: ThreadPoolExecutor | None = None
 # Track loaded kinds so analyze() can lazy-load on demand without
 # repeatedly hitting disk.
 _loaded_kinds: set[str] = set()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dedup")
+    return _executor
+
+
+def shutdown() -> None:
+    """Idempotent shutdown — called from sidecar lifespan finally."""
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor = None
 
 
 def get_analyzer() -> DedupAnalyzer:
@@ -95,7 +111,7 @@ def submit_build(kind: DedupKind) -> str:
     - ``error``: ``error``
     """
     job_id = bus.create_job()
-    _executor.submit(_run_build, job_id, kind)
+    _get_executor().submit(_run_build, job_id, kind)
     return job_id
 
 

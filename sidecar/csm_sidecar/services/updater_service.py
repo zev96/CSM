@@ -25,7 +25,26 @@ logger = logging.getLogger(__name__)
 # 内测分叉 / 私有分发场景仍可在 settings.json 里覆写 update_repo。
 DEFAULT_UPDATE_REPO = "zev96/CSM"
 
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="updater")
+# Lazy-init: shutdown() nulls the pool; next submit_download() recreates.
+# Critical for the upgrade path: lifespan finally now actually shuts this
+# down (instead of the module-level singleton lingering until process exit),
+# matching the audit C4 contract.
+_executor: ThreadPoolExecutor | None = None
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="updater")
+    return _executor
+
+
+def shutdown() -> None:
+    """Idempotent shutdown — called from sidecar lifespan finally."""
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor = None
 
 
 def _read_release_token() -> str:
@@ -127,7 +146,7 @@ def submit_download(*, url: str, expected_sha256: str, target: Path | None = Non
     """Spawn a download. Progress streams over /api/events/{job_id}."""
     job_id = bus.create_job()
     target = target or _default_target_path(url)
-    _executor.submit(_run_download, job_id, url, expected_sha256, target)
+    _get_executor().submit(_run_download, job_id, url, expected_sha256, target)
     return job_id
 
 
