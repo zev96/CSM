@@ -17,6 +17,7 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
+import { useStaleGuard } from "@/composables/useStaleGuard";
 
 const props = defineProps<{
   open: boolean;
@@ -166,20 +167,33 @@ async function captureViaLogin() {
   }
 }
 
+// Guard against rapid platform switches: `watch(platform, loadCookies)`
+// fires a fresh load on every change, but the older response could
+// resolve last and overwrite the newer platform's cookie list.
+const loadGuard = useStaleGuard();
+
 async function loadCookies() {
+  const my = loadGuard.issue();
   loading.value = true;
   try {
     const r = await sidecar.client.get("/api/monitor/cookies", {
       params: { platform: platform.value },
     });
+    if (loadGuard.isStale(my)) return;
     cookies.value = r.data.cookies ?? [];
   } catch (e: any) {
+    if (loadGuard.isStale(my)) return;
     cookies.value = [];
     if (e?.response?.status !== 503) {
       toast.error(`加载失败：${e?.message ?? e}`);
     }
   } finally {
-    loading.value = false;
+    // Only the most recent load owns the loading indicator. A stale
+    // response setting it false here would prematurely hide the spinner
+    // for the in-flight call.
+    if (!loadGuard.isStale(my)) {
+      loading.value = false;
+    }
   }
 }
 

@@ -46,6 +46,7 @@ import { useMonitorStatus } from "@/stores/monitorStatus";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
+import { useStaleGuard } from "@/composables/useStaleGuard";
 
 const sidecar = useSidecar();
 const cfg = useConfig();
@@ -411,11 +412,20 @@ async function loadTaskSnapshots() {
 // 期间旧 tasks 拿不到 snapshot 会全部回落到 ``matched=false / rank=-1`` 渲
 // 染（视觉上是「整列瞬间变成无 / 未找到」的明显闪动），切平台、切顶级
 // tab 都触发。原子赋值后中间态被消除，UI 直接从旧终态跳到新终态。
+//
+// Stale guard on top of the atomic write: with multiple awaits (tasks
+// list + N parallel snapshot fetches) a rapid tab switch can still
+// arrive in flight-order rather than user-click order. The guard drops
+// any result tied to an obsolete typeKey before we touch reactive state.
+const tasksLoadGuard = useStaleGuard();
+
 async function loadTasksAndSnapshotsAtomic(typeKey: string): Promise<void> {
+  const my = tasksLoadGuard.issue();
   loading.value = true;
   failed.value = false;
   try {
     const r = await sidecar.client.get("/api/monitor/tasks", { params: { type: typeKey } });
+    if (tasksLoadGuard.isStale(my)) return;
     const newTasks: Task[] = r.data?.tasks ?? [];
     const pairs: Record<number, TaskSnapshotPair> = {};
     await Promise.all(newTasks.map(async (t) => {
@@ -433,18 +443,23 @@ async function loadTasksAndSnapshotsAtomic(typeKey: string): Promise<void> {
         // 不阻塞整批切换。
       }
     }));
+    if (tasksLoadGuard.isStale(my)) return;
     tasks.value = newTasks;
     taskSnapshots.value = pairs;
     if (newTasks.length > 0 && (!selectedTaskId.value || !newTasks.find((t) => t.id === selectedTaskId.value))) {
       selectedTaskId.value = newTasks[0].id;
     }
   } catch (e: any) {
+    if (tasksLoadGuard.isStale(my)) return;
     failed.value = true;
     tasks.value = [];
     taskSnapshots.value = {};
     if (e?.response?.status !== 503) toast.error(`加载失败：${e?.message ?? e}`);
   } finally {
-    loading.value = false;
+    // Only the most recent call should clear the spinner.
+    if (!tasksLoadGuard.isStale(my)) {
+      loading.value = false;
+    }
   }
 }
 
