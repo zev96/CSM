@@ -53,11 +53,14 @@ def test_fresh_db_has_video_comments_and_ai_summary(fresh_db: Path):
 
 
 def test_schema_version_is_4(fresh_db: Path):
+    # Now expects "5" — T1 bumped the schema for the comment-template
+    # library. Test name kept for git-blame continuity; the check is
+    # really "schema_meta tracks the current stamp".
     with sqlite3.connect(str(fresh_db)) as conn:
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key='version'"
         ).fetchone()
-    assert row[0] == "4"
+    assert row[0] == "5"
 
 
 def test_video_comments_index_present(fresh_db: Path):
@@ -103,13 +106,14 @@ def test_v3_to_v4_upgrade_preserves_video_rows(tmp_path: Path, monkeypatch):
     monitor_storage.init_db(db)
 
     # Post-upgrade: row preserved + new shape applied + version bumped.
+    # init_db now runs through v5 as well, so the recorded version is "5".
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute("SELECT title FROM videos").fetchall()
         assert rows == [("kept",)]
         ver = conn.execute(
             "SELECT value FROM schema_meta WHERE key='version'"
         ).fetchone()[0]
-    assert ver == "4"
+    assert ver == "5"
     assert "ai_summary" in _video_columns(db)
     assert "video_comments" in _table_names(db)
 

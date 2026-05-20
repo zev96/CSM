@@ -50,12 +50,13 @@ def test_v3_videos_unique_platform_video_id(fresh_db: Path):
 
 def test_v3_schema_version_recorded(fresh_db: Path):
     # schema_meta tracks the CURRENT version stamp, not v3 specifically;
-    # bumped to "4" when Outreach Phase 2/3 added video_comments + ai_summary.
+    # bumped to "5" when the comment-template library (T1) added
+    # comment_templates.
     conn = sqlite3.connect(str(fresh_db))
     row = conn.execute(
         "SELECT value FROM schema_meta WHERE key='version'"
     ).fetchone()
-    assert row[0] == "4"
+    assert row[0] == "5"
 
 
 def test_models_import_and_validate():

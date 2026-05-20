@@ -138,6 +138,41 @@ def apply_v4_migration(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE videos ADD COLUMN ai_summary TEXT")
 
 
+# ── Schema v5 additions ─────────────────────────────────────────────────
+# Comment template library (cross-video reusable evaluation snippets).
+# UNIQUE(text_hash) ensures dedup on normalized text; ON CONFLICT updates
+# use_count + last_used_at.
+_DDL_V5_TEMPLATES: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS comment_templates (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        text                TEXT NOT NULL,
+        text_hash           TEXT NOT NULL UNIQUE,
+        tags_json           TEXT NOT NULL DEFAULT '[]',
+        source_platform     TEXT,
+        source_comment_id   INTEGER REFERENCES video_comments(id) ON DELETE SET NULL,
+        starred             INTEGER NOT NULL DEFAULT 0,
+        hidden              INTEGER NOT NULL DEFAULT 0,
+        use_count           INTEGER NOT NULL DEFAULT 0,
+        first_seen_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        last_used_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_templates_starred_last ON comment_templates(starred DESC, last_used_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_templates_hidden ON comment_templates(hidden)",
+]
+
+
+def apply_v5_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v4 → v5.
+
+    Idempotent: CREATE TABLE / CREATE INDEX use IF NOT EXISTS.
+    Historical backfill of existing done comments is in T3.
+    """
+    for stmt in _DDL_V5_TEMPLATES:
+        conn.execute(stmt)
+
+
 def get_conn() -> sqlite3.Connection:
     """Thin alias — mining shares monitor's connection pool."""
     return monitor_storage.get_conn()

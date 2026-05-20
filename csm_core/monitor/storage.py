@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -139,6 +139,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # v4: Outreach Phase 2/3 — video_comments table + videos.ai_summary.
     # Same lazy-import + idempotent rationale as v3.
     mining_storage.apply_v4_migration(conn)
+    # v5: comment template library — see csm_core/mining/storage.py
+    mining_storage.apply_v5_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),
