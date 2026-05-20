@@ -167,11 +167,26 @@ _DDL_V5_TEMPLATES: list[str] = [
 def apply_v5_migration(conn: sqlite3.Connection) -> None:
     """Called by monitor.storage._migrate when bumping v4 → v5.
 
-    Idempotent: CREATE TABLE / CREATE INDEX use IF NOT EXISTS.
-    Historical backfill of existing done comments is in T3.
+    Idempotent: CREATE TABLE / CREATE INDEX use IF NOT EXISTS;
+    backfill uses UPSERT so re-runs are safe.
     """
     for stmt in _DDL_V5_TEMPLATES:
         conn.execute(stmt)
+    _backfill_v5_templates(conn)
+
+
+def _backfill_v5_templates(conn: sqlite3.Connection) -> None:
+    """Scan all existing done comments and upsert them as templates.
+
+    Runs in chronological order so first_seen_at matches the earliest
+    occurrence. Safe to re-run (ON CONFLICT bumps use_count).
+    """
+    rows = conn.execute(
+        "SELECT id, video_id, text FROM video_comments "
+        "WHERE status='done' ORDER BY created_at ASC"
+    ).fetchall()
+    for row in rows:
+        _upsert_template_from_comment(conn, dict(row))
 
 
 def _normalize_text(text: str) -> str:
@@ -672,6 +687,7 @@ def update_comment(
     ).fetchone()
     if row is None:
         return None
+    before_status = row["status"]
     sets: list[str] = []
     args: list[Any] = []
     if text is not None:
@@ -694,6 +710,11 @@ def update_comment(
     new_row = conn.execute(
         "SELECT * FROM video_comments WHERE id=?", (comment_id,),
     ).fetchone()
+    # T3 hook — template library auto-ingest on draft→done.
+    # isolation_level=None autocommits each execute(); the upsert runs
+    # immediately after the UPDATE so consistency is fine.
+    if new_row and before_status != "done" and new_row["status"] == "done":
+        _upsert_template_from_comment(conn, dict(new_row))
     return _row_to_comment_dict(new_row) if new_row else None
 
 

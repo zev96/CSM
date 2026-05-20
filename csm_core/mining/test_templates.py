@@ -44,10 +44,12 @@ def test_v5_creates_templates_table(conn):
 
 def test_v5_migration_idempotent(conn):
     # Re-run apply_v5_migration on already-migrated DB — should not raise.
+    # (Backfill may have populated rows from prior done comments, but
+    # re-running must not double them.)
+    n_before = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
     mining_storage.apply_v5_migration(conn)
-    mining_storage.apply_v5_migration(conn)
-    # Table still has zero rows
-    assert conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0] == 0
+    n_after = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n_after == n_before  # idempotent
 
 
 def test_v5_indexes_exist(conn):
@@ -58,7 +60,6 @@ def test_v5_indexes_exist(conn):
     assert "idx_templates_hidden" in idx
 
 
-import json
 from csm_core.mining.storage import (
     _normalize_text, _hash_text, _upsert_template_from_comment,
 )
@@ -109,3 +110,58 @@ def test_upsert_second_time_bumps_use_count(conn):
     assert rows[0] == 1                  # only 1 row (dedup)
     assert rows[1] == 2                  # use_count bumped
     assert rows[2] == 1                  # source_comment_id stays at first
+
+
+# ── T3: backfill + update_comment hook ─────────────────────────────────
+
+
+def test_backfill_inserts_existing_done_comments(tmp_path, monkeypatch):
+    """Seed v4-style data, then trigger backfill, assert templates created."""
+    db = tmp_path / "back.db"
+    monkeypatch.setattr(monitor_storage, "_initialized", False, raising=False)
+    monkeypatch.setattr(monitor_storage, "_db_path", None, raising=False)
+    monkeypatch.setattr(monitor_storage, "_local", threading.local(), raising=False)
+    monitor_storage.init_db(str(db))
+    conn = monitor_storage.get_conn()
+    # Seed 3 done comments + 1 draft (draft should NOT be backfilled)
+    conn.execute("INSERT INTO videos(platform, platform_video_id, url) VALUES('kuaishou','v1','http://1')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 1, 'A', 'done')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 2, 'B', 'done')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 3, 'C', 'draft')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 4, 'A', 'done')")  # dup of 'A'
+    # Wipe templates table to simulate "before backfill"
+    conn.execute("DELETE FROM comment_templates")
+
+    mining_storage._backfill_v5_templates(conn)
+
+    n = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n == 2  # 'A' + 'B' (C is draft, second 'A' deduped)
+    uc = conn.execute("SELECT use_count FROM comment_templates WHERE text='A'").fetchone()[0]
+    assert uc == 2  # 'A' got hit twice
+
+
+def test_update_comment_draft_to_done_triggers_upsert(conn):
+    conn.execute("INSERT INTO videos(platform, platform_video_id, url) VALUES('douyin','v1','http://1')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 1, '新评论', 'draft')")
+
+    n_before = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n_before == 0
+
+    mining_storage.update_comment(1, status="done")
+
+    n_after = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n_after == 1
+    row = conn.execute("SELECT text, source_platform FROM comment_templates").fetchone()
+    assert row["text"] == "新评论"
+    assert row["source_platform"] == "douyin"
+
+
+def test_update_comment_status_unchanged_no_trigger(conn):
+    conn.execute("INSERT INTO videos(platform, platform_video_id, url) VALUES('douyin','v1','http://1')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 1, 'X', 'done')")
+    conn.execute("DELETE FROM comment_templates")
+
+    mining_storage.update_comment(1, text="X (edited)")  # status not changed (still 'done')
+
+    n = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n == 0  # no trigger — only draft→done triggers
