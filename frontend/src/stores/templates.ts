@@ -122,7 +122,8 @@ export const useTemplatesStore = defineStore("templates", () => {
       const resp = await api().patch<{ template: Template }>(`/api/mining/templates/${id}`, payload)
       // Update local cache if id is in items
       const idx = items.value.findIndex(t => t.id === id)
-      if (idx >= 0) items.value[idx] = resp.data.template
+      // Mint a new object reference so watchers comparing by ref fire correctly.
+      if (idx >= 0) items.value[idx] = { ...resp.data.template }
       return resp.data.template
     } catch (err: any) {
       if (err?.response?.status === 409 && err.response.data?.detail === "duplicate") {
