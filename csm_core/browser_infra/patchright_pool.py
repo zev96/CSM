@@ -73,20 +73,54 @@ def ensure_browsers_path() -> str | None:
     ``patchright install chromium`` populated the user-wide cache at
     ``%LOCALAPPDATA%\\ms-playwright`` (not anywhere the bundle knows about).
 
-    Fix: explicitly set ``PLAYWRIGHT_BROWSERS_PATH`` to that user-wide
-    cache before any ``sync_playwright().start()`` call — both the
-    monitor scraping pool and the interactive-login flow rely on this.
+    Lookup priority (first match wins):
 
-    Honors a user-provided ``PLAYWRIGHT_BROWSERS_PATH`` if already set
-    (e.g. someone shipped a portable browser layout). Returns the path
-    actually in effect, or ``None`` if we couldn't compute one (in
-    which case patchright is left to its default behaviour).
+    1. ``PLAYWRIGHT_BROWSERS_PATH`` already in env (user/dev override —
+       e.g. someone shipped a portable browser layout, or dev set it for
+       a local test).
+    2. **Bundled Chromium** shipped alongside the sidecar exe at
+       ``<sidecar-exe-dir>/binaries/ms-playwright/`` (release builds —
+       packed in via Tauri ``bundle.resources``, see release.yml step
+       "Copy Chromium into Tauri resources").
+    3. **User-wide cache** at ``%LOCALAPPDATA%\\ms-playwright`` /
+       ``~/Library/Caches/ms-playwright`` / ``~/.cache/ms-playwright``
+       (dev machines that ran ``patchright install chromium`` once, and
+       legacy installs from before v0.5.3 where users were told to run
+       it manually).
+
+    Returns the path actually in effect, or ``None`` if no candidate
+    exists — in which case patchright is left to its own discovery and
+    will likely fail with "Executable doesn't exist", which the caller
+    surfaces as a 503 with a "rebuild sidecar / install chromium" hint.
     """
     global _browsers_path_logged
     existing = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if existing:
         return existing
 
+    # Priority 2: bundled-with-installer Chromium. The sidecar exe lives
+    # at ``<install_dir>/csm-sidecar-<triple>.exe`` (Tauri externalBin
+    # drops it at the install root) and Tauri ``bundle.resources`` lays
+    # ``binaries/ms-playwright/`` next to it. PyInstaller onefile leaves
+    # ``sys.executable`` pointing at the real .exe path (not the _MEI
+    # temp dir), so this resolves to the install dir, not the unpack
+    # temp. Same path works in dev when running an actually-frozen build
+    # via tauri dev.
+    try:
+        bundled = Path(sys.executable).resolve().parent / "binaries" / "ms-playwright"
+        if bundled.exists():
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled)
+            if not _browsers_path_logged:
+                logger.info("PLAYWRIGHT_BROWSERS_PATH set to bundled %s", bundled)
+                _browsers_path_logged = True
+            return str(bundled)
+    except Exception as e:
+        # Defensive: ``sys.executable`` is always set, but path resolution
+        # could in theory hit a permission error on weird filesystems.
+        # Falling through to the user-wide cache is the right behaviour.
+        logger.debug("ensure_browsers_path bundled lookup raised: %s", e)
+
+    # Priority 3: user-wide cache populated by `patchright install chromium`.
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         candidate = Path(base) / "ms-playwright"
@@ -100,7 +134,8 @@ def ensure_browsers_path() -> str | None:
         # to fall through to its own discovery and we'd be worse off.
         if not _browsers_path_logged:
             logger.warning(
-                "PLAYWRIGHT_BROWSERS_PATH not set and default %s doesn't exist — "
+                "PLAYWRIGHT_BROWSERS_PATH not set, no bundled Chromium next "
+                "to sidecar, and default %s doesn't exist — "
                 "run `patchright install chromium` first",
                 candidate,
             )
