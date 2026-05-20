@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -97,9 +98,15 @@ class BatchRequest:
 # Process-global state. Keyed by job_id. Lock guards both dict mutation
 # and per-state field reads (cancel_requested) since worker thread reads
 # while route handlers write.
-_states: dict[str, BatchState] = {}
+#
+# OrderedDict + MAX_CACHE so a long-running sidecar that's seen hundreds
+# of batches doesn't keep every BatchState (which holds a per-item list)
+# in memory forever. Eviction only drops *finished* entries — a running
+# batch is never silently forgotten.
+_states: "OrderedDict[str, BatchState]" = OrderedDict()
 _lock = threading.Lock()
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="batch")
+MAX_CACHE = 50
 
 
 def submit(req: BatchRequest) -> str:
@@ -123,6 +130,7 @@ def submit(req: BatchRequest) -> str:
     )
     with _lock:
         _states[job_id] = state
+        _evict_finished_overflow_unlocked()
     _executor.submit(_run_job, job_id)
     return job_id
 
@@ -286,3 +294,38 @@ def _summary(state: BatchState) -> dict:
         "by_status": by_status,
         "total_duration_seconds": round(total_duration, 3),
     }
+
+
+def _evict_finished_overflow_unlocked() -> None:
+    """Drop oldest *finished* batches when ``_states`` exceeds ``MAX_CACHE``.
+
+    Must be called with ``_lock`` held. Walks insertion order (oldest first)
+    and pops entries whose ``finished_at`` is set, until we're back under
+    capacity. A running batch (``finished_at is None``) is never evicted —
+    we don't want to forget a job a user is still watching, even if it's
+    been queued for a long time.
+
+    Pathological case: if all 50 slots are filled with running batches
+    (max_workers=2 makes this implausible — submit blocks before that),
+    eviction is a no-op and the cache grows past MAX_CACHE until something
+    finishes. That's the right trade-off.
+    """
+    if len(_states) <= MAX_CACHE:
+        return
+    overflow = len(_states) - MAX_CACHE
+    to_drop: list[str] = []
+    for jid, st in _states.items():
+        if len(to_drop) >= overflow:
+            break
+        if st.finished_at is not None:
+            to_drop.append(jid)
+    for jid in to_drop:
+        del _states[jid]
+    if to_drop:
+        logger.debug("batch_service evicted %d finished states", len(to_drop))
+
+
+def reset_for_test() -> None:
+    """Test-only — wipe the state cache between tests."""
+    with _lock:
+        _states.clear()

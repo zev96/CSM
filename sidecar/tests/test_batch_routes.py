@@ -162,3 +162,74 @@ def test_submit_with_missing_vault_root_streams_error(client: TestClient, tmp_pa
     # Whole-batch failure → no items run, all stay queued and we never
     # update them to cancelled (cancel path) — but the worker fail path
     # leaves them queued. That's fine; the SSE error event is the signal.
+
+
+# ── _states bounded cache ─────────────────────────────────────────────────
+def test_states_evicts_finished_when_over_capacity(monkeypatch):
+    """When submit() pushes _states past MAX_CACHE, oldest *finished* entries
+    drop out and a running entry survives even if it's oldest."""
+    batch_service.reset_for_test()
+    monkeypatch.setattr(batch_service, "MAX_CACHE", 3, raising=True)
+
+    # 4 fake states: oldest finished, two more finished, then a running one.
+    # After eviction we expect just 3 to remain (MAX_CACHE).
+    def _add(jid: str, finished: bool) -> None:
+        st = batch_service.BatchState(
+            job_id=jid, keywords=["kw"], template_id="tpl",
+            skill_id=None, provider=None, model=None, seed=0,
+            started_at="2026-05-20T00:00:00",
+            finished_at="2026-05-20T00:01:00" if finished else None,
+        )
+        with batch_service._lock:
+            batch_service._states[jid] = st
+
+    _add("a", finished=True)
+    _add("b", finished=False)   # running, oldest of the running set
+    _add("c", finished=True)
+    _add("d", finished=True)
+    # Trigger the unlocked helper directly — mirrors what submit() does
+    # under _lock after inserting a new entry.
+    with batch_service._lock:
+        batch_service._evict_finished_overflow_unlocked()
+
+    keys = list(batch_service._states.keys())
+    # 'a' was the oldest finished → evicted. 'b' (running) survives even
+    # though it's older than 'c' and 'd'. 'c' and 'd' stay because we only
+    # had to drop one to get back under MAX_CACHE=3.
+    assert keys == ["b", "c", "d"]
+
+
+def test_states_does_not_evict_when_under_capacity(monkeypatch):
+    """No-op when under MAX_CACHE — safety against accidental cleanup."""
+    batch_service.reset_for_test()
+    monkeypatch.setattr(batch_service, "MAX_CACHE", 5, raising=True)
+    for jid in ("a", "b", "c"):
+        with batch_service._lock:
+            batch_service._states[jid] = batch_service.BatchState(
+                job_id=jid, keywords=["kw"], template_id="tpl",
+                skill_id=None, provider=None, model=None, seed=0,
+                started_at="2026-05-20T00:00:00",
+                finished_at="2026-05-20T00:01:00",
+            )
+    with batch_service._lock:
+        batch_service._evict_finished_overflow_unlocked()
+    assert list(batch_service._states.keys()) == ["a", "b", "c"]
+
+
+def test_states_never_evicts_running_batches(monkeypatch):
+    """Pathological case: every slot is a running batch. Cache grows past
+    MAX_CACHE rather than silently forgetting an in-flight job."""
+    batch_service.reset_for_test()
+    monkeypatch.setattr(batch_service, "MAX_CACHE", 2, raising=True)
+    for jid in ("a", "b", "c"):
+        with batch_service._lock:
+            batch_service._states[jid] = batch_service.BatchState(
+                job_id=jid, keywords=["kw"], template_id="tpl",
+                skill_id=None, provider=None, model=None, seed=0,
+                started_at="2026-05-20T00:00:00",
+                finished_at=None,
+            )
+    with batch_service._lock:
+        batch_service._evict_finished_overflow_unlocked()
+    # All three running entries preserved — better to leak than to forget.
+    assert list(batch_service._states.keys()) == ["a", "b", "c"]
