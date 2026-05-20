@@ -3,6 +3,10 @@
 Tauri stack: the canonical version lives in ``frontend/src-tauri/tauri.conf.json``
 (read by the about dialog) and is mirrored in ``frontend/src-tauri/Cargo.toml``
 (the Rust crate version — kept in sync so cargo + Tauri metadata don't drift).
+``frontend/package.json`` + ``frontend/package-lock.json`` also carry the
+version as npm metadata; we bump them in lock-step so npm / GitHub / IDE
+tooltips don't show a stale value (v0.5.0 release shipped with the lockfile
+stuck at 0.4.0 because they used to be bumped by hand).
 
 Usage:
     python scripts/release.py 0.4.1           # actually do it
@@ -34,6 +38,8 @@ ROOT = Path(__file__).resolve().parent.parent
 TAURI_CONF = ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
 CARGO_TOML = ROOT / "frontend" / "src-tauri" / "Cargo.toml"
 SIDECAR_INIT = ROOT / "sidecar" / "csm_sidecar" / "__init__.py"
+PACKAGE_JSON = ROOT / "frontend" / "package.json"
+PACKAGE_LOCK = ROOT / "frontend" / "package-lock.json"
 CHANGELOG = ROOT / "CHANGELOG.md"
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-[\w.]+)?$")
@@ -128,6 +134,46 @@ def _bump_sidecar_init(new: str) -> None:
     SIDECAR_INIT.write_text(new_text, encoding="utf-8")
 
 
+def _bump_package_json(new: str) -> None:
+    """Rewrite top-level ``"version"`` in frontend/package.json.
+
+    Standard JSON round-trip; 2-space indent matches the existing layout.
+    Force LF via ``newline="\\n"`` because the file is committed as LF —
+    Python's default text-mode write turns ``\\n`` into ``\\r\\n`` on
+    Windows, which would land CRLF in the diff (and the lockfile
+    rewrite below for the same reason).
+    """
+    payload = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
+    payload["version"] = new
+    PACKAGE_JSON.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _bump_package_lock(new: str) -> None:
+    """Rewrite the two ``"version"`` fields in frontend/package-lock.json.
+
+    npm v3 lockfile stores the project version at two spots:
+    - top-level ``version``
+    - ``packages[""].version`` (root package entry)
+
+    Both must match package.json. Everything else (``lockfileVersion``,
+    ``requires``, the ``packages`` resolver tree) is npm-managed —
+    we touch only those two version fields.
+    """
+    payload = json.loads(PACKAGE_LOCK.read_text(encoding="utf-8"))
+    payload["version"] = new
+    if "packages" in payload and "" in payload["packages"]:
+        payload["packages"][""]["version"] = new
+    PACKAGE_LOCK.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def _bump_changelog(new: str) -> None:
     text = CHANGELOG.read_text(encoding="utf-8")
     today = dt.date.today().isoformat()
@@ -184,6 +230,8 @@ def main(argv: list[str]) -> int:
         print(f"[dry-run] would write {TAURI_CONF} with version={new_version}")
         print(f"[dry-run] would write {CARGO_TOML} with version={new_version}")
         print(f"[dry-run] would write {SIDECAR_INIT} with __version__={new_version}")
+        print(f"[dry-run] would write {PACKAGE_JSON} with version={new_version}")
+        print(f"[dry-run] would write {PACKAGE_LOCK} with version={new_version} (2 fields)")
         print("[dry-run] would rewrite CHANGELOG.md (Unreleased -> "
               f"[{new_version}] - {dt.date.today().isoformat()})")
         print(f"[dry-run] would: git add -A && git commit -m 'release: v{new_version}'")
@@ -194,12 +242,16 @@ def main(argv: list[str]) -> int:
     _bump_tauri_conf(new_version)
     _bump_cargo_toml(new_version)
     _bump_sidecar_init(new_version)
+    _bump_package_json(new_version)
+    _bump_package_lock(new_version)
     _bump_changelog(new_version)
     subprocess.check_call(
         ["git", "add",
          "frontend/src-tauri/tauri.conf.json",
          "frontend/src-tauri/Cargo.toml",
          "sidecar/csm_sidecar/__init__.py",
+         "frontend/package.json",
+         "frontend/package-lock.json",
          "CHANGELOG.md"], cwd=ROOT,
     )
     subprocess.check_call(
