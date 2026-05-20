@@ -105,8 +105,25 @@ class BatchRequest:
 # batch is never silently forgotten.
 _states: "OrderedDict[str, BatchState]" = OrderedDict()
 _lock = threading.Lock()
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="batch")
+# Lazy-init: shutdown() nulls the pool, the next submit() lazy-recreates.
+# See generate_service for the rationale (lifespan cycle vs test reuse).
+_executor: ThreadPoolExecutor | None = None
 MAX_CACHE = 50
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="batch")
+    return _executor
+
+
+def shutdown() -> None:
+    """Idempotent shutdown — called from sidecar lifespan finally."""
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor = None
 
 
 def submit(req: BatchRequest) -> str:
@@ -131,7 +148,7 @@ def submit(req: BatchRequest) -> str:
     with _lock:
         _states[job_id] = state
         _evict_finished_overflow_unlocked()
-    _executor.submit(_run_job, job_id)
+    _get_executor().submit(_run_job, job_id)
     return job_id
 
 

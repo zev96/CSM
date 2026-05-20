@@ -58,14 +58,36 @@ class GenerateRequest:
 # Pool sized so a typical desktop can run a generate + a batch + a polish
 # concurrently without thrashing. Provider HTTP clients have their own
 # retry; we don't want unlimited fan-out.
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="generate")
+#
+# Lazy-init: created on first submit() and nulled by shutdown(). Lifespan
+# calls shutdown() in its finally block; the next submit() (in production
+# this is "never" because the process exits; in tests it's the next
+# TestClient iteration) re-creates the pool cleanly.
+_executor: ThreadPoolExecutor | None = None
 _lock = threading.Lock()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="generate")
+    return _executor
+
+
+def shutdown() -> None:
+    """Idempotent shutdown. Cancels queued work and nulls the pool so a
+    subsequent submit() can lazy-recreate. ``wait=False`` because the
+    sidecar process is about to exit; in-flight jobs die with it."""
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor = None
 
 
 def submit(req: GenerateRequest) -> str:
     """Kick off a job, return the ``job_id`` to subscribe via SSE."""
     job_id = bus.create_job()
-    _executor.submit(_run_job, job_id, req)
+    _get_executor().submit(_run_job, job_id, req)
     return job_id
 
 
