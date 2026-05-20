@@ -24,6 +24,7 @@ import type { AxiosError } from "axios"
 
 import { subscribe } from "@/api/client"
 import { useSidecar } from "@/stores/sidecar"
+import { useStaleGuard } from "@/composables/useStaleGuard"
 
 export type Platform = "douyin" | "bilibili" | "kuaishou"
 export type CommentedFilter = "0" | "1" | "all"
@@ -259,7 +260,16 @@ export const useMiningStore = defineStore("mining", () => {
   // computed client-side from store.videos. If accumulated mining_videos
   // ever exceeds 500 we should add a /api/mining/videos/stats endpoint
   // and stop relying on the loaded list for counts.
+  //
+  // Stale guard: MiningView wires ``@input="store.refreshVideos()"`` so
+  // every keystroke in the search box fires a fresh request. Without a
+  // guard, two responses can resolve in arrival-time order — the older
+  // one would overwrite ``videos.value`` and ``total.value`` with stale
+  // data plus drop the spinner while the newer call is still in flight.
+  const videosLoadGuard = useStaleGuard()
+
   async function refreshVideos(offset = 0, limit = 500) {
+    const my = videosLoadGuard.issue()
     loading.value = true
     try {
       const params: Record<string, string | number> = {
@@ -274,11 +284,15 @@ export const useMiningStore = defineStore("mining", () => {
         "/api/mining/videos",
         { params },
       )
+      if (videosLoadGuard.isStale(my)) return
       total.value = resp.data.total
       if (offset === 0) videos.value = resp.data.videos
       else videos.value.push(...resp.data.videos)
     } finally {
-      loading.value = false
+      // Only the latest in-flight call owns the spinner.
+      if (!videosLoadGuard.isStale(my)) {
+        loading.value = false
+      }
     }
   }
 
