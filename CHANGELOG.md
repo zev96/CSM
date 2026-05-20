@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.5.2] - 2026-05-20
 
 ### Fixed
 - **应用内热更新依然失败 (WinError 32)，v0.4.9 那次"修"没修干净**：v0.4.9 给 updater 加了 `taskkill /F /IM csm-sidecar.exe`，但实测 v0.4.9 → v0.5.1 升级照样 rename `<install>` → `<install>.bak` 失败 18 秒后回滚到旧版（关于页一直停在 v0.4.9）。真正的根因是 **updater.exe 自己跑在 `<install>/binaries/updater.exe`** —— Windows 把 running `.exe` 映像 mmap 成 image section 持有 deny-write/deny-delete handle 直到进程退出，install dir 在 updater 退出前永远 rename 不动，这跟 sidecar 是否被 kill 完全无关。本次让 updater spawn 前先把 `<install>/binaries/updater.exe` copy 到 `%TEMP%\csm_update\updater-<pid>.exe`，从 install dir **外面**跑，install dir 里就没有正在运行的 image 占用。**老用户 0.4.x → 0.5.1 装的需要走一次 NSIS setup.exe 重装到最新版**——他们机器里的旧 updater.exe 在 install dir 里跑，下次热更新还会撞同样的 image lock。
