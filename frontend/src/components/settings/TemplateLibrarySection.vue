@@ -3,7 +3,7 @@
  * Settings → 评论模板库 section.
  * Full CRUD + bulk import + JSON export + show-hidden toggle.
  */
-import { computed, onMounted, ref, watch } from "vue"
+import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 
 import Icon from "@/components/ui/Icon.vue"
 import { useToast } from "@/composables/useToast"
@@ -29,7 +29,15 @@ const showBulkImport = ref(false)
 
 let searchTimer: number | undefined
 
-watch([search, selectedTags, platform, showHidden, page], () => {
+// Filter changes → reset to page 0 + refresh
+watch([search, selectedTags, platform, showHidden], () => {
+  page.value = 0
+  if (searchTimer) window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(refresh, 200)
+})
+
+// Page changes alone → just refresh (debounced)
+watch(page, () => {
   if (searchTimer) window.clearTimeout(searchTimer)
   searchTimer = window.setTimeout(refresh, 200)
 })
@@ -52,6 +60,10 @@ const hiddenCount = computed(() =>
 onMounted(async () => {
   await store.loadAllTags()
   await refresh()
+})
+
+onUnmounted(() => {
+  if (searchTimer) window.clearTimeout(searchTimer)
 })
 
 function openCreate() {
