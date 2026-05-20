@@ -57,3 +57,60 @@ def test_list_templates_strips_empty_tags(client: TestClient, monitor_db: Path):
     r = client.get("/api/mining/templates?tags=,,")
     # Falls through to "tags=None" semantics → returns everything
     assert r.json()["total"] == 1
+
+
+def test_create_template(client: TestClient, monitor_db: Path):
+    r = client.post("/api/mining/templates", json={"text": "新建模板", "tags": ["种草"]})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["template"]["text"] == "新建模板"
+    assert body["template"]["tags"] == ["种草"]
+
+
+def test_create_template_duplicate_returns_409(client: TestClient, monitor_db: Path):
+    r1 = client.post("/api/mining/templates", json={"text": "dup"})
+    assert r1.status_code == 201
+    existing_id = r1.json()["template"]["id"]
+    r2 = client.post("/api/mining/templates", json={"text": "dup"})
+    assert r2.status_code == 409
+    assert r2.json() == {"detail": "duplicate", "existing_id": existing_id}
+
+
+def test_create_template_too_long_returns_400(client: TestClient, monitor_db: Path):
+    r = client.post("/api/mining/templates", json={"text": "x" * 2001})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "text_too_long"
+
+
+def test_create_template_too_many_tags(client: TestClient, monitor_db: Path):
+    r = client.post("/api/mining/templates", json={"text": "ok", "tags": ["t"] * 11})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "too_many_tags"
+
+
+def test_patch_template(client: TestClient, monitor_db: Path):
+    tid = mining_storage.create_template(text="原")
+    r = client.patch(f"/api/mining/templates/{tid}", json={"starred": True, "text": "新"})
+    assert r.status_code == 200
+    assert r.json()["template"]["starred"] is True
+    assert r.json()["template"]["text"] == "新"
+
+
+def test_delete_template(client: TestClient, monitor_db: Path):
+    tid = mining_storage.create_template(text="删")
+    r = client.delete(f"/api/mining/templates/{tid}")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    r2 = client.delete(f"/api/mining/templates/{tid}")
+    assert r2.status_code == 404
+
+
+def test_use_bumps_count_and_returns_text(client: TestClient, monitor_db: Path):
+    tid = mining_storage.create_template(text="复用我")
+    r = client.post(f"/api/mining/templates/{tid}/use")
+    assert r.status_code == 200
+    assert r.json() == {"text": "复用我"}
+    # Confirm DB
+    from csm_core.monitor.storage import get_conn
+    row = get_conn().execute("SELECT use_count FROM comment_templates WHERE id=?", (tid,)).fetchone()
+    assert row[0] == 1
