@@ -61,6 +61,43 @@ jobs:
           if ($size -lt 30) { Write-Error "TOKEN appears empty — check CSM_RELEASE_PAT secret"; exit 1 }
           if ($size -gt 200) { Write-Warning "TOKEN looks unusually long ($size bytes)" }
 
+      # Patchright bundles its Node driver, but **not** the Chromium browser
+      # binary itself — that gets downloaded into %LOCALAPPDATA%\ms-playwright
+      # by `patchright install chromium`. Dev machines have it from a one-time
+      # local install; fresh user machines installing the NSIS package don't.
+      # Without this step, every patchright launch (cookie login, baidu login,
+      # mining browser, comment scraping) fails with "Executable doesn't exist"
+      # — user-visible as "评论弹窗错误", "登录窗口打不开", "百度账号无法登陆".
+      # We download once into the runner, then ship the chromium-XXXX/ folder
+      # via Tauri bundle.resources so it lands next to the installed sidecar.
+      - name: Install Patchright Chromium
+        run: python -m patchright install chromium
+
+      # Stage the Chromium folder where Tauri's bundler picks it up. Only
+      # chromium-XXXX/ — skip chromium_headless_shell-* (we headed-launch
+      # everywhere; bundling adds ~100 MB for code paths we don't hit) and
+      # any ffmpeg-* / winldd-* helpers patchright drops in the same dir.
+      # If a future code path needs headless-shell, surface the bug and add
+      # it explicitly rather than blanket-bundling the whole 2 GB cache.
+      - name: Stage Chromium into Tauri resources
+        shell: pwsh
+        run: |
+          $src = "$env:LOCALAPPDATA\ms-playwright"
+          $dst = "frontend\src-tauri\binaries\ms-playwright"
+          if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $chromiumDirs = Get-ChildItem $src -Directory -Filter "chromium-*" |
+            Where-Object { $_.Name -notlike "*headless*" }
+          if (-not $chromiumDirs) {
+            Write-Error "no chromium-XXXX/ dir found under $src — patchright install failed?"
+            exit 1
+          }
+          foreach ($d in $chromiumDirs) {
+            Copy-Item -Path $d.FullName -Destination $dst -Recurse -Force
+          }
+          $totalSize = (Get-ChildItem $dst -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("staged chromium: {0:N0} bytes ({1:N1} MB)" -f $totalSize, ($totalSize / 1MB))
+
       # ── PyInstaller onefile artifacts that get bundled into Tauri ─────
       # build_sidecar.py drops the exe under frontend/src-tauri/binaries/
       # with the Tauri host-triple suffix (csm-sidecar-x86_64-pc-windows-msvc.exe).
@@ -128,6 +165,16 @@ jobs:
           }
           if (-not (Test-Path "$stage\binaries\updater.exe")) {
             Write-Error "Staging missing binaries\updater.exe — Tauri resources 未写入"; exit 1
+          }
+          # v0.5.3: chromium 必须随 NSIS 装到 install dir，否则
+          # patchright launch_persistent_context 会炸 "Executable doesn't exist"。
+          # 校验目录存在且非空（至少 1 个 chromium-XXXX 子目录）。
+          if (-not (Test-Path "$stage\binaries\ms-playwright")) {
+            Write-Error "Staging missing binaries\ms-playwright — Chromium bundle didn't land in install dir"; exit 1
+          }
+          $chromiumDirs = Get-ChildItem "$stage\binaries\ms-playwright" -Directory -Filter "chromium-*" -ErrorAction SilentlyContinue
+          if (-not $chromiumDirs) {
+            Write-Error "Staging has binaries\ms-playwright but no chromium-XXXX/ inside — bundle.resources copied an empty dir"; exit 1
           }
 
       - name: Package hot-update zip

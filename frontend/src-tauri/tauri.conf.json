@@ -49,7 +49,8 @@
       "binaries/csm-sidecar"
     ],
     "resources": [
-      "binaries/updater.exe"
+      "binaries/updater.exe",
+      "binaries/ms-playwright/"
     ],
     "windows": {
       "nsis": {
