@@ -11,7 +11,7 @@
 //! Dev 模式约束：updater.exe 不在 resource_dir 里（PyInstaller onefile 产物需要走 release 打包流程
 //! 才会出现在 resources/）。dev 调用会返回错误字符串 "updater_not_found: ..."，
 //! 前端识别后给友好提示，不让 dev 流程被异常卡死。
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tauri::{AppHandle, Manager};
@@ -80,6 +80,40 @@ fn install_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "current_exe has no parent dir".to_string())
 }
 
+/// 给 updater.exe 在 install dir 之外的容身之处。
+/// 详细原因见 [`stage_updater_for_run`] 的文档。
+fn staged_updater_path(pid: u32) -> PathBuf {
+    // 跟 updater/main.py 里 _setup_logging 的 log_dir 同位置：
+    // 调试时 staged exe 跟 updater.log 在一起，方便定位。
+    std::env::temp_dir()
+        .join("csm_update")
+        .join(format!("updater-{pid}.exe"))
+}
+
+/// Copy `<install>/binaries/updater.exe` 到 `%TEMP%/csm_update/updater-<pid>.exe`，
+/// 返回 staged 路径供 spawn。
+///
+/// 为什么必须这么做：直接 `spawn <install>/binaries/updater.exe` 时，
+/// Windows 把 running updater.exe 映像 mmap 成 image section，持有
+/// deny-write/deny-delete handle 直到进程退出。这导致 updater 自己里面
+/// `os.rename(<install>, <install>.bak)` 永远拿 WinError 32 失败。
+/// taskkill csm-sidecar 只解决了 sidecar 那条锁，但 updater 自己的 image lock
+/// 跟 sidecar 无关 —— v0.4.9 → v0.5.1 实测踩坑 (updater.log 留证)。
+fn stage_updater_for_run(src: &Path, pid: u32) -> Result<PathBuf, String> {
+    let staged = staged_updater_path(pid);
+    if let Some(parent) = staged.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {parent:?} failed: {e}"))?;
+    }
+    // 老残留（上次 update 留下的 updater-<pid>.exe）可能还存在并被持有 lock。
+    // copy 走 overwrite 语义本身能覆盖，但若旧 staged 还在跑（极少见，前提是
+    // 上次没退干净），copy 会因 sharing violation 失败 —— 直接报错让上层
+    // surface 出来，比偷偷换名搞副本好。
+    std::fs::copy(src, &staged)
+        .map_err(|e| format!("copy {src:?} -> {staged:?} failed: {e}"))?;
+    Ok(staged)
+}
+
 #[tauri::command]
 pub async fn install_and_restart(
     app: AppHandle,
@@ -97,11 +131,17 @@ pub async fn install_and_restart(
     let target = install_dir()?;
     let pid = std::process::id();
 
+    // 关键：把 updater.exe copy 到 install dir 外（%TEMP%）再 spawn。
+    // 不这么做，updater 进程映像就锁在它自己要 rename 的目录里，rename
+    // 永远拿 WinError 32（v0.4.9 → v0.5.1 实测踩坑，详见 [`stage_updater_for_run`]）。
+    let spawn_target = stage_updater_for_run(&updater_exe, pid)?;
+
     log::info!(
-        "install_and_restart: pid={pid} updater={updater_exe:?} zip={zip:?} target={target:?}",
+        "install_and_restart: pid={pid} updater={updater_exe:?} staged={spawn_target:?} \
+         zip={zip:?} target={target:?}",
     );
 
-    let mut cmd = Command::new(&updater_exe);
+    let mut cmd = Command::new(&spawn_target);
     cmd.arg("--pid")
         .arg(pid.to_string())
         .arg("--zip")
@@ -124,4 +164,61 @@ pub async fn install_and_restart(
     log::info!("updater spawned, exiting main app");
     app.exit(0);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    #[test]
+    fn staged_updater_path_lives_under_system_temp_dir() {
+        let p = staged_updater_path(12345);
+        assert!(
+            p.starts_with(std::env::temp_dir()),
+            "{p:?} must live under std::env::temp_dir() so it's outside any install dir"
+        );
+        let fname = p.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(fname.contains("12345"), "filename {fname:?} must encode the pid for parallel-safety");
+        assert!(fname.ends_with(".exe"), "{fname:?} must keep .exe extension so Windows treats it as executable");
+    }
+
+    #[test]
+    fn stage_updater_for_run_copies_source_into_temp_and_returns_new_path() {
+        // Create a fake "install dir" with an updater.exe inside.
+        let fake_install = std::env::temp_dir().join(format!(
+            "csm-test-stage-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(fake_install.join("binaries")).unwrap();
+        let src = fake_install.join("binaries").join("updater.exe");
+        {
+            let mut f = fs::File::create(&src).unwrap();
+            f.write_all(b"SENTINEL-UPDATER-BYTES").unwrap();
+        }
+
+        let pid = 99001;
+        let staged = stage_updater_for_run(&src, pid).expect("staging should succeed");
+
+        // 1. staged path must NOT be inside the install dir
+        assert!(
+            !staged.starts_with(&fake_install),
+            "staged path {staged:?} must NOT live inside install dir {fake_install:?} \
+             (that's the whole point — running image lock would block rename)"
+        );
+        // 2. staged file must exist
+        assert!(staged.exists(), "staged exe {staged:?} must exist on disk after staging");
+        // 3. contents must match the source byte-for-byte
+        let staged_bytes = fs::read(&staged).unwrap();
+        assert_eq!(staged_bytes, b"SENTINEL-UPDATER-BYTES");
+
+        // cleanup
+        let _ = fs::remove_file(&staged);
+        let _ = fs::remove_dir_all(&fake_install);
+    }
 }
