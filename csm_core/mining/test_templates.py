@@ -279,6 +279,37 @@ def test_list_templates_filters_and_orders(conn):
     res = mining_storage.list_templates(search="种草")
     assert {r["id"] for r in res["items"]} == {a, c}
 
+    # M4 strengthening: also verify the secondary sort keys
+    # Bump c's use_count twice, leave a un-bumped — c should now sort
+    # above a (use_count tiebreaker since last_used_at also advanced).
+    mining_storage.bump_template_use(c)
+    mining_storage.bump_template_use(c)
+    res = mining_storage.list_templates(limit=10, offset=0)
+    # Expected order: B (starred=True), then C (use_count=2, recent last_used_at), then A
+    ids = [r["id"] for r in res["items"]]
+    assert ids == [b, c, a], f"expected [b={b}, c={c}, a={a}], got {ids}"
+
+
+def test_list_templates_search_escapes_wildcards(conn):
+    """User typing % or _ in search should not act as SQL wildcards (M2 fix)."""
+    mining_storage.create_template(text="50% off here")
+    mining_storage.create_template(text="normal text")
+    mining_storage.create_template(text="user_name lookup")
+
+    # `%` should be literal, not wildcard
+    res = mining_storage.list_templates(search="%")
+    assert res["total"] == 1
+    assert "50%" in res["items"][0]["text"]
+
+    # `_` should be literal
+    res = mining_storage.list_templates(search="_")
+    assert res["total"] == 1
+    assert "user_name" in res["items"][0]["text"]
+
+    # Normal text still works
+    res = mining_storage.list_templates(search="normal")
+    assert res["total"] == 1
+
 
 def test_bump_use(conn):
     tid = mining_storage.create_template(text="复用我")

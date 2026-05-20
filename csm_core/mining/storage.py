@@ -917,8 +917,11 @@ def list_templates(
     args: list[Any] = []
 
     if search:
-        where.append("text LIKE ?")
-        args.append(f"%{search}%")
+        # Escape SQL wildcards in user input so `%` and `_` are literal.
+        # ESCAPE '\\' enables \\% and \\_ as literal markers.
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append("text LIKE ? ESCAPE '\\'")
+        args.append(f"%{escaped}%")
     if platform == "manual":
         where.append("source_platform IS NULL")
     elif platform:
