@@ -27,18 +27,23 @@ const total = ref(0)
 
 onMounted(async () => {
   try {
-    const items = await store.listTopChips(props.limit ?? 5)
+    const { items, total: t } = await store.listTopChips(props.limit ?? 5)
     chips.value = items
-    // Quick total fetch — we need the "更多 (N)" badge
-    await store.list({ limit: 1, offset: 0 })
-    total.value = store.total
+    total.value = t
+  } catch (e) {
+    // Non-critical UI: empty-state copy is the fallback if API fails.
+    // Drawer (T11) will surface real errors with toasts.
+    console.warn("Failed to load template chips:", e)
   } finally {
     loaded.value = true
   }
 })
 
 function truncate(text: string, n = 12): string {
-  return text.length > n ? text.slice(0, n) + "…" : text
+  // Use Array.from to split into grapheme-like units so emoji + ZWJ
+  // sequences don't get sliced mid-codepoint (would render as �).
+  const chars = Array.from(text)
+  return chars.length > n ? chars.slice(0, n).join("") + "…" : text
 }
 </script>
 

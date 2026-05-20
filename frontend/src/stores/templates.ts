@@ -87,12 +87,12 @@ export const useTemplatesStore = defineStore("templates", () => {
     }
   }
 
-  async function listTopChips(limit = 5): Promise<Template[]> {
+  async function listTopChips(limit = 5): Promise<{ items: Template[]; total: number }> {
     const resp = await api().get<{ items: Template[]; total: number }>(
       "/api/mining/templates",
       { params: { limit, offset: 0, hidden: "0" } },
     )
-    return resp.data.items
+    return resp.data
   }
 
   async function loadAllTags(): Promise<void> {
