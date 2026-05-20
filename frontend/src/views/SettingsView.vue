@@ -26,6 +26,7 @@ import NotificationPrefsModal from "@/components/ui/NotificationPrefsModal.vue";
 import FormInput from "@/components/forms/FormInput.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
+import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection.vue";
 import logoUrl from "@/assets/logo.png";
 
 import { useConfig } from "@/stores/config";
@@ -173,6 +174,7 @@ const SECTIONS: SectionDef[] = [
   { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL" },
   { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建" },
   { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie" },
+  { k: "templates", l: "评论模板库", icon: "bookmark", sub: "查看 · 编辑 · 批量导入 · 导出" },
   { k: "account", l: "账号", icon: "user", sub: "登录态 · 工作空间" },
   { k: "about", l: "关于", icon: "info", sub: "版本与更新" },
 ];
@@ -1513,6 +1515,11 @@ async function saveAccountEdit() {
                 <span>打开管理器</span>
               </Btn>
             </SettingsRow>
+          </template>
+
+          <!-- ━━━━━━━━ 评论模板库 ━━━━━━━━ -->
+          <template v-else-if="section === 'templates'">
+            <TemplateLibrarySection />
           </template>
 
           <!-- ━━━━━━━━ 账号 ━━━━━━━━ -->
