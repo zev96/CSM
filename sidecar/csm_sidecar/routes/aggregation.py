@@ -13,7 +13,7 @@ router = APIRouter(tags=["aggregation"], dependencies=[RequireToken])
 
 
 @router.get("/api/recent")
-async def list_recent(
+def list_recent(
     limit: int = Query(default=5, ge=1, le=50),
     days: int = Query(default=7, ge=1, le=365),
 ) -> dict[str, Any]:
@@ -22,7 +22,7 @@ async def list_recent(
 
 
 @router.get("/api/calendar")
-async def calendar_view(
+def calendar_view(
     month: str | None = Query(
         default=None, description="YYYY-MM format; defaults to current month",
     ),
@@ -48,7 +48,7 @@ async def calendar_view(
 
 
 @router.get("/api/stats/words")
-async def stats_words(
+def stats_words(
     range: str = Query(default="this-week"),
 ) -> dict[str, Any]:
     """Word counts for ``yesterday`` or ``this-week``."""

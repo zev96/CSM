@@ -27,7 +27,7 @@ class VaultScanResponse(BaseModel):
 
 
 @router.post("/api/vault/scan", response_model=VaultScanResponse)
-async def scan_vault(body: VaultScanRequest) -> VaultScanResponse:
+def scan_vault(body: VaultScanRequest) -> VaultScanResponse:
     root_str = body.root or config_service.load().vault_root
     if not root_str:
         raise HTTPException(
@@ -45,7 +45,7 @@ async def scan_vault(body: VaultScanRequest) -> VaultScanResponse:
 
 
 @router.get("/api/vault/dirs")
-async def list_dirs() -> dict[str, Any]:
+def list_dirs() -> dict[str, Any]:
     """List leaf directories under vault_root that directly contain .md files.
 
     Mirrors ``csm_gui.widgets.slot_tree_widget._scan_vault_dirs`` —
@@ -92,7 +92,7 @@ async def list_dirs() -> dict[str, Any]:
 
 
 @router.get("/api/vault/notes")
-async def list_notes(
+def list_notes(
     module: str | None = Query(default=None, description="Module path filter, e.g. '营销资料库/标题模块'"),
 ) -> dict[str, Any]:
     """List notes from the most recent scan. Returns 409 if no scan yet."""
@@ -112,7 +112,7 @@ async def list_notes(
 
 
 @router.get("/api/vault/attributes")
-async def list_attributes(
+def list_attributes(
     module: str | None = Query(
         default=None,
         description="Scope to notes whose path is under this module, e.g. '营销资料库/产品模块/吸尘器'",
