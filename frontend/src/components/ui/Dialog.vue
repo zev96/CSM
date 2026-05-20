@@ -30,8 +30,15 @@ const props = withDefaults(
     size?: "sm" | "md" | "lg";
     /** false disables backdrop click + escape key. Default true. */
     closable?: boolean;
+    /**
+     * Render the header X button. Default false: most adopters drive
+     * dismiss through their own footer buttons (Confirm/Cancel) and don't
+     * want the extra X. Set true when you do want it (one-click escape
+     * with no decision attached).
+     */
+    showClose?: boolean;
   }>(),
-  { size: "md", closable: true },
+  { size: "md", closable: true, showClose: false },
 );
 
 const emit = defineEmits<{
@@ -97,12 +104,12 @@ onUnmounted(() => {
         }"
         @click.stop
       >
-        <div v-if="title || closable" class="mb-4 flex items-center justify-between gap-3">
+        <div v-if="title || showClose" class="mb-4 flex items-center justify-between gap-3">
           <div v-if="title" class="font-display flex-1 text-[15px] font-semibold leading-tight">
             {{ title }}
           </div>
           <button
-            v-if="closable"
+            v-if="showClose"
             type="button"
             class="inline-flex flex-shrink-0 items-center justify-center"
             :style="{
