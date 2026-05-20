@@ -99,8 +99,6 @@ class MonitorConfig(BaseModel):
     request_delay_max: float = 15.0
     alert_cooldown_hours: int = 24
     chrome_path: str = ""
-    ai_summarize_zhihu: bool = False
-    ai_classify_comments: bool = False
 
     # ── 浏览器引擎选择 ───────────────────────────────────────────
     # patchright = Playwright + stealth patches，开箱反爬通过率高（推荐）

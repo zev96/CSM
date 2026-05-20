@@ -1416,18 +1416,6 @@ async function saveAccountEdit() {
                 </button>
               </div>
             </SettingsRow>
-            <SettingsRow label="AI 摘要 · 知乎" hint="对回答自动摘要">
-              <FormToggle
-                :model-value="get('monitor.ai_summarize_zhihu') ?? false"
-                @update:model-value="(v) => setField('monitor.ai_summarize_zhihu', v)"
-              />
-            </SettingsRow>
-            <SettingsRow label="AI 评论分类" hint="对评论自动打标签">
-              <FormToggle
-                :model-value="get('monitor.ai_classify_comments') ?? false"
-                @update:model-value="(v) => setField('monitor.ai_classify_comments', v)"
-              />
-            </SettingsRow>
 
             <!--
               ── 百度关键词 子配置 ──
