@@ -23,7 +23,7 @@ class BuildIndexAccepted(BaseModel):
 
 
 @router.post("/api/dedup/build-index", response_model=BuildIndexAccepted, status_code=202)
-async def build_index(body: BuildIndexBody) -> BuildIndexAccepted:
+def build_index(body: BuildIndexBody) -> BuildIndexAccepted:
     """Kick off an index rebuild. Subscribe to the SSE stream for progress.
 
     Events:
@@ -42,7 +42,7 @@ class AnalyzeBody(BaseModel):
 
 
 @router.post("/api/dedup/analyze")
-async def analyze(body: AnalyzeBody) -> dict[str, Any]:
+def analyze(body: AnalyzeBody) -> dict[str, Any]:
     """Run a duplicate-rate check against the named index.
 
     If no index is loaded for ``kind`` (never built, or load failed),
@@ -54,7 +54,7 @@ async def analyze(body: AnalyzeBody) -> dict[str, Any]:
 
 # ── /api/dedup/status ───────────────────────────────────────────────────────
 @router.get("/api/dedup/status")
-async def status() -> dict[str, Any]:
+def status() -> dict[str, Any]:
     """Doc counts per kind — feeds the settings 历史查重 panel."""
     return dedup_service.index_status()
 
@@ -66,5 +66,5 @@ class DensityBody(BaseModel):
 
 
 @router.post("/api/keyword/density")
-async def keyword_density(body: DensityBody) -> dict[str, Any]:
+def keyword_density(body: DensityBody) -> dict[str, Any]:
     return keyword_service.density(keyword=body.keyword, text=body.text)

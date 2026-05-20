@@ -38,7 +38,7 @@ class TaskBody(BaseModel):
 
 
 @router.get("/api/monitor/tasks")
-async def list_tasks(
+def list_tasks(
     type: TaskType | None = Query(default=None),
     enabled_only: bool = Query(default=False),
 ) -> dict[str, Any]:
@@ -48,7 +48,7 @@ async def list_tasks(
 
 
 @router.get("/api/monitor/tasks/{task_id}")
-async def get_task(task_id: int) -> dict[str, Any]:
+def get_task(task_id: int) -> dict[str, Any]:
     _require_storage()
     t = monitor_service.get_task(task_id)
     if t is None:
@@ -57,7 +57,7 @@ async def get_task(task_id: int) -> dict[str, Any]:
 
 
 @router.post("/api/monitor/tasks", status_code=201)
-async def create_task(body: TaskBody) -> dict[str, Any]:
+def create_task(body: TaskBody) -> dict[str, Any]:
     _require_storage()
     task = MonitorTask(**body.model_dump())
     new_id = monitor_service.create_task(task)
@@ -65,7 +65,7 @@ async def create_task(body: TaskBody) -> dict[str, Any]:
 
 
 @router.patch("/api/monitor/tasks/{task_id}")
-async def update_task(task_id: int, body: TaskBody) -> dict[str, Any]:
+def update_task(task_id: int, body: TaskBody) -> dict[str, Any]:
     _require_storage()
     if monitor_service.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
@@ -75,7 +75,7 @@ async def update_task(task_id: int, body: TaskBody) -> dict[str, Any]:
 
 
 @router.delete("/api/monitor/tasks/{task_id}", status_code=204)
-async def delete_task(task_id: int) -> None:
+def delete_task(task_id: int) -> None:
     _require_storage()
     if monitor_service.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
@@ -83,7 +83,7 @@ async def delete_task(task_id: int) -> None:
 
 
 @router.post("/api/monitor/tasks/{task_id}/run-now")
-async def run_now(
+def run_now(
     task_id: int,
     keyword: str | None = Query(default=None),
 ) -> dict[str, Any]:
@@ -110,7 +110,7 @@ async def run_now(
 
 
 @router.post("/api/monitor/tasks/{task_id}/resume")
-async def resume_task(task_id: int) -> dict[str, Any]:
+def resume_task(task_id: int) -> dict[str, Any]:
     """Resume a risk_control'd task from its last_resumed_keyword breakpoint.
 
     Reads the latest result's ``metric.last_resumed_keyword`` and dispatches
@@ -136,7 +136,7 @@ async def resume_task(task_id: int) -> dict[str, Any]:
 
 
 @router.get("/api/monitor/running")
-async def list_running() -> dict[str, Any]:
+def list_running() -> dict[str, Any]:
     """Truth source for "which tasks are currently being fetched".
 
     Frontend hydrates ``runningTaskIds`` from this when a page mounts
@@ -152,7 +152,7 @@ async def list_running() -> dict[str, Any]:
 
 
 @router.post("/api/monitor/tasks/{task_id}/cancel")
-async def cancel_task(task_id: int) -> dict[str, Any]:
+def cancel_task(task_id: int) -> dict[str, Any]:
     """Cooperative cancel: signal the running worker to bail at its next
     checkpoint. Baidu adapter checks between keywords; other adapters
     are single-shot fetches that can't easily be interrupted (the
@@ -172,7 +172,7 @@ async def cancel_task(task_id: int) -> dict[str, Any]:
 
 # ── Results ────────────────────────────────────────────────────────────────
 @router.get("/api/monitor/results")
-async def list_results(
+def list_results(
     task_id: int = Query(...),
     limit: int = Query(default=30, ge=1, le=500),
 ) -> dict[str, Any]:
@@ -190,7 +190,7 @@ class CookieBody(BaseModel):
 
 
 @router.get("/api/monitor/cookies")
-async def list_cookies(
+def list_cookies(
     platform: str = Query(...),
     enabled_only: bool = Query(default=False),
 ) -> dict[str, Any]:
@@ -200,14 +200,14 @@ async def list_cookies(
 
 
 @router.post("/api/monitor/cookies/{platform}", status_code=201)
-async def add_cookie(platform: str, body: CookieBody) -> dict[str, Any]:
+def add_cookie(platform: str, body: CookieBody) -> dict[str, Any]:
     _require_storage()
     cred_id = monitor_service.add_cookie(platform=platform, **body.model_dump())
     return {"id": cred_id, "platform": platform, "label": body.label}
 
 
 @router.delete("/api/monitor/cookies/{cred_id}", status_code=204)
-async def delete_cookie(cred_id: int) -> None:
+def delete_cookie(cred_id: int) -> None:
     _require_storage()
     monitor_service.delete_cookie(cred_id)
 
@@ -305,13 +305,13 @@ def login_capture(platform: str, body: CookieLoginBody) -> dict[str, Any]:
 
 # ── Summary + history aggregations ────────────────────────────────────────
 @router.get("/api/monitor/summary")
-async def get_summary() -> dict[str, Any]:
+def get_summary() -> dict[str, Any]:
     _require_storage()
     return monitor_service.get_summary()
 
 
 @router.get("/api/monitor/history/comment-retention")
-async def get_comment_retention_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
+def get_comment_retention_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
     _require_storage()
     try:
         return history_service.get_comment_retention_history(range_str=range_str)
@@ -320,7 +320,7 @@ async def get_comment_retention_history(range_str: str = Query("7d", alias="rang
 
 
 @router.get("/api/monitor/history/zhihu-ranking")
-async def get_zhihu_ranking_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
+def get_zhihu_ranking_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
     _require_storage()
     try:
         return history_service.get_zhihu_ranking_history(range_str=range_str)
@@ -329,7 +329,7 @@ async def get_zhihu_ranking_history(range_str: str = Query("7d", alias="range"))
 
 
 @router.get("/api/monitor/history/baidu-keyword")
-async def get_baidu_keyword_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
+def get_baidu_keyword_history(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
     _require_storage()
     try:
         return history_service.get_baidu_keyword_history(range_str=range_str)
@@ -355,7 +355,7 @@ async def stream_events():
 
 # ── Baidu browser profile management ──────────────────────────────────────
 @router.post("/api/monitor/baidu/reset-profile", status_code=status.HTTP_204_NO_CONTENT)
-async def reset_baidu_profile() -> None:
+def reset_baidu_profile() -> None:
     """Delete the persistent baidu browser profile dir.
 
     Use case: profile has been hit by 百度风控 multiple times and cookies

@@ -13,7 +13,7 @@ router = APIRouter(tags=["updater"], dependencies=[RequireToken])
 
 
 @router.get("/api/updater/check")
-async def check() -> dict[str, Any]:
+def check() -> dict[str, Any]:
     """Hit GitHub Releases for the latest manifest. Cheap (~2s) — sync."""
     return updater_service.check()
 
@@ -29,7 +29,7 @@ class DownloadAccepted(BaseModel):
 
 
 @router.post("/api/updater/download", response_model=DownloadAccepted, status_code=202)
-async def download(body: DownloadBody) -> DownloadAccepted:
+def download(body: DownloadBody) -> DownloadAccepted:
     """Stream-download an update asset. Subscribe to the SSE stream for
     progress (``progress`` events with ``done``/``total``/``percent``).
 

@@ -21,7 +21,7 @@ class RerollBody(BaseModel):
 
 
 @router.post("/api/assembler/reroll")
-async def reroll(body: RerollBody) -> dict[str, Any]:
+def reroll(body: RerollBody) -> dict[str, Any]:
     """Replace one pick in the cached plan and return the updated plan + draft.
 
     Errors:

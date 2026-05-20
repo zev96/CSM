@@ -28,7 +28,7 @@ class BatchAccepted(BaseModel):
 
 
 @router.post("/api/batch", response_model=BatchAccepted, status_code=202)
-async def start_batch(body: BatchBody) -> BatchAccepted:
+def start_batch(body: BatchBody) -> BatchAccepted:
     """Submit a batch job. Subscribe to the SSE stream for live progress.
 
     Events emitted on ``/api/events/{job_id}``:
@@ -54,7 +54,7 @@ async def start_batch(body: BatchBody) -> BatchAccepted:
 
 
 @router.get("/api/batch/{job_id}")
-async def get_batch(job_id: str) -> dict[str, Any]:
+def get_batch(job_id: str) -> dict[str, Any]:
     """Snapshot of the current batch state — for UI refresh / late join."""
     st = batch_service.get_state(job_id)
     if st is None:
@@ -63,7 +63,7 @@ async def get_batch(job_id: str) -> dict[str, Any]:
 
 
 @router.post("/api/batch/{job_id}/cancel")
-async def cancel_batch(job_id: str) -> dict[str, Any]:
+def cancel_batch(job_id: str) -> dict[str, Any]:
     """Cooperatively cancel a running batch.
 
     Already-running items finish; queued items are marked ``cancelled``.
