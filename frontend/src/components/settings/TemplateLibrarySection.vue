@@ -53,7 +53,10 @@ async function refresh() {
   })
 }
 
-const hiddenCount = computed(() =>
+// Count hidden rows ONLY among current items — accurate when
+// "显示隐藏" is checked. When off, server filters them out so this
+// is always 0; we hide the badge in that case.
+const visibleHiddenCount = computed(() =>
   store.items.filter(t => t.hidden).length,
 )
 
@@ -183,7 +186,7 @@ function toggleTag(tag: string) {
         <Icon name="download" :size="12" /> 导出 JSON
       </button>
       <span class="count">
-        共 {{ store.total }} 条<span v-if="hiddenCount"> · {{ hiddenCount }} 隐藏</span>
+        共 {{ store.total }} 条<span v-if="showHidden && visibleHiddenCount"> · 含 {{ visibleHiddenCount }} 已隐藏</span>
       </span>
     </div>
 

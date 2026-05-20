@@ -210,8 +210,14 @@ def apply_v5_migration(conn: sqlite3.Connection) -> None:
 def _backfill_v5_templates(conn: sqlite3.Connection) -> None:
     """Scan all existing done comments and upsert them as templates.
 
-    Runs in chronological order so first_seen_at matches the earliest
-    occurrence. Safe to re-run (ON CONFLICT bumps use_count).
+    Iterates by `created_at ASC` so `source_comment_id` points at the
+    chronologically-earliest occurrence of duplicate text. Note that
+    `first_seen_at` itself defaults to migration-run time (strftime
+    'now' in the INSERT), not the source comment's `created_at` — the
+    chronological iteration affects which row "wins" the source link,
+    not the timestamp on the template row.
+
+    Safe to re-run (ON CONFLICT bumps use_count).
     """
     rows = conn.execute(
         "SELECT id, video_id, text FROM video_comments "
