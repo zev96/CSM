@@ -23,7 +23,7 @@ class TitleBody(BaseModel):
 
 
 @router.post("/api/title")
-async def generate_title(body: TitleBody) -> dict[str, Any]:
+def generate_title(body: TitleBody) -> dict[str, Any]:
     try:
         candidates = title_service.generate(**body.model_dump())
     except LLMConfigError as e:
@@ -43,7 +43,7 @@ class PolishBody(BaseModel):
 
 
 @router.post("/api/polish/block")
-async def polish_block(body: PolishBody) -> dict[str, str]:
+def polish_block(body: PolishBody) -> dict[str, str]:
     try:
         out = polish_service.polish_block(**body.model_dump())
     except LLMConfigError as e:
@@ -61,7 +61,7 @@ class ExportBody(BaseModel):
 
 
 @router.post("/api/export/{fmt}")
-async def export_article_route(fmt: str, body: ExportBody) -> dict[str, Any]:
+def export_article_route(fmt: str, body: ExportBody) -> dict[str, Any]:
     if fmt not in ("markdown", "docx"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

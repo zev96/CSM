@@ -44,7 +44,7 @@ class SkillUpdatePayload(BaseModel):
 
 
 @router.get("/api/skills")
-async def list_skills() -> dict[str, Any]:
+def list_skills() -> dict[str, Any]:
     skills = skills_service.list_skills(_resolve_skill_dir())
     return {
         "count": len(skills),
@@ -53,7 +53,7 @@ async def list_skills() -> dict[str, Any]:
 
 
 @router.get("/api/skills/{skill_id}")
-async def get_skill(skill_id: str) -> dict[str, Any]:
+def get_skill(skill_id: str) -> dict[str, Any]:
     skill = skills_service.get_skill(_resolve_skill_dir(), skill_id)
     if skill is None:
         raise HTTPException(
@@ -64,7 +64,7 @@ async def get_skill(skill_id: str) -> dict[str, Any]:
 
 
 @router.post("/api/skills", status_code=201)
-async def create_skill(payload: SkillPayload) -> dict[str, Any]:
+def create_skill(payload: SkillPayload) -> dict[str, Any]:
     skill_dir = _require_skill_dir()
     if not payload.id.strip():
         raise HTTPException(status_code=400, detail="id 不能为空")
@@ -83,7 +83,7 @@ async def create_skill(payload: SkillPayload) -> dict[str, Any]:
 
 
 @router.patch("/api/skills/{skill_id}")
-async def update_skill(skill_id: str, payload: SkillUpdatePayload) -> dict[str, Any]:
+def update_skill(skill_id: str, payload: SkillUpdatePayload) -> dict[str, Any]:
     skill_dir = _require_skill_dir()
     try:
         skill = skills_service.update_skill(
@@ -100,7 +100,7 @@ async def update_skill(skill_id: str, payload: SkillUpdatePayload) -> dict[str, 
 
 
 @router.delete("/api/skills/{skill_id}", status_code=204)
-async def delete_skill(skill_id: str) -> None:
+def delete_skill(skill_id: str) -> None:
     skill_dir = _require_skill_dir()
     try:
         skills_service.delete_skill(skill_dir, skill_id)

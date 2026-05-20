@@ -34,7 +34,7 @@ router = APIRouter(tags=["mining"], dependencies=[RequireToken])
 
 # ── Jobs ─────────────────────────────────────────────────────────────
 @router.post("/api/mining/jobs", status_code=201)
-async def start_job(body: StartJobRequest) -> dict[str, Any]:
+def start_job(body: StartJobRequest) -> dict[str, Any]:
     try:
         job_id = mining_service.submit_job(
             keyword=body.keyword,
@@ -50,13 +50,13 @@ async def start_job(body: StartJobRequest) -> dict[str, Any]:
 
 
 @router.get("/api/mining/jobs")
-async def list_jobs(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, Any]:
+def list_jobs(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, Any]:
     items = mining_storage.list_jobs(limit=limit)
     return {"count": len(items), "jobs": items}
 
 
 @router.get("/api/mining/jobs/{job_id}")
-async def get_job(job_id: int) -> dict[str, Any]:
+def get_job(job_id: int) -> dict[str, Any]:
     job = mining_storage.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
@@ -64,7 +64,7 @@ async def get_job(job_id: int) -> dict[str, Any]:
 
 
 @router.post("/api/mining/jobs/{job_id}/cancel")
-async def cancel(job_id: int) -> dict[str, Any]:
+def cancel(job_id: int) -> dict[str, Any]:
     ok = mining_service.cancel_job(job_id)
     if not ok:
         raise HTTPException(status_code=409, detail="job not running or already finished")
@@ -148,7 +148,7 @@ def _fetch_comments_by_video(video_ids: list[int]) -> tuple[dict[int, dict[int, 
 
 
 @router.get("/api/mining/videos/export.csv")
-async def export_csv(
+def export_csv(
     keyword: str | None = Query(default=None),
     platform: Platform | None = Query(default=None),
     commented: str = Query(default="0", pattern="^(0|1|all)$"),
@@ -223,7 +223,7 @@ async def export_csv(
 
 
 @router.get("/api/mining/videos")
-async def list_videos(
+def list_videos(
     keyword: str | None = Query(default=None),
     platform: Platform | None = Query(default=None),
     commented: str = Query(default="0", pattern="^(0|1|all)$"),
@@ -240,7 +240,7 @@ async def list_videos(
 
 
 @router.delete("/api/mining/videos/{video_id}", status_code=204)
-async def soft_delete_video(video_id: int) -> None:
+def soft_delete_video(video_id: int) -> None:
     if not mining_storage.soft_delete_video(video_id):
         raise HTTPException(status_code=404, detail="video not found")
 
@@ -258,7 +258,7 @@ _login_specs = {
 
 
 @router.get("/api/mining/login/status")
-async def login_status() -> dict[str, Any]:
+def login_status() -> dict[str, Any]:
     return {
         platform: {"logged_in": mining_browser.has_login_cookie(platform)}
         for platform in _login_specs
@@ -266,7 +266,7 @@ async def login_status() -> dict[str, Any]:
 
 
 @router.post("/api/mining/login/{platform}")
-async def login_start(platform: Platform) -> dict[str, Any]:
+def login_start(platform: Platform) -> dict[str, Any]:
     """Launch a headed Patchright window pointing at the platform homepage.
 
     User logs in manually; cookies persist in the platform's user_data_dir.
@@ -313,7 +313,7 @@ async def login_start(platform: Platform) -> dict[str, Any]:
 
 
 @router.post("/api/mining/login/{platform}/confirm")
-async def login_confirm(platform: Platform) -> dict[str, Any]:
+def login_confirm(platform: Platform) -> dict[str, Any]:
     state = _login_state
     with state.lock:
         if state.active_platform != platform or state.confirm_event is None:
@@ -374,13 +374,13 @@ class AIPromptsPatch(BaseModel):
 
 
 @router.get("/api/mining/ai_prompts")
-async def get_ai_prompts() -> dict[str, Any]:
+def get_ai_prompts() -> dict[str, Any]:
     """Return current + default prompts + the variable lists the UI hints with."""
     return _ai_prompts_payload()
 
 
 @router.patch("/api/mining/ai_prompts")
-async def patch_ai_prompts(body: AIPromptsPatch) -> dict[str, Any]:
+def patch_ai_prompts(body: AIPromptsPatch) -> dict[str, Any]:
     """Update mining_summary_prompt / mining_suggest_prompt.
 
     Either field may be omitted (no change). Empty string is allowed and
@@ -421,14 +421,14 @@ class CommentPatch(BaseModel):
 
 
 @router.get("/api/mining/videos/{video_id}/comments")
-async def list_video_comments(video_id: int) -> dict[str, Any]:
+def list_video_comments(video_id: int) -> dict[str, Any]:
     if not _video_exists(video_id):
         raise HTTPException(status_code=404, detail=f"video not found: {video_id}")
     return {"comments": mining_storage.list_comments(video_id)}
 
 
 @router.post("/api/mining/videos/{video_id}/comments", status_code=201)
-async def create_video_comment(video_id: int, body: CommentCreate) -> dict[str, Any]:
+def create_video_comment(video_id: int, body: CommentCreate) -> dict[str, Any]:
     if not _video_exists(video_id):
         raise HTTPException(status_code=404, detail=f"video not found: {video_id}")
     try:
@@ -448,7 +448,7 @@ async def create_video_comment(video_id: int, body: CommentCreate) -> dict[str, 
 
 
 @router.patch("/api/mining/comments/{comment_id}")
-async def patch_comment(comment_id: int, body: CommentPatch) -> dict[str, Any]:
+def patch_comment(comment_id: int, body: CommentPatch) -> dict[str, Any]:
     existing = mining_storage.get_comment(comment_id)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
@@ -473,7 +473,7 @@ async def patch_comment(comment_id: int, body: CommentPatch) -> dict[str, Any]:
 
 
 @router.delete("/api/mining/comments/{comment_id}", status_code=204)
-async def delete_comment_route(comment_id: int) -> None:
+def delete_comment_route(comment_id: int) -> None:
     existing = mining_storage.get_comment(comment_id)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
@@ -519,7 +519,7 @@ _EXT_TO_MEDIA_TYPE = {
 
 
 @router.get("/api/mining/images/{image_id}")
-async def get_comment_image(image_id: str) -> FileResponse:
+def get_comment_image(image_id: str) -> FileResponse:
     path = mining_images_service.get_image_path(image_id)
     if path is None:
         raise HTTPException(status_code=404, detail=f"image not found: {image_id}")
@@ -552,7 +552,7 @@ def _llm_http_error(e: Exception) -> HTTPException:
 
 
 @router.post("/api/mining/videos/{video_id}/ai_summary")
-async def ai_summary(video_id: int, body: AISummaryBody) -> dict[str, Any]:
+def ai_summary(video_id: int, body: AISummaryBody) -> dict[str, Any]:
     try:
         text = mining_ai_service.summarize_video(video_id, force=body.force)
     except LookupError:
@@ -566,7 +566,7 @@ async def ai_summary(video_id: int, body: AISummaryBody) -> dict[str, Any]:
 
 
 @router.post("/api/mining/videos/{video_id}/ai_suggest_comment")
-async def ai_suggest_comment(video_id: int, body: AISuggestBody) -> dict[str, Any]:
+def ai_suggest_comment(video_id: int, body: AISuggestBody) -> dict[str, Any]:
     try:
         text = mining_ai_service.suggest_comment(
             video_id,
@@ -591,7 +591,7 @@ class BulkMarkBody(BaseModel):
 
 
 @router.patch("/api/mining/videos/bulk_mark_commented")
-async def bulk_mark_commented(body: BulkMarkBody) -> dict[str, Any]:
+def bulk_mark_commented(body: BulkMarkBody) -> dict[str, Any]:
     updated = mining_storage.bulk_mark_commented(body.video_ids, body.value)
     return {"updated": updated}
 
@@ -605,7 +605,7 @@ class TemplateListResponse(BaseModel):
 
 
 @router.get("/api/mining/templates", response_model=TemplateListResponse)
-async def list_templates(
+def list_templates(
     search: str | None = None,
     tags: str | None = Query(default=None, description="CSV of tag names, intersection"),
     platform: str | None = None,
@@ -629,7 +629,7 @@ async def list_templates(
 
 
 @router.get("/api/mining/templates/tags")
-async def list_template_tags() -> dict[str, list[str]]:
+def list_template_tags() -> dict[str, list[str]]:
     return {"tags": mining_storage.list_used_tags()}
 
 
@@ -673,7 +673,7 @@ def _fetch_template_dict(template_id: int) -> dict[str, Any] | None:
 
 
 @router.post("/api/mining/templates", status_code=201)
-async def create_template(body: CreateTemplateBody):
+def create_template(body: CreateTemplateBody):
     _validate_template_input(body.text, body.tags)
     try:
         tid = mining_storage.create_template(
@@ -691,7 +691,7 @@ async def create_template(body: CreateTemplateBody):
 
 
 @router.patch("/api/mining/templates/{template_id}")
-async def patch_template(template_id: int, body: UpdateTemplateBody):
+def patch_template(template_id: int, body: UpdateTemplateBody):
     _validate_template_input(body.text, body.tags)
     try:
         tpl = mining_storage.update_template(
@@ -710,7 +710,7 @@ async def patch_template(template_id: int, body: UpdateTemplateBody):
 
 
 @router.delete("/api/mining/templates/{template_id}")
-async def delete_template(template_id: int) -> dict[str, Any]:
+def delete_template(template_id: int) -> dict[str, Any]:
     ok = mining_storage.delete_template(template_id)
     if not ok:
         raise HTTPException(status_code=404, detail="template not found")
@@ -718,7 +718,7 @@ async def delete_template(template_id: int) -> dict[str, Any]:
 
 
 @router.post("/api/mining/templates/{template_id}/use")
-async def use_template(template_id: int) -> dict[str, Any]:
+def use_template(template_id: int) -> dict[str, Any]:
     text = mining_storage.bump_template_use(template_id)
     if text is None:
         raise HTTPException(status_code=404, detail="template not found")
@@ -732,7 +732,7 @@ class BulkImportBody(BaseModel):
 
 
 @router.post("/api/mining/templates/bulk-import")
-async def bulk_import_templates(body: BulkImportBody) -> dict[str, int]:
+def bulk_import_templates(body: BulkImportBody) -> dict[str, int]:
     if len(body.texts) > _MAX_BULK:
         raise HTTPException(status_code=400, detail="max_batch_exceeded")
     _validate_template_input(text=None, tags=body.tags)
