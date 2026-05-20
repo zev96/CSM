@@ -33,7 +33,7 @@ class JobAccepted(BaseModel):
 
 
 @router.post("/api/generate", response_model=JobAccepted, status_code=202)
-async def start_generate(body: GenerateBody) -> JobAccepted:
+def start_generate(body: GenerateBody) -> JobAccepted:
     """Kick off a generate job, return the SSE stream URL.
 
     The actual work runs on a worker thread; subscribe to the stream URL

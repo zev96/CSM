@@ -18,7 +18,7 @@ router = APIRouter(tags=["config"], dependencies=[RequireToken])
 
 
 @router.get("/api/config", response_model=AppConfig)
-async def get_config() -> AppConfig:
+def get_config() -> AppConfig:
     """Return the current AppConfig.
 
     NB: ``api_keys`` field is included for backward compat but should not
@@ -28,7 +28,7 @@ async def get_config() -> AppConfig:
 
 
 @router.patch("/api/config", response_model=AppConfig)
-async def patch_config(updates: dict[str, Any]) -> AppConfig:
+def patch_config(updates: dict[str, Any]) -> AppConfig:
     """Apply a partial update. Nested dicts (e.g. monitor) are deep-merged.
 
     Body shape: any subset of AppConfig's JSON form. Examples::
@@ -81,13 +81,13 @@ class KeyringSet(BaseModel):
 
 
 @router.get("/api/keyring/{provider}", response_model=KeyringStatus)
-async def keyring_status(provider: str) -> KeyringStatus:
+def keyring_status(provider: str) -> KeyringStatus:
     """Report whether a key is set for ``provider``. Never returns the value."""
     return KeyringStatus(provider=provider, has_key=get_secret(provider) is not None)
 
 
 @router.post("/api/keyring/{provider}", response_model=KeyringStatus)
-async def keyring_set(provider: str, body: KeyringSet) -> KeyringStatus:
+def keyring_set(provider: str, body: KeyringSet) -> KeyringStatus:
     """Persist an API key for ``provider`` in the OS credential store."""
     ok = set_secret(provider, body.value)
     if not ok:
@@ -99,7 +99,7 @@ async def keyring_set(provider: str, body: KeyringSet) -> KeyringStatus:
 
 
 @router.delete("/api/keyring/{provider}", response_model=KeyringStatus)
-async def keyring_delete(provider: str) -> KeyringStatus:
+def keyring_delete(provider: str) -> KeyringStatus:
     """Remove the stored key. Idempotent — already-absent is success."""
     delete_secret(provider)
     return KeyringStatus(provider=provider, has_key=False)
