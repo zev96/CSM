@@ -167,6 +167,18 @@ def test_update_comment_status_unchanged_no_trigger(conn):
     assert n == 0  # no trigger — only draft→done triggers
 
 
+def test_update_comment_done_to_draft_no_trigger(conn):
+    """Reversing done → draft must not create new templates (spec §5)."""
+    conn.execute("INSERT INTO videos(platform, platform_video_id, url) VALUES('douyin','v1','http://1')")
+    conn.execute("INSERT INTO video_comments(video_id, tier, text, status) VALUES(1, 1, 'X', 'done')")
+    conn.execute("DELETE FROM comment_templates")
+
+    mining_storage.update_comment(1, status="draft")
+
+    n = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n == 0
+
+
 def test_apply_v5_migration_backfill_runs_once(tmp_path, monkeypatch):
     """apply_v5_migration should run backfill exactly once across calls.
 
@@ -199,3 +211,15 @@ def test_apply_v5_migration_backfill_runs_once(tmp_path, monkeypatch):
         "SELECT value FROM schema_meta WHERE key='templates_v5_backfilled'"
     ).fetchone()
     assert marker is not None
+
+    # Mutation: remove the marker, prove ungated re-run DOES backfill.
+    # This proves the gate is what was blocking — not some unrelated coincidence.
+    conn.execute("DELETE FROM schema_meta WHERE key='templates_v5_backfilled'")
+    mining_storage.apply_v5_migration(conn)
+    n2 = conn.execute("SELECT COUNT(*) FROM comment_templates").fetchone()[0]
+    assert n2 == 1, "ungated re-run should backfill the seeded done comment"
+    # And marker re-instated
+    marker2 = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='templates_v5_backfilled'"
+    ).fetchone()
+    assert marker2 is not None

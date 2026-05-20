@@ -178,18 +178,33 @@ def apply_v5_migration(conn: sqlite3.Connection) -> None:
     gate, every done comment would bump its template's ``use_count`` by
     +1 on each startup, inflating counts and breaking the chips top-5
     sort. Spec §3.4 calls this out as "一次性回填".
+
+    Transactional wrap (spec §3.4 "异常时整事务回滚"): we use an explicit
+    BEGIN/COMMIT/ROLLBACK rather than ``with conn:`` because monitor.storage
+    opens connections with ``isolation_level=None`` (autocommit). Under
+    autocommit, Python's sqlite3 connection context manager does NOT issue
+    BEGIN — it's a no-op for transaction wrapping. So we issue BEGIN
+    manually, then COMMIT on success / ROLLBACK on any exception (then
+    re-raise so the migration runner sees the failure).
     """
-    for stmt in _DDL_V5_TEMPLATES:
-        conn.execute(stmt)
-    # One-time backfill, gated by schema_meta marker.
-    already_done = conn.execute(
-        "SELECT value FROM schema_meta WHERE key='templates_v5_backfilled'"
-    ).fetchone()
-    if not already_done:
-        _backfill_v5_templates(conn)
-        conn.execute(
-            "INSERT INTO schema_meta(key, value) VALUES('templates_v5_backfilled', '1')"
-        )
+    conn.execute("BEGIN")
+    try:
+        for stmt in _DDL_V5_TEMPLATES:
+            conn.execute(stmt)
+        # One-time backfill, gated by schema_meta marker.
+        already_done = conn.execute(
+            "SELECT value FROM schema_meta WHERE key='templates_v5_backfilled'"
+        ).fetchone()
+        if not already_done:
+            _backfill_v5_templates(conn)
+            conn.execute(
+                "INSERT INTO schema_meta(key, value) VALUES('templates_v5_backfilled', '1')"
+            )
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
 
 
 def _backfill_v5_templates(conn: sqlite3.Connection) -> None:
