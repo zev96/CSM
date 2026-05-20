@@ -104,9 +104,26 @@ const PATHS: Record<string, string> = {
   // Generic image / photo glyph — rectangle with a mountain + sun. Used
   // for the comment composer's 图片 upload button (Phase 2 评论楼).
   image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  // Shield outline — security / verification indicator (ArticleView dedup chip).
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  // Plain document outline — simpler than fileText (no body lines). Used as
+  // a sidebar bullet on TemplatesView; reads better at 13px than fileText.
+  doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
 };
 
-const inner = PATHS[props.name] ?? PATHS.home;
+const inner = (() => {
+  const hit = PATHS[props.name];
+  if (hit) return hit;
+  // Dev-only: surface missing icon names instead of silently falling back
+  // to home. Previously ``shield`` / ``doc`` rendered as a tiny house glyph
+  // for weeks and no one noticed. import.meta.env.DEV is dropped from the
+  // production bundle so end-users don't see the warning.
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.warn(`[Icon] unknown name="${props.name}" — falling back to "home". Add it to PATHS in components/ui/Icon.vue.`);
+  }
+  return PATHS.home;
+})();
 </script>
 
 <template>

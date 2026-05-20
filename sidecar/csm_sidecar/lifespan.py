@@ -66,6 +66,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         auth.generate_token()
     started_monitor = False
     auto_scan_task: asyncio.Task | None = None
+    reap_task: asyncio.Task | None = None
     if not _is_test_run():
         # Migrate pre-v0.4.5 Windows data dir BEFORE anything else opens
         # a file inside config_dir — once monitor_lifecycle / vault scan /
@@ -76,6 +77,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             migrate_legacy_config_dir()
         except Exception:
             logger.exception("legacy data dir migration failed; continuing")
+        # Drain any plaintext api_keys from settings.json into the OS
+        # keyring. Cheap when empty; on a fresh upgrade pulls plaintext
+        # out of disk before any route reads them.
+        try:
+            from csm_core.config import migrate_api_keys_to_keyring
+            migrate_api_keys_to_keyring()
+        except Exception:
+            logger.exception("api_keys keyring migration failed; continuing")
         try:
             from .services import startup_dirs
             startup_dirs.ensure_default_dirs()
@@ -85,6 +94,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # the task isn't GC'd while pending (asyncio docs warn about this);
         # cancel it in finally so a slow scan doesn't leak past shutdown.
         auto_scan_task = asyncio.create_task(_auto_scan_vault())
+        # Drop EventBus buffers whose SSE client never connected. Without
+        # this, every job_id (generate/batch/dedup/updater) whose stream
+        # was opened then closed without reading to `done` would leak its
+        # queue + buffered events for the lifetime of the sidecar.
+        reap_task = asyncio.create_task(_periodic_reap_stale())
         try:
             # Local import so test-only imports don't pull in apscheduler.
             from .services import monitor_lifecycle
@@ -109,6 +123,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        if reap_task is not None and not reap_task.done():
+            reap_task.cancel()
+            try:
+                await asyncio.wait_for(reap_task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.exception("reap_stale task raised during shutdown; ignoring")
         if auto_scan_task is not None and not auto_scan_task.done():
             auto_scan_task.cancel()
             try:
@@ -128,6 +150,38 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             mining_service.shutdown()
         except Exception:
             logger.exception("mining_service shutdown raised; ignoring")
+        # generate/batch/dedup/updater services each own their own
+        # module-level ThreadPoolExecutor. We deliberately do NOT shut
+        # them down here: they're created at import time as singletons,
+        # and once shut down can't be revived without a lazy-init refactor
+        # across the four modules. The v0.5.2 audit (C4) flagged "corrupt
+        # updater .bin after hard kill" — that concern is already covered
+        # by ``download_with_verification`` atomically deleting the target
+        # on any failure, plus ``POST /api/shutdown`` now routing through
+        # uvicorn's SIGINT path so this very lifespan ``finally`` block
+        # actually runs to completion before process exit. A follow-up PR
+        # can lazy-init those pools so they can be safely cycled.
+
+
+async def _periodic_reap_stale(interval_s: float = 60.0) -> None:
+    """Tick ``event_bus.bus.reap_stale()`` on a background interval.
+
+    The bus stores per-job queues for fire-and-forget worker output. A
+    queue that nobody ever streams to ``done`` would otherwise stick around
+    for the full sidecar lifetime — over a day this leaks memory in
+    proportion to UI tab churn.
+    """
+    from .event_bus import bus
+    while True:
+        try:
+            await asyncio.sleep(interval_s)
+            reaped = bus.reap_stale()
+            if reaped:
+                logger.debug("EventBus reap_stale: %d buffers", reaped)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("reap_stale tick failed; continuing")
 
 
 async def _auto_scan_vault() -> None:

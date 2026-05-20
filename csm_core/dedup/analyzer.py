@@ -164,7 +164,28 @@ class DedupAnalyzer:
             ))
 
         # Build SegmentHit list — collapse runs of consecutive covered positions.
+        # Cache loaded source files: a single source typically covers several
+        # disjoint regions, and we'd otherwise re-open + decode the same file
+        # once per hit. Also mirrors the .docx branch from the candidates loop
+        # so excerpts from binary .docx sources actually populate.
         hits: list[SegmentHit] = []
+        src_text_cache: dict[str, str] = {}
+
+        def _src_text(p: str) -> str:
+            if p in src_text_cache:
+                return src_text_cache[p]
+            loaded = ""
+            try:
+                if p.lower().endswith(".docx"):
+                    from .corpus import extract_text
+                    loaded = extract_text(Path(p))
+                else:
+                    loaded = Path(p).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                loaded = ""
+            src_text_cache[p] = loaded
+            return loaded
+
         i = 0
         while i < len(covered):
             if covered[i]:
@@ -176,16 +197,14 @@ class DedupAnalyzer:
                 src_path = meta.get("path", "")
                 excerpt = ""
                 if src_path:
-                    try:
-                        src_text = Path(src_path).read_text(encoding="utf-8", errors="ignore")
+                    src_text = _src_text(src_path)
+                    if src_text:
                         seg = text[i:j]
                         idx_in_src = src_text.find(seg)
                         if idx_in_src >= 0:
                             lo = max(0, idx_in_src - EXCERPT_CONTEXT)
                             hi = min(len(src_text), idx_in_src + len(seg) + EXCERPT_CONTEXT)
                             excerpt = src_text[lo:hi]
-                    except OSError:
-                        pass
                 hits.append(SegmentHit(
                     start=i, end=j,
                     text=text[i:j],

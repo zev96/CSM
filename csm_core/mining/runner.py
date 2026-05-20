@@ -147,8 +147,12 @@ class MiningRunner:
                 "error": outcome.error_message,
             })
 
-        summary = mining_storage.finalize_job(job_id)
-        self.publish("job.finished", {"job_id": job_id, "summary": summary})
-
-        with self._lock:
-            self._cancel_events.pop(job_id, None)
+        try:
+            summary = mining_storage.finalize_job(job_id)
+            self.publish("job.finished", {"job_id": job_id, "summary": summary})
+        finally:
+            # Always reap the cancel Event, even if finalize_job/publish raised.
+            # Previously a SQL error in finalize_job would skip this and leak
+            # one threading.Event per failed job for the sidecar lifetime.
+            with self._lock:
+                self._cancel_events.pop(job_id, None)

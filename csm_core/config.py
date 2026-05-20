@@ -134,8 +134,14 @@ class AppConfig(BaseModel):
     # 用户先去设置页选一个。这避免了 "mock" 作为兜底导致用户拿到 "mock response"
     # 占位结果还以为是真生成。
     default_provider: Provider | None = None
-    # TODO(task-2): move api_keys to OS keyring (keyring package) — plaintext on disk is below user expectations.
-    # Tracked for sidecar migration: see csm_core.config.keyring_store below for the new code path.
+    # Plaintext API keys — legacy storage. New code should write via
+    # ``set_secret(provider, ...)`` and read via ``get_secret(provider)`` so
+    # keys land in the OS credential store. ``migrate_api_keys_to_keyring``
+    # is wired into sidecar startup and drains anything left here on launch.
+    # Entries only survive when the OS keyring backend is unavailable
+    # (uncommon on Win/macOS, possible on a headless Linux without
+    # secret-service); see ``migrate_api_keys_to_keyring`` for the fallback
+    # contract.
     api_keys: dict[str, str] = Field(default_factory=dict)
     default_template: str | None = None
     skill_dir: str | None = None
@@ -350,3 +356,70 @@ def delete_secret(provider: str) -> bool:
     except Exception as e:  # pragma: no cover
         logger.warning("keyring delete failed for %s: %s", provider, e)
         return False
+
+
+def read_api_key(provider: str, cfg: AppConfig | None = None) -> str:
+    """Resolve a provider's API key, preferring the OS keyring.
+
+    Falls back to the in-config ``api_keys`` dict for the (shrinking)
+    transition window where ``migrate_api_keys_to_keyring`` hasn't yet
+    drained an entry — e.g. first boot after upgrade, or a Linux box
+    without a working secret-service backend.
+
+    Returns "" when nothing is configured.
+    """
+    if cfg is None:
+        cfg = load_config(default_config_path())
+    return get_secret(provider) or cfg.api_keys.get(provider, "")
+
+
+def migrate_api_keys_to_keyring(path: Path | None = None) -> int:
+    """Drain plaintext ``api_keys`` from settings.json into the OS keyring.
+
+    Called once per sidecar boot (see ``csm_sidecar.lifespan``). Each
+    provider's key is transferred via ``set_secret``; the plaintext entry
+    is removed only after the keyring write succeeds. If the keyring
+    backend is unavailable (``set_secret`` returns False), the plaintext
+    entry stays so the user doesn't suddenly lose access to their key.
+
+    If a keyring value already exists for a provider we treat settings.json
+    as the stale copy and drop the plaintext without overwriting the
+    keyring — the keyring is the source of truth.
+
+    Returns the number of providers successfully resolved (migrated to
+    keyring OR already present in keyring with plaintext now dropped).
+    """
+    p = path or default_config_path()
+    cfg = load_config(p)
+    if not cfg.api_keys:
+        return 0
+
+    migrated = 0
+    remaining: dict[str, str] = {}
+    for provider, value in cfg.api_keys.items():
+        if not value:
+            # Empty string — drop it; no need to migrate "" into keyring.
+            continue
+        existing = get_secret(provider)
+        if existing:
+            # Keyring already authoritative; drop plaintext.
+            migrated += 1
+            continue
+        if set_secret(provider, value):
+            migrated += 1
+        else:
+            # Keyring backend unavailable — keep plaintext as a fallback.
+            remaining[provider] = value
+
+    if remaining == cfg.api_keys:
+        # No change to persist (either no keys, or all kept as fallback).
+        return migrated
+    cfg.api_keys = remaining
+    try:
+        save_config(cfg, p)
+    except OSError as e:
+        # Don't propagate — failing to save just means we'll retry next boot.
+        logger.warning("api_keys keyring migration: save failed: %s", e)
+    else:
+        logger.info("migrated %d api_keys entries to OS keyring", migrated)
+    return migrated
