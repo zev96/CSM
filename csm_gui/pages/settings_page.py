@@ -1297,30 +1297,6 @@ class SettingsPage(QWidget):
         r_chrome.set_control(chrome_holder)
         browser_card.add_row(r_chrome)
 
-        # ── AI 联动 ──────────────────────────────────────────────────
-        ai_card = _SettingsCard(
-            "AI 联动",
-            "复用 CSM 现有的多 LLM 抽象，对监测结果做增值",
-        )
-
-        self.monitor_ai_summarize_switch = SwitchButton(self)
-        self.monitor_ai_summarize_switch.setChecked(m.ai_summarize_zhihu)
-        r_summarize = _SettingsRow(
-            "知乎 Top 回答 AI 摘要",
-            "每次任务完成后调用 LLM 生成竞品摘要，写入 Vault/_monitor_intel/",
-        )
-        r_summarize.set_control(self.monitor_ai_summarize_switch)
-        ai_card.add_row(r_summarize)
-
-        self.monitor_ai_classify_switch = SwitchButton(self)
-        self.monitor_ai_classify_switch.setChecked(m.ai_classify_comments)
-        r_classify = _SettingsRow(
-            "评论情感/相关度分析",
-            "对采集到的评论调用 LLM 做情感分类；会消耗少量 token",
-        )
-        r_classify.set_control(self.monitor_ai_classify_switch)
-        ai_card.add_row(r_classify)
-
         # ── Cookie 管理 ──────────────────────────────────────────────
         cookie_card = _SettingsCard(
             "Cookie 管理",
@@ -1332,7 +1308,7 @@ class SettingsPage(QWidget):
         r_cookie.set_control(cookie_btn)
         cookie_card.add_row(r_cookie)
 
-        return self._wrap_group(rate_card, alert_card, browser_card, ai_card, cookie_card)
+        return self._wrap_group(rate_card, alert_card, browser_card, cookie_card)
 
     def _on_browse_chrome_path(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1592,8 +1568,6 @@ class SettingsPage(QWidget):
                 alert_top_n=self.monitor_top_n_spin.value(),
                 alert_cooldown_hours=self.monitor_cooldown_spin.value(),
                 chrome_path=self.monitor_chrome_path_edit.text().strip(),
-                ai_summarize_zhihu=self.monitor_ai_summarize_switch.isChecked(),
-                ai_classify_comments=self.monitor_ai_classify_switch.isChecked(),
             ),
         )
         self._config = new_cfg
