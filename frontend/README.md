@@ -31,8 +31,8 @@ frontend/
 │   │   ├── LeftNav.vue
 │   │   ├── TweaksPanel.vue
 │   │   ├── ui/             # Card / Btn / Pill / Icon / Sparkline / Bars / ProgressBar / Spinner / Toast
-│   │   ├── forms/          # FormInput / FormSelect / FormToggle / FormPathPicker / FormSlider / FormSection / FormField
-│   │   ├── home/           # Home cards (greeting / hero / calendar / alerts / retention / recents / quick)
+│   │   ├── forms/          # FormInput / FormSelect / FormToggle / FormPathPicker / FormSection / FormField
+│   │   ├── home/           # Home cards (greeting / hero / calendar / alerts / retention / recents)
 │   │   ├── settings/       # 8 sections + ProviderCard
 │   │   ├── monitor/        # AddTaskModal + CookieManagerModal
 │   │   └── templates/      # TemplateBuilder + BlockEditor

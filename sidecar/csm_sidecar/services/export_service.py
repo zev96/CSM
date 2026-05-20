@@ -57,7 +57,13 @@ def export(
             report = analyzer.analyze(final_text, kind="history")
             body_for_export = body_for_export + "\n\n---\n\n## 查重报告\n\n" + _format_report(report)
         except Exception:
-            pass
+            # User opted-in to dedup-on-export and we silently dropped it —
+            # surface the reason in logs so we can diagnose, but keep the
+            # export itself going. The article without a dedup appendix is
+            # still strictly better than failing the whole export.
+            logger.warning(
+                "dedup report skipped on export: analyzer raised", exc_info=True,
+            )
 
     paths = export_article(
         out_dir=target_dir,

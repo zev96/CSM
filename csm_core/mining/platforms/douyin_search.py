@@ -72,6 +72,12 @@ class DouyinSearchAdapter:
                     body = response.json()
                 except Exception:
                     return
+                # 抖音偶发返回 JSON list/string（A/B 试验或风控降级页），
+                # 直接 body.get() 会 raise AttributeError 渗回 Patchright
+                # 的 response 事件循环 → "Listener raised" 日志噪音 + 抓取
+                # 早早异常停止。先确认 dict 再读字段。
+                if not isinstance(body, dict):
+                    return
                 if body.get("status_code") not in (0, None):
                     return
                 for c in self._extract_cards(body):
