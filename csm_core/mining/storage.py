@@ -15,6 +15,7 @@ explicit transactions needed; the runner already throttles cards to
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime
@@ -171,6 +172,46 @@ def apply_v5_migration(conn: sqlite3.Connection) -> None:
     """
     for stmt in _DDL_V5_TEMPLATES:
         conn.execute(stmt)
+
+
+def _normalize_text(text: str) -> str:
+    """Strip + lowercase. Preserve emoji / punctuation / internal whitespace."""
+    return text.strip().lower()
+
+
+def _hash_text(text: str) -> str:
+    """sha1 hex digest of normalized text — used as UNIQUE key for dedup."""
+    return hashlib.sha1(_normalize_text(text).encode("utf-8")).hexdigest()
+
+
+def _get_video_platform(conn: sqlite3.Connection, video_id: int) -> str | None:
+    row = conn.execute("SELECT platform FROM videos WHERE id=?", (video_id,)).fetchone()
+    return row[0] if row else None
+
+
+def _upsert_template_from_comment(conn: sqlite3.Connection, comment: dict) -> None:
+    """Insert or update a template from a video_comments row.
+
+    `comment` must have keys: id, video_id, text.
+    On conflict (same text_hash) bumps use_count + last_used_at.
+    Caller is responsible for ensuring the transaction context.
+    """
+    text_hash = _hash_text(comment["text"])
+    platform = _get_video_platform(conn, comment["video_id"])
+    conn.execute(
+        """
+        INSERT INTO comment_templates
+          (text, text_hash, source_platform, source_comment_id,
+           use_count, first_seen_at, last_used_at)
+        VALUES(?, ?, ?, ?, 1,
+               strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+               strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        ON CONFLICT(text_hash) DO UPDATE SET
+          use_count = use_count + 1,
+          last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        """,
+        (comment["text"], text_hash, platform, comment["id"]),
+    )
 
 
 def get_conn() -> sqlite3.Connection:
