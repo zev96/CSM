@@ -166,7 +166,7 @@ const panelStyle = computed(() => {
         :key="item.key"
         type="button"
         :disabled="item.disabled"
-        class="flex w-full items-center gap-2 px-3 text-left"
+        class="dropdown-row flex w-full items-center gap-2 px-3 text-left"
         :style="{
           height: '32px',
           borderRadius: '6px',
@@ -187,3 +187,13 @@ const panelStyle = computed(() => {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+/*
+  hover 行平滑过渡 —— 与 FormSelect 一致。@mouseenter 直接改 inline
+  background，浏览器对 inline style 变化仍会应用 transition。
+*/
+.dropdown-row {
+  transition: background 120ms ease;
+}
+</style>

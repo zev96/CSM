@@ -1,13 +1,12 @@
 <script setup lang="ts">
 /**
- * 单选下拉 —— 自绘按钮 + popover，外观对齐 BlockEditor 链接 / 跟随下拉：
- *   - 触发按钮：bg-card-2 + line border + ▾，跟原生 select 等高
- *   - 弹层：bg-card-2 + 软阴影
- *   - 选中行：primary-soft 底 + primary-deep 字 + 右侧 ✓
- *   - 任意 hover 行：--dark 底 + cream 字（覆盖选中态）
+ * 单选下拉 —— 自绘按钮 + popover。弹层样式对齐 Dropdown（action menu）：
+ *   - 触发按钮：bg-card-2 + line border + ▾
+ *   - 弹层：bg-card + 软阴影
+ *   - 行项目：无选中视觉（无橙底无 ✓），统一交给触发按钮显示当前值
+ *   - hover：浅色 card-2（不再反白 dark/cream）
  *
  * 保留旧 API：modelValue / options / width / disabled / @update:modelValue。
- * 这样上游 9 个引用点不用改就能换皮肤。
  *
  * Teleport popover 到 body —— 避免被父容器 overflow:hidden 裁掉；位置用
  * getBoundingClientRect 计算。点外面 / ESC 关闭。
@@ -157,7 +156,7 @@ watch(
         width: `${menuPos.width}px`,
         maxHeight: '280px',
         overflowY: 'auto',
-        background: 'var(--card-2)',
+        background: 'var(--card)',
         border: '1px solid var(--line)',
         borderRadius: 'var(--radius-inner)',
         boxShadow: '0 6px 18px rgba(28,26,23,0.10)',
@@ -173,18 +172,11 @@ watch(
         class="form-select-row flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px]"
         :style="{
           borderRadius: '6px',
-          background: o.value === modelValue ? 'var(--primary-soft)' : 'transparent',
-          color: o.value === modelValue ? 'var(--primary-deep)' : 'var(--ink)',
+          color: 'var(--ink)',
         }"
         @click="select(o.value)"
       >
         <span class="flex-1 truncate">{{ o.label }}</span>
-        <Icon
-          v-if="o.value === modelValue"
-          name="check"
-          :size="11"
-          :style="{ color: 'var(--primary-deep)' }"
-        />
       </button>
     </div>
   </Teleport>
@@ -199,14 +191,17 @@ watch(
   outline-offset: 1px;
 }
 /*
- * 弹层行 hover —— 对齐原生 <select> 的深色 hover；用 !important 压住
- * 选中态的内联 primary-soft 底色。
- */
-.form-select-row:hover {
-  background: var(--dark) !important;
-  color: #fbf7ec !important;
+  弹层行：平滑 background 过渡，让 hover 有"高亮块滑过"的视觉感
+  （对齐 Dropdown 风格）。
+  ⚠ background 默认值必须在 CSS 里设 transparent，不能写在 inline
+  :style 上 —— inline style 优先级高于 :hover，会把 hover 颜色压住，
+  之前就是这个 bug 让 hover 看起来"没反应"。
+*/
+.form-select-row {
+  background: transparent;
+  transition: background 120ms ease;
 }
-.form-select-row:hover :deep(svg) {
-  color: #fbf7ec !important;
+.form-select-row:hover {
+  background: var(--card-2);
 }
 </style>

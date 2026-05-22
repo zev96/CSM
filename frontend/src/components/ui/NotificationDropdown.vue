@@ -1,18 +1,17 @@
 <script setup lang="ts">
 /**
- * Bell-icon dropdown — pinned to the top-right of the App utility row.
+ * Bell-icon dropdown — bell 现在住在 LeftNav 的设置按钮上方，
+ * dropdown 从 nav 右侧弹出（向下、横向出 nav 边缘）。
  *
- * The bell `<IconBtn>` lives in App.vue; this component is conditionally
+ * The bell button lives in LeftNav.vue; this component is conditionally
  * rendered while it's open, mounted as a sibling so click-outside can
  * close it. We don't Teleport because the dropdown is positioned
- * relative to the bell — keeping it inside the utility row's stacking
- * context is simpler than chasing the icon's bbox.
+ * relative to the bell wrapper — main 区域 overflow visible 不会被裁。
  *
  * Click handlers:
  *   - Click any notification → mark just that one read.
  *   - 「全部已读」→ mark all.
- *   - 「前往设置」→ closes + emits `goto-settings` so the parent can
- *     navigate to Settings → 监测 (where the «通知» toggle lives).
+ *   - 「前往设置」→ closes + navigates to Settings (通知设置 modal).
  */
 import { computed } from "vue";
 import { useRouter } from "vue-router";
@@ -70,8 +69,8 @@ function gotoSettings() {
     v-if="open"
     class="absolute z-30"
     :style="{
-      top: '42px',
-      right: '52px',
+      bottom: '0',
+      left: '52px',
       width: '320px',
       maxHeight: '420px',
       background: 'var(--bg-inner)',
