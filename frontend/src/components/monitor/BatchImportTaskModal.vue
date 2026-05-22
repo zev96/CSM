@@ -29,6 +29,7 @@
 import { computed, ref, watch } from "vue";
 import * as XLSX from "xlsx";
 
+import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 
@@ -588,61 +589,20 @@ async function submitAll() {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="fixed inset-0 z-40 flex items-center justify-center"
-      :style="{ background: 'rgba(28,26,23,0.4)' }"
-      @click.self="close"
-    >
-      <div
-        class="anim-up overflow-hidden"
-        :style="{
-          background: 'var(--bg-inner)',
-          width: '720px',
-          maxWidth: '94vw',
-          maxHeight: '92vh',
-          borderRadius: 'var(--radius-card)',
-          border: '1px solid var(--line)',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.18)',
-          display: 'flex',
-          flexDirection: 'column',
-        }"
-      >
-        <!-- header -->
-        <div
-          class="flex items-center justify-between flex-shrink-0"
-          :style="{ padding: '20px 24px', borderBottom: '1px solid var(--line)' }"
-        >
-          <div>
-            <div class="font-display text-[18px] font-bold">批量导入监测任务</div>
-            <div class="mt-1 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              支持 .xlsx / .csv 上传 · Excel 复制粘贴 · 抖音/B站「复制链接」分享文案
-            </div>
-          </div>
-          <button
-            type="button"
-            class="inline-flex items-center justify-center"
-            :style="{
-              width: '32px',
-              height: '32px',
-              borderRadius: '999px',
-              background: 'var(--card)',
-              border: '1px solid var(--line)',
-              color: 'var(--ink-2)',
-            }"
-            :disabled="submitting"
-            @click="close"
-          >
-            <Icon name="x" :size="16" />
-          </button>
-        </div>
+  <Dialog
+    :open="open"
+    size="xl"
+    title="批量导入监测任务"
+    show-close
+    :closable="!submitting"
+    @update:open="close"
+  >
+    <!-- Subtitle below Dialog's title; mb-4 mirrors the spacing of EditBatchModal's pattern. -->
+    <div class="mb-4 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+      支持 .xlsx / .csv 上传 · Excel 复制粘贴 · 抖音/B站「复制链接」分享文案
+    </div>
 
-        <!-- body (scrollable) -->
-        <div
-          class="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto"
-          :style="{ padding: '20px 24px' }"
-        >
+    <div class="flex flex-col gap-4">
           <!-- platform + 模板选择行 -->
           <div class="flex items-center gap-2">
             <label class="text-[12px] font-medium" :style="{ color: 'var(--ink-2)', minWidth: '60px' }">平台</label>
@@ -1032,58 +992,50 @@ async function submitAll() {
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- footer -->
-        <div
-          class="flex items-center justify-between flex-shrink-0"
-          :style="{ padding: '14px 24px', borderTop: '1px solid var(--line)' }"
-        >
-          <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-            <template v-if="submitting">
-              提交中… {{ progress.done }} / {{ progress.total }}
-            </template>
-            <template v-else-if="rows.length">
-              即将提交 <span :style="{ color: 'var(--ink)' }">{{ validRows.length }}</span> 行
-            </template>
-          </div>
-          <div class="flex gap-2">
-            <button
-              type="button"
-              :style="{
-                background: 'transparent',
-                border: '1px solid var(--line)',
-                color: 'var(--ink-2)',
-                padding: '7px 18px',
-                fontSize: '12.5px',
-                borderRadius: '999px',
-              }"
-              :disabled="submitting"
-              @click="close"
-            >取消</button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5"
-              :style="{
-                background: validRows.length ? 'var(--dark)' : 'var(--card-2)',
-                color: validRows.length ? '#fff' : 'var(--ink-3)',
-                padding: '7px 18px',
-                fontSize: '12.5px',
-                fontWeight: 500,
-                borderRadius: '999px',
-                cursor: validRows.length && !submitting ? 'pointer' : 'not-allowed',
-                opacity: submitting ? 0.6 : 1,
-              }"
-              :disabled="submitting || !validRows.length"
-              @click="submitAll"
-            >
-              <Spinner v-if="submitting" :size="12" />
-              <Icon v-else name="check" :size="13" />
-              <span>{{ submitting ? "提交中…" : `批量提交 (${validRows.length})` }}</span>
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
-  </Teleport>
+
+    <template #footer>
+      <div class="flex-1 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+        <template v-if="submitting">
+          提交中… {{ progress.done }} / {{ progress.total }}
+        </template>
+        <template v-else-if="rows.length">
+          即将提交 <span :style="{ color: 'var(--ink)' }">{{ validRows.length }}</span> 行
+        </template>
+      </div>
+      <button
+        type="button"
+        :style="{
+          background: 'transparent',
+          border: '1px solid var(--line)',
+          color: 'var(--ink-2)',
+          padding: '7px 18px',
+          fontSize: '12.5px',
+          borderRadius: '999px',
+        }"
+        :disabled="submitting"
+        @click="close"
+      >取消</button>
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5"
+        :style="{
+          background: validRows.length ? 'var(--dark)' : 'var(--card-2)',
+          color: validRows.length ? '#fff' : 'var(--ink-3)',
+          padding: '7px 18px',
+          fontSize: '12.5px',
+          fontWeight: 500,
+          borderRadius: '999px',
+          cursor: validRows.length && !submitting ? 'pointer' : 'not-allowed',
+          opacity: submitting ? 0.6 : 1,
+        }"
+        :disabled="submitting || !validRows.length"
+        @click="submitAll"
+      >
+        <Spinner v-if="submitting" :size="12" />
+        <Icon v-else name="check" :size="13" />
+        <span>{{ submitting ? "提交中…" : `批量提交 (${validRows.length})` }}</span>
+      </button>
+    </template>
+  </Dialog>
 </template>
