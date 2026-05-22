@@ -1,14 +1,54 @@
 <script setup lang="ts">
 /**
- * Pill button. Three styles ported from CSM-RE1 ui.jsx::Btn:
- * - ``solid``  filled with --primary, white text
- * - ``ghost``  transparent, ink text on hover (default secondary)
- * - ``soft``   --primary-soft fill, ink text
- * - ``danger`` red destructive action
+ * Pill button. Five variants ported from CSM-RE1 ui.jsx::Btn, now
+ * driven by `class-variance-authority` so the variant × size matrix
+ * lives in one declarative table instead of a `:class` ternary chain.
+ *
+ *   - solid   filled with --primary, white text
+ *   - ghost   transparent, ink text on hover (default — picked when
+ *             `variant` is omitted)
+ *   - soft    --primary-soft fill, ink text
+ *   - dark    --dark fill, card text (used by BatchImportTaskModal
+ *             submit + a couple of other "weighty" actions)
+ *   - danger  red destructive action
+ *
+ * Public API unchanged from the hand-rolled version:
+ *   <Btn variant="solid" small>提交</Btn>
+ *
+ * The `small` prop is kept as a convenience flag because every caller
+ * in the codebase already uses it; internally it maps to the cva
+ * `size: "small"` variant.
  */
-type BtnVariant = "solid" | "ghost" | "soft" | "dark" | "danger";
+import { cva, type VariantProps } from "class-variance-authority";
+
+const btnVariants = cva(
+  "inline-flex items-center justify-center gap-1.5 font-medium transition disabled:opacity-50 disabled:cursor-not-allowed",
+  {
+    variants: {
+      variant: {
+        solid: "bg-primary text-white hover:bg-primary-deep",
+        ghost: "bg-transparent text-ink-2 hover:bg-[rgba(28,26,23,0.05)]",
+        soft: "bg-primary-soft text-ink hover:brightness-95",
+        dark: "bg-dark text-card hover:bg-dark-2",
+        danger: "bg-red text-white hover:brightness-110",
+      },
+      size: {
+        default: "px-4 py-2 text-[13px]",
+        small: "px-3 py-1.5 text-[12px]",
+      },
+    },
+    defaultVariants: {
+      variant: "ghost",
+      size: "default",
+    },
+  },
+);
+
+type BtnVariant = NonNullable<VariantProps<typeof btnVariants>["variant"]>;
+
 defineProps<{
   variant?: BtnVariant;
+  /** Convenience flag — equivalent to selecting the "small" size. */
   small?: boolean;
   disabled?: boolean;
 }>();
@@ -17,16 +57,7 @@ defineProps<{
 <template>
   <button
     :disabled="disabled"
-    class="inline-flex items-center justify-center gap-1.5 font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-    :class="[
-      small ? 'px-3 py-1.5 text-[12px]' : 'px-4 py-2 text-[13px]',
-      variant === 'solid' && 'bg-primary text-white hover:bg-primary-deep',
-      variant === 'soft' && 'bg-primary-soft text-ink hover:brightness-95',
-      variant === 'dark' && 'bg-dark text-card hover:bg-dark-2',
-      variant === 'danger' && 'bg-red text-white hover:brightness-110',
-      (!variant || variant === 'ghost') &&
-        'bg-transparent text-ink-2 hover:bg-[rgba(28,26,23,0.05)]',
-    ]"
+    :class="btnVariants({ variant: variant ?? 'ghost', size: small ? 'small' : 'default' })"
     :style="{ borderRadius: 'var(--radius-pill)' }"
   >
     <slot />
