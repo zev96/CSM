@@ -14,6 +14,7 @@
 import { computed, ref, watch } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
+import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormField from "@/components/forms/FormField.vue";
@@ -309,228 +310,202 @@ const wizardTitle = computed(() => {
 </script>
 
 <template>
-  <Teleport to="body">
+  <Dialog
+    :open="open"
+    size="lg"
+    :title="wizardTitle"
+    show-close
+    :closable="!saving"
+    @update:open="close"
+  >
     <div
-      v-if="open"
-      class="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
-      @click.self="close"
+      v-if="loading"
+      class="flex items-center justify-center py-8"
     >
-      <div
-        class="anim-up bg-bg-inner flex flex-col p-6"
-        :style="{
-          width: '640px',
-          maxWidth: '92vw',
-          maxHeight: '88vh',
-          borderRadius: 'var(--radius-card)',
-        }"
-      >
-        <div class="mb-4 flex flex-shrink-0 items-center justify-between">
-          <div class="font-display text-[16px] font-semibold">{{ wizardTitle }}</div>
-          <button type="button" @click="close">
-            <Icon name="x" :size="18" />
-          </button>
-        </div>
-
-        <div
-          v-if="loading"
-          class="flex flex-1 items-center justify-center py-8"
-        >
-          <Spinner :size="14" />
-        </div>
-
-        <!-- ━━━━━━━ 创建模式：3 步向导 ━━━━━━━ -->
-        <template v-else-if="mode === 'create'">
-          <!-- step 1：基础 -->
-          <div
-            v-if="step === 1"
-            class="flex flex-1 flex-col gap-4 overflow-y-auto px-1"
-          >
-            <FormField label="Skill 名称" hint="名称将作为文件名（.md），中文 / 字母 / 数字均可，避免 \\ / : * ? &quot; &lt; &gt; |。">
-              <FormInput
-                v-model="skillName"
-                placeholder="如：xiaohongshu-polish"
-                debounce="live"
-              />
-            </FormField>
-            <FormField label="适用品类" hint="会写进 prompt — 「你是一位专注于 X 品类的编辑」。">
-              <FormInput
-                v-model="product"
-                placeholder="如：宠物吸尘器、轻办公笔电"
-                debounce="live"
-              />
-            </FormField>
-            <FormField label="起始模板" hint="选一个内置预设作为起点，下一步可微调。">
-              <FormSelect
-                :model-value="presetKey"
-                :options="presetOptions"
-                width="100%"
-                @update:model-value="(v) => (presetKey = String(v))"
-              />
-            </FormField>
-          </div>
-
-          <!-- step 2：风格 -->
-          <div
-            v-else-if="step === 2"
-            class="flex flex-1 flex-col gap-4 overflow-y-auto px-1"
-          >
-            <div
-              class="text-[12.5px] font-medium"
-              :style="{ color: 'var(--ink-2)' }"
-            >
-              微调风格（可留空，使用模板默认值）
-            </div>
-            <FormField label="开头钩子">
-              <FormInput
-                v-model="hookOverride"
-                placeholder="覆盖：开头钩子要求"
-                debounce="live"
-              />
-            </FormField>
-            <FormField label="段落密度">
-              <FormInput
-                v-model="densityOverride"
-                placeholder="覆盖：段落密度"
-                debounce="live"
-              />
-            </FormField>
-            <FormField label="语气">
-              <FormInput
-                v-model="toneOverride"
-                placeholder="覆盖：语气"
-                debounce="live"
-              />
-            </FormField>
-            <FormField label="额外禁止项">
-              <textarea
-                v-model="extraProhibitions"
-                class="bg-card-2 px-3 py-2 text-[12.5px] outline-none transition-colors focus:bg-card-white"
-                :style="{
-                  width: '100%',
-                  minHeight: '110px',
-                  borderRadius: 'var(--radius-inner)',
-                  border: '1px solid var(--line)',
-                  resize: 'vertical',
-                  lineHeight: 1.6,
-                }"
-                placeholder="每行一条额外禁止项（可选）"
-              />
-            </FormField>
-          </div>
-
-          <!-- step 3：预览 -->
-          <div
-            v-else
-            class="flex flex-1 flex-col gap-2 overflow-y-auto px-1"
-          >
-            <div
-              class="text-[12.5px] font-medium"
-              :style="{ color: 'var(--ink-2)' }"
-            >
-              预览（可直接编辑）
-            </div>
-            <textarea
-              v-model="previewBody"
-              class="bg-card-2 px-3 py-2 font-mono text-[12px] outline-none transition-colors focus:bg-card-white"
-              :style="{
-                width: '100%',
-                flex: 1,
-                minHeight: '320px',
-                borderRadius: 'var(--radius-inner)',
-                border: '1px solid var(--line)',
-                resize: 'vertical',
-                lineHeight: 1.7,
-              }"
-            />
-          </div>
-
-          <!-- 上一步 / 下一步 / 创建 -->
-          <div class="mt-5 flex flex-shrink-0 items-center gap-2">
-            <Btn
-              v-if="step > 1"
-              variant="ghost"
-              small
-              :disabled="saving"
-              @click="goBack"
-            >
-              <Icon name="arrowLeft" :size="13" />
-              <span>上一步</span>
-            </Btn>
-            <span class="flex-1" />
-            <Btn variant="ghost" small :disabled="saving" @click="close">取消</Btn>
-            <Btn
-              v-if="step < 3"
-              variant="solid"
-              small
-              @click="goNext"
-            >
-              <span>下一步</span>
-              <Icon name="arrowRight" :size="13" />
-            </Btn>
-            <Btn v-else variant="solid" small :disabled="saving" @click="saveCreate">
-              <Spinner v-if="saving" :size="11" />
-              <Icon v-else name="check" :size="13" />
-              <span>创建</span>
-            </Btn>
-          </div>
-        </template>
-
-        <!-- ━━━━━━━ 编辑模式：单步表单 ━━━━━━━ -->
-        <template v-else>
-          <div class="flex flex-1 flex-col gap-4 overflow-y-auto px-1">
-            <FormField label="名称" hint="出现在 Skill 列表里的显示名。">
-              <FormInput
-                v-model="editName"
-                placeholder="如 克制 · 克制"
-                debounce="live"
-              />
-            </FormField>
-            <FormField label="ID" hint="文件名（不可修改）。">
-              <FormInput :model-value="skillName" disabled />
-            </FormField>
-            <FormField label="一句话描述" hint="卡片副标题，不会进 prompt。">
-              <FormInput
-                v-model="editDesc"
-                placeholder="如 极度克制 · 不超过 1 个感叹号"
-                debounce="live"
-              />
-            </FormField>
-            <FormField label="语气标签">
-              <FormInput
-                v-model="editTone"
-                placeholder="如 克制 / 真实 / 温柔"
-                debounce="live"
-              />
-            </FormField>
-            <FormField
-              label="Prompt 正文（Markdown）"
-              hint="这部分会拼到生成请求的 user_skill_prompt 里。"
-            >
-              <textarea
-                v-model="previewBody"
-                class="bg-card-2 px-3 py-2 font-mono text-[12.5px] outline-none transition-colors focus:bg-card-white"
-                :style="{
-                  width: '100%',
-                  minHeight: '260px',
-                  borderRadius: 'var(--radius-inner)',
-                  border: '1px solid var(--line)',
-                  resize: 'vertical',
-                  lineHeight: 1.6,
-                }"
-              />
-            </FormField>
-          </div>
-
-          <div class="mt-5 flex flex-shrink-0 justify-end gap-2">
-            <Btn variant="ghost" small :disabled="saving" @click="close">取消</Btn>
-            <Btn variant="solid" small :disabled="saving" @click="saveEdit">
-              <Spinner v-if="saving" :size="11" />
-              <Icon v-else name="check" :size="13" />
-              <span>保存修改</span>
-            </Btn>
-          </div>
-        </template>
-      </div>
+      <Spinner :size="14" />
     </div>
-  </Teleport>
+
+    <!-- ━━━━━━━ 创建模式：3 步向导 ━━━━━━━ -->
+    <template v-else-if="mode === 'create'">
+      <!-- step 1：基础 -->
+      <div v-if="step === 1" class="flex flex-col gap-4 px-1">
+        <FormField label="Skill 名称" hint="名称将作为文件名（.md），中文 / 字母 / 数字均可，避免 \\ / : * ? &quot; &lt; &gt; |。">
+          <FormInput
+            v-model="skillName"
+            placeholder="如：xiaohongshu-polish"
+            debounce="live"
+          />
+        </FormField>
+        <FormField label="适用品类" hint="会写进 prompt — 「你是一位专注于 X 品类的编辑」。">
+          <FormInput
+            v-model="product"
+            placeholder="如：宠物吸尘器、轻办公笔电"
+            debounce="live"
+          />
+        </FormField>
+        <FormField label="起始模板" hint="选一个内置预设作为起点，下一步可微调。">
+          <FormSelect
+            :model-value="presetKey"
+            :options="presetOptions"
+            width="100%"
+            @update:model-value="(v) => (presetKey = String(v))"
+          />
+        </FormField>
+      </div>
+
+      <!-- step 2：风格 -->
+      <div v-else-if="step === 2" class="flex flex-col gap-4 px-1">
+        <div
+          class="text-[12.5px] font-medium"
+          :style="{ color: 'var(--ink-2)' }"
+        >
+          微调风格（可留空，使用模板默认值）
+        </div>
+        <FormField label="开头钩子">
+          <FormInput
+            v-model="hookOverride"
+            placeholder="覆盖：开头钩子要求"
+            debounce="live"
+          />
+        </FormField>
+        <FormField label="段落密度">
+          <FormInput
+            v-model="densityOverride"
+            placeholder="覆盖：段落密度"
+            debounce="live"
+          />
+        </FormField>
+        <FormField label="语气">
+          <FormInput
+            v-model="toneOverride"
+            placeholder="覆盖：语气"
+            debounce="live"
+          />
+        </FormField>
+        <FormField label="额外禁止项">
+          <textarea
+            v-model="extraProhibitions"
+            class="bg-card-2 px-3 py-2 text-[12.5px] outline-none transition-colors focus:bg-card-white"
+            :style="{
+              width: '100%',
+              minHeight: '110px',
+              borderRadius: 'var(--radius-inner)',
+              border: '1px solid var(--line)',
+              resize: 'vertical',
+              lineHeight: 1.6,
+            }"
+            placeholder="每行一条额外禁止项（可选）"
+          />
+        </FormField>
+      </div>
+
+      <!-- step 3：预览 -->
+      <div v-else class="flex flex-col gap-2 px-1">
+        <div
+          class="text-[12.5px] font-medium"
+          :style="{ color: 'var(--ink-2)' }"
+        >
+          预览（可直接编辑）
+        </div>
+        <textarea
+          v-model="previewBody"
+          class="bg-card-2 px-3 py-2 font-mono text-[12px] outline-none transition-colors focus:bg-card-white"
+          :style="{
+            width: '100%',
+            minHeight: '320px',
+            borderRadius: 'var(--radius-inner)',
+            border: '1px solid var(--line)',
+            resize: 'vertical',
+            lineHeight: 1.7,
+          }"
+        />
+      </div>
+    </template>
+
+    <!-- ━━━━━━━ 编辑模式：单步表单 ━━━━━━━ -->
+    <template v-else>
+      <div class="flex flex-col gap-4 px-1">
+        <FormField label="名称" hint="出现在 Skill 列表里的显示名。">
+          <FormInput
+            v-model="editName"
+            placeholder="如 克制 · 克制"
+            debounce="live"
+          />
+        </FormField>
+        <FormField label="ID" hint="文件名（不可修改）。">
+          <FormInput :model-value="skillName" disabled />
+        </FormField>
+        <FormField label="一句话描述" hint="卡片副标题，不会进 prompt。">
+          <FormInput
+            v-model="editDesc"
+            placeholder="如 极度克制 · 不超过 1 个感叹号"
+            debounce="live"
+          />
+        </FormField>
+        <FormField label="语气标签">
+          <FormInput
+            v-model="editTone"
+            placeholder="如 克制 / 真实 / 温柔"
+            debounce="live"
+          />
+        </FormField>
+        <FormField
+          label="Prompt 正文（Markdown）"
+          hint="这部分会拼到生成请求的 user_skill_prompt 里。"
+        >
+          <textarea
+            v-model="previewBody"
+            class="bg-card-2 px-3 py-2 font-mono text-[12.5px] outline-none transition-colors focus:bg-card-white"
+            :style="{
+              width: '100%',
+              minHeight: '260px',
+              borderRadius: 'var(--radius-inner)',
+              border: '1px solid var(--line)',
+              resize: 'vertical',
+              lineHeight: 1.6,
+            }"
+          />
+        </FormField>
+      </div>
+    </template>
+
+    <template #footer>
+      <template v-if="!loading && mode === 'create'">
+        <Btn
+          v-if="step > 1"
+          variant="ghost"
+          small
+          :disabled="saving"
+          @click="goBack"
+        >
+          <Icon name="arrowLeft" :size="13" />
+          <span>上一步</span>
+        </Btn>
+        <span class="flex-1" />
+        <Btn variant="ghost" small :disabled="saving" @click="close">取消</Btn>
+        <Btn
+          v-if="step < 3"
+          variant="solid"
+          small
+          @click="goNext"
+        >
+          <span>下一步</span>
+          <Icon name="arrowRight" :size="13" />
+        </Btn>
+        <Btn v-else variant="solid" small :disabled="saving" @click="saveCreate">
+          <Spinner v-if="saving" :size="11" />
+          <Icon v-else name="check" :size="13" />
+          <span>创建</span>
+        </Btn>
+      </template>
+      <template v-else-if="!loading && mode === 'edit'">
+        <Btn variant="ghost" small :disabled="saving" @click="close">取消</Btn>
+        <Btn variant="solid" small :disabled="saving" @click="saveEdit">
+          <Spinner v-if="saving" :size="11" />
+          <Icon v-else name="check" :size="13" />
+          <span>保存修改</span>
+        </Btn>
+      </template>
+    </template>
+  </Dialog>
 </template>
