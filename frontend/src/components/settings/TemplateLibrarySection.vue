@@ -6,6 +6,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 
 import Icon from "@/components/ui/Icon.vue"
+import FormSelect from "@/components/forms/FormSelect.vue"
 import { useToast } from "@/composables/useToast"
 import { useTemplatesStore, type Template } from "@/stores/templates"
 
@@ -162,13 +163,17 @@ function toggleTag(tag: string) {
         >{{ t }}</button>
         <span v-if="!store.allTags.length" class="muted">（暂无标签）</span>
       </div>
-      <select v-model="platform" class="platform-select">
-        <option value="">平台：全部</option>
-        <option value="douyin">抖音</option>
-        <option value="kuaishou">快手</option>
-        <option value="bilibili">B 站</option>
-        <option value="manual">手动</option>
-      </select>
+      <FormSelect
+        :model-value="platform"
+        :options="[
+          { label: '平台：全部', value: '' },
+          { label: '抖音', value: 'douyin' },
+          { label: '快手', value: 'kuaishou' },
+          { label: 'B 站', value: 'bilibili' },
+          { label: '手动', value: 'manual' },
+        ]"
+        @update:model-value="(v) => (platform = String(v))"
+      />
       <label class="show-hidden">
         <input type="checkbox" v-model="showHidden" />
         显示隐藏
@@ -277,12 +282,6 @@ function toggleTag(tag: string) {
   color: var(--ink, #6a5520); font-family: inherit;
 }
 .tag-chip.active { background: var(--accent, #e0a020); color: #fff; border-color: var(--accent, #e0a020); }
-.platform-select {
-  padding: 5px 8px;
-  border: 1px solid var(--line, #d4c8a8); border-radius: 6px;
-  font-size: 12px; background: var(--card-input, #fff);
-  color: var(--ink, #2a2017); font-family: inherit;
-}
 .show-hidden { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink, #6b5a3a); }
 .actions {
   display: flex; gap: 8px; align-items: center;

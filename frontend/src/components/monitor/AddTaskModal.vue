@@ -387,17 +387,16 @@ async function submit() {
                 v-model="searchKeywordsRaw"
                 rows="4"
                 placeholder="如：&#10;Claude Code 教程&#10;Claude Code 怎么用&#10;Anthropic Claude"
+                class="bg-card-2 focus:bg-card-white outline-none transition-colors"
                 :style="{
                   width: '100%',
                   resize: 'vertical',
                   padding: '6px 10px',
                   fontSize: '12.5px',
                   fontFamily: 'inherit',
-                  background: 'var(--card-2)',
                   border: '1px solid var(--line)',
                   borderRadius: 'var(--radius-inner)',
                   color: 'var(--ink)',
-                  outline: 'none',
                   boxSizing: 'border-box',
                 }"
               />
@@ -472,17 +471,16 @@ async function submit() {
                     v-model="baiduExcludeDomainsRaw"
                     rows="3"
                     placeholder="cewey.com&#10;example.com"
+                    class="bg-card-2 focus:bg-card-white outline-none transition-colors"
                     :style="{
                       width: '100%',
                       resize: 'vertical',
                       padding: '6px 10px',
                       fontSize: '12.5px',
                       fontFamily: 'inherit',
-                      background: 'var(--card-2)',
                       border: '1px solid var(--line)',
                       borderRadius: 'var(--radius-inner)',
                       color: 'var(--ink)',
-                      outline: 'none',
                       boxSizing: 'border-box',
                     }"
                   />

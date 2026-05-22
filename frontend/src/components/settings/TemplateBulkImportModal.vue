@@ -6,6 +6,7 @@
 import { computed, ref } from "vue"
 
 import Icon from "@/components/ui/Icon.vue"
+import FormSelect from "@/components/forms/FormSelect.vue"
 import { useTemplatesStore } from "@/stores/templates"
 
 const emit = defineEmits<{
@@ -117,12 +118,16 @@ async function doImport() {
 
         <label>
           <span>来源平台</span>
-          <select v-model="platform">
-            <option value="">手动 (默认)</option>
-            <option value="douyin">抖音</option>
-            <option value="kuaishou">快手</option>
-            <option value="bilibili">B 站</option>
-          </select>
+          <FormSelect
+            :model-value="platform"
+            :options="[
+              { label: '手动 (默认)', value: '' },
+              { label: '抖音', value: 'douyin' },
+              { label: '快手', value: 'kuaishou' },
+              { label: 'B 站', value: 'bilibili' },
+            ]"
+            @update:model-value="(v) => (platform = String(v))"
+          />
         </label>
 
         <div class="preview">

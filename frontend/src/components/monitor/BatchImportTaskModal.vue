@@ -32,6 +32,7 @@ import * as XLSX from "xlsx";
 import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Spinner from "@/components/ui/Spinner.vue";
+import FormSelect from "@/components/forms/FormSelect.vue";
 
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
@@ -606,23 +607,14 @@ async function submitAll() {
           <!-- platform + 模板选择行 -->
           <div class="flex items-center gap-2">
             <label class="text-[12px] font-medium" :style="{ color: 'var(--ink-2)', minWidth: '60px' }">平台</label>
-            <select
-              v-model="platform"
-              class="text-[12.5px]"
-              :style="{
-                flex: 1,
-                height: '34px',
-                background: 'var(--card)',
-                border: '1px solid var(--line)',
-                borderRadius: '8px',
-                padding: '0 12px',
-                color: 'var(--ink)',
-              }"
-            >
-              <option v-for="t in TYPES" :key="t.value" :value="t.value">
-                {{ t.label }}
-              </option>
-            </select>
+            <div class="flex-1">
+              <FormSelect
+                :model-value="platform"
+                :options="TYPES.map((t) => ({ label: t.label, value: t.value }))"
+                width="100%"
+                @update:model-value="(v) => (platform = v as any)"
+              />
+            </div>
           </div>
 
           <!--
@@ -638,10 +630,10 @@ async function submitAll() {
               v-model="batchName"
               type="text"
               :placeholder="isBaidu ? '如：0515-吸尘器关键词组' : '如：戴森评论监测（每条视频会自动加上视频 ID 后缀）'"
+              class="bg-card-2 focus:bg-card-white outline-none transition-colors"
               :style="{
                 flex: 1,
                 height: '34px',
-                background: 'var(--card)',
                 border: '1px solid var(--line)',
                 borderRadius: '8px',
                 padding: '0 12px',
@@ -661,10 +653,10 @@ async function submitAll() {
               v-model="targetBrand"
               type="text"
               placeholder="如：CEWEY（一个品牌词，命中该词的搜索结果会标「自家」）"
+              class="bg-card-2 focus:bg-card-white outline-none transition-colors"
               :style="{
                 flex: 1,
                 height: '34px',
-                background: 'var(--card)',
                 border: '1px solid var(--line)',
                 borderRadius: '8px',
                 padding: '0 12px',
@@ -782,11 +774,11 @@ async function submitAll() {
               : isComment
                 ? 'https://www.bilibili.com/video/BV1xx&#9;我家这台投影仪用了半年的真实感受...'
                 : '无线吸尘器哪款好用\t https://www.zhihu.com/question/12345\t 戴森\t 5'"
+            class="bg-card-2 focus:bg-card-white outline-none transition-colors"
             :style="{
               width: '100%',
               minHeight: '180px',
               padding: '12px',
-              background: 'var(--card)',
               border: '1px solid var(--line)',
               borderRadius: '10px',
               fontFamily: 'ui-monospace, SF Mono, Menlo, Consolas, monospace',
@@ -794,7 +786,6 @@ async function submitAll() {
               lineHeight: 1.55,
               color: 'var(--ink)',
               resize: 'vertical',
-              outline: 'none',
             }"
           />
 
@@ -940,11 +931,11 @@ async function submitAll() {
                 :value="topN"
                 min="1"
                 max="100"
+                class="bg-card-2 focus:bg-card-white outline-none transition-colors"
                 :style="{
                   width: '100%',
                   height: '34px',
                   padding: '0 12px',
-                  background: 'var(--card)',
                   border: '1px solid var(--line)',
                   borderRadius: '8px',
                   fontSize: '12.5px',
@@ -958,31 +949,26 @@ async function submitAll() {
                 计划
               </div>
               <div class="flex items-center gap-2">
-                <select
-                  v-model="scheduleMode"
-                  class="text-[12.5px]"
-                  :style="{
-                    flex: 1,
-                    height: '34px',
-                    background: 'var(--card)',
-                    border: '1px solid var(--line)',
-                    borderRadius: '8px',
-                    padding: '0 12px',
-                    color: 'var(--ink)',
-                  }"
-                >
-                  <option value="manual">手动触发</option>
-                  <option value="daily">每天</option>
-                </select>
+                <div class="flex-1">
+                  <FormSelect
+                    :model-value="scheduleMode"
+                    :options="[
+                      { label: '手动触发', value: 'manual' },
+                      { label: '每天', value: 'daily' },
+                    ]"
+                    width="100%"
+                    @update:model-value="(v) => (scheduleMode = v as 'manual' | 'daily')"
+                  />
+                </div>
                 <input
                   v-if="scheduleMode === 'daily'"
                   v-model="dailyTime"
                   placeholder="HH:MM"
+                  class="bg-card-2 focus:bg-card-white outline-none transition-colors"
                   :style="{
                     width: '90px',
                     height: '34px',
                     padding: '0 10px',
-                    background: 'var(--card)',
                     border: '1px solid var(--line)',
                     borderRadius: '8px',
                     fontSize: '12.5px',

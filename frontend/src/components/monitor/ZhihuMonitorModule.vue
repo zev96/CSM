@@ -444,7 +444,12 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
 </script>
 
 <template>
-  <div>
+  <!--
+    Root: `space-y-6` 给 hero / table+detail grid 两个直接子节点统一 24px
+    间距（对齐 MonitorView root 的 gap-24 节奏）。原来是裸 <div>，hero
+    后面紧贴 grid，告警出现时和下方表格粘成一团。
+  -->
+  <div class="space-y-6">
     <!--
       告警 hero 包裹层 —— 当告警数 > 1 时，hero 下方再放 1–2 张更窄
       更暗的「影子」卡，形成卡片堆叠的视觉；点右上角的 ‹ › 切换上一
