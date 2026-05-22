@@ -7,6 +7,7 @@
 import { ref, watch } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
+import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import FormField from "@/components/forms/FormField.vue";
 import FormInput from "@/components/forms/FormInput.vue";
@@ -41,54 +42,41 @@ function submit() {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
-      @click.self="close"
-    >
-      <div
-        class="anim-up bg-bg-inner p-6"
-        :style="{ width: '440px', maxWidth: '92vw', borderRadius: 'var(--radius-card)' }"
-      >
-        <div class="mb-4 flex items-center justify-between">
-          <div class="font-display text-[16px] font-semibold">新建模板</div>
-          <button type="button" @click="close">
-            <Icon name="x" :size="18" />
-          </button>
-        </div>
+  <Dialog
+    :open="open"
+    title="新建模板"
+    show-close
+    @update:open="close"
+  >
+    <div class="flex flex-col gap-4">
+      <FormField label="模板名" hint="出现在模板库列表里的名字。">
+        <FormInput
+          v-model="name"
+          placeholder="如 导购 · 吸尘器"
+          debounce="live"
+        />
+      </FormField>
 
-        <div class="flex flex-col gap-4">
-          <FormField label="模板名" hint="出现在模板库列表里的名字。">
-            <FormInput
-              v-model="name"
-              placeholder="如 导购 · 吸尘器"
-              debounce="live"
-            />
-          </FormField>
-
-          <FormField label="适合产品类别" hint="这个模板写的是什么产品，用于检索时匹配。">
-            <FormInput
-              v-model="product"
-              placeholder="如 无线吸尘器"
-              debounce="live"
-            />
-          </FormField>
-        </div>
-
-        <div class="mt-6 flex justify-end gap-2">
-          <Btn variant="ghost" small @click="close">取消</Btn>
-          <Btn
-            variant="solid"
-            small
-            :disabled="!name.trim() || !product.trim()"
-            @click="submit"
-          >
-            <Icon name="arrowRight" :size="13" />
-            <span>下一步 · 编辑结构</span>
-          </Btn>
-        </div>
-      </div>
+      <FormField label="适合产品类别" hint="这个模板写的是什么产品，用于检索时匹配。">
+        <FormInput
+          v-model="product"
+          placeholder="如 无线吸尘器"
+          debounce="live"
+        />
+      </FormField>
     </div>
-  </Teleport>
+
+    <template #footer>
+      <Btn variant="ghost" small @click="close">取消</Btn>
+      <Btn
+        variant="solid"
+        small
+        :disabled="!name.trim() || !product.trim()"
+        @click="submit"
+      >
+        <Icon name="arrowRight" :size="13" />
+        <span>下一步 · 编辑结构</span>
+      </Btn>
+    </template>
+  </Dialog>
 </template>
