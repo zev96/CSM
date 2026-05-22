@@ -1,13 +1,29 @@
 <script setup lang="ts">
 /**
- * 百度 SEO 首页卡 — 撮要展示百度关键词命中率 + 近期异动。
- * 数据：GET /api/monitor/history/baidu-keyword?range=7d。
- * "详情 →" 跳转到监测中心 baidu tab。
+ * 百度 SEO 首页卡 — Row 2 第 1 张。
+ *
+ *   ┌─────────────────────────────────────────┐
+ *   │ MONITOR · 百度 SEO              [详情→]│
+ *   │ 宠物家庭吸尘器推荐  近 7 天             │
+ *   │ ◢ sparkline ◣                            │
+ *   │ 周一  周二 ... 今天                       │
+ *   │ ┌─────────────────────────────────────┐ │
+ *   │ │ ★ 宠物家庭吸尘器推荐         [↗2]   │ │  ← 高亮主项
+ *   │ ├─────────────────────────────────────┤ │
+ *   │ │   扫地机器人推荐             [↘2]   │ │
+ *   │ │   千元降噪耳机               [↘5]   │ │
+ *   │ └─────────────────────────────────────┘ │
+ *   └─────────────────────────────────────────┘
+ *
+ * 数据：GET /api/monitor/history/baidu-keyword?range=7d
+ * Sparkline 暂用 fallback mock 序列（详见 Design.md §5.6），等后端 series
+ * endpoint 落地后单独 PR 接入。
  */
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
+import Sparkline from "@/components/ui/Sparkline.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 
@@ -46,7 +62,7 @@ interface BaiduResponse {
 const data = ref<BaiduResponse | null>(null);
 const loaded = ref(false);
 
-// Sort keywords by severity: dropped/down first, then new/up, then flat.
+// 排序：异动 > 平稳，把 dropped/down 放最前，让用户先看到掉名词。
 const CHANGE_ORDER: Record<ChangeKind, number> = {
   dropped: 0,
   down: 1,
@@ -55,27 +71,37 @@ const CHANGE_ORDER: Record<ChangeKind, number> = {
   flat: 4,
 };
 
-const topKeywords = computed<Keyword[]>(() => {
+const sortedKeywords = computed<Keyword[]>(() => {
   if (!data.value) return [];
   return [...data.value.keywords]
     .sort((a, b) => CHANGE_ORDER[a.change_kind] - CHANGE_ORDER[b.change_kind])
-    .slice(0, 4);
+    .slice(0, 3);
 });
 
-function formatCheckedAt(iso: string | null): string {
-  if (!iso) return "—";
-  try {
-    const d = new Date(iso);
-    return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
-  } catch {
-    return "—";
-  }
+const topKeyword = computed(() => sortedKeywords.value[0] ?? null);
+const restKeywords = computed(() => sortedKeywords.value.slice(1));
+
+// fallback sparkline — 7 个点平稳上升，等后端给 series 再换真实数据。
+const SPARK_FALLBACK = [3, 4, 4, 5, 5, 6, 7];
+const SPARK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "今天"];
+
+function chipStyle(kind: ChangeKind) {
+  if (kind === "up" || kind === "new")
+    return { background: "#dde7d2", color: "#4d6b2f" };
+  if (kind === "down" || kind === "dropped")
+    return { background: "#f3d3cd", color: "#a3382a" };
+  return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
 }
 
-function arrowFor(kind: ChangeKind): { glyph: string; color: string } {
-  if (kind === "up" || kind === "new") return { glyph: "▲", color: "#5e7848" };
-  if (kind === "down" || kind === "dropped") return { glyph: "▼", color: "var(--red)" };
-  return { glyph: "—", color: "#a89f8d" };
+function chipIcon(kind: ChangeKind) {
+  if (kind === "up" || kind === "new") return "arrowUp";
+  if (kind === "down" || kind === "dropped") return "arrowDown";
+  return "x"; // 持平：用 x 占位避免空字符串
+}
+
+function chipText(kw: Keyword) {
+  if (kw.change_kind === "flat") return "持平";
+  return String(kw.matched_count);
 }
 
 onMounted(async () => {
@@ -86,7 +112,7 @@ onMounted(async () => {
     });
     data.value = r.data;
   } catch {
-    /* 静默失败 — 空状态顶住 */
+    /* 静默：空状态顶住 */
   } finally {
     loaded.value = true;
   }
@@ -104,36 +130,35 @@ onMounted(async () => {
     }"
   >
     <!-- 标题区 -->
-    <div class="mb-3 flex flex-shrink-0 items-center justify-between">
-      <div>
+    <div class="mb-2 flex flex-shrink-0 items-start justify-between">
+      <div class="min-w-0">
         <div
           class="text-[10.5px] font-medium uppercase tracking-[1.5px]"
           :style="{ color: 'var(--ink-3)' }"
         >
-          MONITOR · 百度 SEO
+          Monitor · 百度 SEO
         </div>
         <div
-          class="font-display mt-1 font-bold"
-          :style="{ fontSize: '18px', letterSpacing: '-0.4px' }"
+          v-if="topKeyword"
+          class="font-display mt-1 truncate font-semibold"
+          :style="{ fontSize: '13px', color: 'var(--ink)' }"
+        >
+          {{ topKeyword.search_keyword }}
+        </div>
+        <div
+          v-else
+          class="font-display mt-1 font-semibold"
+          :style="{ fontSize: '13px', color: 'var(--ink-3)' }"
         >
           百度关键词
         </div>
-        <!--
-          副标题已收敛到「排名异动 N」单条 —— 原来「监测 X 关键词 / 覆盖 Y
-          品牌词 / 平均命中率」这条信息密度高但首页卡用户主要关心异动，
-          所以只保留异动计数；详细 KPI 在监测中心详情页查看。
-        -->
-        <div class="mt-0.5 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-          <template v-if="!loaded">加载中…</template>
-          <template v-else-if="data && data.kpis.monitored_keywords > 0">
-            排名异动 <b :style="{ color: 'var(--ink)' }">{{ data.kpis.changed_keywords }}</b>
-          </template>
-          <template v-else>暂无百度关键词任务</template>
+        <div class="mt-0.5 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
+          近 7 天
         </div>
       </div>
       <button
         type="button"
-        class="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11.5px]"
+        class="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-full px-2.5 text-[11.5px]"
         :style="{
           background: 'var(--card-2)',
           color: 'var(--ink-2)',
@@ -146,7 +171,17 @@ onMounted(async () => {
       </button>
     </div>
 
-    <!-- 异动摘要块已与副标题合并，避免重复显示「排名异动 N」 -->
+    <!-- Sparkline + 日期标签 -->
+    <div class="mb-2 flex-shrink-0">
+      <Sparkline
+        :points="SPARK_FALLBACK"
+        :axis-labels="SPARK_LABELS"
+        :height="38"
+        stroke="var(--primary)"
+        :show-last="true"
+        fluid
+      />
+    </div>
 
     <!-- 关键词列表 -->
     <div
@@ -157,34 +192,56 @@ onMounted(async () => {
       加载中…
     </div>
     <div
-      v-else-if="topKeywords.length === 0"
+      v-else-if="sortedKeywords.length === 0"
       class="flex min-h-0 flex-1 items-center justify-center text-center text-[12px]"
       :style="{ color: 'var(--ink-3)' }"
     >
       暂无百度关键词任务<br />
       <span class="text-[11px]">前往监测中心添加</span>
     </div>
-    <div v-else class="min-h-0 flex-1 overflow-y-auto">
+    <div v-else class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+      <!-- 高亮主项：用 primary-soft 兜底，对应设计稿浅紫高亮带 -->
       <div
-        v-for="kw in topKeywords" :key="kw.task_id"
-        class="flex items-center gap-2 rounded-[8px] p-2"
-        :style="{ border: '1px solid rgba(28,26,23,0.06)', marginBottom: '4px', background: 'var(--card-2)' }"
+        v-if="topKeyword"
+        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
+        :style="{
+          background: 'var(--primary-soft)',
+          border: '1px solid rgba(238,106,42,0.18)',
+        }"
       >
-        <span
-          class="flex-shrink-0 text-[12px] font-bold w-3 text-center"
-          :style="{ color: arrowFor(kw.change_kind).color }"
-        >{{ arrowFor(kw.change_kind).glyph }}</span>
-        <div class="min-w-0 flex-1">
-          <div class="truncate text-[11.5px] font-medium">{{ kw.search_keyword }}</div>
-          <div class="mt-0.5 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-            <template v-if="kw.matched_ranks.length">
-              target: {{ kw.target_brand }} · 命中 {{ kw.matched_ranks.map((r) => '#' + r).join(' ') }} ({{ kw.matched_count }}/{{ kw.top_n }})
-            </template>
-            <template v-else>未命中</template>
-          </div>
+        <div
+          class="min-w-0 flex-1 truncate text-[12px] font-semibold"
+          :style="{ color: 'var(--primary-deep)' }"
+        >
+          {{ topKeyword.search_keyword }}
         </div>
-        <span class="flex-shrink-0 text-[10px]" :style="{ color: 'var(--ink-4)' }">
-          {{ formatCheckedAt(kw.checked_at) }}
+        <span
+          class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
+          :style="chipStyle(topKeyword.change_kind)"
+        >
+          <Icon :name="chipIcon(topKeyword.change_kind)" :size="9" />
+          {{ chipText(topKeyword) }}
+        </span>
+      </div>
+      <!-- 次项：标准 card-2 底 -->
+      <div
+        v-for="kw in restKeywords"
+        :key="kw.task_id"
+        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
+        :style="{
+          background: 'var(--card-2)',
+          border: '1px solid var(--line)',
+        }"
+      >
+        <div class="min-w-0 flex-1 truncate text-[12px]">
+          {{ kw.search_keyword }}
+        </div>
+        <span
+          class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
+          :style="chipStyle(kw.change_kind)"
+        >
+          <Icon :name="chipIcon(kw.change_kind)" :size="9" />
+          {{ chipText(kw) }}
         </span>
       </div>
     </div>

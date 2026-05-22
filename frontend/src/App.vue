@@ -294,7 +294,7 @@ onMounted(async () => {
 /*
   顶栏搜索框：禁掉全局的 2px 橙色 :focus-visible 描边。外层胶囊已有
   border + 卡片底色作为视觉聚焦反馈，再叠橙圈会变成"双重描边"。
-  这个跟 KeywordHero 那个 hero-input 是同一思路。
+  这个跟 CreateArticleHero 那个 hero-input 是同一思路。
 */
 .topbar-search:focus,
 .topbar-search:focus-visible {
