@@ -118,28 +118,20 @@ async function openDoc(d: Doc) {
       background: 'var(--card)',
       borderRadius: 'var(--radius-card)',
       border: '1px solid var(--line)',
-      padding: '16px',
+      padding: '12px 14px',
     }"
   >
-    <!-- 标题区 -->
-    <div class="mb-3 flex flex-shrink-0 items-center justify-between">
-      <div class="min-w-0">
-        <div
-          class="text-[10.5px] font-medium uppercase tracking-[1.5px]"
-          :style="{ color: 'var(--ink-3)' }"
-        >
-          Recent · 文档
-        </div>
-        <div
-          class="font-display mt-1 font-bold"
-          :style="{ fontSize: '15px', letterSpacing: '-0.3px' }"
-        >
-          继续未完成的工作 · {{ visibleDocs.length }} 篇
-        </div>
+    <!-- 标题区（紧凑单行：「最近文档」 + 「全部 →」） -->
+    <div class="mb-2 flex flex-shrink-0 items-center justify-between">
+      <div
+        class="font-display font-semibold"
+        :style="{ fontSize: '13px', color: 'var(--ink)' }"
+      >
+        最近文档
       </div>
       <button
         type="button"
-        class="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[11.5px]"
+        class="inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px]"
         :style="{
           background: 'var(--card-2)',
           color: 'var(--ink-2)',
@@ -167,15 +159,16 @@ async function openDoc(d: Doc) {
 
     <div
       v-else
-      class="grid min-h-0 flex-1 grid-cols-2 gap-3 sm:grid-cols-4"
+      class="grid min-h-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-4"
     >
       <div
         v-for="d in visibleDocs"
         :key="d.id"
-        class="flex cursor-pointer flex-col gap-2 rounded-[12px] p-3 transition"
+        class="flex cursor-pointer flex-col gap-1 rounded-[10px] transition"
         :style="{
           background: 'var(--card-2)',
           border: '1px solid var(--line)',
+          padding: '8px 10px',
         }"
         @click="openDoc(d)"
         @mouseenter="
@@ -190,14 +183,14 @@ async function openDoc(d: Doc) {
         "
       >
         <span
-          class="inline-flex h-5 w-fit items-center gap-1 rounded-full px-2 text-[10.5px] font-medium"
+          class="inline-flex h-4 w-fit items-center gap-1 rounded-full px-1.5 text-[10px] font-medium"
           :style="chipStyle(d.status)"
         >
           <Icon name="fileText" :size="9" />
           {{ d.status }}
         </span>
         <div
-          class="font-display line-clamp-2 text-[13px] font-semibold leading-snug"
+          class="font-display line-clamp-1 text-[12.5px] font-semibold leading-snug"
           :style="{ color: 'var(--ink)' }"
         >
           {{ d.title }}

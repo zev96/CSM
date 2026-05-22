@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * Outer paper-card layout — port of CSM-RE1（V1）/src/app.jsx.
- * Hosts the LeftNav + top utility row + router-view + global Toast +
- * 通知 dropdown (bell icon top-right).
+ * Hosts the LeftNav + router-view + global Toast. 通知 dropdown 现在
+ * 挂在 LeftNav 的设置按钮上方，搜索框已下线。
  *
  * The "Tweaks" floating panel was removed — the only useful affordance
  * it offered (information density / primary colour) now lives in
@@ -12,35 +12,23 @@
  */
 import { computed, onMounted, ref } from "vue";
 
-import Icon from "./components/ui/Icon.vue";
 import LeftNav from "./components/LeftNav.vue";
 import ToastContainer from "./components/ui/ToastContainer.vue";
 import ConfirmModal from "./components/ui/ConfirmModal.vue";
 import FailureAlertModal from "./components/ui/FailureAlertModal.vue";
 import UpdateAvailableModal from "./components/ui/UpdateAvailableModal.vue";
 import Spinner from "./components/ui/Spinner.vue";
-import NotificationDropdown from "./components/ui/NotificationDropdown.vue";
 import OnboardingFlow from "./components/OnboardingFlow.vue";
 import WindowControls from "./components/WindowControls.vue";
 import { useTweaks } from "./composables/useTweaks";
-import { useNotifications } from "./composables/useNotifications";
 import { useConfig } from "./stores/config";
 import { useMonitorStatus } from "./stores/monitorStatus";
 import { useSidecarReady } from "./composables/useSidecarReady";
 
-const search = ref("");
 // Boot tweaks (loads radius/density/primary from localStorage and
 // applies CSS). Still needed even though the Tweaks panel is gone —
 // SettingsView writes to the same state.
 useTweaks();
-
-const notify = useNotifications();
-const notifOpen = ref(false);
-
-function toggleNotif() {
-  notifOpen.value = !notifOpen.value;
-  if (notifOpen.value) notify.markAllRead();
-}
 
 // ── 首次启动 onboarding ─────────────────────────────────────
 // 显示条件只看一个状态：localStorage 的「已完成」标记。
@@ -189,65 +177,6 @@ onMounted(async () => {
         class="flex min-w-0 flex-1 flex-col overflow-hidden"
         :style="{ padding: '22px 30px 30px 6px' }"
       >
-        <!-- Top utility row -->
-        <div class="mb-3 flex items-center justify-end gap-2">
-          <div
-            class="flex items-center pr-3 pl-3"
-            :style="{
-              height: '36px',
-              background: 'var(--card)',
-              border: '1px solid var(--line)',
-              borderRadius: '999px',
-              minWidth: '280px',
-              color: 'var(--ink-3)',
-            }"
-          >
-            <Icon name="search" :size="14" />
-            <input
-              v-model="search"
-              placeholder="搜索关键词、文档、模板…"
-              class="topbar-search flex-1 bg-transparent px-2 text-[12.5px] outline-none"
-            />
-          </div>
-          <!--
-            通知铃铛：点击 toggle 下拉面板。badge 只在有未读时显示。
-            打开面板的瞬间把所有未读标记为已读 (markAllRead in
-            toggleNotif) —— 用户的"打开 = 看过"假设比强迫他们逐条点
-            合理。空面板会显示空状态，不会有空白。
-          -->
-          <div class="relative">
-            <button
-              title="通知"
-              type="button"
-              class="relative inline-flex items-center justify-center transition hover:bg-[rgba(28,26,23,0.05)]"
-              :style="{
-                width: '36px',
-                height: '36px',
-                borderRadius: 'var(--radius-pill)',
-                color: 'var(--ink-2)',
-                background: notifOpen ? 'rgba(28,26,23,0.05)' : 'transparent',
-              }"
-              @click="toggleNotif"
-            >
-              <Icon name="bell" :size="16" />
-              <span
-                v-if="notify.unreadCount.value > 0"
-                class="absolute"
-                :style="{
-                  top: '8px',
-                  right: '8px',
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: 'var(--red)',
-                  boxShadow: '0 0 0 2px var(--bg-inner)',
-                }"
-              />
-            </button>
-            <NotificationDropdown :open="notifOpen" @close="notifOpen = false" />
-          </div>
-        </div>
-
     <!--
       router-view wrapper（min-h-0 flex-1 overflow-y-auto 给 ArticleView
       这种内容长的页面兜底滚动；HomeView 自己 min-h-full 不溢出）。
@@ -289,16 +218,5 @@ onMounted(async () => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
-}
-
-/*
-  顶栏搜索框：禁掉全局的 2px 橙色 :focus-visible 描边。外层胶囊已有
-  border + 卡片底色作为视觉聚焦反馈，再叠橙圈会变成"双重描边"。
-  这个跟 CreateArticleHero 那个 hero-input 是同一思路。
-*/
-.topbar-search:focus,
-.topbar-search:focus-visible {
-  outline: none !important;
-  box-shadow: none;
 }
 </style>

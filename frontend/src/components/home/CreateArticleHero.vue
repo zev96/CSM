@@ -22,7 +22,6 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import Btn from "@/components/ui/Btn.vue";
-import Card from "@/components/ui/Card.vue";
 import Dropdown from "@/components/ui/Dropdown.vue";
 import Icon from "@/components/ui/Icon.vue";
 import { useConfig } from "@/stores/config";
@@ -113,146 +112,130 @@ function takeoff() {
 </script>
 
 <template>
-  <Card muted padless class="h-full">
+  <!--
+    平铺版本：去 Card 外框、去暖色 blob、去"创建新文章"小标。
+    直接贴在页面背景上，紧凑布局（参考设计：大标 → 输入条 → chip 行）。
+    输入条 max-width 让它不撑满整行，看起来更像 hero CTA 而不是表单。
+  -->
+  <div class="flex flex-col" :style="{ gap: '14px' }">
+    <!-- 问候 + CTA 大标 -->
     <div
-      class="relative flex h-full flex-col overflow-hidden"
+      class="font-display font-bold leading-tight"
+      :style="{ fontSize: '26px', letterSpacing: '-0.5px' }"
+    >
+      {{ greeting }}，{{ userName }}。今天写点什么？
+    </div>
+
+    <!-- 一体胶囊输入条（窄，不撑满） -->
+    <div
+      class="flex items-center"
       :style="{
-        borderRadius: 'var(--radius-card)',
-        padding: 'var(--density-pad)',
+        maxWidth: '460px',
+        background: 'var(--card-white)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-pill)',
+        padding: '6px',
+        paddingLeft: '18px',
+        boxShadow: '0 1px 0 rgba(28,26,23,0.04)',
       }"
     >
-      <!-- 暖色 blob 装饰：黄 + 橙叠加，pointer-events:none 不挡交互 -->
-      <div
-        class="blur-blob"
+      <Icon name="search" :size="16" class="opacity-60" />
+      <input
+        v-model="keyword"
+        placeholder="输入关键词，例如「宠物家庭吸尘器」"
+        class="hero-input flex-1 bg-transparent px-3 outline-none"
         :style="{
-          position: 'absolute',
-          width: '300px',
-          height: '300px',
-          top: '-80px',
-          left: '-50px',
-          borderRadius: '50%',
-          background: 'var(--yellow)',
-          opacity: 0.55,
-          zIndex: 0,
+          fontSize: '14.5px',
+          color: 'var(--ink)',
+          height: '36px',
         }"
+        @keyup.enter="takeoff"
       />
-      <div
-        class="blur-blob"
-        :style="{
-          position: 'absolute',
-          width: '260px',
-          height: '260px',
-          top: '140px',
-          left: '300px',
-          borderRadius: '50%',
-          background: 'var(--primary)',
-          opacity: 0.4,
-          zIndex: 0,
-        }"
-      />
-
-      <div class="relative flex h-full flex-col" :style="{ zIndex: 2 }">
-        <!-- 小标 -->
-        <div
-          class="text-[10.5px] font-medium uppercase tracking-[1.5px]"
-          :style="{ color: 'var(--ink-3)' }"
-        >
-          创建新文章
-        </div>
-
-        <!-- 问候 + CTA 大标 -->
-        <div
-          class="font-display mt-2 font-bold leading-tight"
-          :style="{ fontSize: '26px', letterSpacing: '-0.5px' }"
-        >
-          {{ greeting }}，{{ userName }}。今天写点什么？
-        </div>
-
-        <!-- 一体胶囊输入条 -->
-        <div
-          class="mt-5 flex items-center"
-          :style="{
-            background: 'var(--card-white)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-pill)',
-            padding: '6px',
-            paddingLeft: '18px',
-            boxShadow: '0 1px 0 rgba(28,26,23,0.04)',
-          }"
-        >
-          <Icon name="search" :size="16" class="opacity-60" />
-          <input
-            v-model="keyword"
-            placeholder="输入关键词，例如「宠物家庭吸尘器」"
-            class="hero-input flex-1 bg-transparent px-3 outline-none"
-            :style="{
-              fontSize: '14.5px',
-              color: 'var(--ink)',
-              height: '40px',
-            }"
-            @keyup.enter="takeoff"
-          />
-          <Btn variant="dark" :disabled="!keyword.trim()" @click="takeoff">
-            创建
-            <Icon name="arrowRight" :size="13" />
-          </Btn>
-        </div>
-
-        <!-- 模板 / 风格 dropdown 胶囊 -->
-        <div class="mt-4 flex flex-wrap items-center gap-2">
-          <Dropdown :items="tplItems" @select="(k: string) => (tplId = k)">
-            <template #trigger>
-              <button
-                type="button"
-                class="inline-flex items-center gap-2"
-                :style="{
-                  height: '32px',
-                  padding: '0 12px',
-                  background: 'var(--card-white)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 'var(--radius-pill)',
-                  fontSize: '12px',
-                  color: 'var(--ink-2)',
-                  cursor: 'pointer',
-                }"
-              >
-                <span :style="{ color: 'var(--ink-3)' }">模板</span>
-                <span class="font-semibold" :style="{ color: 'var(--ink)' }">{{
-                  tplLabel
-                }}</span>
-                <Icon name="arrowDown" :size="11" />
-              </button>
-            </template>
-          </Dropdown>
-
-          <Dropdown :items="skillItems" @select="(k: string) => (skillId = k)">
-            <template #trigger>
-              <button
-                type="button"
-                class="inline-flex items-center gap-2"
-                :style="{
-                  height: '32px',
-                  padding: '0 12px',
-                  background: 'var(--card-white)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 'var(--radius-pill)',
-                  fontSize: '12px',
-                  color: 'var(--ink-2)',
-                  cursor: 'pointer',
-                }"
-              >
-                <span :style="{ color: 'var(--ink-3)' }">风格</span>
-                <span class="font-semibold" :style="{ color: 'var(--ink)' }">{{
-                  skillLabel
-                }}</span>
-                <Icon name="arrowDown" :size="11" />
-              </button>
-            </template>
-          </Dropdown>
-        </div>
-      </div>
+      <Btn variant="dark" :disabled="!keyword.trim()" @click="takeoff">
+        创建
+        <Icon name="arrowRight" :size="13" />
+      </Btn>
     </div>
-  </Card>
+
+    <!--
+      模板 / 风格 dropdown 胶囊。胶囊宽度按所有候选选项中最宽的那项
+      锁死 —— 切换风格时不会跳。用 CSS grid stacking：每个候选 name
+      以 visibility:hidden 占位铺在同一 grid cell（grid-column/row:1），
+      column 宽度自动取所有 children 的 max-content；可见 label 也
+      落在同一 cell，叠在 hidden 上面正常显示。纯 CSS，无 JS measure。
+    -->
+    <div class="flex flex-wrap items-center gap-2">
+      <Dropdown :items="tplItems" @select="(k: string) => (tplId = k)">
+        <template #trigger>
+          <button
+            type="button"
+            class="inline-flex items-center gap-2"
+            :style="{
+              height: '32px',
+              padding: '0 12px',
+              background: 'var(--card-white)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-pill)',
+              fontSize: '12px',
+              color: 'var(--ink-2)',
+              cursor: 'pointer',
+            }"
+          >
+            <span :style="{ color: 'var(--ink-3)' }">模板</span>
+            <span
+              class="dd-label-stack font-semibold"
+              :style="{ color: 'var(--ink)' }"
+            >
+              <span
+                v-for="t in templates"
+                :key="t.id"
+                aria-hidden="true"
+                class="dd-label-ghost"
+                >{{ t.name }}</span
+              >
+              <span class="dd-label-current">{{ tplLabel }}</span>
+            </span>
+            <Icon name="arrowDown" :size="11" />
+          </button>
+        </template>
+      </Dropdown>
+
+      <Dropdown :items="skillItems" @select="(k: string) => (skillId = k)">
+        <template #trigger>
+          <button
+            type="button"
+            class="inline-flex items-center gap-2"
+            :style="{
+              height: '32px',
+              padding: '0 12px',
+              background: 'var(--card-white)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-pill)',
+              fontSize: '12px',
+              color: 'var(--ink-2)',
+              cursor: 'pointer',
+            }"
+          >
+            <span :style="{ color: 'var(--ink-3)' }">风格</span>
+            <span
+              class="dd-label-stack font-semibold"
+              :style="{ color: 'var(--ink)' }"
+            >
+              <span
+                v-for="s in skills"
+                :key="s.id"
+                aria-hidden="true"
+                class="dd-label-ghost"
+                >{{ s.name }}</span
+              >
+              <span class="dd-label-current">{{ skillLabel }}</span>
+            </span>
+            <Icon name="arrowDown" :size="11" />
+          </button>
+        </template>
+      </Dropdown>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -264,5 +247,25 @@ function takeoff() {
 .hero-input:focus-visible {
   outline: none !important;
   box-shadow: none;
+}
+
+/*
+  下拉胶囊的 label 宽度锁死到最长选项 —— grid cell 宽度 = 所有 children
+  的 max-content max。ghost 与 current 都落在 row 1 / col 1，visibility:
+  hidden 的 ghost 不占视觉但占布局，撑出 cell 宽度；current 叠在上面正常
+  显示。current 是 source-order 最后一个，自然在 z-stack 顶层。
+*/
+.dd-label-stack {
+  display: inline-grid;
+}
+.dd-label-stack > * {
+  grid-column: 1;
+  grid-row: 1;
+  white-space: nowrap;
+}
+.dd-label-ghost {
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
 }
 </style>

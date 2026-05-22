@@ -150,45 +150,44 @@ onMounted(async () => {
     }"
   >
     <!-- 标题区 -->
-    <div class="mb-2 flex flex-shrink-0 items-start justify-between">
-      <div class="min-w-0">
-        <div
-          class="text-[10.5px] font-medium uppercase tracking-[1.5px]"
-          :style="{ color: 'var(--ink-3)' }"
-        >
-          Monitor · 知乎问题
-        </div>
-        <div
-          v-if="topRow"
-          class="font-display mt-1 truncate font-semibold"
-          :style="{ fontSize: '13px', color: 'var(--ink)' }"
-        >
-          {{ topRow.name }}
-        </div>
-        <div
-          v-else
-          class="font-display mt-1 font-semibold"
-          :style="{ fontSize: '13px', color: 'var(--ink-3)' }"
-        >
-          知乎排名
-        </div>
-        <div class="mt-0.5 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-          近 7 天 · {{ subLabel }}
-        </div>
+    <div class="flex flex-shrink-0 items-center justify-between">
+      <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">
+        知乎问题
       </div>
       <button
         type="button"
-        class="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-full px-2.5 text-[11.5px]"
+        class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
         :style="{
           background: 'var(--card-2)',
           color: 'var(--ink-2)',
           border: '1px solid var(--line)',
         }"
+        title="详情"
         @click="router.push({ name: 'monitor', query: { tab: 'zhihu' } })"
       >
-        详情
-        <Icon name="arrowRight" :size="10" />
+        <Icon name="arrowRight" :size="11" />
       </button>
+    </div>
+
+    <!-- 大标：当前主问题 + 状态 chip -->
+    <div class="mt-2 flex flex-shrink-0 items-center gap-2">
+      <div
+        class="font-display min-w-0 flex-1 truncate font-bold"
+        :style="{ fontSize: '15px', color: 'var(--ink)' }"
+      >
+        {{ topRow ? topRow.name : "知乎排名" }}
+      </div>
+      <span
+        v-if="topRow"
+        class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
+        :style="chipStyle(topRow.severity)"
+      >
+        <Icon :name="topRow.chipIcon" :size="9" />
+        {{ topRow.chipText }}
+      </span>
+    </div>
+    <div class="mt-0.5 mb-2 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
+      近 7 天 · {{ subLabel }}
     </div>
 
     <!-- Sparkline -->
@@ -220,38 +219,38 @@ onMounted(async () => {
       <span class="text-[11px]">前往监测中心添加</span>
     </div>
     <div v-else class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-      <!-- 高亮主项 -->
+      <!-- 高亮主项：深橙底 + 暖色字 -->
       <div
         v-if="topRow"
         class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
         :style="{
-          background: 'var(--primary-soft)',
-          border: '1px solid rgba(238,106,42,0.18)',
+          background: 'var(--primary)',
+          border: '1px solid var(--primary)',
         }"
       >
         <div
           class="min-w-0 flex-1 truncate text-[12px] font-semibold"
-          :style="{ color: 'var(--primary-deep)' }"
+          :style="{ color: 'var(--yellow)' }"
         >
           {{ topRow.name }}
         </div>
         <span
           class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
-          :style="chipStyle(topRow.severity)"
+          :style="{
+            background: 'var(--primary-deep)',
+            color: 'var(--yellow)',
+          }"
         >
           <Icon :name="topRow.chipIcon" :size="9" />
           {{ topRow.chipText }}
         </span>
       </div>
-      <!-- 次项 -->
+      <!-- 次项：白底简洁行 -->
       <div
         v-for="r in restRows"
         :key="r.id"
         class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
-        :style="{
-          background: 'var(--card-2)',
-          border: '1px solid var(--line)',
-        }"
+        :style="{ background: 'transparent' }"
       >
         <div class="min-w-0 flex-1 truncate text-[12px]">{{ r.name }}</div>
         <span

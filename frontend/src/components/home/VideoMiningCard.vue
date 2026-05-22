@@ -139,43 +139,44 @@ function chipLabel(state: Row["state"]) {
     }"
   >
     <!-- 标题区 -->
-    <div class="mb-2 flex flex-shrink-0 items-start justify-between gap-2">
-      <div class="min-w-0">
-        <div
-          class="text-[10.5px] font-medium uppercase tracking-[1.5px]"
-          :style="{ color: 'var(--ink-3)' }"
-        >
-          Mining · 视频抓取
-        </div>
-        <div class="mt-1 flex items-baseline gap-2">
-          <div
-            class="font-display font-bold"
-            :style="{
-              fontSize: '26px',
-              lineHeight: 1,
-              letterSpacing: '-0.5px',
-            }"
-          >
-            {{ totalScraped }}
-          </div>
-          <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
-            {{ subLabel }}
-          </div>
-        </div>
+    <div class="flex flex-shrink-0 items-center justify-between">
+      <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">
+        视频抓取
       </div>
       <button
         type="button"
-        class="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-full px-2.5 text-[11.5px]"
+        class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
         :style="{
           background: 'var(--card-2)',
           color: 'var(--ink-2)',
           border: '1px solid var(--line)',
         }"
+        title="详情"
         @click="router.push({ name: 'mining' })"
       >
-        详情
-        <Icon name="arrowRight" :size="10" />
+        <Icon name="arrowRight" :size="11" />
       </button>
+    </div>
+
+    <!-- 大数字 + 子标 -->
+    <div class="mt-2 flex flex-shrink-0 items-baseline gap-2">
+      <div
+        class="font-display font-bold"
+        :style="{
+          fontSize: '24px',
+          lineHeight: 1,
+          letterSpacing: '-0.5px',
+          color: 'var(--ink)',
+        }"
+      >
+        {{ totalScraped }}
+      </div>
+      <div class="text-[11.5px]" :style="{ color: 'var(--ink-2)' }">
+        已抓取
+      </div>
+    </div>
+    <div class="mt-0.5 mb-2 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
+      {{ subLabel }}
     </div>
 
     <!-- 任务列表 -->
@@ -187,17 +188,14 @@ function chipLabel(state: Row["state"]) {
       暂无抓取任务<br />
       <span class="text-[11px]">前往引流中心新建任务</span>
     </div>
-    <div v-else class="mt-2 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
+    <div v-else class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
       <div
         v-for="r in rows"
         :key="r.id"
-        class="flex items-center gap-2.5 rounded-[10px] p-2.5"
-        :style="{
-          background: 'var(--card-2)',
-          border: '1px solid var(--line)',
-        }"
+        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
+        :style="{ background: 'transparent' }"
       >
-        <div class="min-w-0 flex-1 truncate text-[12px] font-semibold">
+        <div class="min-w-0 flex-1 truncate text-[12px]">
           {{ r.keyword }}
         </div>
         <span

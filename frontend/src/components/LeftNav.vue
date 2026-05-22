@@ -3,13 +3,17 @@
  * Floating 72px-wide icon nav — port of CSM-RE1（V1）/src/nav.jsx.
  * Uses vue-router for activation; the React prototype's ``onSelect``
  * prop is replaced by ``router.push``.
+ *
+ * 通知 bell 也住在这里（设置按钮上方），dropdown 从 nav 右侧弹出。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import Icon from "./ui/Icon.vue";
+import NotificationDropdown from "./ui/NotificationDropdown.vue";
 import logoUrl from "@/assets/logo.png";
 import { useConfig } from "@/stores/config";
+import { useNotifications } from "@/composables/useNotifications";
 
 const route = useRoute();
 const router = useRouter();
@@ -26,8 +30,15 @@ function gotoAccount() {
   router.push({ name: "settings", hash: "#account" }).catch(() => {});
 }
 
-// 监测中心原本有个红点 (badge: true + alertCount prop)，现在监测告警
-// 走右上角铃铛，左侧不再重复出状态指示，badge 字段整个移除。
+// 通知铃铛：点击 toggle 下拉面板。打开瞬间标全部已读 ——
+// "打开 = 看过" 比强迫逐条点合理。
+const notify = useNotifications();
+const notifOpen = ref(false);
+function toggleNotif() {
+  notifOpen.value = !notifOpen.value;
+  if (notifOpen.value) notify.markAllRead();
+}
+
 const NAV_TOP = [
   { key: "home", icon: "home", label: "工作台" },
   { key: "article", icon: "edit", label: "创作区" },
@@ -105,7 +116,45 @@ function go(key: string) {
       </div>
     </div>
 
-    <div class="flex flex-col items-center gap-2">
+    <div class="flex flex-col items-center gap-1.5">
+      <!--
+        通知 bell —— 放在「设置」按钮正上方。badge 在有未读时显示。
+        wrapper relative 给 NotificationDropdown absolute 定位用，
+        dropdown 自身往 nav 右侧弹出（覆盖到主内容区上层）。
+      -->
+      <div class="relative">
+        <button
+          title="通知"
+          type="button"
+          class="relative inline-flex items-center justify-center transition"
+          :style="{
+            width: '44px',
+            height: '44px',
+            borderRadius: '14px',
+            color: 'var(--ink-2)',
+            background: notifOpen ? 'rgba(28,26,23,0.05)' : 'transparent',
+          }"
+          @mouseenter="(e) => { if (!notifOpen) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
+          @mouseleave="(e) => { if (!notifOpen) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
+          @click="toggleNotif"
+        >
+          <Icon name="bell" :size="18" />
+          <span
+            v-if="notify.unreadCount.value > 0"
+            class="absolute"
+            :style="{
+              top: '10px',
+              right: '10px',
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              background: 'var(--red)',
+              boxShadow: '0 0 0 2px var(--bg-inner)',
+            }"
+          />
+        </button>
+        <NotificationDropdown :open="notifOpen" @close="notifOpen = false" />
+      </div>
       <button
         v-for="item in NAV_BOT"
         :key="item.key"
