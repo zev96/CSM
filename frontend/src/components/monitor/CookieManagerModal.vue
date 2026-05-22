@@ -7,6 +7,7 @@
 import { onMounted, onUnmounted, ref, watch } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
+import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Spinner from "@/components/ui/Spinner.vue";
@@ -261,24 +262,14 @@ onUnmounted(() => stopTick());
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
-      @click.self="close"
-    >
-      <div
-        class="anim-up bg-bg-inner max-h-[90vh] overflow-y-auto p-6"
-        :style="{ width: '560px', maxWidth: '92vw', borderRadius: 'var(--radius-card)' }"
-      >
-        <div class="mb-4 flex items-center justify-between">
-          <div class="font-display text-[16px] font-semibold">Cookie 池管理</div>
-          <button type="button" @click="close">
-            <Icon name="x" :size="18" />
-          </button>
-        </div>
-
-        <FormField label="平台" inline>
+  <Dialog
+    :open="open"
+    size="lg"
+    title="Cookie 池管理"
+    show-close
+    @update:open="close"
+  >
+    <FormField label="平台" inline>
           <FormSelect
             :model-value="platform"
             :options="PLATFORMS"
@@ -413,7 +404,5 @@ onUnmounted(() => stopTick());
             </Btn>
           </div>
         </div>
-      </div>
-    </div>
-  </Teleport>
+  </Dialog>
 </template>
