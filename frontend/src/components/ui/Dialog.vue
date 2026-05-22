@@ -26,8 +26,8 @@ const props = withDefaults(
   defineProps<{
     open: boolean;
     title?: string;
-    /** sm = 360 / md = 460 / lg = 640. Default md. */
-    size?: "sm" | "md" | "lg";
+    /** sm = 360 / md = 460 / lg = 640 / xl = 760. Default md. */
+    size?: "sm" | "md" | "lg" | "xl";
     /** false disables backdrop click + escape key. Default true. */
     closable?: boolean;
     /**
@@ -45,7 +45,7 @@ const emit = defineEmits<{
   (e: "update:open", v: boolean): void;
 }>();
 
-const SIZES = { sm: "360px", md: "460px", lg: "640px" } as const;
+const SIZES = { sm: "360px", md: "460px", lg: "640px", xl: "760px" } as const;
 
 function close() {
   if (props.closable) emit("update:open", false);
@@ -94,7 +94,7 @@ onUnmounted(() => {
       @click="onBackdrop"
     >
       <div
-        class="anim-up bg-bg-inner flex flex-col p-6"
+        class="anim-up bg-bg-inner flex flex-col overflow-hidden p-6"
         :style="{
           width: SIZES[size],
           maxWidth: '92vw',

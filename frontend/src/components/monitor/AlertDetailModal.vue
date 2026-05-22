@@ -12,6 +12,7 @@
  */
 import { computed } from "vue";
 
+import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Sparkline from "@/components/ui/Sparkline.vue";
@@ -126,86 +127,67 @@ const eyebrow = computed(() => {
 </script>
 
 <template>
-  <Teleport to="body">
+  <Dialog :open="open" size="xl" @update:open="close">
+    <!--
+      Bleed-out dark themed banner — extends edge-to-edge by cancelling
+      Dialog chrome's p-6 with -mx-6 -mt-6. Relies on Dialog chrome's
+      `overflow-hidden` to clip the banner's rounded top corners and
+      the radial-gradient blur. The mb-5 below restores the gap to body.
+    -->
     <div
-      v-if="open"
-      class="fixed inset-0 z-40 flex items-center justify-center"
-      :style="{ background: 'rgba(28,26,23,0.4)' }"
-      @click.self="close"
+      class="relative -mx-6 -mt-6 mb-5 flex-shrink-0 overflow-hidden"
+      :style="{
+        background: 'var(--dark)',
+        color: '#fbf7ec',
+        padding: '22px 26px',
+      }"
     >
       <div
-        class="anim-up overflow-hidden"
+        aria-hidden="true"
         :style="{
-          background: 'var(--bg-inner)',
-          width: '760px',
-          maxWidth: '94vw',
-          maxHeight: '90vh',
-          borderRadius: 'var(--radius-card)',
-          border: '1px solid var(--line)',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.18)',
-          display: 'flex',
-          flexDirection: 'column',
+          position: 'absolute',
+          top: '-40px', right: '-20px',
+          width: '220px', height: '220px',
+          background: 'radial-gradient(circle, rgba(216,90,72,0.5), transparent 65%)',
+          filter: 'blur(12px)',
+          pointerEvents: 'none',
         }"
-      >
-        <!-- header banner -->
-        <div
-          class="relative flex-shrink-0 overflow-hidden"
-          :style="{
-            background: 'var(--dark)',
-            color: '#fbf7ec',
-            padding: '22px 26px',
-            borderBottom: '1px solid var(--line)',
-          }"
-        >
+      />
+      <div class="relative flex items-start justify-between gap-4">
+        <div class="min-w-0">
           <div
-            aria-hidden="true"
-            :style="{
-              position: 'absolute',
-              top: '-40px', right: '-20px',
-              width: '220px', height: '220px',
-              background: 'radial-gradient(circle, rgba(216,90,72,0.5), transparent 65%)',
-              filter: 'blur(12px)',
-              pointerEvents: 'none',
-            }"
-          />
-          <div class="relative flex items-start justify-between gap-4">
-            <div class="min-w-0">
-              <div
-                class="text-[10.5px] uppercase"
-                :style="{ letterSpacing: '1.5px', color: 'rgba(255,255,255,0.5)' }"
-              >{{ eyebrow }}</div>
-              <div
-                class="font-display mt-1 font-bold"
-                :style="{ fontSize: '22px', letterSpacing: '-0.5px', lineHeight: 1.25 }"
-              >{{ title }}</div>
-              <div
-                class="mt-1 text-[12px]"
-                :style="{ color: 'rgba(255,255,255,0.6)' }"
-              >{{ subtitle }}</div>
-            </div>
-            <button
-              type="button"
-              class="inline-flex flex-shrink-0 items-center justify-center"
-              :style="{
-                width: '32px',
-                height: '32px',
-                borderRadius: '999px',
-                background: 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                color: '#fbf7ec',
-              }"
-              @click="close"
-            >
-              <Icon name="x" :size="16" />
-            </button>
-          </div>
+            class="text-[10.5px] uppercase"
+            :style="{ letterSpacing: '1.5px', color: 'rgba(255,255,255,0.5)' }"
+          >{{ eyebrow }}</div>
+          <div
+            class="font-display mt-1 font-bold"
+            :style="{ fontSize: '22px', letterSpacing: '-0.5px', lineHeight: 1.25 }"
+          >{{ title }}</div>
+          <div
+            class="mt-1 text-[12px]"
+            :style="{ color: 'rgba(255,255,255,0.6)' }"
+          >{{ subtitle }}</div>
         </div>
-
-        <!-- body (scrollable) -->
-        <div
-          class="flex flex-1 flex-col gap-5 overflow-y-auto"
-          :style="{ padding: '22px 26px' }"
+        <button
+          type="button"
+          class="inline-flex flex-shrink-0 items-center justify-center"
+          :style="{
+            width: '32px',
+            height: '32px',
+            borderRadius: '999px',
+            background: 'rgba(255,255,255,0.08)',
+            border: '1px solid rgba(255,255,255,0.12)',
+            color: '#fbf7ec',
+          }"
+          @click="close"
         >
+          <Icon name="x" :size="16" />
+        </button>
+      </div>
+    </div>
+
+    <!-- body content -->
+    <div class="flex flex-col gap-5">
           <!-- ── 知乎告警 ──────────────────────────────────── -->
           <template v-if="kind === 'zhihu_alert'">
             <div
@@ -685,89 +667,81 @@ const eyebrow = computed(() => {
             </template>
           </template>
 
-        </div>
-
-        <!-- footer -->
-        <div
-          class="flex flex-shrink-0 items-center justify-between"
-          :style="{ padding: '14px 26px', borderTop: '1px solid var(--line)' }"
-        >
-          <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-            <template v-if="kind === 'zhihu_alert' && zhihuData">
-              <template v-if="zhihuData.matchedCount === 0">
-                建议：基于 Top 答案补一篇救场内容
-              </template>
-              <template v-else>
-                自家命中 {{ zhihuData.matchedCount }} 条 · 持续观察
-              </template>
-            </template>
-            <template v-else-if="kind === 'comment_alert' && commentData">
-              <template v-if="commentData.deleted.length">
-                建议：补发 {{ commentData.deleted.length }} 条同主题评论保留存
-              </template>
-              <template v-else>
-                全部评论留存中
-              </template>
-            </template>
-            <template v-else-if="kind === 'baidu_alert' && baiduData">
-              <template v-if="baiduData.missingCurrent > 0">
-                建议：为 {{ baiduData.missingCurrent }} 个未达理想的关键词补一篇软文
-              </template>
-              <template v-else>
-                全部关键词已达理想卡位
-              </template>
-            </template>
-          </div>
-          <div class="flex gap-2">
-            <button
-              type="button"
-              :style="{
-                background: 'transparent',
-                border: '1px solid var(--line)',
-                color: 'var(--ink-2)',
-                padding: '7px 18px',
-                fontSize: '12.5px',
-                borderRadius: '999px',
-              }"
-              @click="close"
-            >关闭</button>
-            <button
-              v-if="kind === 'zhihu_alert' && zhihuData"
-              type="button"
-              class="inline-flex items-center gap-1.5"
-              :style="{
-                background: 'var(--primary)',
-                color: '#fff',
-                padding: '7px 18px',
-                fontSize: '12.5px',
-                fontWeight: 500,
-                borderRadius: '999px',
-              }"
-              @click="emit('action', 'rescue')"
-            >
-              <Icon name="edit" :size="13" />
-              <span>起一篇救场</span>
-            </button>
-            <button
-              v-else-if="kind === 'comment_alert' && commentData"
-              type="button"
-              class="inline-flex items-center gap-1.5"
-              :style="{
-                background: 'var(--primary)',
-                color: '#fff',
-                padding: '7px 18px',
-                fontSize: '12.5px',
-                fontWeight: 500,
-                borderRadius: '999px',
-              }"
-              @click="emit('action', 'repost')"
-            >
-              <Icon name="refresh" :size="13" />
-              <span>补发评论</span>
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
-  </Teleport>
+
+    <template #footer>
+      <div class="flex-1 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+        <template v-if="kind === 'zhihu_alert' && zhihuData">
+          <template v-if="zhihuData.matchedCount === 0">
+            建议：基于 Top 答案补一篇救场内容
+          </template>
+          <template v-else>
+            自家命中 {{ zhihuData.matchedCount }} 条 · 持续观察
+          </template>
+        </template>
+        <template v-else-if="kind === 'comment_alert' && commentData">
+          <template v-if="commentData.deleted.length">
+            建议：补发 {{ commentData.deleted.length }} 条同主题评论保留存
+          </template>
+          <template v-else>
+            全部评论留存中
+          </template>
+        </template>
+        <template v-else-if="kind === 'baidu_alert' && baiduData">
+          <template v-if="baiduData.missingCurrent > 0">
+            建议：为 {{ baiduData.missingCurrent }} 个未达理想的关键词补一篇软文
+          </template>
+          <template v-else>
+            全部关键词已达理想卡位
+          </template>
+        </template>
+      </div>
+      <button
+        type="button"
+        :style="{
+          background: 'transparent',
+          border: '1px solid var(--line)',
+          color: 'var(--ink-2)',
+          padding: '7px 18px',
+          fontSize: '12.5px',
+          borderRadius: '999px',
+        }"
+        @click="close"
+      >关闭</button>
+      <button
+        v-if="kind === 'zhihu_alert' && zhihuData"
+        type="button"
+        class="inline-flex items-center gap-1.5"
+        :style="{
+          background: 'var(--primary)',
+          color: '#fff',
+          padding: '7px 18px',
+          fontSize: '12.5px',
+          fontWeight: 500,
+          borderRadius: '999px',
+        }"
+        @click="emit('action', 'rescue')"
+      >
+        <Icon name="edit" :size="13" />
+        <span>起一篇救场</span>
+      </button>
+      <button
+        v-else-if="kind === 'comment_alert' && commentData"
+        type="button"
+        class="inline-flex items-center gap-1.5"
+        :style="{
+          background: 'var(--primary)',
+          color: '#fff',
+          padding: '7px 18px',
+          fontSize: '12.5px',
+          fontWeight: 500,
+          borderRadius: '999px',
+        }"
+        @click="emit('action', 'repost')"
+      >
+        <Icon name="refresh" :size="13" />
+        <span>补发评论</span>
+      </button>
+    </template>
+  </Dialog>
 </template>
