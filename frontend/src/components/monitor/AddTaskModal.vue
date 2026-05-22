@@ -20,7 +20,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import Btn from "@/components/ui/Btn.vue";
-import Icon from "@/components/ui/Icon.vue";
+import Dialog from "@/components/ui/Dialog.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormField from "@/components/forms/FormField.vue";
 import FormInput from "@/components/forms/FormInput.vue";
@@ -316,37 +316,14 @@ async function submit() {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
-      @click.self="close"
-    >
-      <!--
-        Layout: header (pinned) + body (scrolls) + footer (pinned).
-        outer `overflow-hidden` 把 body 的 scrollbar 限制在圆角矩形内
-        ——之前把 max-h + overflow-y-auto 直接挂在外层，浏览器渲染滚动条
-        时会伸到圆角外，「右边的下拉条超出界面本身」就是这个问题。
-      -->
-      <div
-        class="anim-up bg-bg-inner flex flex-col overflow-hidden"
-        :style="{
-          width: '480px',
-          maxWidth: '92vw',
-          maxHeight: '90vh',
-          borderRadius: 'var(--radius-card)',
-        }"
-      >
-        <div class="flex flex-shrink-0 items-center justify-between" :style="{ padding: '24px 24px 12px' }">
-          <div class="font-display text-[16px] font-semibold">
-            {{ isEdit ? "编辑监测任务" : "新增监测任务" }}
-          </div>
-          <button type="button" @click="close">
-            <Icon name="x" :size="18" />
-          </button>
-        </div>
-
-        <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto" :style="{ padding: '4px 24px' }">
+  <Dialog
+    :open="open"
+    :title="isEdit ? '编辑监测任务' : '新增监测任务'"
+    show-close
+    :closable="!showDefaultDomainsPopover"
+    @update:open="close"
+  >
+    <div class="flex flex-col gap-4">
           <FormField label="平台">
             <!--
               编辑模式下平台改不了 —— task.type 决定后端 adapter 路由，
@@ -586,26 +563,30 @@ async function submit() {
           <FormField label="启用" inline>
             <FormToggle v-model="enabled" />
           </FormField>
-        </div>
-
-        <!-- Footer pinned at bottom; sits outside the scrollable body. -->
-        <div class="flex flex-shrink-0 justify-end gap-2" :style="{ padding: '12px 24px 24px', borderTop: '1px solid var(--line)' }">
-          <Btn variant="ghost" small @click="close">取消</Btn>
-          <Btn variant="solid" small :disabled="submitting" @click="submit">
-            <Spinner v-if="submitting" :size="12" />
-            <span>
-              {{
-                submitting
-                  ? (isEdit ? "保存中…" : "提交中…")
-                  : (isEdit ? "保存修改" : "添加任务")
-              }}
-            </span>
-          </Btn>
-        </div>
-      </div>
     </div>
 
-    <!-- 默认排除域名展示弹层（modal-in-modal） -->
+    <template #footer>
+      <Btn variant="ghost" small @click="close">取消</Btn>
+      <Btn variant="solid" small :disabled="submitting" @click="submit">
+        <Spinner v-if="submitting" :size="12" />
+        <span>
+          {{
+            submitting
+              ? (isEdit ? "保存中…" : "提交中…")
+              : (isEdit ? "保存修改" : "添加任务")
+          }}
+        </span>
+      </Btn>
+    </template>
+  </Dialog>
+
+  <!--
+    默认排除域名展示弹层（modal-in-modal）。独立 Teleport 让它直接挂在
+    body 下，z-[60] 堆在 Dialog 的 z-50 之上。Dialog 的 ESC 在 popover
+    open 时被 :closable="!showDefaultDomainsPopover" 关掉，避免按 ESC
+    误关外层 AddTaskModal —— popover 自己用 X 按钮或 backdrop click 关。
+  -->
+  <Teleport to="body">
     <div
       v-if="showDefaultDomainsPopover"
       class="fixed inset-0 z-[60] flex items-center justify-center bg-black/30"
