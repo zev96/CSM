@@ -13,7 +13,7 @@
 import { ref, watch } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
-import Icon from "@/components/ui/Icon.vue";
+import Dialog from "@/components/ui/Dialog.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormField from "@/components/forms/FormField.vue";
 import FormInput from "@/components/forms/FormInput.vue";
@@ -125,90 +125,45 @@ async function submit() {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="fixed inset-0 z-40 flex items-center justify-center"
-      :style="{ background: 'rgba(28,26,23,0.4)' }"
-      @click.self="close"
-    >
-      <div
-        class="anim-up overflow-hidden"
-        :style="{
-          background: 'var(--bg-inner)',
-          width: '480px',
-          maxWidth: '92vw',
-          maxHeight: '90vh',
-          borderRadius: 'var(--radius-card)',
-          border: '1px solid var(--line)',
-          display: 'flex',
-          flexDirection: 'column',
-        }"
-      >
-        <div
-          class="flex items-center justify-between flex-shrink-0"
-          :style="{ padding: '20px 24px', borderBottom: '1px solid var(--line)' }"
-        >
-          <div>
-            <div class="font-display text-[16px] font-semibold">编辑批次</div>
-            <div class="mt-1 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              批次内 {{ tasks.length }} 条任务会同步更新（每条视频的 URL / 评论原文不动）
-            </div>
-          </div>
-          <button
-            type="button"
-            class="inline-flex items-center justify-center"
-            :style="{
-              width: '32px',
-              height: '32px',
-              borderRadius: '999px',
-              background: 'var(--card)',
-              border: '1px solid var(--line)',
-              color: 'var(--ink-2)',
-            }"
-            :disabled="submitting"
-            @click="close"
-          >
-            <Icon name="x" :size="16" />
-          </button>
-        </div>
-
-        <div
-          class="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto"
-          :style="{ padding: '20px 24px' }"
-        >
-          <FormField
-            label="批次名"
-            hint="子任务的名字会自动变成 `批次名 - 视频 ID 尾段`"
-          >
-            <FormInput v-model="newName" placeholder="如：戴森评论监测" debounce="live" />
-          </FormField>
-
-          <FormField
-            label="理想排名（前 N 位）"
-            hint="希望评论出现在前几位，默认 5。后台始终扫描前 150 条，超过才算「丢失」。"
-            inline
-          >
-            <FormInput
-              type="number"
-              :model-value="newTopN"
-              :width="100"
-              @commit="(v) => (newTopN = Number(v) || 5)"
-            />
-          </FormField>
-        </div>
-
-        <div
-          class="flex justify-end gap-2 flex-shrink-0"
-          :style="{ padding: '14px 24px', borderTop: '1px solid var(--line)' }"
-        >
-          <Btn variant="ghost" small @click="close">取消</Btn>
-          <Btn variant="solid" small :disabled="submitting" @click="submit">
-            <Spinner v-if="submitting" :size="12" />
-            <span>{{ submitting ? "保存中…" : `保存（${tasks.length} 条）` }}</span>
-          </Btn>
-        </div>
-      </div>
+  <Dialog
+    :open="open"
+    title="编辑批次"
+    show-close
+    :closable="!submitting"
+    @update:open="close"
+  >
+    <div class="mb-4 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+      批次内 {{ tasks.length }} 条任务会同步更新（每条视频的 URL / 评论原文不动）
     </div>
-  </Teleport>
+
+    <div class="flex flex-col gap-4">
+      <FormField
+        label="批次名"
+        hint="子任务的名字会自动变成 `批次名 - 视频 ID 尾段`"
+      >
+        <FormInput v-model="newName" placeholder="如：戴森评论监测" debounce="live" />
+      </FormField>
+
+      <FormField
+        label="理想排名（前 N 位）"
+        hint="希望评论出现在前几位，默认 5。后台始终扫描前 150 条，超过才算「丢失」。"
+        inline
+      >
+        <FormInput
+          type="number"
+          :model-value="newTopN"
+          :width="100"
+          @commit="(v) => (newTopN = Number(v) || 5)"
+        />
+      </FormField>
+    </div>
+
+    <template #footer>
+      <Btn variant="ghost" small @click="close">取消</Btn>
+      <Btn variant="solid" small :disabled="submitting" @click="submit">
+        <Spinner v-if="submitting" :size="12" />
+        <span>{{ submitting ? "保存中…" : `保存（${tasks.length} 条）` }}</span>
+      </Btn>
+    </template>
+  </Dialog>
 </template>

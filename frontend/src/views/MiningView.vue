@@ -452,9 +452,8 @@ onMounted(async () => {
 
     <!-- Modal -->
     <StartJobModal
-      v-if="showNewTask"
+      v-model:open="showNewTask"
       :login-status="store.loginStatus"
-      @close="showNewTask = false"
       @submit="onStartSubmit"
     />
   </div>

@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import Btn from "@/components/ui/Btn.vue";
+import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Blob from "@/components/ui/Blob.vue";
 import PlatformPickerCard from "./PlatformPickerCard.vue";
 import type { Platform } from "@/stores/mining";
 
 const props = defineProps<{
+  open: boolean;
   loginStatus: Record<Platform, boolean>;
 }>();
 
 const emit = defineEmits<{
-  (e: "close"): void;
+  (e: "update:open", v: boolean): void;
   (e: "submit", payload: { keyword: string; platforms: Platform[]; target: number }): void;
 }>();
 
@@ -34,8 +36,31 @@ const canSubmit = computed(
   () => kw.value.trim() && Object.values(picked.value).some(v => v)
 );
 
+// 以前用 v-if 挂载，每次新开都是 fresh component → 状态天然 reset。
+// 改 v-model:open 后组件常驻，必须显式在 open 变 true 时重置表单 +
+// 重新按当前 loginStatus 自动勾选。
+watch(
+  () => props.open,
+  (v) => {
+    if (!v) return;
+    kw.value = "";
+    picked.value = {
+      bilibili: !!props.loginStatus.bilibili,
+      douyin: !!props.loginStatus.douyin,
+      kuaishou: !!props.loginStatus.kuaishou,
+    };
+    cap.value = 50;
+    sort.value = "综合";
+    range.value = "近 1 周";
+  },
+);
+
 function togglePlatform(p: Platform) {
   picked.value[p] = !picked.value[p];
+}
+
+function close() {
+  emit("update:open", false);
 }
 
 function onSubmit() {
@@ -49,50 +74,32 @@ function onSubmit() {
 </script>
 
 <template>
-  <!--
-    Teleport to body so the backdrop covers the whole window — Vue's
-    default mount target sits inside <main>, which is an anim-up
-    descendant with transform != none. Per CSS spec, position:fixed
-    children of a transformed ancestor get clipped to that ancestor's
-    box, so without Teleport the backdrop wouldn't reach LeftNav.
-    Monitor's AddTaskModal and ui/ConfirmModal do the same.
-  -->
-  <Teleport to="body">
-  <div
-    class="anim-in"
-    @click="$emit('close')"
-    style="position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.30); display: flex; align-items: center; justify-content: center; padding: 24px;"
-  >
-    <div
-      class="anim-up"
-      @click.stop
-      style="width: 560px; max-width: 100%; max-height: 92%; background: var(--card); border-radius: 22px; border: 1px solid var(--line); box-shadow: 0 30px 60px -20px rgba(28,26,23,0.4); overflow: hidden; display: flex; flex-direction: column; position: relative;"
-    >
-      <Blob color="#f5c042" :size="220" :top="-80" :left="-40" :opacity="0.32"/>
+  <Dialog :open="open" size="lg" @update:open="close">
+    <Blob color="#f5c042" :size="220" :top="-80" :left="-40" :opacity="0.32"/>
 
-      <!-- 顶部 -->
-      <div class="relative" style="padding: 22px 24px 0;">
-        <div class="flex items-start justify-between">
-          <div>
-            <div class="text-[10.5px] tracking-[1.5px] uppercase font-medium" style="color: var(--ink-3)">
-              Outreach · 新建抓取任务
-            </div>
-            <div class="font-display font-bold mt-1.5" style="font-size: 22px; letter-spacing: -0.5px;">
-              新建抓取任务
-            </div>
+    <!-- 顶部 -->
+    <div class="relative mb-4">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-[10.5px] tracking-[1.5px] uppercase font-medium" style="color: var(--ink-3)">
+            Outreach · 新建抓取任务
           </div>
-          <button
-            @click="$emit('close')"
-            class="inline-flex items-center justify-center"
-            style="width: 32px; height: 32px; border-radius: 999px; background: var(--card-2); color: var(--ink-2); border: 1px solid var(--line);"
-          >
-            <Icon name="x" :size="14"/>
-          </button>
+          <div class="font-display font-bold mt-1.5" style="font-size: 22px; letter-spacing: -0.5px;">
+            新建抓取任务
+          </div>
         </div>
+        <button
+          @click="close"
+          class="inline-flex items-center justify-center"
+          style="width: 32px; height: 32px; border-radius: 999px; background: var(--card-2); color: var(--ink-2); border: 1px solid var(--line);"
+        >
+          <Icon name="x" :size="14"/>
+        </button>
       </div>
+    </div>
 
-      <div class="relative flex-1 overflow-y-auto" style="padding: 18px 24px 0;">
-        <!-- 关键词 -->
+    <div class="relative">
+      <!-- 关键词 -->
         <div>
           <div class="flex items-center justify-between mb-1.5">
             <label class="text-[11.5px] font-semibold">关键词</label>
@@ -211,25 +218,17 @@ function onSubmit() {
         </div>
       </div>
 
-      <!-- footer -->
-      <div
-        class="relative flex items-center justify-between"
-        style="padding: 16px 24px; border-top: 1px solid var(--line); background: var(--card-2);"
-      >
-        <div class="text-[11px]" style="color: var(--ink-3)">
-          <Icon name="key" :size="11" style="display: inline-block; margin-right: 4px; opacity: 0.6;"/>
-          登录 cookie 来自监控中心 · 仅存于本地
-        </div>
-        <div class="flex items-center gap-2">
-          <Btn variant="ghost" @click="$emit('close')">取消</Btn>
-          <Btn variant="solid" :disabled="!canSubmit" @click="onSubmit">
-            <Icon name="play" :size="11"/> 开始抓取
-          </Btn>
-        </div>
+    <template #footer>
+      <div class="flex-1 text-[11px]" style="color: var(--ink-3)">
+        <Icon name="key" :size="11" style="display: inline-block; margin-right: 4px; opacity: 0.6;"/>
+        登录 cookie 来自监控中心 · 仅存于本地
       </div>
-    </div>
-  </div>
-  </Teleport>
+      <Btn variant="ghost" @click="close">取消</Btn>
+      <Btn variant="solid" :disabled="!canSubmit" @click="onSubmit">
+        <Icon name="play" :size="11"/> 开始抓取
+      </Btn>
+    </template>
+  </Dialog>
 </template>
 
 <style scoped>
