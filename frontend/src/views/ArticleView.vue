@@ -16,7 +16,7 @@
  *     - 操作卡（整篇润色 primary + 重新随机 / 清空 双按钮 + 导出文章 dark）
  *
  * 起飞入口：
- *   V1 的起飞入口在 home（KeywordHero）。本视图主要用于**已起飞**后查看
+ *   起飞入口在 home（CreateArticleHero）。本视图主要用于**已起飞**后查看
  *   /编辑文章。但用户可能直接走 keyboard 入这个路由（或者 query 没带
  *   keyword），所以保留一个"起飞条"作为 idle 状态兜底，藏在 header 下方
  *   只在 status === idle 时显示。
@@ -798,7 +798,7 @@ const tabSectionLabel = computed(() => {
     <!--
       ── V1 风格 header ─────────────────────────────────────────
       `← 返回工作台 | 分隔线 | 模板 chip | Skill chip | 字数 · 重复率`
-      不再有起飞条 —— 起飞入口在 home（KeywordHero），这里只展示已起飞
+      不再有起飞条 —— 起飞入口在 home（CreateArticleHero），这里只展示已起飞
       文章。模板/Skill chips 始终显示（即便未起飞），保持 V1 设计稿的
       视觉骨架；模板/Skill 在 mount 时自动载入第一个作为默认。
     -->

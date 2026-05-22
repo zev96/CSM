@@ -82,7 +82,7 @@ const PATHS: Record<string, string> = {
   // Sparkle / star — used for the Skill quick tile.
   skills:
     '<path d="M12 2l2.39 5.26L20 8.27l-4 3.9.94 5.5L12 15.27l-4.94 2.4L8 12.17l-4-3.9 5.61-1.01z"/>',
-  // Triangle warning — for alert/warn rows in RankAlertsCard.
+  // Triangle warning — for alert/warn rows in ZhihuCard.
   warn: '<path d="M12 3l10 18H2L12 3z"/><path d="M12 10v5"/><circle cx="12" cy="18" r=".8" fill="currentColor" stroke="none"/>',
   // Safe / vault — for "vault 索引" info rows.
   vault:
@@ -109,6 +109,14 @@ const PATHS: Record<string, string> = {
   // Plain document outline — simpler than fileText (no body lines). Used as
   // a sidebar bullet on TemplatesView; reads better at 13px than fileText.
   doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  // Bar chart — three vertical bars rising left-to-right. Used by 首页 数据中心
+  // shortcut card (ShortcutColumn) as the visual hook for analytics / 排名监控.
+  barChart:
+    '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+  // Filled volume / speaker — used by 引流中心 shortcut card to evoke
+  // "广播 / 触达". Pure visual cue, no audio meaning.
+  megaphone:
+    '<polygon points="3 11 3 13 7 13 13 19 13 5 7 11 3 11"/><path d="M16 8a5 5 0 0 1 0 8"/>',
 };
 
 const inner = (() => {

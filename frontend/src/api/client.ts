@@ -54,29 +54,6 @@ export async function listRecent(limit = 5, days = 7) {
   };
 }
 
-// ── /api/calendar ──────────────────────────────────────────────────────────
-export async function getCalendar(month?: string) {
-  return (await client().get("/api/calendar", { params: month ? { month } : {} }))
-    .data as {
-    year: number;
-    month: number;
-    days: number;
-    done: number[];
-    scheduled: number[];
-  };
-}
-
-// ── /api/stats/words ───────────────────────────────────────────────────────
-export async function getWordsStats(range: "yesterday" | "this-week" = "this-week") {
-  return (await client().get("/api/stats/words", { params: { range } })).data as {
-    range: string;
-    start: string;
-    end: string;
-    total_words: number;
-    by_day: Array<{ date: string; weekday: string; words: number; polished: number }>;
-  };
-}
-
 // ── /api/health ────────────────────────────────────────────────────────────
 export async function health() {
   return (await client().get("/health")).data as { status: string };
