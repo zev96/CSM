@@ -783,7 +783,6 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         :active-tab="activeTab"
         @add-task="showAddTask = true"
         @import-batch="showBatchImport = true"
-        @cookie-mgr="showCookieMgr = true"
         @edit-batch="(name) => openEditBatch(name)"
         @delete-batch="(name) => deleteBatch(name)"
         @run-batch="(name) => runBatch(name)"

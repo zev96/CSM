@@ -61,7 +61,6 @@ const emit = defineEmits<{
   (e: "update:commentSubtab", v: CommentPlatform): void;
   (e: "add-task"): void;
   (e: "import-batch"): void;
-  (e: "cookie-mgr"): void;
   (e: "edit-batch", batchName: string): void;
   (e: "delete-batch", batchName: string): void;
   (e: "run-batch", batchName: string): void;
@@ -479,7 +478,12 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
 </script>
 
 <template>
-  <div>
+  <!--
+    Root: `space-y-6` 给 hero / subtab / body 三个直接子节点统一 24px 间距
+    （对齐 MonitorView root 的 gap-24 节奏）。原来是裸 <div>，紧急告警 hero
+    跟下面平台 pivot 行紧贴成一团 —— 屏幕大时看着像粘连。
+  -->
+  <div class="space-y-6">
     <!-- alert hero (stacked when commentAlerts.length > 1) -->
     <div
       v-if="commentAlerts.length > 0 && currentCommentAlert"
@@ -683,23 +687,11 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
       <!--
         评论平台只保留批量导入：每天要监测的视频链接通常很多，
         一条一条用 modal 加效率太低。单条的「新增任务」按钮在评论
-        tab 下隐藏，统一走批量入口（用户决定）。Cookie 仍保留。
+        tab 下隐藏，统一走批量入口（用户决定）。Cookie 入口删除：
+        池子在「设置 → 监测中心 → Cookie 管理」统一配置，
+        在工作页再开一个等同重复。
       -->
       <div class="flex flex-shrink-0 gap-2">
-        <button
-          type="button"
-          class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px]"
-          :style="{
-            background: 'transparent',
-            color: 'var(--ink-2)',
-            border: '1px solid var(--line)',
-            borderRadius: '999px',
-          }"
-          @click="emit('cookie-mgr')"
-        >
-          <Icon name="key" :size="12" />
-          <span>Cookie</span>
-        </button>
         <button
           type="button"
           class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium"

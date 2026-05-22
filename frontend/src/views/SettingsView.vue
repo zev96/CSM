@@ -1309,20 +1309,15 @@ async function saveAccountEdit() {
               label="浏览器引擎"
               hint="Patchright = 反爬通过率高（推荐，首次跑会下载 Chromium ~170MB）；DrissionPage = 复用本机 Chrome 兜底。切换后请重启 sidecar。"
             >
-              <select
-                :value="get('monitor.browser_engine') ?? 'patchright'"
-                class="bg-card-white px-3 text-[12.5px] outline-none"
-                :style="{
-                  height: '34px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--line)',
-                  minWidth: '160px',
-                }"
-                @change="(e) => setField('monitor.browser_engine', (e.target as HTMLSelectElement).value)"
-              >
-                <option value="patchright">Patchright（推荐）</option>
-                <option value="drission">DrissionPage（兜底）</option>
-              </select>
+              <FormSelect
+                :model-value="(get('monitor.browser_engine') ?? 'patchright') as string"
+                :options="[
+                  { label: 'Patchright（推荐）', value: 'patchright' },
+                  { label: 'DrissionPage（兜底）', value: 'drission' },
+                ]"
+                width="200"
+                @update:model-value="(v) => setField('monitor.browser_engine', String(v))"
+              />
             </SettingsRow>
             <!--
               多账号轮换：用户在 Cookie 池里放 2+ 条同平台 cookie 时启用；

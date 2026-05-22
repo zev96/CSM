@@ -190,6 +190,25 @@ body {
   border-radius: 6px;
 }
 
+/*
+ * Text inputs / textareas / native selects: use a NEGATIVE outline-offset so
+ * the focus ring sits flush against the input's border instead of extending
+ * 4px past its box (2px outline width + 2px offset). When an input lives in
+ * a scrollable container — e.g. Dialog's body wrapper, which has
+ * `flex-1 overflow-y-auto` and per CSS spec gets `overflow-x: auto` too —
+ * any pixels past the wrapper's content edge are clipped, eating the left/
+ * right of the focus ring (bug surface: AddTaskModal / BatchImportTaskModal
+ * inputs looked "blocked" on the left). Inset offset = zero clipping.
+ *
+ * Buttons / links are intentionally not in this rule; the outer ring reads
+ * cleaner on filled / pill shapes where an inset outline would overlap text.
+ */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline-offset: -2px;
+}
+
 body[data-density="compact"] {
   --density-pad: 16px;
   --density-gap: 12px;
