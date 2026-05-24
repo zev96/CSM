@@ -424,3 +424,89 @@ async def baidu_login_status() -> dict[str, Any]:
         import logging
         logging.getLogger(__name__).warning("baidu login-status read failed: %s", e)
         return {"logged_in": False, "username": None, "expires_at": None}
+
+
+# ── Baidu native mode (方案 D) ────────────────────────────────────
+from csm_core.monitor.drivers import chrome_detect
+from csm_core.monitor.drivers.baidu_browser import baidu_browser_session
+from pathlib import Path as _Path
+
+# 用 config_service.load() 而不是 csm_core.config.get_config()，跟
+# baidu_keyword.fetch() 保持一致（这样测试 fixture config_service.init(tmp_path)
+# 注入的 config 能生效）。
+from csm_sidecar.services import config_service as _cfg_svc
+
+
+class ListProfilesBody(BaseModel):
+    user_data_dir: str = Field(min_length=1)
+
+
+class TestNativeBody(BaseModel):
+    chrome_executable_path: str = Field(min_length=1)
+    chrome_user_data_dir: str = Field(min_length=1)
+    chrome_profile_name: str = Field(default="Default")
+
+
+class NativeConfigBody(BaseModel):
+    use_native_chrome: bool
+    chrome_executable_path: str | None = None
+    chrome_user_data_dir: str | None = None
+    chrome_profile_name: str = "Default"
+
+
+@router.post("/api/monitor/baidu/detect-chrome")
+def baidu_detect_chrome() -> dict[str, Any]:
+    """探测 Chrome 安装路径 + User Data 默认位置。"""
+    return {
+        "executable_path": chrome_detect.find_chrome_executable(),
+        "user_data_dir": chrome_detect.find_user_data_dir(),
+    }
+
+
+@router.post("/api/monitor/baidu/list-profiles")
+def baidu_list_profiles(body: ListProfilesBody) -> dict[str, Any]:
+    """枚举给定 user_data_dir 下所有 profile + 账号 email。"""
+    return {"profiles": chrome_detect.list_profiles(body.user_data_dir)}
+
+
+@router.post("/api/monitor/baidu/test-native")
+def baidu_test_native(body: TestNativeBody) -> dict[str, Any]:
+    """试启动 Chrome 验证配置可用。成功 close 后返回 ok=True。"""
+    try:
+        with baidu_browser_session(
+            headless=False,  # native 模式下被忽略
+            user_data_dir=_Path(body.chrome_user_data_dir),
+            use_native_chrome=True,
+            chrome_executable_path=body.chrome_executable_path,
+            chrome_profile_name=body.chrome_profile_name,
+        ):
+            pass  # 启动成功立即关
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/api/monitor/baidu/native-config")
+def baidu_get_native_config() -> dict[str, Any]:
+    """读当前 native mode 配置。"""
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    return {
+        "use_native_chrome": bk.use_native_chrome,
+        "chrome_executable_path": bk.chrome_executable_path,
+        "chrome_user_data_dir": bk.chrome_user_data_dir,
+        "chrome_profile_name": bk.chrome_profile_name,
+    }
+
+
+@router.post("/api/monitor/baidu/native-config")
+def baidu_set_native_config(body: NativeConfigBody) -> dict[str, Any]:
+    """保存 native mode 配置（merge 到全局 BaiduKeywordConfig）。"""
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    bk.use_native_chrome = body.use_native_chrome
+    bk.chrome_executable_path = body.chrome_executable_path
+    bk.chrome_user_data_dir = body.chrome_user_data_dir
+    bk.chrome_profile_name = body.chrome_profile_name
+    _cfg_svc.save(cfg)
+    return {"ok": True}
