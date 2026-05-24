@@ -38,8 +38,6 @@ from ..drivers.risk_detector import (
     RiskControlException,
     RiskSignal,
 )
-from csm_core import config as csm_config
-
 logger = logging.getLogger(__name__)
 
 
@@ -614,14 +612,43 @@ class BaiduKeywordAdapter:
                 error_message="circuit breaker open for baidu_keyword",
             )
 
+        # ── Fast-fail: validate keyword/brand BEFORE preflight ───────────
+        # 移到 preflight 之前：config 错的任务不要等 120s Chrome 关闭再失败。
+        cfg = task.config or {}
+        keywords_raw = cfg.get("search_keywords") or []
+        keywords = [k.strip() for k in keywords_raw if k and k.strip()]
+        brand = (cfg.get("target_brand") or "").strip()
+
+        if not keywords or not brand:
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="failed",
+                rank=-1,
+                error_message="config.search_keywords (non-empty list) + target_brand required",
+            )
+
         # ── Native mode preflight ────────────────────────────────
         # use_native_chrome=True → 跑前等用户关 Chrome（OS profile lock）。
         # 超时返回 error，不进 session。
-        app_cfg = csm_config.get_config()
+        #
+        # lazy import 避免 csm_core → csm_sidecar 循环；用 config_service.load()
+        # 而非 csm_config.get_config() 是为了拿测试 fixture (sidecar/tests/conftest.py
+        # settings_path) 注入的 config，而不是真实 user disk 上的 settings.json。
+        from csm_sidecar.services import config_service as _cfg_svc
+        app_cfg = _cfg_svc.load()
         baidu_cfg = app_cfg.monitor.baidu_keyword
         use_native = bool(baidu_cfg.use_native_chrome)
 
         if use_native:
+            if not baidu_cfg.chrome_executable_path or not baidu_cfg.chrome_user_data_dir:
+                return MonitorResult(
+                    task_id=task.id or 0,
+                    checked_at=datetime.utcnow(),
+                    status="error",
+                    rank=-1,
+                    error_message="请在设置中配置 Chrome 路径（chrome_executable_path 和 chrome_user_data_dir）",
+                )
             try:
                 chrome_preflight.wait_for_chrome_closed(timeout_s=120)
             except chrome_preflight.ChromeStillRunningError as e:
@@ -637,26 +664,12 @@ class BaiduKeywordAdapter:
         if use_native:
             session_kwargs.update(
                 use_native_chrome=True,
-                user_data_dir=Path(baidu_cfg.chrome_user_data_dir or ""),
+                user_data_dir=Path(baidu_cfg.chrome_user_data_dir),
                 chrome_executable_path=baidu_cfg.chrome_executable_path,
                 chrome_profile_name=baidu_cfg.chrome_profile_name,
             )
         # native 强制 headless=False（baidu_browser_session 内部也会忽略）
         # ─────────────────────────────────────────────────────────
-
-        cfg = task.config or {}
-        keywords_raw = cfg.get("search_keywords") or []
-        keywords = [k.strip() for k in keywords_raw if k and k.strip()]
-        brand = (cfg.get("target_brand") or "").strip()
-
-        if not keywords or not brand:
-            return MonitorResult(
-                task_id=task.id or 0,
-                checked_at=datetime.utcnow(),
-                status="failed",
-                rank=-1,
-                error_message="config.search_keywords (non-empty list) + target_brand required",
-            )
 
         headless = bool(cfg.get("headless", self._headless_default))
         effective_headless = False if use_native else headless
