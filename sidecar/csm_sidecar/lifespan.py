@@ -120,6 +120,30 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             )
         except Exception:
             logger.exception("mining_service init failed; continuing without mining")
+        # Wire native-mode SSE events: BaiduKeywordAdapter → monitor_bus.
+        # Injected here so csm_core never imports csm_sidecar directly.
+        try:
+            from csm_core.monitor.platforms import baidu_keyword as _bk_module
+            from csm_sidecar.monitor_bus import monitor_bus as _monitor_bus
+            from csm_sidecar.services.monitor_loop import MonitorEvent as _MonitorEvent
+            from datetime import datetime as _datetime
+            from typing import Any as _Any
+
+            def _publish_native_event(payload: dict[str, _Any]) -> None:
+                """从 csm_core 收到 dict 形态事件 → 包成 MonitorEvent → publish 到 monitor_bus。"""
+                evt = _MonitorEvent(
+                    kind=payload["kind"],
+                    task_id=payload.get("task_id", 0),
+                    at=_datetime.utcnow(),
+                    remaining_s=payload.get("remaining_s"),
+                    keyword=payload.get("keyword"),
+                    kw_idx=payload.get("kw_idx"),
+                )
+                _monitor_bus.publish(evt)
+
+            _bk_module.ADAPTER.set_event_publisher(_publish_native_event)
+        except Exception:
+            logger.exception("native event publisher injection failed; continuing without native SSE events")
     try:
         yield
     finally:

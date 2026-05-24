@@ -1192,7 +1192,7 @@ def test_fetch_calls_chrome_preflight_when_native_mode_enabled(monkeypatch):
     from csm_core.monitor.base import MonitorTask
 
     preflight_called: list[bool] = []
-    def fake_preflight(timeout_s=120, poll_interval_s=1.0):
+    def fake_preflight(timeout_s=120, poll_interval_s=1.0, **kw):
         preflight_called.append(True)
         # mock 立即返回（chrome 不在跑）
         return None
@@ -1384,3 +1384,61 @@ def test_try_human_solve_emits_notification_with_keyword(monkeypatch):
     )
     assert len(captured) == 1
     assert "testkw" in captured[0].get("body", "")
+
+
+# ── Task 13: fetch() 触发 preflight 时 monitor_bus 收到事件 ──────────────────
+
+def test_fetch_publishes_waiting_chrome_close_event(monkeypatch):
+    """native mode + Chrome 在跑 → 应该 publish waiting_chrome_close 到 fake_publisher。"""
+    from csm_core.monitor.drivers import chrome_preflight
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from typing import Any
+
+    # 安装 publisher（模拟 lifespan）。存原始 dict，避免依赖 MonitorEvent 字段（sidecar editable
+    # install 在 worktree 测试时指向主仓，Task 8 新字段还没 merge → 构造会 TypeError）。
+    published: list[dict[str, Any]] = []
+    def fake_publisher(payload: dict[str, Any]) -> None:
+        published.append(payload)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.set_event_publisher(fake_publisher)
+
+    # mock Chrome 前 2 次在跑、第 3 次关闭
+    state = {"calls": 0}
+    def fake_is_running():
+        state["calls"] += 1
+        return state["calls"] <= 2
+    monkeypatch.setattr(chrome_preflight, "is_chrome_running", fake_is_running)
+    monkeypatch.setattr(chrome_preflight, "_notify", lambda **kw: None)
+
+    fake_cfg = MagicMock()
+    fake_cfg.monitor.baidu_keyword.use_native_chrome = True
+    fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/x/chrome.exe"
+    fake_cfg.monitor.baidu_keyword.chrome_user_data_dir = "C:/x/User Data"
+    fake_cfg.monitor.baidu_keyword.chrome_profile_name = "Default"
+    # 跟 Task 5 测试一样的 mock target（config_service.load 而非 csm_core.config.get_config）
+    monkeypatch.setattr("csm_sidecar.services.config_service.load", lambda: fake_cfg)
+
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_session(**kw):
+        sess = MagicMock()
+        sess.page = MagicMock()
+        sess.context = MagicMock()
+        sess.context.cookies.return_value = [{"name": "BDUSS", "value": "x"}]
+        yield sess
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", fake_session)
+
+    # 用非空 keywords 让 fetch 进入 preflight + session（empty 会在 keyword 验证短路）
+    task = MonitorTask(
+        id=99, type="baidu_keyword", name="t", target_url="https://baidu.com",
+        config={"search_keywords": ["test"], "target_brand": "y"},
+    )
+    adapter.fetch(task)
+
+    kinds = [p["kind"] for p in published]
+    assert "waiting_chrome_close" in kinds
+    assert "chrome_closed" in kinds
+    # task_id 正确
+    assert all(p.get("task_id") == 99 for p in published if p.get("task_id"))

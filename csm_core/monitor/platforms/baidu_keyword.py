@@ -506,6 +506,12 @@ class BaiduKeywordAdapter:
         self._ua_idx = 0
         self._http_sessions: dict[int, Any] = {}
         self._http_sessions_lock = threading.Lock()
+        self._event_publisher: Any = None
+
+    def set_event_publisher(self, fn: Any) -> None:
+        """Sidecar lifespan 启动时注入，给 native mode chrome_preflight +
+        软着陆验证码 发 SSE 事件用。"""
+        self._event_publisher = fn
 
     def _next_ua(self) -> str:
         """Round-robin pick from _UA_POOL. Called only by _get_session
@@ -741,7 +747,11 @@ class BaiduKeywordAdapter:
                     error_message="请在设置中配置 Chrome 路径（chrome_executable_path 和 chrome_user_data_dir）",
                 )
             try:
-                chrome_preflight.wait_for_chrome_closed(timeout_s=120)
+                chrome_preflight.wait_for_chrome_closed(
+                    timeout_s=120,
+                    task_id=task.id or 0,
+                    event_publisher=self._event_publisher,
+                )
             except chrome_preflight.ChromeStillRunningError as e:
                 return MonitorResult(
                     task_id=task.id or 0,
@@ -984,6 +994,8 @@ class BaiduKeywordAdapter:
                 if risk is not None:
                     solved = _try_human_solve(
                         page=page, keyword=keyword, kw_idx=kw_idx,
+                        task_id=task.id,
+                        event_publisher=self._event_publisher,
                     )
                     if solved:
                         # 重新 navigate + 重新 detect_risk，本轮 kw 重跑
