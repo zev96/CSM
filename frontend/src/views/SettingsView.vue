@@ -28,6 +28,7 @@ import FormInput from "@/components/forms/FormInput.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
 import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection.vue";
+import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
 
 import { useConfig } from "@/stores/config";
@@ -181,6 +182,7 @@ const SECTIONS: SectionDef[] = [
   { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL", group: "workflow" },
   { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建", group: "workflow" },
   { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie", group: "workflow" },
+  { k: "baidu-scrape", l: "百度抓取", icon: "radar", sub: "Native Chrome profile · 降低风控", group: "workflow" },
   { k: "templates", l: "评论模板库", icon: "bookmark", sub: "查看 · 编辑 · 批量导入 · 导出", group: "workflow" },
   { k: "account", l: "账号", icon: "user", sub: "登录态 · 工作空间", group: "system" },
   { k: "about", l: "关于", icon: "info", sub: "版本与更新", group: "system" },
@@ -1683,6 +1685,15 @@ async function saveAccountEdit() {
               要求"是比较重要且常用的选项"——已在模板开头（SettingsRow 列表
               顶部）单独渲染了一份，这里的旧 last-row 删除。
             -->
+          </template>
+
+          <!-- ━━━━━━━━ 百度抓取 ━━━━━━━━ -->
+          <!--
+            Native Chrome profile 模式配置。自有独立组件 BaiduScrapeSettings，
+            内部直接访问后端 5 个 API routes（Task 7）。
+          -->
+          <template v-else-if="section === 'baidu-scrape'">
+            <BaiduScrapeSettings />
           </template>
 
           <!-- ━━━━━━━━ 评论模板库 ━━━━━━━━ -->
