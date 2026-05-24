@@ -2,6 +2,15 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Fixed
+- **应用内热更新依然撞 WinError 32，v0.5.2 的 image-lock 修复没盖全根因**：v0.5.2 把 updater.exe stage 到 `%TEMP%` 跑解决了 updater 自己的 image 锁，但**install dir 的 cwd handle 锁**没修。实际链路：用户双击桌面/Start Menu 快捷方式启动 CSM 时，NSIS shortcut 把 csm-tauri.exe 的 cwd 设为 install dir → csm-tauri spawn 的所有子进程（csm-sidecar、msedgewebview2 × 6、updater）**全部继承 cwd = install dir** → 每个子进程都持一个 install dir 的目录 handle → updater rename `<install> → <install>.bak` 时拿不动（18s retry 全失败）。更糟的是 Tauri 2 没把 WebView2 子进程绑到 Win32 Job Object，csm-tauri 退出后 webview2 变成 **孤儿**（PPID 指向已死的 pid），`taskkill /T csm-tauri` 触及不到，它们继续锁着 install dir。三层修复：
+  1. **Rust `install_and_restart`** spawn updater 时显式 `cmd.current_dir(std::env::temp_dir())`，updater 自己的 cwd 不再锁 install dir
+  2. **Python `updater/main.py`** 启动后立刻 `os.chdir(tempfile.gettempdir())`，作为双保险（若将来 spawner 又忘记设 cwd 也能兜住）
+  3. **`_taskkill_csm_processes()` + NSIS PREINSTALL hook** 加按 Tauri identifier `com.csm.app` cmdline 过滤的 `msedgewebview2.exe` 清理，靠 psutil 枚举所有孤儿（NSIS 那边走 PowerShell `Get-CimInstance`）—— **不会误伤其他 Tauri/Electron 应用**的 WebView2 子进程
+- **⚠️ 所有 ≤ v0.5.4 的老用户必须走一次 setup.exe 重装到 v0.5.5**：你机器上跑的 spawn 流程是当前装的版本的代码 —— v0.5.4 的 Rust 没 `current_dir` fix、v0.5.4 的 updater 没杀 webview2，应用内热更新升 v0.5.5 还是会撞同样的 cwd lock。只能走 [setup.exe](https://github.com/zev96/CSM/releases) 跨过这道坎。装上 v0.5.5 之后，**后续热更新就稳了**（v0.5.5 → v0.5.6 → ... 都不会再撞）。
+
 ## [0.5.4] - 2026-05-24
 
 ### Added

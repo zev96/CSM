@@ -14,11 +14,18 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Tauri identifier — appears in WebView2 children's cmdline via the
+# ``--user-data-dir=...\com.csm.app\EBWebView`` flag. Used to filter
+# CSM's WebView2 processes out of all running msedgewebview2.exe on
+# the system (don't kill other Tauri/Electron apps).
+CSM_TAURI_IDENTIFIER = "com.csm.app"
 
 
 def _setup_logging() -> Path | None:
@@ -79,14 +86,69 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _kill_orphan_webview2() -> int:
+    """Kill orphan ``msedgewebview2.exe`` processes spawned by CSM.
+
+    Why: WebView2 child processes spawned by csm-tauri inherit cwd
+    = install dir (Tauri 2 doesn't bind them to a Win32 Job Object, and
+    csm-tauri itself doesn't ``current_dir`` away before spawning them).
+    When csm-tauri exits via ``app.exit(0)`` right before updater runs,
+    these WebView2 children survive as orphans whose ParentProcessId
+    points to a dead pid — ``taskkill /T`` can't reach them. Their cwd
+    handles keep the install dir from being renamed (v0.5.4 and earlier
+    saw WinError 32 here even after csm-* was taskkilled).
+
+    Filter by ``CSM_TAURI_IDENTIFIER`` (``com.csm.app``) appearing in
+    cmdline so we don't kill WebView2 processes belonging to other
+    Tauri/Electron apps the user might have running. The identifier
+    appears in every CSM WebView2 child's ``--user-data-dir=...`` flag.
+
+    Returns the number of processes killed. No-op on non-Windows or when
+    psutil is unavailable.
+    """
+    if not sys.platform.startswith("win"):
+        return 0
+    try:
+        import psutil
+    except ImportError:
+        logger.warning(
+            "psutil not bundled with updater; skipping orphan WebView2 cleanup "
+            "(install dir may stay locked by orphans)"
+        )
+        return 0
+
+    killed = 0
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if proc.info["name"] != "msedgewebview2.exe":
+                continue
+            cmdline = " ".join(proc.info.get("cmdline") or [])
+            if CSM_TAURI_IDENTIFIER not in cmdline:
+                continue
+            proc.kill()
+            killed += 1
+            logger.info("killed orphan webview2 pid=%d", proc.info["pid"])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        except Exception as e:
+            logger.warning(
+                "failed to kill webview2 pid=%s: %s",
+                proc.info.get("pid"), e,
+            )
+    logger.info("orphan webview2 cleanup: killed %d", killed)
+    return killed
+
+
 def _taskkill_csm_processes() -> None:
-    """Defensive kill of any leftover csm-sidecar.exe / csm-tauri.exe.
+    """Defensive kill of any leftover csm-sidecar.exe / csm-tauri.exe + orphan WebView2.
 
     Tauri's sidecar lifecycle doesn't reliably propagate close to the child
     csm-sidecar.exe when the main process exits — sidecar then keeps a lock
     on ``<install>/csm-sidecar.exe`` (and on data-dir files), which makes the
-    rename in ``replace_directory`` fail with WinError 32. Mirrors the NSIS
-    PREINSTALL hook in ``frontend/src-tauri/installer-hooks.nsh``.
+    rename in ``replace_directory`` fail with WinError 32. WebView2 children
+    are even worse: they outlive csm-tauri as orphans (see
+    :func:`_kill_orphan_webview2`). Mirrors the NSIS PREINSTALL hook in
+    ``frontend/src-tauri/installer-hooks.nsh``.
 
     No-op on non-Windows. taskkill exit code is ignored (process may already
     be gone, which we want).
@@ -105,6 +167,9 @@ def _taskkill_csm_processes() -> None:
             logger.info("taskkill /F /IM %s issued", name)
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("taskkill %s failed: %s", name, e)
+    # WebView2 children are not named csm-*, so taskkill above misses them.
+    # Clean them up explicitly — this is the v0.5.5 root-cause fix.
+    _kill_orphan_webview2()
     # Give Windows time to release file handles after process exit.
     time.sleep(0.5)
 
@@ -227,6 +292,24 @@ def replace_directory(*, target: Path, zip_path: Path) -> None:
 
 def main(argv: list[str]) -> int:
     log_path = _setup_logging()
+
+    # CRITICAL — chdir away from install dir before doing anything.
+    #
+    # When updater.exe is spawned by csm-tauri without an explicit
+    # ``current_dir``, it inherits the parent's cwd (= install dir on
+    # double-click launches where NSIS shortcut sets cwd to install dir).
+    # Our own cwd handle on install dir then blocks the rename below.
+    # Rust-side spawning was fixed in v0.5.5 (updater.rs sets
+    # current_dir(temp_dir)), but this chdir is a defense-in-depth so
+    # any spawner that forgets to set cwd still doesn't lock us.
+    try:
+        os.chdir(tempfile.gettempdir())
+    except OSError as e:
+        logger.warning(
+            "chdir to %s failed: %s — install dir rename may fail under cwd lock",
+            tempfile.gettempdir(), e,
+        )
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--zip", type=Path, required=True)
