@@ -50,6 +50,15 @@ datas += collect_data_files("frontmatter")
 datas += collect_data_files("patchright", include_py_files=False)
 # CSM Skill / template defaults shipped with the app (read-only).
 datas += [("../templates", "templates"), ("../examples", "examples")]
+# csm_core / csm_sidecar 树里**所有**非-py 数据文件 —— 包括将来添加的。
+# 历史教训 (v0.5.6 之前)：kuaishou_search.py 读 _vendor/mc_kuaishou_search.graphql
+# 这个 GraphQL 模板，但 spec 没列它 → PyInstaller bundle 漏包 → 运行时
+# FileNotFoundError 卡死整个快手抓取链路，从 v0.5.0 mining 引入起一直到
+# v0.5.5 都没修。catch-all collect_data_files 兜底，让以后任何 adapter
+# 增量加配置 / 模板 / fixtures 都不用记得回来改 spec。
+# include_py_files=False 关掉 .py 复制（hiddenimports 已覆盖代码）。
+datas += collect_data_files("csm_core", include_py_files=False)
+datas += collect_data_files("csm_sidecar", include_py_files=False)
 
 
 # ── Hidden imports ─────────────────────────────────────────────────────────
