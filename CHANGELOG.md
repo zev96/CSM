@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.5.4] - 2026-05-24
 
 ### Added
 - **监测中心运行中任务真正可取消**：之前点「取消」只是不再调度下一轮，但当前正在跑的 fetch 不会中断（Top-100 的页拉到第 7 页要继续拉完才停）。现在 zhihu_question / bilibili_comment / douyin_comment / kuaishou_comment 四个 adapter 都接受 `cancel_token`，在分页循环 / 关键 await 节点检查 → 一旦用户按下取消就立即抛 CancelledError、不再发后续请求。
