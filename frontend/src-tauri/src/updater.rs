@@ -90,6 +90,21 @@ fn staged_updater_path(pid: u32) -> PathBuf {
         .join(format!("updater-{pid}.exe"))
 }
 
+/// 决定 spawn updater 时给它的 cwd。**必须**返回 install dir 之外的路径。
+///
+/// 为什么：Windows 的进程 cwd 持有目录 handle，如果 updater 自己的 cwd 在
+/// install dir 里，那 `os.rename(<install>, <install>.bak)` 必拿 WinError 32。
+/// 而 spawn 时不显式设 cwd 的话，子进程会继承父进程（csm-tauri）cwd —— 用户
+/// 双击桌面快捷方式启动时 csm-tauri 的 cwd 就是 install dir（NSIS shortcut
+/// 默认）。这是 v0.4.x–v0.5.4 一直没修干净的根因。
+///
+/// 函数抽出来便于单测守住"cwd 永远在 install dir 之外"的 invariant。
+fn updater_spawn_cwd() -> PathBuf {
+    // %TEMP%（Windows 上是 %LOCALAPPDATA%\Temp\）跟 CSM 默认 install dir
+    // (%LOCALAPPDATA%\CSM\) 是同级目录，永远不会嵌套。
+    std::env::temp_dir()
+}
+
 /// Copy `<install>/binaries/updater.exe` 到 `%TEMP%/csm_update/updater-<pid>.exe`，
 /// 返回 staged 路径供 spawn。
 ///
@@ -141,8 +156,21 @@ pub async fn install_and_restart(
          zip={zip:?} target={target:?}",
     );
 
+    let spawn_cwd = updater_spawn_cwd();
     let mut cmd = Command::new(&spawn_target);
-    cmd.arg("--pid")
+    // CRITICAL — cwd must be **outside** install dir.
+    //
+    // Without this, the spawned updater inherits csm-tauri's cwd (= install
+    // dir on real double-click launches via NSIS shortcuts). The updater's
+    // own cwd handle then locks install dir, and the
+    // rename(install_dir → backup) step inside replace_directory fails
+    // with WinError 32 (the actual root cause of v0.4.x–v0.5.4 hot-update
+    // failures; v0.5.1's TEMP-staging of updater.exe only fixed the
+    // image-lock side of the problem).
+    //
+    // updater/main.py also chdir's to TEMP on startup as defense-in-depth.
+    cmd.current_dir(&spawn_cwd)
+        .arg("--pid")
         .arg(pid.to_string())
         .arg("--zip")
         .arg(&zip)
@@ -156,6 +184,7 @@ pub async fn install_and_restart(
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
+    log::info!("spawning updater with cwd={spawn_cwd:?}");
     cmd.spawn()
         .map_err(|e| format!("spawn updater failed: {e}"))?;
 
@@ -182,6 +211,37 @@ mod tests {
         let fname = p.file_name().unwrap().to_string_lossy().into_owned();
         assert!(fname.contains("12345"), "filename {fname:?} must encode the pid for parallel-safety");
         assert!(fname.ends_with(".exe"), "{fname:?} must keep .exe extension so Windows treats it as executable");
+    }
+
+    #[test]
+    fn updater_spawn_cwd_lives_outside_typical_install_dirs() {
+        // 守住 v0.5.5 的根因修复：spawn updater 时给的 cwd 绝不能在 install
+        // dir 里，否则 updater 自己的 cwd handle 锁死 rename。stable Rust 的
+        // Command 没法读 cwd（command_getters 是 nightly），所以这里只能测
+        // 抽出来的 updater_spawn_cwd() 这个 invariant。
+        //
+        // 检查三种典型 install dir：
+        //   - NSIS per-user 默认 %LOCALAPPDATA%\CSM\
+        //   - Program Files \CSM\
+        //   - dev 模式 frontend\src-tauri\target\debug\
+        let cwd = updater_spawn_cwd();
+        let typical_installs: Vec<PathBuf> = vec![
+            std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .map(|p| p.join("CSM"))
+                .unwrap_or_else(|| PathBuf::from("C:\\NonExistentInstall")),
+            std::env::var_os("ProgramFiles")
+                .map(PathBuf::from)
+                .map(|p| p.join("CSM"))
+                .unwrap_or_else(|| PathBuf::from("C:\\NonExistentInstall")),
+        ];
+        for install in &typical_installs {
+            assert!(
+                !cwd.starts_with(install),
+                "updater_spawn_cwd {cwd:?} unexpectedly inside install dir {install:?}; \
+                 if this fires, the v0.5.5 cwd-lock root-cause fix is being undone"
+            );
+        }
     }
 
     #[test]

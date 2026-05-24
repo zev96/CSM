@@ -5,7 +5,12 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    # psutil powers _kill_orphan_webview2 — orphan WebView2 children
+    # outlive csm-tauri and aren't named csm-*, so plain taskkill misses
+    # them. Without psutil the updater would skip that cleanup and the
+    # install-dir rename would fail again under cwd-lock (the v0.5.5
+    # root-cause fix). PyInstaller hooks handle psutil's binary modules.
+    hiddenimports=['psutil'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
