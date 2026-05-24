@@ -1,9 +1,6 @@
 """chrome_detect.py 单元测试 —— mock 注册表 / 文件系统 / Preferences JSON。"""
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-
 import pytest
 
 from csm_core.monitor.drivers import chrome_detect
@@ -84,3 +81,30 @@ class TestListProfiles:
         (tmp_path / "ShaderCache").mkdir()
         names = {p["name"] for p in chrome_detect.list_profiles(str(tmp_path))}
         assert names == {"Default"}
+
+    def test_list_profiles_handles_malformed_preferences_json(self, tmp_path):
+        """Preferences 是合法 JSON 但 root 不是 dict（罕见但磁盘损坏可能产生）→
+        不抛、返回 account_email=None。"""
+        for name, content in [
+            ("Default", "[]"),       # 根是 list 不是 dict
+            ("Profile 1", "null"),   # 根是 null
+            ("Profile 2", "42"),     # 根是数字
+        ]:
+            p = tmp_path / name
+            p.mkdir()
+            (p / "Preferences").write_text(content, encoding="utf-8")
+
+        result = chrome_detect.list_profiles(str(tmp_path))
+        assert len(result) == 3
+        assert all(p["account_email"] is None for p in result)
+
+    def test_list_profiles_handles_non_dict_account_entry(self, tmp_path):
+        """account_info[0] 是 str 而不是 dict（脏数据）→ 不抛、email=None。"""
+        p = tmp_path / "Default"
+        p.mkdir()
+        (p / "Preferences").write_text(
+            '{"account_info": ["plain-string-not-dict"]}',
+            encoding="utf-8",
+        )
+        result = chrome_detect.list_profiles(str(tmp_path))
+        assert result[0]["account_email"] is None

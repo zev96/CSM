@@ -48,7 +48,8 @@ def _read_registry_chrome_path() -> str | None:
             value, _ = winreg.QueryValueEx(key, "")
             if value and os.path.exists(value):
                 return value
-    except (OSError, FileNotFoundError):
+    except (OSError, FileNotFoundError) as e:
+        logger.debug("registry chrome path lookup failed: %s", e)
         return None
     return None
 
@@ -62,6 +63,7 @@ def _find_default_install_path() -> str | None:
     for path in candidates:
         if os.path.exists(path):
             return path
+    logger.debug("no chrome.exe at default install paths")
     return None
 
 
@@ -110,6 +112,7 @@ def _read_account_email(preferences_path: Path) -> str | None:
             email = accounts[0].get("email")
             if email and isinstance(email, str):
                 return email
-    except (OSError, json.JSONDecodeError, KeyError):
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError) as e:
+        logger.debug("read account_email failed: %s", e)
         return None
     return None
