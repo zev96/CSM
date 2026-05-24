@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.5.6] - 2026-05-24
 
 ### Fixed
 - **引流抓取里快手任务一开始就失败、报 `FileNotFoundError: ...\_vendor\mc_kuaishou_search.graphql`**：`kuaishou_search.py:76` 运行时读 `_vendor/mc_kuaishou_search.graphql` GraphQL 模板，但 `sidecar/csm-sidecar.spec` 的 `datas` 列表**从来就没列 csm_core 的非-py 数据文件**——PyInstaller onefile 默认只把 .py 包进 bundle，这个 .graphql 模板从 v0.5.0 引入 mining 模块起到 v0.5.5 一直缺，每次跑快手任务在 `_MEI*` 临时目录里都找不到文件直接挂。**v0.5.0/v0.5.1/v0.5.2/v0.5.3/v0.5.4/v0.5.5 都是这个 broken bundle**，只是用户之前可能没真用快手所以没暴露。修法：spec `datas` 加 catch-all `collect_data_files("csm_core", include_py_files=False)` + `collect_data_files("csm_sidecar", include_py_files=False)`，**整棵树**所有非-py 文件（含将来新加的 .json/.yaml/.sql/.html 等）自动进 bundle。配 invariant 单测守住 `collect_data_files("csm_core"` 永远在 spec 里。
