@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.5.5] - 2026-05-24
 
 ### Fixed
 - **应用内热更新依然撞 WinError 32，v0.5.2 的 image-lock 修复没盖全根因**：v0.5.2 把 updater.exe stage 到 `%TEMP%` 跑解决了 updater 自己的 image 锁，但**install dir 的 cwd handle 锁**没修。实际链路：用户双击桌面/Start Menu 快捷方式启动 CSM 时，NSIS shortcut 把 csm-tauri.exe 的 cwd 设为 install dir → csm-tauri spawn 的所有子进程（csm-sidecar、msedgewebview2 × 6、updater）**全部继承 cwd = install dir** → 每个子进程都持一个 install dir 的目录 handle → updater rename `<install> → <install>.bak` 时拿不动（18s retry 全失败）。更糟的是 Tauri 2 没把 WebView2 子进程绑到 Win32 Job Object，csm-tauri 退出后 webview2 变成 **孤儿**（PPID 指向已死的 pid），`taskkill /T csm-tauri` 触及不到，它们继续锁着 install dir。三层修复：
