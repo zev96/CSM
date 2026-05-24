@@ -58,6 +58,8 @@ EventKind = Literal[
     "captcha_required", "captcha_resolved", "captcha_timeout",
     "progress",
     "risk_control",  # Task 4: adapter hit risk control mid-scan; breakpoint saved
+    # Native mode 方案 D：跑前等关 Chrome / Chrome 已关 / 命中风控需人工解
+    "waiting_chrome_close", "chrome_closed", "needs_captcha",
 ]
 
 
@@ -82,6 +84,10 @@ class MonitorEvent:
     # can render "已抓 N / 共 M · 从断点续抓" without digging into result.metric.
     last_resumed_keyword: int | None = None  # 0-indexed; next keyword to try on resume
     total_keywords: int | None = None        # full task keyword count
+    # Native mode 方案 D 专用字段（默认 None，保持向后兼容）
+    remaining_s: int | None = None  # waiting_chrome_close 倒计时
+    keyword: str | None = None      # needs_captcha 的关键词文本
+    kw_idx: int | None = None       # needs_captcha 的关键词索引 (0-based)
 
 
 EventSink = Callable[[MonitorEvent], None]
