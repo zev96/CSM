@@ -2,6 +2,36 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+- **监测中心运行中任务真正可取消**：之前点「取消」只是不再调度下一轮，但当前正在跑的 fetch 不会中断（Top-100 的页拉到第 7 页要继续拉完才停）。现在 zhihu_question / bilibili_comment / douyin_comment / kuaishou_comment 四个 adapter 都接受 `cancel_token`，在分页循环 / 关键 await 节点检查 → 一旦用户按下取消就立即抛 CancelledError、不再发后续请求。
+- **首页监测卡片趋势化**：ZhihuCard 顶部从"命中数"改成 `↑N/↓N` matched_count delta + 7 天 sparkline；CommentRetentionCard sparkline yMin=0/yMax=100（保留率相对 100% 的位置看得见）；KeywordTrendCard 加 yMax/yMin props，Y 轴绑定该关键词的 Top-N（不再随单日数据 auto-scale）。
+- **首页卡片 → 详情页深链**：监测卡片现在可点直接跳到对应任务详情（MonitorView 接受 `route.query.task`，跨 tab 切换也能续上）；mining 卡片同理（MiningView 接受 `route.query.job`，首次挂载选中该 job）。
+- **引流抓取三栏布局**：mining 视图改为 `TaskListPanel`（左）+ `SubtaskListPanel`（中）+ `VideoDetailPanel`（右），视频详情可一次性看到子任务列表（评论图层、回复内容、图片返图）；老的整页 `VideoCard.vue` 退役。
+- **CSV 导出真实保存对话框**：之前 mining CSV 直接静默写到 Downloads 文件夹找不到，现在走 Tauri `dialog.save → fetch → writeFile` 链路弹原生保存框；导出格式新增分列「序号 / 平台 / 视频链接 / 第 N 层评论内容 / 评论图片 / 评论返图」+ `PLATFORM_LABEL_CN` 中文平台名。
+- **TaskListItem 状态推断**：mining `list_jobs` SQL 增加 `video_count` + `commented_count` 子查询聚合，前端 `TaskListItem` 据此推 failed / running / in_progress / fully_completed 状态，不再靠启发式。
+- **设置页重组**：SECTIONS 改为 basics / workflow / system 三组 + 260 px 富侧边栏（图标 + 名称 + 副标题）；Cookie 池入口移到监测 section 顶部；「重置百度浏览器 profile」从 Cookie Modal 回搬到设置（登录在 Cookie Modal，重置在设置，职责分离）。
+- **CVA toolchain**：引入 `class-variance-authority` + `clsx` + `tailwind-merge`，`Btn` 组件作为首个 cva refactor 试点；后续 UI primitive 会沿用这套写法。
+
+### Changed
+- **Modal 大迁移到 Dialog primitive（Phase 1 完成）**：CreateTemplate / EditBatch / StartJob / CookieManager / SkillEdit / AddTask / AlertDetail / BatchImportTask 全部迁到统一 `Dialog.vue`；Dialog 新增 `xl` size + `zClass` prop（允许 ConfirmModal 提到 z-60 不被嵌套 modal 盖住）。
+- **UI 一致性 pass**：聚焦环 / 输入背景 / 下拉 / 间距全局对齐；删除 3 个零引用孤儿组件清理；首页 hero / monitor 卡片 / dropdown 视觉打磨。
+- **首页工作区 3 行布局**：CreateArticleHero / 监测卡片行 / 最近文档行的纵向节奏改为 3-row layout，配套 `DESIGN.md` 落地视觉规范。
+- **知乎趋势窗口 14d → 7d**：sparkBuckets / `loadResults limit` / 标签同步；LineChart Y 轴绑定 selectedTask Top-N（优先 metric → task config → 10 fallback），避免单点波动放大失真。
+- **「最近文档」「打开位置」可点开**：Tauri shell `open` scope 从 `true` 改成 `"^.{1,}"`（之前 `true` 没绕过 scope 校验，所有外部打开都失败），辅助 `toFileURL` 处理 Windows 路径。
+
+### Fixed
+- **默认窗口 / 最小窗口尺寸 1280×800**：之前 default 比 min 大、min 又超过部分主流笔记本物理屏幕，窗口会撑出可视区或拉不回来。两个都钉死到 1280×800。
+- **Tauri 2 下 `window.confirm()` 报 "Command not found"**：Tauri 2 砍掉了 dialog|confirm IPC，浏览器原生 `confirm` 也走不通；统一改用 in-app `confirmDialog`，cookie 删除 / baidu 登录确认等地方现在都能弹出。
+- **百度账号登录弹 "Network Error"**：sidecar `/baidu/login` 最长轮询 600s，但 axios 默认 60s 超时早早把请求杀掉、用户还没点完登录就报错。给这条 endpoint 单独设 660s timeout。
+- **百度登录确认弹窗被 CookieManagerModal 盖住**：原来 ConfirmModal 跟父 modal 都是 z-50，z-index 平级 → DOM 顺序决定层级。Dialog 新增 `zClass` prop，ConfirmModal 升到 z-60；CookieManagerModal 在登录出错时自动关闭，避免 toast 也被 trap。
+- **「历史查重」重建按钮按了无效**：之前只是个空 handler 没接后端，现在真的 `POST /api/dedup/build-index`。
+- **AddTaskModal Top-N 输入失焦不保存**：之前用 `:model-value + @commit` 配对，FormInput 内部 proxy computed 在 blur 时读到的是 stale props → 用户键入的值被丢。改回直接 `v-model="topN"`。
+- **dev 模式下空 `binaries/ms-playwright/` 卡死 patchright**：Tauri dev 会把 src-tauri 下的 `binaries/ms-playwright/`（在 dev 机上是空目录，CI 才填 chromium）镜像到 `target/debug/`，`ensure_browsers_path` 之前看到目录就当 bundled 路径 → patchright 拿空目录起 chromium 直接挂。收紧检查：必须有 `chromium-*` 子目录才认是 bundled；否则继续 fallback 到 LOCALAPPDATA 缓存。
+- **StartJobModal `@login` emit 没声明**：原来 `$emit('close')` 没在 emits 里，Vue 警告且 v-model 失效；改成 `$emit('update:open', false)` 走 v-model 标准合约。
+- **ArticleView `passCount` vue-tsc unused-var 警告**：加 `_` 前缀 + `void` 让 strict mode 编过又不丢语义。
+
 ## [0.5.3] - 2026-05-20
 
 ### Fixed
