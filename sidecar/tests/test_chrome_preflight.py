@@ -1,8 +1,7 @@
 """chrome_preflight.py 单元测试 —— mock psutil 模拟 Chrome 进程状态。"""
 from __future__ import annotations
 
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

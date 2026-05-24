@@ -75,7 +75,7 @@ def wait_for_chrome_closed(
 
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        remaining = int(deadline - time.monotonic())
+        remaining = max(0, int(deadline - time.monotonic()))
         _maybe_publish({
             "kind": "waiting_chrome_close",
             "task_id": task_id,
@@ -112,6 +112,11 @@ _notify_impl = None
 
 
 def set_notifier(fn) -> None:
-    """Sidecar lifespan 启动时调用，注入真正的通知发送实现。"""
+    """Sidecar lifespan 启动时调用，注入真正的通知发送实现。
+
+    应该只在 sidecar 启动时调用一次。模块级 ``_notify_impl`` 无锁保护，
+    生产场景假设单次注入；测试场景请用 ``monkeypatch.setattr(chrome_preflight,
+    "_notify", ...)`` 而不是 ``set_notifier`` 来避免影响其他测试。
+    """
     global _notify_impl
     _notify_impl = fn
