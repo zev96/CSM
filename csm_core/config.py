@@ -287,6 +287,16 @@ def default_config_path() -> Path:
     return default_config_dir() / "settings.json"
 
 
+def get_config() -> "AppConfig":
+    """Load and return the current AppConfig from the default config path.
+
+    Convenience wrapper for csm_core modules that need to read config without
+    depending on the sidecar's config_service. Each call re-reads from disk
+    (no caching) — suitable for occasional reads in adapter entry points.
+    """
+    return load_config(default_config_path())
+
+
 def default_templates_dir() -> Path:
     """Per-user templates folder. Created on first sidecar startup if missing.
 

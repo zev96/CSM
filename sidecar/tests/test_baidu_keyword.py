@@ -6,6 +6,7 @@ SERP 解析逻辑用真实保存的 fixture 验证。
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -878,7 +879,7 @@ def test_fetch_drops_session_on_normal_return(monkeypatch):
     captured: dict[str, Any] = {}
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, resume_from, session):
+                       *, resume_from, session, session_kwargs=None):
         captured["session"] = session
         captured["task_id"] = task.id
         return MonitorResult(
@@ -929,7 +930,7 @@ def test_fetch_drops_session_on_risk_control(monkeypatch):
     adapter.apply_settings(default_excluded_domains=())
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, resume_from, session):
+                       *, resume_from, session, session_kwargs=None):
         raise RiskControlException(
             RiskSignal(layer="url", detail="wappass triggered"), progress=2,
         )
@@ -1179,3 +1180,114 @@ def test_fetch_raises_auth_when_serp_redirects_to_login(monkeypatch):
         assert e.progress == 0  # failed on first keyword
     else:
         raise AssertionError("expected RiskControlException(layer='auth')")
+
+
+def test_fetch_calls_chrome_preflight_when_native_mode_enabled(monkeypatch):
+    """use_native_chrome=True → fetch() 入口调 wait_for_chrome_closed。"""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+
+    preflight_called: list[bool] = []
+    def fake_preflight(timeout_s=120, poll_interval_s=1.0):
+        preflight_called.append(True)
+        # mock 立即返回（chrome 不在跑）
+        return None
+
+    monkeypatch.setattr(
+        "csm_core.monitor.drivers.chrome_preflight.wait_for_chrome_closed",
+        fake_preflight,
+    )
+    # mock config 返回 use_native=True
+    fake_cfg = MagicMock()
+    fake_cfg.monitor.baidu_keyword.use_native_chrome = True
+    fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/x/chrome.exe"
+    fake_cfg.monitor.baidu_keyword.chrome_user_data_dir = "C:/x/User Data"
+    fake_cfg.monitor.baidu_keyword.chrome_profile_name = "Default"
+    monkeypatch.setattr("csm_core.config.get_config", lambda: fake_cfg)
+
+    # mock baidu_browser_session 不实际启浏览器
+    fake_session = MagicMock()
+    fake_session.page = MagicMock()
+    fake_session.context = MagicMock()
+    fake_session.context.cookies.return_value = [{"name": "BDUSS", "value": "x"}]
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_session_cm(**kwargs):
+        # 断言 native 参数被透传
+        assert kwargs.get("use_native_chrome") is True
+        assert kwargs.get("chrome_executable_path") == "C:/x/chrome.exe"
+        assert kwargs.get("chrome_profile_name") == "Default"
+        yield fake_session
+    monkeypatch.setattr(
+        "csm_core.monitor.platforms.baidu_keyword.baidu_browser_session",
+        fake_session_cm,
+    )
+
+    task = MonitorTask(
+        id=1, type="baidu_keyword", name="t", target_url="https://baidu.com",
+        config={"search_keywords": [], "target_brand": "x"},  # 空 keywords 短路返回
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    # 短路：空 keywords 应该早 return，但 preflight 已经跑过
+    adapter.fetch(task)
+    assert preflight_called == [True]
+
+
+def test_fetch_skips_preflight_when_native_mode_disabled(monkeypatch):
+    """默认 use_native_chrome=False → 不调 preflight。"""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+
+    preflight_called: list[bool] = []
+    monkeypatch.setattr(
+        "csm_core.monitor.drivers.chrome_preflight.wait_for_chrome_closed",
+        lambda **kw: preflight_called.append(True),
+    )
+    fake_cfg = MagicMock()
+    fake_cfg.monitor.baidu_keyword.use_native_chrome = False
+    monkeypatch.setattr("csm_core.config.get_config", lambda: fake_cfg)
+
+    task = MonitorTask(
+        id=1, type="baidu_keyword", name="t", target_url="https://baidu.com",
+        config={"search_keywords": [], "target_brand": "x"},
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.fetch(task)
+    assert preflight_called == []
+
+
+def test_fetch_returns_error_when_chrome_close_times_out(monkeypatch):
+    """preflight raise ChromeStillRunningError → 返回 status=error 结果，不进 session。"""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.drivers.chrome_preflight import ChromeStillRunningError
+    from csm_core.monitor.base import MonitorTask
+
+    def fake_preflight(**kw):
+        raise ChromeStillRunningError("等待 Chrome 关闭超时")
+
+    monkeypatch.setattr(
+        "csm_core.monitor.drivers.chrome_preflight.wait_for_chrome_closed",
+        fake_preflight,
+    )
+    fake_cfg = MagicMock()
+    fake_cfg.monitor.baidu_keyword.use_native_chrome = True
+    fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/x/chrome.exe"
+    fake_cfg.monitor.baidu_keyword.chrome_user_data_dir = "C:/x/User Data"
+    fake_cfg.monitor.baidu_keyword.chrome_profile_name = "Default"
+    monkeypatch.setattr("csm_core.config.get_config", lambda: fake_cfg)
+
+    session_called: list[bool] = []
+    monkeypatch.setattr(
+        "csm_core.monitor.platforms.baidu_keyword.baidu_browser_session",
+        lambda **kw: session_called.append(True),
+    )
+
+    task = MonitorTask(
+        id=1, type="baidu_keyword", name="t", target_url="https://baidu.com",
+        config={"search_keywords": ["x"], "target_brand": "y"},
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    result = adapter.fetch(task)
+    assert result.status == "error"
+    assert "等待 Chrome 关闭超时" in (result.error_message or "")
+    assert session_called == []  # 没启 session

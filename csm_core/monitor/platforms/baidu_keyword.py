@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse, quote
 
@@ -26,6 +27,7 @@ from lxml import html as lxml_html
 
 from .. import rate_limit
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
+from ..drivers import chrome_preflight
 from ..drivers.baidu_browser import baidu_browser_session
 from ..drivers.baidu_login import detect_login_required
 from ..drivers.risk_detector import (
@@ -36,6 +38,7 @@ from ..drivers.risk_detector import (
     RiskControlException,
     RiskSignal,
 )
+from csm_core import config as csm_config
 
 logger = logging.getLogger(__name__)
 
@@ -611,6 +614,36 @@ class BaiduKeywordAdapter:
                 error_message="circuit breaker open for baidu_keyword",
             )
 
+        # ── Native mode preflight ────────────────────────────────
+        # use_native_chrome=True → 跑前等用户关 Chrome（OS profile lock）。
+        # 超时返回 error，不进 session。
+        app_cfg = csm_config.get_config()
+        baidu_cfg = app_cfg.monitor.baidu_keyword
+        use_native = bool(baidu_cfg.use_native_chrome)
+
+        if use_native:
+            try:
+                chrome_preflight.wait_for_chrome_closed(timeout_s=120)
+            except chrome_preflight.ChromeStillRunningError as e:
+                return MonitorResult(
+                    task_id=task.id or 0,
+                    checked_at=datetime.utcnow(),
+                    status="error",
+                    rank=-1,
+                    error_message=str(e),
+                )
+
+        session_kwargs: dict[str, Any] = {}
+        if use_native:
+            session_kwargs.update(
+                use_native_chrome=True,
+                user_data_dir=Path(baidu_cfg.chrome_user_data_dir or ""),
+                chrome_executable_path=baidu_cfg.chrome_executable_path,
+                chrome_profile_name=baidu_cfg.chrome_profile_name,
+            )
+        # native 强制 headless=False（baidu_browser_session 内部也会忽略）
+        # ─────────────────────────────────────────────────────────
+
         cfg = task.config or {}
         keywords_raw = cfg.get("search_keywords") or []
         keywords = [k.strip() for k in keywords_raw if k and k.strip()]
@@ -626,6 +659,7 @@ class BaiduKeywordAdapter:
             )
 
         headless = bool(cfg.get("headless", self._headless_default))
+        effective_headless = False if use_native else headless
         rate_limit.get_pacer(self.platform).wait()
 
         # Clamp resume_from to valid range so callers don't need to guard.
@@ -634,9 +668,10 @@ class BaiduKeywordAdapter:
         session = self._get_session(task.id or 0)
         try:
             return self._fetch_with_promotion(
-                task, keywords, brand, headless, progress_cb, cancel_token,
+                task, keywords, brand, effective_headless, progress_cb, cancel_token,
                 resume_from=resume_from,
                 session=session,
+                session_kwargs=session_kwargs,
             )
         finally:
             # Drop on every exit path (normal return / RiskControlException /
@@ -655,6 +690,7 @@ class BaiduKeywordAdapter:
         *,
         resume_from: int = 0,
         session: Any = None,
+        session_kwargs: "dict[str, Any] | None" = None,
     ) -> MonitorResult:
         """跑一次所有 SERP。命中 RiskControlException 直接传给 runner，
         runner（Task 4）决定 retry 还是 pause + 写断点。此函数不再做 in-task
@@ -666,6 +702,7 @@ class BaiduKeywordAdapter:
                 task, keywords, brand, headless, progress_cb, cancel_token,
                 resume_from=resume_from,
                 session=session,
+                session_kwargs=session_kwargs,
             )
         except RiskControlException:
             # 4 层风控命中 —— 让 runner (Task 4) 捕获写断点 + 暂停任务；不计入熔断器。
@@ -715,6 +752,7 @@ class BaiduKeywordAdapter:
         *,
         resume_from: int = 0,
         session: Any = None,
+        session_kwargs: "dict[str, Any] | None" = None,
     ) -> MonitorResult:
         """一次完整 多SERP→解 link→抓正文→打分，返回聚合 MonitorResult。
 
@@ -758,7 +796,7 @@ class BaiduKeywordAdapter:
         # producing the
         #   'BaiduBrowserSession' object has no attribute 'get'
         # warning storm in production logs.
-        with baidu_browser_session(headless=headless) as bsession:
+        with baidu_browser_session(headless=headless, **(session_kwargs or {})) as bsession:
             page = bsession.page
 
             # Login-state pre-flight: an anonymous fetch will burn quickly
