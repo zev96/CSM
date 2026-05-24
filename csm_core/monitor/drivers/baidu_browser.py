@@ -48,72 +48,83 @@ class BaiduBrowserSession:
 
 @contextmanager
 def baidu_browser_session(
-    *, headless: bool, user_data_dir: Path | None = None
+    *,
+    headless: bool,
+    user_data_dir: Path | None = None,
+    use_native_chrome: bool = False,
+    chrome_executable_path: str | None = None,
+    chrome_profile_name: str = "Default",
 ) -> Iterator[BaiduBrowserSession]:
     """启动百度抓取专用的持久 BrowserContext。
 
-    与原 incognito_session 的核心区别：
-    - launch_persistent_context 直接返回 BrowserContext（不需要 launch +
-      new_context 两步）
-    - context.close() 时 cookies / localStorage / indexedDB 落盘到
-      user_data_dir，不删
-    - 同一时刻只能 1 个 instance 用同一 user_data_dir（OS 层 lock；并发
-      限制由 rate_limit.configure_concurrency 保证）
+    两种模式：
+    - **自建 profile**（默认，向后兼容）：用 CSM 自有 user_data_dir + Patchright 自带
+      Chromium。可真 headless。
+    - **native Chrome**（``use_native_chrome=True``）：用 channel="chrome" +
+      用户的 Chrome.exe + 用户日常 user_data_dir。``headless`` 入参被忽略
+      （Chrome stable 不支持 headless persistent context，会启动失败）。
 
     Args:
-        headless: True → 后台跑；False → 弹可见窗口（验证码升级用）。
-                  注：patchright stealth fork 不能真正 honor headless=True，
-                  所以始终 headed + 推屏外（沿用原 incognito_session 的策略）。
-        user_data_dir: 默认 <config_dir>/baidu_browser_profile。
+        headless: 自建模式下生效；native 模式被强制覆盖为 False。
+        user_data_dir: 自建模式 → 默认 ``<config_dir>/baidu_browser_profile``；
+                       native 模式 → 必须是用户 Chrome User Data 目录绝对路径。
+        use_native_chrome: True = 走 native 分支。
+        chrome_executable_path: native 模式必填，用户 Chrome.exe 绝对路径。
+        chrome_profile_name: native 模式选哪个 profile（"Default" / "Profile 1"...）。
 
     Yields:
-        BaiduBrowserSession，含 .page / .context / .pw 给 adapter 用。
+        BaiduBrowserSession。
 
     Raises:
-        RuntimeError: patchright 未安装、Chromium 启动失败。
+        RuntimeError: patchright 未安装、Chromium / Chrome 启动失败。
+        ValueError: native 模式但缺 user_data_dir / chrome_executable_path。
     """
     ensure_browsers_path()
-    target_dir = user_data_dir or _default_user_data_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if use_native_chrome:
+        if user_data_dir is None:
+            raise ValueError("native mode requires user_data_dir")
+        if not chrome_executable_path:
+            raise ValueError("native mode requires chrome_executable_path")
+        target_dir = Path(user_data_dir)
+        if headless:
+            logger.debug("native mode 忽略 headless=True（Chrome stable 不支持）")
+        launch_kwargs: dict[str, Any] = dict(
+            user_data_dir=str(target_dir),
+            headless=False,
+            executable_path=chrome_executable_path,
+            channel="chrome",
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                f"--profile-directory={chrome_profile_name}",
+            ],
+            viewport={"width": 1366, "height": 768},
+        )
+    else:
+        target_dir = user_data_dir or _default_user_data_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        launch_kwargs = dict(
+            user_data_dir=str(target_dir),
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--window-size=1366,768",
+                "--blink-settings=imagesEnabled=false",
+            ],
+            viewport={"width": 1366, "height": 768},
+        )
 
     pw = None
     context = None
     try:
         pw = _sync_playwright().start()
-
-        # ── Launch flags ────────────────────────────────────────────────
-        # 原 incognito_session 强制 effective_headless=False + 推屏外 +
-        # start-minimized 是基于「patchright stealth 不能真 headless」的老
-        # 经验。但现代 patchright stealth fork（navigator.webdriver / CDP /
-        # UA / WebGL fingerprint patches）跟 headless mode 兼容；老 hack
-        # 反而让 OS 把窗口 layout 视为 invalid，所有元素 getBoundingClientRect
-        # 返回 0×0，patchright fill / click 内部的 visibility check + scroll-
-        # into-view 都触发 "Element is not visible"，30s timeout。
-        #
-        # 这里直接用 headless=headless 原值。用户传 True → 真 headless（后台
-        # 跑、layout 正常 calc）；传 False → headed visible（验证码升级场景）。
-        launch_args: list[str] = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--window-size=1366,768",
-            "--blink-settings=imagesEnabled=false",
-        ]
-
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=str(target_dir),
-            headless=headless,
-            args=launch_args,
-            viewport={"width": 1366, "height": 768},
-        )
-        # persistent context 通常已有 default page；若是首次冷启 / 没有则新建
+        context = pw.chromium.launch_persistent_context(**launch_kwargs)
         page = context.pages[0] if context.pages else context.new_page()
-
-        # 健康度日志 —— 失败不阻塞 fetch（Section E）
         _log_profile_health(context, target_dir)
-
         yield BaiduBrowserSession(page=page, context=context, pw=pw)
     finally:
-        # LIFO 关闭。context.close() 时 cookies 自动落盘 user_data_dir。
         if context is not None:
             try:
                 context.close()
