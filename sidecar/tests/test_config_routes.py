@@ -149,3 +149,35 @@ def _install_fake_keyring(monkeypatch):
     monkeypatch.setattr("csm_sidecar.routes.config.get_secret", fake_get)
     monkeypatch.setattr("csm_sidecar.routes.config.set_secret", fake_set)
     monkeypatch.setattr("csm_sidecar.routes.config.delete_secret", fake_delete)
+
+
+def test_baidu_keyword_config_native_mode_fields_round_trip(client):
+    """新加的 4 个 native mode 字段能 GET/PATCH 正确 round-trip。"""
+    resp = client.get("/api/config")
+    assert resp.status_code == 200
+    cfg = resp.json()
+    bk = cfg["monitor"]["baidu_keyword"]
+    # 默认值断言
+    assert bk["use_native_chrome"] is False
+    assert bk["chrome_executable_path"] is None
+    assert bk["chrome_user_data_dir"] is None
+    assert bk["chrome_profile_name"] == "Default"
+
+    # PATCH 后能读到
+    patch = {
+        "monitor": {
+            "baidu_keyword": {
+                "use_native_chrome": True,
+                "chrome_executable_path": "C:/test/chrome.exe",
+                "chrome_user_data_dir": "C:/test/User Data",
+                "chrome_profile_name": "Profile 1",
+            }
+        }
+    }
+    resp = client.patch("/api/config", json=patch)
+    assert resp.status_code == 200
+    bk2 = resp.json()["monitor"]["baidu_keyword"]
+    assert bk2["use_native_chrome"] is True
+    assert bk2["chrome_executable_path"] == "C:/test/chrome.exe"
+    assert bk2["chrome_user_data_dir"] == "C:/test/User Data"
+    assert bk2["chrome_profile_name"] == "Profile 1"

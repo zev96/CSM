@@ -39,6 +39,16 @@ class BaiduKeywordConfig(BaseModel):
     # 百家号专用 article pacer 上限 —— baidu 自家子域反爬最严，比普通
     # 软文站需要更宽的间隔窗口。8-16s 实测能稳定避开验证码。
     baijiahao_pacing_seconds: int = 8
+    # ── Native Chrome 模式 (方案 D) ──────────────────────────────
+    # 启用后：跑监控时挂载用户日常 Chrome profile（用 channel="chrome" +
+    # 用户的 user_data_dir）。需要跑前先关掉 Chrome（OS profile lock）。
+    # 详见 docs/superpowers/specs/2026-05-24-baidu-anti-risk-design.md
+    use_native_chrome: bool = False
+    # 自动探测时为 None，UI 启用 native mode 时调 /api/monitor/baidu/detect-chrome
+    chrome_executable_path: str | None = None
+    chrome_user_data_dir: str | None = None
+    # 多 profile 用户选哪个（"Default" / "Profile 1" / "Profile 2"...）
+    chrome_profile_name: str = "Default"
     breaker_failures: int = 3
     breaker_cooldown_seconds: int = 600
 
