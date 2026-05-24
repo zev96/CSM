@@ -3,7 +3,8 @@ import { ref, computed, watch } from "vue";
 import Btn from "@/components/ui/Btn.vue";
 import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
-import Blob from "@/components/ui/Blob.vue";
+// Blob 已下线 —— 用户要求弹窗背景跟应用默认 Dialog 一致，不要黄色
+// 渐变光晕。
 import PlatformPickerCard from "./PlatformPickerCard.vue";
 import type { Platform } from "@/stores/mining";
 
@@ -75,18 +76,13 @@ function onSubmit() {
 
 <template>
   <Dialog :open="open" size="lg" @update:open="close">
-    <Blob color="#f5c042" :size="220" :top="-80" :left="-40" :opacity="0.32"/>
-
-    <!-- 顶部 -->
+    <!-- 顶部 ——
+         按用户要求移除：黄色 Blob 光晕 + "OUTREACH · 新建抓取任务" eyebrow。
+         只保留 H2 标题和右上角关闭按钮，背景跟应用默认 Dialog 一致。 -->
     <div class="relative mb-4">
       <div class="flex items-start justify-between">
-        <div>
-          <div class="text-[10.5px] tracking-[1.5px] uppercase font-medium" style="color: var(--ink-3)">
-            Outreach · 新建抓取任务
-          </div>
-          <div class="font-display font-bold mt-1.5" style="font-size: 22px; letter-spacing: -0.5px;">
-            新建抓取任务
-          </div>
+        <div class="font-display font-bold" style="font-size: 22px; letter-spacing: -0.5px;">
+          新建抓取任务
         </div>
         <button
           @click="close"
@@ -101,9 +97,10 @@ function onSubmit() {
     <div class="relative">
       <!-- 关键词 -->
         <div>
-          <div class="flex items-center justify-between mb-1.5">
+          <div class="mb-1.5">
             <label class="text-[11.5px] font-semibold">关键词</label>
-            <span class="text-[10.5px]" style="color: var(--ink-4)">多个关键词暂不支持（Phase 2）</span>
+            <!-- "多个关键词暂不支持（Phase 2）" 副标按用户要求移除 —— 是
+                 内部 roadmap 信息，不该让用户看。 -->
           </div>
           <div
             class="flex items-center"
@@ -127,9 +124,10 @@ function onSubmit() {
 
         <!-- 平台 -->
         <div class="mt-5">
-          <div class="flex items-center justify-between mb-2">
-            <label class="text-[11.5px] font-semibold">在哪些平台抓</label>
-            <span class="text-[10.5px]" style="color: var(--ink-4)">未登录的去监控中心扫码</span>
+          <div class="mb-2">
+            <label class="text-[11.5px] font-semibold">平台范围</label>
+            <!-- "未登录的去监控中心扫码" 副标按用户要求移除 —— 卡片自身的
+                 「未登录 / 已登录」状态已说明，旁标是冗余引导。 -->
           </div>
           <div class="grid grid-cols-3 gap-2">
             <PlatformPickerCard
@@ -139,7 +137,7 @@ function onSubmit() {
               :picked="!!picked[p]"
               :logged-in="!!loginStatus[p]"
               @toggle="togglePlatform(p)"
-              @login="$emit('close')"
+              @login="$emit('update:open', false)"
             />
           </div>
         </div>
@@ -219,10 +217,10 @@ function onSubmit() {
       </div>
 
     <template #footer>
-      <div class="flex-1 text-[11px]" style="color: var(--ink-3)">
-        <Icon name="key" :size="11" style="display: inline-block; margin-right: 4px; opacity: 0.6;"/>
-        登录 cookie 来自监控中心 · 仅存于本地
-      </div>
+      <!-- "登录 cookie 来自监控中心 · 仅存于本地" footer 提示按用户要求
+           移除（隐私/数据流细节不需要在每次新建任务时再重复说一次）。
+           取消 + 开始抓取 两个按钮靠右排列。 -->
+      <div class="flex-1"/>
       <Btn variant="ghost" @click="close">取消</Btn>
       <Btn variant="solid" :disabled="!canSubmit" @click="onSubmit">
         <Icon name="play" :size="11"/> 开始抓取

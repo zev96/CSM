@@ -37,8 +37,15 @@ const props = withDefaults(
      * with no decision attached).
      */
     showClose?: boolean;
+    /**
+     * 自定义 z-index class（覆盖默认 z-50）。同一 modal 树里要往别的
+     * Dialog 上叠时用，例如 ConfirmModal 必须高于触发它的 CookieManager
+     * Modal，否则点"登录百度"弹出来的确认框会被压在 cookie 弹窗后。
+     * 传任何 Tailwind z 类即可（z-[60] / z-[100] 等）。
+     */
+    zClass?: string;
   }>(),
-  { size: "md", closable: true, showClose: false },
+  { size: "md", closable: true, showClose: false, zClass: "z-50" },
 );
 
 const emit = defineEmits<{
@@ -88,7 +95,8 @@ onUnmounted(() => {
   <Teleport to="body">
     <div
       v-if="open"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      class="fixed inset-0 flex items-center justify-center bg-black/30"
+      :class="zClass"
       role="dialog"
       aria-modal="true"
       @click="onBackdrop"

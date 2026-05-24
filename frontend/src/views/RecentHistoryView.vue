@@ -97,12 +97,30 @@ function fileFolder(path: string): string {
   return idx > 0 ? path.slice(0, idx) : path;
 }
 
+/**
+ * Tauri 2 plugin-shell 的 open() 默认 scope 只放 mailto/tel/https
+ * 三种 URL；本地文件 / 文件夹路径会被 scope 拒掉。两个保险一起上：
+ *   1. tauri.conf.json plugins.shell.open 放宽 regex（已配置）
+ *   2. 把 Windows 路径 ("C:\foo\bar.md") 转成 file:// URL，正斜杠 + 三斜杠 +
+ *      盘符。即便 scope 跑了 default 也更可能命中 https? 兜底。
+ * Linux/macOS 路径首字符是 "/", 用 `file://` + path 即可。
+ */
+function toFileURL(p: string): string {
+  if (!p) return "";
+  // 已经是 URL（http/file/...）直接放行
+  if (/^[a-z]+:\/\//i.test(p)) return p;
+  const normalized = p.replace(/\\/g, "/");
+  // Windows 绝对路径 "C:/..." → "file:///C:/..."；POSIX "/..." → "file:///..."
+  if (/^[A-Za-z]:\//.test(normalized)) return `file:///${normalized}`;
+  if (normalized.startsWith("/")) return `file://${normalized}`;
+  // 相对路径兜底（不该发生）
+  return `file:///${normalized}`;
+}
+
 async function openLocation(d: Doc) {
-  // 用 Tauri plugin-shell 的 open() 打开父目录到系统文件管理器
-  // （Windows → Explorer，macOS → Finder）。capabilities/default.json
-  // 已经放行 shell:allow-open，不需要再申请权限。
-  // 浏览器 dev 模式 (不是 Tauri 窗口) 下 import 会拿不到 plugin，那
-  // 时降级成 toast 显示路径让用户自己复制。
+  // 用 Tauri plugin-shell 的 open() 打开父目录到系统文件管理器。
+  // 浏览器 dev 模式（不是 Tauri 窗口）下 import 拿不到 plugin，降级
+  // toast 显示路径让用户自己复制。
   const folder = fileFolder(d.path);
   try {
     const isTauri =
@@ -114,7 +132,7 @@ async function openLocation(d: Doc) {
       return;
     }
     const { open } = await import("@tauri-apps/plugin-shell");
-    await open(folder);
+    await open(toFileURL(folder));
   } catch (e: any) {
     toast.error(`打开位置失败：${e?.message ?? e}`);
   }
@@ -131,7 +149,7 @@ async function openDoc(d: Doc) {
       return;
     }
     const { open } = await import("@tauri-apps/plugin-shell");
-    await open(d.path);
+    await open(toFileURL(d.path));
   } catch (e: any) {
     toast.error(`打开失败：${e?.message ?? e}`);
   }

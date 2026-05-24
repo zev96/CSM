@@ -496,13 +496,20 @@ function onTextareaKeydown(e: KeyboardEvent) {
       class="flex items-center"
       :style="{ padding: '5px 6px 5px 8px', gap: '6px' }"
     >
+      <!--
+        图片 + AI 续写 按用户要求只保留 icon，文字下线 —— 鼠标 hover
+        title 属性给完整说明。图片数量徽章 N/9 保留（点开前要知道还能
+        加几张）；上传中 / 生成中走 Spinner 才在 icon 处可视化状态。
+      -->
       <button
         type="button"
         class="inline-flex items-center gap-1 transition"
         :disabled="isUploading || !canPickMoreImages"
         :style="{
-          height: '26px',
-          padding: '0 9px',
+          height: '28px',
+          width: images.length > 0 ? 'auto' : '28px',
+          padding: images.length > 0 ? '0 9px' : '0',
+          justifyContent: 'center',
           borderRadius: '999px',
           fontSize: '11px',
           background: 'var(--card-2)',
@@ -510,39 +517,36 @@ function onTextareaKeydown(e: KeyboardEvent) {
           border: '1px solid var(--line)',
           cursor: isUploading ? 'wait' : (canPickMoreImages ? 'pointer' : 'not-allowed'),
         }"
-        :title="canPickMoreImages ? '上传图片（JPG/PNG/WebP）' : `已达上限 ${MAX_IMAGES} 张`"
+        :title="isUploading ? '上传中…' : (canPickMoreImages ? '上传图片（JPG/PNG/WebP）' : `已达上限 ${MAX_IMAGES} 张`)"
         @click="pickImages"
       >
-        <Icon name="image" :size="11"/>
-        <span>{{ isUploading ? "上传中…" : "图片" }}</span>
+        <Icon name="image" :size="13"/>
         <span
           v-if="images.length > 0"
           :style="{
             fontSize: '10px',
             color: images.length >= MAX_IMAGES ? 'var(--red)' : 'var(--ink-3)',
-            marginLeft: '1px',
           }"
-        >({{ images.length }}/{{ MAX_IMAGES }})</span>
+        >{{ images.length }}/{{ MAX_IMAGES }}</span>
       </button>
       <button
         type="button"
-        class="inline-flex items-center gap-1 transition"
+        class="inline-flex items-center justify-center transition"
         :disabled="isSuggesting"
         :style="{
-          height: '26px',
-          padding: '0 9px',
+          height: '28px',
+          width: '28px',
+          padding: '0',
           borderRadius: '999px',
-          fontSize: '11px',
           background: 'rgba(245,192,66,0.18)',
           color: isSuggesting ? 'var(--ink-4)' : '#7a5400',
           border: '1px solid rgba(245,192,66,0.36)',
           cursor: isSuggesting ? 'wait' : 'pointer',
         }"
-        title="让 AI 续写下一层评论"
+        :title="isSuggesting ? 'AI 续写中…' : '让 AI 续写下一层评论'"
         @click="onSuggest"
       >
-        <Icon name="wand" :size="11"/>
-        <span>{{ isSuggesting ? "生成中…" : "AI 续写" }}</span>
+        <Icon name="wand" :size="13"/>
       </button>
       <div class="flex-1"/>
       <button

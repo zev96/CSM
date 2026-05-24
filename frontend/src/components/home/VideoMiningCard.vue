@@ -3,21 +3,26 @@
  * 视频抓取 — 首页 Row 2 第 4 张监测卡。
  *
  *   ┌─────────────────────────────────────────┐
- *   │ MINING · 视频抓取                  [→]  │
- *   │ 218                                     │
- *   │ 已抓取 · 2 任务运行中                    │
- *   ├─────────────────────────────────────────┤
- *   │ 宠物家庭吸尘器     124/150     [进行中] │
- *   │ 母婴加湿器          52/52     [完成]   │
- *   │ 投影仪家用           0/60     [排队]   │
- *   │ 千元降噪耳机        42/80     [进行中] │
+ *   │ 视频抓取                          [→]   │
+ *   │ 30   已抓取                              │
+ *   │  (没有 sparkline，hero 直接接列表)        │
+ *   │ 宠物家庭吸尘器     124/150     [进行中]  │  ← hover 切换顶部
+ *   │ 母婴加湿器          52/52      [完成]   │     30 → row.got/target
+ *   │ ...                                     │     已抓取 → row.keyword
  *   └─────────────────────────────────────────┘
  *
- * 数据：useMiningStore — jobs[] + 每个 job.progress.{platform:{got,target}}。
- * 大数字 = 所有 job 已抓取视频累加（progress.got 之和），任务列表按状态排序
- * （running > pending/queued > done/failed），最多 4 条。
+ * 交互：
+ *   - 默认顶部：totalScraped + "已抓取"
+ *   - hover 某行 → 顶部数字切到 row.got/row.target，副词切到 row.keyword
+ *   - 行 hover 高亮 + 阴影凸起；点击行 → router.push 引流中心 + 该 job
+ *
+ * 原副标 "全部任务已完成 · 共 X 个任务" 删除（用户要求 hero 副位只在
+ * hover 时承载关键词，不展示全局统计）。
+ *
+ * rows 全量映射（不再 slice 0-4）—— 列表 flex-1 + overflow-y-auto
+ * 自然处理高度。
  */
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
@@ -36,7 +41,6 @@ interface Row {
   state: "running" | "queued" | "done" | "failed";
 }
 
-// MiningJob.progress 是平台 → {got,target} 的 map。聚合到 job 级要 sum 一下。
 function aggregateJob(j: MiningJob): { got: number; target: number } {
   let got = 0;
   let target = 0;
@@ -57,7 +61,7 @@ function classifyState(j: MiningJob): Row["state"] {
   if (s === "running") return "running";
   if (s === "pending" || s === "queued") return "queued";
   if (s === "failed" || s === "cancelled") return "failed";
-  return "done"; // done / partial_done / 其它终态
+  return "done";
 }
 
 const STATE_ORDER: Record<Row["state"], number> = {
@@ -67,6 +71,8 @@ const STATE_ORDER: Record<Row["state"], number> = {
   failed: 3,
 };
 
+// 首页这张卡列表最多 15 条（避免数据多时把列表撑太长 / 拉过多 DOM）；
+// 用户要看完整列表走右上「→」详情按钮跳到引流中心。
 const rows = computed<Row[]>(() =>
   [...store.jobs]
     .map((j) => {
@@ -80,36 +86,41 @@ const rows = computed<Row[]>(() =>
       };
     })
     .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state])
-    .slice(0, 4),
+    .slice(0, 15),
 );
 
 const totalScraped = computed(() =>
   store.jobs.reduce((acc, j) => acc + aggregateJob(j).got, 0),
 );
 
-const runningCount = computed(
-  () => store.jobs.filter((j) => classifyState(j) === "running").length,
+// hover 状态 —— 切顶部数字 + 副词
+const hoveredIdx = ref<number | null>(null);
+const selectedRow = computed<Row | null>(() =>
+  hoveredIdx.value === null ? null : rows.value[hoveredIdx.value] ?? null,
 );
 
-const subLabel = computed(() => {
-  if (store.jobs.length === 0) return "暂无抓取任务";
-  if (runningCount.value === 0) return "已抓取 · 全部任务已完成";
-  return `已抓取 · ${runningCount.value} 任务运行中`;
-});
+const heroNumber = computed(() =>
+  selectedRow.value
+    ? `${selectedRow.value.got}/${selectedRow.value.target}`
+    : String(totalScraped.value),
+);
+// heroLabel 已彻底下线（用户要求）—— 顶部只保留大数字 30/30，副位文字
+// "已抓取"删除。下方行 + 状态 pill 已经把语义说清，副词冗余。
 
 onMounted(async () => {
   try {
     await whenReady();
     await store.loadJobs(50);
   } catch {
-    /* 静默：空状态文案撑起占位 */
+    /* 静默 */
   }
 });
 
-// 状态 chip 配色，对齐 Design.md §2 "派生色"。
+// 状态 chip 配色。"进行中"用 yellow-soft 跟知乎 warn 同档（主色按
+// 约定只保留在按钮 + hover 上）。
 function chipStyle(state: Row["state"]) {
   if (state === "running")
-    return { background: "var(--primary-soft)", color: "var(--primary-deep)" };
+    return { background: "var(--yellow-soft)", color: "#7a5400" };
   if (state === "queued")
     return {
       background: "rgba(28,26,23,0.06)",
@@ -126,17 +137,21 @@ function chipLabel(state: Row["state"]) {
   if (state === "failed") return "失败";
   return "完成";
 }
+
+// 点击关键词行 → 跳引流中心 + 该 job。MiningView 暂不读 job query，
+// 透传留待后续接 job 路由 highlight。
+function onRowClick(r: Row) {
+  router.push({
+    name: "mining",
+    query: { job: r.id },
+  });
+}
 </script>
 
 <template>
   <section
-    class="relative flex h-full flex-col overflow-hidden"
-    :style="{
-      background: 'var(--card)',
-      borderRadius: 'var(--radius-card)',
-      border: '1px solid var(--line)',
-      padding: '16px',
-    }"
+    class="card-frosted relative flex h-full flex-col overflow-hidden"
+    :style="{ padding: '16px' }"
   >
     <!-- 标题区 -->
     <div class="flex flex-shrink-0 items-center justify-between">
@@ -145,12 +160,7 @@ function chipLabel(state: Row["state"]) {
       </div>
       <button
         type="button"
-        class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
-        :style="{
-          background: 'var(--card-2)',
-          color: 'var(--ink-2)',
-          border: '1px solid var(--line)',
-        }"
+        class="trend-detail inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
         title="详情"
         @click="router.push({ name: 'mining' })"
       >
@@ -158,7 +168,10 @@ function chipLabel(state: Row["state"]) {
       </button>
     </div>
 
-    <!-- 大数字 + 子标 -->
+    <!--
+      大数字（hover 行时切到该行 got/target）。
+      副词 "已抓取" / 关键词 swap 都按用户要求下线 —— 顶部只展示数字。
+    -->
     <div class="mt-2 flex flex-shrink-0 items-baseline gap-2">
       <div
         class="font-display font-bold"
@@ -169,15 +182,11 @@ function chipLabel(state: Row["state"]) {
           color: 'var(--ink)',
         }"
       >
-        {{ totalScraped }}
-      </div>
-      <div class="text-[11.5px]" :style="{ color: 'var(--ink-2)' }">
-        已抓取
+        {{ heroNumber }}
       </div>
     </div>
-    <div class="mt-0.5 mb-2 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-      {{ subLabel }}
-    </div>
+    <!-- 用 mt-3 留出跟 KeywordTrendCard sparkline 后 mb-3 同款节奏 -->
+    <div class="mt-3 flex-shrink-0"></div>
 
     <!-- 任务列表 -->
     <div
@@ -190,23 +199,29 @@ function chipLabel(state: Row["state"]) {
     </div>
     <div v-else class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
       <div
-        v-for="r in rows"
+        v-for="(r, idx) in rows"
         :key="r.id"
-        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
-        :style="{ background: 'transparent' }"
+        class="row flex items-center gap-2 rounded-[10px] px-2.5 py-2"
+        :class="{ 'row-active': idx === hoveredIdx }"
+        @mouseenter="hoveredIdx = idx"
+        @mouseleave="hoveredIdx = null"
+        @click="onRowClick(r)"
       >
         <div class="min-w-0 flex-1 truncate text-[12px]">
           {{ r.keyword }}
         </div>
-        <span
-          class="font-mono flex-shrink-0 tabular-nums text-[11px]"
-          :style="{ color: 'var(--ink-2)' }"
-        >
-          {{ r.got }}/{{ r.target }}
-        </span>
+        <!--
+          got/target 数字已从行中移除：hover 时顶部 hero 已经显示了
+          该行的 30/30，行内再重复一份显得吵。状态 pill 单独留着，
+          因为它是离散语义（完成/失败/进行中），数字代替不了。
+        -->
         <span
           class="inline-flex h-5 flex-shrink-0 items-center rounded-full px-2 text-[10.5px] font-medium"
-          :style="chipStyle(r.state)"
+          :style="
+            idx === hoveredIdx
+              ? { background: '#ffffff', color: chipStyle(r.state).color }
+              : chipStyle(r.state)
+          "
         >
           {{ chipLabel(r.state) }}
         </span>
@@ -214,3 +229,32 @@ function chipLabel(state: Row["state"]) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.trend-detail {
+  background: rgba(28, 26, 23, 0.04);
+  color: var(--ink-2);
+  border: 1px solid rgba(28, 26, 23, 0.06);
+  transition: background-color 0.12s ease;
+}
+.trend-detail:hover {
+  background: rgba(28, 26, 23, 0.08);
+}
+
+.row {
+  background: transparent;
+  color: var(--ink);
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+  cursor: pointer;
+}
+.row-active {
+  background: var(--primary);
+  color: #ffffff;
+  box-shadow:
+    0 6px 16px -2px rgba(238, 106, 42, 0.45),
+    0 2px 6px rgba(28, 26, 23, 0.06);
+}
+</style>

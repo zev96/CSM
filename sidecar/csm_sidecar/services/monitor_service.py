@@ -160,7 +160,21 @@ def get_summary() -> dict[str, Any]:
 
     Frontend renders 留存率 / 排名 visualisations from this. We don't
     aggregate the metric numerics here because the metric shape varies by
-    platform — UI does the platform-aware unpacking it needs."""
+    platform — UI does the platform-aware unpacking it needs.
+
+    For ``zhihu_question`` tasks we additionally include:
+
+    - ``prev``: the second-most-recent snapshot, so the home card can
+      render "卡位数量 ↑+2 / ↓-1" delta badges without a second round-trip
+      per task.
+    - ``series``: last 7 snapshots' ``matched_count`` (oldest → newest)
+      for the home card sparkline. Each entry is ``{checked_at,
+      matched_count}``; UI is responsible for calendar-bucketing. Was 14
+      originally; user dropped to 7 for the home trend window.
+    - ``top_n``: the effective Top-N for the task (from latest metric or
+      task config), so the sparkline Y-axis can be bounded by the
+      keyword's capacity ceiling.
+    """
     out: dict[str, Any] = {"platforms": {}, "generated_at": datetime.now().isoformat()}
     for ttype in PLATFORM_TYPES:
         tasks = storage.list_tasks(type=ttype)
@@ -168,14 +182,39 @@ def get_summary() -> dict[str, Any]:
         for t in tasks:
             if t.id is None:
                 continue
-            latest = storage.latest_result(t.id)
-            platform_view["tasks"].append({
+            entry: dict[str, Any] = {
                 "id": t.id,
                 "name": t.name,
                 "target_url": t.target_url,
                 "enabled": t.enabled,
-                "latest": result_to_dict(latest) if latest else None,
-            })
+                "latest": None,
+            }
+            if ttype == "zhihu_question":
+                # Pull last 7 results in one go — covers latest + prev + the
+                # 7-day sparkline frame. Cheap (single indexed query per task).
+                recent = storage.list_results(t.id, limit=7)
+                latest = recent[0] if recent else None
+                prev = recent[1] if len(recent) > 1 else None
+                entry["latest"] = result_to_dict(latest) if latest else None
+                entry["prev"] = result_to_dict(prev) if prev else None
+                # Series oldest → newest so UI can render left-to-right
+                # without re-sorting.
+                entry["series"] = [
+                    {
+                        "checked_at": r.checked_at.isoformat() if r.checked_at else None,
+                        "matched_count": int((r.metric or {}).get("matched_count") or 0),
+                    }
+                    for r in reversed(recent)
+                ]
+                # Top-N priority: latest metric → task config → 10 fallback.
+                # zhihu snapshot's metric carries top_n (see _rank_brand).
+                latest_top_n = (latest.metric or {}).get("top_n") if latest else None
+                cfg_top_n = (t.config or {}).get("top_n")
+                entry["top_n"] = int(latest_top_n or cfg_top_n or 10)
+            else:
+                latest = storage.latest_result(t.id)
+                entry["latest"] = result_to_dict(latest) if latest else None
+            platform_view["tasks"].append(entry)
         out["platforms"][ttype] = platform_view
     return out
 

@@ -2,129 +2,145 @@
 /**
  * 知乎问题 — Row 2 第 2 张监测卡。
  *
- * 替换原 RankAlertsCard。视觉风格对齐 BaiduSeoCard：
- *   - 标题区（小标 / 大标 / 副标 / 详情按钮）
- *   - sparkline + 日期标签
- *   - 列表：高亮主项 + 2 个次项，主项是排名最差或预警最严重的任务
+ * 视图抽到 KeywordTrendCard。本组件负责数据获取 + 严重度映射 →
+ * KeywordTrendItem[]，并把行点击转 router.push 跳到监测中心知乎 tab
+ * 对应任务。
+ *
+ * 全量映射不再 slice(0, 3) —— 大窗口下列表区自然多露任务。
  *
  * 数据：GET /api/monitor/summary, platforms.zhihu_question.tasks。
- * 预警阈值参考 [ZHIHU_MIN_MATCHED] 和 cfg.monitor.alert_top_n。
+ * 每条 task 现在包含 ``latest`` / ``prev`` / ``series`` / ``top_n``，
+ * 让卡片可以本地算"卡位数量变化"徽章 + 真实趋势 sparkline，无需对
+ * 每条任务再单发 /api/monitor/results。
+ *
+ * 徽章语义按用户要求重做：
+ *   - 显示"卡位数量变化"（matched_count delta），不再混杂排名 #N。
+ *   - "↑+2" / "↓-1" 文本只是符号 + 数字，去掉了旧的"命中"后缀。
+ *   - 首次抓取（无 prev）→ "—"；alert/risk_control 仍优先显示风控。
  */
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import Icon from "@/components/ui/Icon.vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
-import { useConfig } from "@/stores/config";
+import KeywordTrendCard, {
+  type BadgeKind,
+  type KeywordTrendItem,
+} from "@/components/home/KeywordTrendCard.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 
 const sidecar = useSidecar();
-const cfg = useConfig();
 const router = useRouter();
 const { whenReady } = useSidecarReady();
 
+interface MonitorSnapshot {
+  status: string;
+  rank: number;
+  checked_at: string | null;
+  metric?: Record<string, any>;
+}
+interface SeriesPoint {
+  checked_at: string | null;
+  matched_count: number;
+}
 interface MonitorTaskRow {
   id: number;
   name: string;
   enabled: boolean;
-  latest: {
-    status: string;
-    rank: number;
-    checked_at: string | null;
-    metric?: Record<string, any>;
-  } | null;
+  latest: MonitorSnapshot | null;
+  prev?: MonitorSnapshot | null;
+  series?: SeriesPoint[];
+  top_n?: number;
 }
 
 const tasks = ref<MonitorTaskRow[]>([]);
 const loaded = ref(false);
 
-const topN = computed(() => cfg.data?.monitor?.alert_top_n ?? 5);
-const ZHIHU_MIN_MATCHED = 3;
-
-type Severity = "alert" | "warn" | "ok" | "info";
+// 排序优先级：风控/失败 > 数量下滑 > 持平 > 上升 > 无数据。徽章 kind
+// 用同一个键。
+type Severity = "alert" | "down" | "flat" | "up" | "info";
 const SEVERITY_ORDER: Record<Severity, number> = {
   alert: 0,
-  warn: 1,
-  info: 2,
-  ok: 3,
+  down: 1,
+  flat: 2,
+  up: 3,
+  info: 4,
 };
+
+function matchedCount(snap: MonitorSnapshot | null | undefined): number {
+  if (!snap) return 0;
+  return Number(snap.metric?.matched_count ?? 0);
+}
 
 function severity(t: MonitorTaskRow): Severity {
   if (!t.latest) return "info";
   if (t.latest.status === "failed" || t.latest.status === "risk_control")
     return "alert";
-  if (t.latest.status !== "ok") return "info";
-  const rank = t.latest.rank;
-  const matched = Number(t.latest.metric?.matched_count ?? 0);
-  if (rank < 1 || rank > topN.value) return "warn";
-  if (matched < ZHIHU_MIN_MATCHED) return "warn";
-  return "ok";
+  if (!t.prev) return "info"; // 还没历史 → 没法算 delta
+  const delta = matchedCount(t.latest) - matchedCount(t.prev);
+  if (delta > 0) return "up";
+  if (delta < 0) return "down";
+  return "flat";
 }
 
-interface Row {
-  id: number;
-  name: string;
-  severity: Severity;
-  chipText: string;
-  chipIcon: string;
+function mapKind(sev: Severity): BadgeKind {
+  if (sev === "alert") return "alert";
+  if (sev === "down") return "down";
+  if (sev === "up") return "up";
+  return "flat";
 }
 
-function buildRow(t: MonitorTaskRow): Row {
+function rowBadge(t: MonitorTaskRow) {
   const sev = severity(t);
-  const rank = t.latest?.rank ?? -1;
-  const matched = Number(t.latest?.metric?.matched_count ?? 0);
-  let chipText: string;
-  let chipIcon: string;
-  if (sev === "alert") {
-    chipText = "风控";
-    chipIcon = "alert";
-  } else if (sev === "warn" && (rank < 1 || rank > topN.value)) {
-    chipText = `#${rank > 0 ? rank : "-"}`;
-    chipIcon = "arrowDown";
-  } else if (sev === "warn") {
-    chipText = `${matched} 命中`;
-    chipIcon = "arrowDown";
-  } else if (sev === "ok") {
-    chipText = `#${rank}`;
-    chipIcon = "arrowUp";
-  } else {
-    chipText = "—";
-    chipIcon = "x";
-  }
-  return { id: t.id, name: t.name, severity: sev, chipText, chipIcon };
+  if (sev === "alert") return { text: "风控", icon: "alert", kind: mapKind(sev) };
+  if (sev === "info") return { text: "—", icon: "", kind: mapKind(sev) };
+  // 纯箭头 + 绝对值数字，按用户要求不带 +/- 符号 —— 方向由 icon 表达，
+  // 重复一份 ASCII 符号是冗余（↑ 已经"就是加"，↓ 已经"就是减"）。
+  const absDelta = Math.abs(matchedCount(t.latest) - matchedCount(t.prev));
+  if (sev === "up")
+    return { text: String(absDelta), icon: "arrowUp", kind: mapKind(sev) };
+  if (sev === "down")
+    return { text: String(absDelta), icon: "arrowDown", kind: mapKind(sev) };
+  // flat（变化 = 0）：纯 "—"，不带 icon
+  return { text: "—", icon: "", kind: mapKind(sev) };
 }
 
-const sortedRows = computed<Row[]>(() =>
-  tasks.value
-    .map(buildRow)
-    .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
-    .slice(0, 3),
+// 真实 sparkline 数据：series oldest→newest 的 matched_count。无 series
+// 时让 KeywordTrendCard fallback 到 SPARK_FALLBACK（开发兜底）。
+function rowSeries(t: MonitorTaskRow): number[] | undefined {
+  if (!t.series || t.series.length === 0) return undefined;
+  return t.series.map((p) => p.matched_count);
+}
+
+// 首页这张卡列表最多 15 条；完整列表走右上「→」按钮跳到监测中心知乎 tab。
+const items = computed<KeywordTrendItem[]>(() =>
+  [...tasks.value]
+    .sort((a, b) => SEVERITY_ORDER[severity(a)] - SEVERITY_ORDER[severity(b)])
+    .slice(0, 15)
+    .map((t) => ({
+      id: t.id,
+      label: t.name,
+      badge: rowBadge(t),
+      series: rowSeries(t),
+      // Y 轴上限 = 该关键词 Top-N（命中条数的容量上限），让 sparkline
+      // 显示"占比"而不是被微小波动放大的相对趋势。
+      yMax: typeof t.top_n === "number" && t.top_n > 0 ? t.top_n : undefined,
+    })),
 );
 
-const topRow = computed(() => sortedRows.value[0] ?? null);
-const restRows = computed(() => sortedRows.value.slice(1));
-
-const subLabel = computed(() => {
-  if (!loaded.value) return "加载中…";
-  if (tasks.value.length === 0) return "暂无知乎任务";
-  const alerts = sortedRows.value.filter(
-    (r) => r.severity === "alert" || r.severity === "warn",
-  ).length;
-  if (alerts > 0) return `${alerts} 个预警`;
-  return "全部上榜";
-});
+const subLabel = computed(() => "近 7 天");
 
 const SPARK_FALLBACK = [2, 3, 3, 4, 5, 5, 6];
-const SPARK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "今天"];
-
-function chipStyle(sev: Severity) {
-  if (sev === "alert") return { background: "#f3d3cd", color: "#a3382a" };
-  if (sev === "warn")
-    return { background: "var(--yellow-soft)", color: "#7a5400" };
-  if (sev === "ok") return { background: "#dde7d2", color: "#4d6b2f" };
-  return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
-}
+// 横轴标签：7 天日（"22"），不带月份；今天在最末。跟 series 长度一致
+// 让 X 轴和数据点对齐。原本 14 天，用户反馈太长，缩到 7 天。
+const SPARK_LABELS = ((): string[] => {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    out.push(String(d.getDate()));
+  }
+  return out;
+})();
 
 onMounted(async () => {
   try {
@@ -137,130 +153,33 @@ onMounted(async () => {
     loaded.value = true;
   }
 });
+
+function goDetail() {
+  router.push({ name: "monitor", query: { tab: "zhihu" } });
+}
+
+// 点击任务行 → 跳到监测中心知乎 tab + 该任务。MonitorView 的
+// ZhihuMonitorModule 暴露 selectTask(taskId)，task query 当前透传，
+// 父组件后续可接住自动 highlight。
+function onItemClick(item: KeywordTrendItem) {
+  router.push({
+    name: "monitor",
+    query: { tab: "zhihu", task: item.id },
+  });
+}
 </script>
 
 <template>
-  <section
-    class="relative flex h-full flex-col overflow-hidden"
-    :style="{
-      background: 'var(--card)',
-      borderRadius: 'var(--radius-card)',
-      border: '1px solid var(--line)',
-      padding: '16px',
-    }"
-  >
-    <!-- 标题区 -->
-    <div class="flex flex-shrink-0 items-center justify-between">
-      <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">
-        知乎问题
-      </div>
-      <button
-        type="button"
-        class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
-        :style="{
-          background: 'var(--card-2)',
-          color: 'var(--ink-2)',
-          border: '1px solid var(--line)',
-        }"
-        title="详情"
-        @click="router.push({ name: 'monitor', query: { tab: 'zhihu' } })"
-      >
-        <Icon name="arrowRight" :size="11" />
-      </button>
-    </div>
-
-    <!-- 大标：当前主问题 + 状态 chip -->
-    <div class="mt-2 flex flex-shrink-0 items-center gap-2">
-      <div
-        class="font-display min-w-0 flex-1 truncate font-bold"
-        :style="{ fontSize: '15px', color: 'var(--ink)' }"
-      >
-        {{ topRow ? topRow.name : "知乎排名" }}
-      </div>
-      <span
-        v-if="topRow"
-        class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
-        :style="chipStyle(topRow.severity)"
-      >
-        <Icon :name="topRow.chipIcon" :size="9" />
-        {{ topRow.chipText }}
-      </span>
-    </div>
-    <div class="mt-0.5 mb-2 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-      近 7 天 · {{ subLabel }}
-    </div>
-
-    <!-- Sparkline -->
-    <div class="mb-2 flex-shrink-0">
-      <Sparkline
-        :points="SPARK_FALLBACK"
-        :axis-labels="SPARK_LABELS"
-        :height="38"
-        stroke="var(--primary)"
-        :show-last="true"
-        fluid
-      />
-    </div>
-
-    <!-- 任务列表 -->
-    <div
-      v-if="!loaded"
-      class="flex min-h-0 flex-1 items-center justify-center text-[12px]"
-      :style="{ color: 'var(--ink-3)' }"
-    >
-      加载中…
-    </div>
-    <div
-      v-else-if="sortedRows.length === 0"
-      class="flex min-h-0 flex-1 items-center justify-center text-center text-[12px]"
-      :style="{ color: 'var(--ink-3)' }"
-    >
-      暂无知乎任务<br />
-      <span class="text-[11px]">前往监测中心添加</span>
-    </div>
-    <div v-else class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-      <!-- 高亮主项：深橙底 + 暖色字 -->
-      <div
-        v-if="topRow"
-        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
-        :style="{
-          background: 'var(--primary)',
-          border: '1px solid var(--primary)',
-        }"
-      >
-        <div
-          class="min-w-0 flex-1 truncate text-[12px] font-semibold"
-          :style="{ color: 'var(--yellow)' }"
-        >
-          {{ topRow.name }}
-        </div>
-        <span
-          class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
-          :style="{
-            background: 'var(--primary-deep)',
-            color: 'var(--yellow)',
-          }"
-        >
-          <Icon :name="topRow.chipIcon" :size="9" />
-          {{ topRow.chipText }}
-        </span>
-      </div>
-      <!-- 次项：白底简洁行 -->
-      <div
-        v-for="r in restRows"
-        :key="r.id"
-        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
-        :style="{ background: 'transparent' }"
-      >
-        <div class="min-w-0 flex-1 truncate text-[12px]">{{ r.name }}</div>
-        <span
-          class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
-          :style="chipStyle(r.severity)"
-        >
-          <Icon :name="r.chipIcon" :size="9" />
-          {{ r.chipText }}
-        </span>
-      </div>
-    </div>
-  </section>
+  <KeywordTrendCard
+    category="知乎问题"
+    :sub-label="subLabel"
+    :axis-labels="SPARK_LABELS"
+    :items="items"
+    :fallback-series="SPARK_FALLBACK"
+    :loaded="loaded"
+    empty-title="暂无知乎任务"
+    empty-hint="前往监测中心添加"
+    @detail="goDetail"
+    @item-click="onItemClick"
+  />
 </template>

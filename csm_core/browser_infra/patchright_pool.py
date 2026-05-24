@@ -106,9 +106,18 @@ def ensure_browsers_path() -> str | None:
     # temp dir), so this resolves to the install dir, not the unpack
     # temp. Same path works in dev when running an actually-frozen build
     # via tauri dev.
+    #
+    # Dev-mode pitfall: ``binaries/ms-playwright/`` is declared as a Tauri
+    # bundle.resources entry, so Tauri *mirrors* it into
+    # ``target/debug/binaries/`` on every dev launch — including when the
+    # source is an empty placeholder (CI fills it in release, dev machines
+    # don't). The empty mirror passes .exists() and steers patchright into
+    # a folder with no chromium, blocking fall-through to the working
+    # LOCALAPPDATA cache. Require at least one ``chromium*`` subdir before
+    # accepting bundled — that's what patchright actually needs to find.
     try:
         bundled = Path(sys.executable).resolve().parent / "binaries" / "ms-playwright"
-        if bundled.exists():
+        if bundled.exists() and any(bundled.glob("chromium*")):
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled)
             if not _browsers_path_logged:
                 logger.info("PLAYWRIGHT_BROWSERS_PATH set to bundled %s", bundled)

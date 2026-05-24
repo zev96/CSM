@@ -21,7 +21,8 @@ import { computed, ref, watch } from "vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Spinner from "@/components/ui/Spinner.vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
+// Sparkline 已下线 —— 留存趋势图改用 LineChart 跟 BaiduRankingPage 总任务图一致。
+import LineChart from "./history/LineChart.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 
 import { useToast } from "@/composables/useToast";
@@ -90,18 +91,18 @@ const PLATFORMS: Array<{ k: CommentPlatform; l: string; color: string; count: nu
   { k: "kuaishou", l: "快手", color: "#f5c042", count: 0 },
 ];
 
-// Sparkline 横轴日期 —— 用今天往回推 N 天，演示模式下纯前端生成。
-function daysAgoLabels(count: number, totalSpan: number): string[] {
+// LineChart 横轴 label —— 7 天 bucket（今天往回 6 天），日期 only ("10")，
+// 跟 BaiduRankingPage bucketByCalendarDay 一致。模块加载一次性算出来；
+// 用户跨天保持页面不重启的概率极低，不挂动态 refresh。
+const COMMENT_CHART_LABELS: string[] = (() => {
   const out: string[] = [];
   const now = new Date();
-  for (let i = 0; i < count; i++) {
-    const offset = Math.round(((count - 1 - i) / (count - 1)) * (totalSpan - 1));
-    const d = new Date(now.getTime() - offset * 24 * 60 * 60 * 1000);
-    out.push(`${d.getMonth() + 1}/${d.getDate()}`);
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    out.push(String(d.getDate()));
   }
   return out;
-}
-const COMMENT_SPARK_LABELS = daysAgoLabels(7, 7); // 7 天留存
+})();
 
 // V1 设计稿示例数据，发布前清空保留空状态 —— 三个平台默认全空，
 // SAMPLE_COMMENTS[platform].length === 0 时模板会渲染"还没有监测任务"。
@@ -479,11 +480,17 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
 
 <template>
   <!--
-    Root: `space-y-6` 给 hero / subtab / body 三个直接子节点统一 24px 间距
-    （对齐 MonitorView root 的 gap-24 节奏）。原来是裸 <div>，紧急告警 hero
-    跟下面平台 pivot 行紧贴成一团 —— 屏幕大时看着像粘连。
+    Root：必须是 `flex min-h-0 flex-1 flex-col`，理由——
+      MonitorView root 是 flex column + h-full；本模块作为它的子项要
+      "占满剩余高度 + 让内部 flex-1 子链生效"。原本用 `space-y-6` 裸
+      <div> 不是 flex 容器、也没 flex-1，导致下面 `grid min-h-0 flex-1`
+      跟 grid 里的 section 都按内容自然撑开 —— 视频列表多了就把整个
+      MonitorView 顶过 viewport，触发 App.vue 第 190 行
+      `<div class="min-h-0 flex-1 overflow-y-auto">` 的兜底滚动，
+      滚动条落到窗口最右（不是视频列表区域内）。
+    flex-1 占满 + min-h-0 解锁子级收缩 + gap-24 替代原 space-y-6 间距。
   -->
-  <div class="space-y-6">
+  <div class="flex min-h-0 flex-1 flex-col" :style="{ gap: '24px' }">
     <!-- alert hero (stacked when commentAlerts.length > 1) -->
     <div
       v-if="commentAlerts.length > 0 && currentCommentAlert"
@@ -791,9 +798,10 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
               <div class="font-display text-[14px] font-semibold">
                 {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} · 评论监控
               </div>
-              <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                评论留存率 = 当前可见数 / 历史峰值
-              </div>
+              <!--
+                "评论留存率 = 当前可见数 / 历史峰值" subtitle 按用户要求移除 ——
+                B 站/抖音/快手三套各重复一句太碎，KPI 列已经直观体现"留存"语义。
+              -->
             </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <div
@@ -1032,7 +1040,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
           让本卡内容超出时自己滚，不传给页面。
         -->
         <section
-          class="flex h-full min-h-0 flex-col overflow-y-auto"
+          class="flex h-full min-h-0 flex-col overflow-hidden"
           :style="{
             background: 'var(--card)',
             border: '1px solid var(--line)',
@@ -1040,8 +1048,14 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             padding: '22px',
           }"
         >
-          <!-- L3 单视频详情（点视频名后右列变这个） -->
+          <!--
+            L3 单视频详情（点视频名后右列变这个）
+            外套 overflow-y-auto wrapper —— L3 的卡片内容可能比 viewport
+            长（KPI + 我的评论 box + 操作按钮），整个 L3 区域自滚。
+            section 自身 overflow-hidden 防止双层滚动条。
+          -->
           <template v-if="selectedVideo">
+          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <div class="mb-3 flex flex-shrink-0 items-start justify-between gap-2">
               <div class="min-w-0">
                 <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
@@ -1207,9 +1221,18 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 <span>补发评论</span>
               </button>
             </div>
+          </div>
           </template>
 
-          <!-- L1/L2 默认右列 —— 留存趋势 + 被删评论 -->
+          <!--
+            L1/L2 默认右列 —— 留存趋势 + 被删评论。
+            修 bug：原来 section 整张 overflow-y-auto 导致整列一起滚（图表
+            和列表都跟着上下移动），用户要求"只让被删评论列表滚"。改成
+            section overflow-hidden + 三段式：
+              - 留存趋势（header + chart）→ flex-shrink-0 固定
+              - 被删评论容器 → flex-1 + min-h-0 + 内层 overflow-y-auto
+              - L2 启停控件 → flex-shrink-0 锁底
+          -->
           <template v-else>
             <div class="flex-shrink-0">
               <div class="font-display text-[14px] font-semibold">
@@ -1219,51 +1242,57 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 {{ selectedCommentTaskId ? "点左侧视频名查看单条评论详情" : "近 7 天" }}
               </div>
             </div>
-            <div class="mt-3">
+            <div class="mt-3 flex-shrink-0">
               <!--
-                真实数据 sparkline 暂时只有 prev/latest 两点（来自 limit=2
-                的快照对）；点不够时 Sparkline 自己会 fallback 到空态。
-                后续要更细，可在选中批次时再拉每个 task limit=14 聚合。
+                永远 render LineChart（跟 ZhihuMonitorModule 同改法）——
+                即使 retentionPoints 为空，也用 7 个 null 撑起完整时间轴 frame
+                让用户看到"这里将来会有趋势线"。chart.js spanGaps=false
+                自动在 null 处画 gap，跟"那天没数据"语义对齐。
+                  pts.length === 0 → 7 个 null
+                  pts.length === 1 → 前 6 个 null + 末位 latest
+                  pts.length >= 2  → 前 5 个 null + 倒数 2 个 [prev, latest]
               -->
-              <Sparkline
-                v-if="retentionPoints.length >= 2"
-                :points="retentionPoints"
-                :width="360"
-                :height="80"
-                stroke="var(--red, #d85a48)"
-                :axis-labels="COMMENT_SPARK_LABELS"
-                fluid
+              <LineChart
+                :labels="COMMENT_CHART_LABELS"
+                :y-max="100"
+                :y-axis-formatter="(v: number) => `${v}%`"
+                :series="[
+                  {
+                    label: '留存率 %',
+                    color: 'var(--red, #d85a48)',
+                    data: retentionPoints.length === 0
+                      ? [null, null, null, null, null, null, null]
+                      : retentionPoints.length === 1
+                        ? [null, null, null, null, null, null, retentionPoints[0]]
+                        : [null, null, null, null, null, retentionPoints[0], retentionPoints[1]],
+                  },
+                ]"
               />
-              <div
-                v-else
-                class="text-[11.5px]"
-                :style="{ color: 'var(--ink-3)', padding: '6px 0' }"
-              >
-                暂无足够的历史快照画趋势 —— 至少需要两次检查后才能成线。
-              </div>
             </div>
-            <div class="mt-4">
-              <div class="mb-2 text-[12px] font-semibold">
+            <div class="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div class="mb-2 flex-shrink-0 text-[12px] font-semibold">
                 {{
                   deletedComments.length
                     ? `被删的 ${deletedComments.length} 条评论`
                     : '暂无被删评论'
                 }}
               </div>
-              <div
-                v-for="(x, i) in deletedComments"
-                :key="i"
-                class="mb-1 flex items-center gap-3"
-                :style="{
-                  padding: '10px',
-                  borderRadius: '10px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                }"
-              >
-                <Pill :tone="x.tone">{{ x.tag }}</Pill>
-                <span class="flex-1 text-[12px]">{{ x.who }}</span>
-                <span class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">{{ x.date }}</span>
+              <div class="min-h-0 flex-1 overflow-y-auto">
+                <div
+                  v-for="(x, i) in deletedComments"
+                  :key="i"
+                  class="mb-1 flex items-center gap-3"
+                  :style="{
+                    padding: '10px',
+                    borderRadius: '10px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <Pill :tone="x.tone">{{ x.tag }}</Pill>
+                  <span class="flex-1 text-[12px]">{{ x.who }}</span>
+                  <span class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">{{ x.date }}</span>
+                </div>
               </div>
             </div>
 
@@ -1274,7 +1303,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             -->
             <div
               v-if="selectedCommentTaskId"
-              class="mt-4 flex items-center gap-2"
+              class="mt-4 flex flex-shrink-0 items-center gap-2"
               :style="{
                 paddingTop: '14px',
                 borderTop: '1px solid var(--line)',

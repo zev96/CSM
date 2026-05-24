@@ -14,9 +14,10 @@ Ported from Case-8 ``bilibili_api.py`` with the following changes:
 from __future__ import annotations
 import logging
 import re
+import threading
 from typing import Any
 
-from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
+from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask, maybe_cancel
 from ..rate_limit import get_pacer, get_breaker
 from ..drivers.cookie_store import CookieStore
 from ._comment_common import build_match_result, fail_result, risk_control_result
@@ -42,7 +43,16 @@ class BilibiliCommentAdapter:
         self._breaker = get_breaker(self.platform)
         self._ua_idx = 0
 
-    def fetch(self, task: MonitorTask) -> MonitorResult:
+    def fetch(
+        self,
+        task: MonitorTask,
+        cancel_token: threading.Event | None = None,
+        **_kwargs,
+    ) -> MonitorResult:
+        # **_kwargs swallows monitor_loop 的 progress_cb / resume_from。
+        # cancel_token 是真正用到的协作取消信号 —— 用户在 UI 点「停止」
+        # 时 monitor_loop 会 set 它，本函数沿途多处 maybe_cancel(...) 检查
+        # 后立刻退出（避免完整跑完一次 fetch 才听取消）。
         if not self._breaker.allow():
             return risk_control_result(task, "breaker_open")
 
@@ -71,10 +81,14 @@ class BilibiliCommentAdapter:
         if cred:
             session.headers["Cookie"] = cred.cookies_text
 
+        # Cancel check #1 —— pacer wait 之前快速退出
+        maybe_cancel(cancel_token)
+
         # 1. Resolve BV → AID. Bilibili's reply API takes the numeric aid
         # (oid), not the BV. The /x/web-interface/view endpoint returns
         # both for free.
         self._pacer.wait()
+        maybe_cancel(cancel_token)
         aid = self._resolve_aid(session, vid, id_type)
         if not aid:
             self._breaker.record_failure()
@@ -82,10 +96,15 @@ class BilibiliCommentAdapter:
                 self._cookies.mark_failed(cred)
             return fail_result(task, "resolve_aid", "could not resolve AV/BV → aid")
 
+        # Cancel check #2 —— 进入主评论拉取（最长 20 页 × 数百毫秒）前再查
+        maybe_cancel(cancel_token)
+
         # 2. Pull hot comments (mode=3). If we don't have enough, top up
         # with mode=2 (time-sorted) but mark those rank=-1 so the matcher
         # only counts the hot-sorted slice.
-        hot, ok, err = self._fetch_comments_by_mode(session, aid, mode=3, limit=200)
+        hot, ok, err = self._fetch_comments_by_mode(
+            session, aid, mode=3, limit=200, cancel_token=cancel_token,
+        )
         if not ok:
             self._breaker.record_failure()
             if cred:
@@ -124,6 +143,7 @@ class BilibiliCommentAdapter:
         aid: str,
         mode: int,
         limit: int,
+        cancel_token: threading.Event | None = None,
     ) -> tuple[list[dict[str, Any]], bool, str | None]:
         all_comments: list[dict[str, Any]] = []
         next_cursor: int | str = 0
@@ -134,6 +154,9 @@ class BilibiliCommentAdapter:
         for _ in range(20):
             if len(all_comments) >= limit:
                 break
+            # Cancel check —— 每翻一页都查一次，pacer 可能 sleep 秒级，期间
+            # 用户点停止应该立刻退（不是再下载一页才退）。
+            maybe_cancel(cancel_token)
             self._pacer.wait()
             try:
                 resp = session.get(

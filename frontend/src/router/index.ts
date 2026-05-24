@@ -32,6 +32,15 @@ const router = createRouter({
       meta: { label: "监测中心" },
     },
     {
+      // 数据中心 —— 从原 MonitorView 的 "report" tab 抽出来的独立 view，
+      // LeftNav 单独项；内部仍沿用 RetentionPage / ZhihuRankingPage /
+      // BaiduSEOAnalytics 三个 history sub-page，结构跟旧 tab 一致。
+      path: "/data-center",
+      name: "data-center",
+      component: () => import("@/views/DataCenterView.vue"),
+      meta: { label: "数据中心" },
+    },
+    {
       path: "/mining",
       name: "mining",
       component: () => import("@/views/MiningView.vue"),
@@ -42,6 +51,22 @@ const router = createRouter({
       name: "templates",
       component: () => import("@/views/TemplatesView.vue"),
       meta: { label: "模板库" },
+    },
+    {
+      // 结构模板编辑/新建独立页 —— 用户要求 ⋯ → 编辑 / 卡片点击都走 router
+      // 而不是原先的 inBuilder modal-takeover 模式。`:id = "new"` = 新建。
+      path: "/templates/edit/:id",
+      name: "template-edit",
+      component: () => import("@/views/TemplateEditView.vue"),
+      meta: { label: "编辑模板" },
+    },
+    {
+      // 风格 Skill 编辑/新建独立页 —— 跟结构模板同模式，原 SkillEditModal
+      // 改成独立 view（用户要求"和模板库一样的，有单独页面的设计"）。
+      path: "/templates/skills/edit/:id",
+      name: "skill-edit",
+      component: () => import("@/views/SkillEditView.vue"),
+      meta: { label: "编辑 Skill" },
     },
     {
       // 最近文档历史页 —— 从 HomeView 的「更多」按钮进入。比首页那张

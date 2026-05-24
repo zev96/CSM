@@ -31,10 +31,10 @@ import CookieManagerModal from "@/components/monitor/CookieManagerModal.vue";
 import EditBatchModal from "@/components/monitor/EditBatchModal.vue";
 import CommentMonitorModule from "@/components/monitor/CommentMonitorModule.vue";
 import ZhihuMonitorModule, { type ZhihuAlertData } from "@/components/monitor/ZhihuMonitorModule.vue";
-import RetentionPage from "@/components/monitor/history/RetentionPage.vue";
-import ZhihuRankingPage from "@/components/monitor/history/ZhihuRankingPage.vue";
+// RetentionPage / ZhihuRankingPage / BaiduSEOAnalytics 已移到 DataCenterView，
+// 这里只剩 baidu 工作区用的 BaiduRankingPage（顶级 tab，跟 history 同名但不同
+// 组件 —— history 那个是 BaiduSEOAnalytics）。
 import BaiduRankingPage from "@/components/monitor/history/BaiduRankingPage.vue";
-import BaiduSEOAnalytics from "@/components/monitor/history/BaiduSEOAnalytics.vue";
 
 import { subscribe } from "@/api/client";
 import { useConfig } from "@/stores/config";
@@ -64,11 +64,13 @@ const route = useRoute();
 const router = useRouter();
 const { whenReady } = useSidecarReady();
 
-type Tab = "zhihu" | "comment" | "baidu" | "report";
+type Tab = "zhihu" | "comment" | "baidu";
 
 function tabFromQuery(): Tab {
   const q = route.query.tab;
-  if (q === "zhihu" || q === "comment" || q === "baidu" || q === "report") return q;
+  // 旧 ?tab=report 链接静默 fallback 到 zhihu —— 数据中心抽出独立 view
+  // (/data-center) 后，'report' 不再是 MonitorView 内 tab。
+  if (q === "zhihu" || q === "comment" || q === "baidu") return q;
   return "zhihu";
 }
 const activeTab = ref<Tab>(tabFromQuery());
@@ -86,16 +88,13 @@ const PLATFORM_TYPE: Record<CommentPlatform, string> = {
 };
 const commentSubtab = ref<CommentPlatform>("bilibili");
 
-type HistorySubtab = "retention" | "zhihu" | "baidu";
-const historySubtab = ref<HistorySubtab>("retention");
-
 // 当前 tab 对应的任务 type——modal 的 :default-type 和 @imported reload 共用，
 // 避免两处分别 inline 维护出现错位（baidu 分支原本只在 :default-type 里有，
 // @imported 漏了，导致百度批量导入后刷错 tab 的列表）。
+// 原 'report' tab 的 baidu 分支已随数据中心一起搬到 DataCenterView。
 const currentTaskType = computed<string>(() => {
   if (activeTab.value === "zhihu") return "zhihu_question";
   if (activeTab.value === "baidu") return "baidu_keyword";
-  if (activeTab.value === "report" && historySubtab.value === "baidu") return "baidu_keyword";
   return PLATFORM_TYPE[commentSubtab.value];
 });
 
@@ -268,7 +267,10 @@ function clearEditOnClose() {
 // Template ref to whichever BaiduRankingPage is currently mounted (top-level
 // baidu tab OR history sub-tab). Only one is mounted at a time, so the same
 // ref name is fine.
-const baiduPageRef = ref<{ reload: () => Promise<void> } | null>(null);
+const baiduPageRef = ref<{
+  reload: () => Promise<void>;
+  selectTask: (taskId: number) => Promise<void>;
+} | null>(null);
 
 // 评论模块的 template ref —— 历史报告 drill-down 时父组件先切
 // activeTab/commentSubtab，等模块挂载 + atomic load 跑完再调它的
@@ -288,6 +290,26 @@ const zhihuModuleRef = ref<{
   onTaskFinished: (taskId: number) => void;
   handleTaskDeleted: (taskId: number) => void;
 } | null>(null);
+
+// route.query.task 驱动："首页关键词卡 → 该任务详情" 的跳转链路。父组件
+// 在 loadTasksAndSnapshotsAtomic 完成 + 子模块挂载后调用，把 ?task=ID 落到
+// 对应模块的 selectTask。子模块自己处理"还没拿到 tasks 时先 pin 待选"
+// 的竞态（zhihu 模块 watch(props.tasks, immediate) 接管；baidu 用 pending
+// ref 跨 loadTasks 持久化）。
+async function _applyTaskQueryIfPresent() {
+  const tQ = route.query.task;
+  const raw = typeof tQ === "string" ? tQ : Array.isArray(tQ) ? tQ[0] : null;
+  if (!raw) return;
+  const taskId = Number(raw);
+  if (!Number.isFinite(taskId) || taskId <= 0) return;
+  // 等一拍让 v-if 切换的模块挂载完成、ref 绑上
+  await nextTick();
+  if (activeTab.value === "zhihu") {
+    zhihuModuleRef.value?.selectTask(taskId);
+  } else if (activeTab.value === "baidu") {
+    void baiduPageRef.value?.selectTask?.(taskId);
+  }
+}
 
 async function onTaskMutatedReload() {
   // Pick typeKey by activeTab — including "baidu" so the call isn't a
@@ -461,7 +483,14 @@ async function cancelTask(taskId: number) {
   try {
     const delivered = await monitorStatus.cancel(taskId);
     if (delivered) {
-      toast.info("已请求停止，等待当前抓取完成后中断…");
+      // 文案说清楚 cancel 是异步的：
+      //   - baidu：在下一个关键词前断开（典型 30-60s）
+      //   - zhihu / comment：当前 fetch 内部不查 cancel 标记，
+      //     需要等本次 HTTP 完成（一般 5-30s）才能退出
+      // 旧文案"等待当前抓取完成后中断"含糊，用户以为不工作。
+      toast.info(
+        "已发送停止信号，正在等当前抓取到达检查点退出（baidu 约 30-60s，zhihu/评论 约 5-30s）",
+      );
     } else {
       toast.warn("没有可停止的任务（可能已经结束）");
     }
@@ -523,42 +552,11 @@ async function cancelBatch(batchName: string) {
   }
 }
 
-// 历史报告 drill-down 跳转 ── RetentionPage 行点击 emit navigate({platform, batchName, taskId}) → 这里。
-// 切到平台评论 tab、平台 chip、批次 L2、视频 L3。靠 nextTick 等
-// watch(activeTab) / watch(commentSubtab) 的 atomic-load 跑完，再通过模块
-// 暴露的 selectBatchAndVideo 写入 selectedCommentTaskId/selectedVideoId，
-// 否则 atomic-load 内部的「selectedTaskId.value = newTasks[0].id」会盖
-// 掉我们的设置。
-async function goToCommentTask(payload: {
-  platform: "bilibili_comment" | "douyin_comment" | "kuaishou_comment";
-  batchName: string;
-  taskId: number;
-}) {
-  const subtabKey: CommentPlatform =
-    payload.platform === "bilibili_comment" ? "bilibili"
-    : payload.platform === "douyin_comment" ? "douyin"
-    : "kuaishou";
-  activeTab.value = "comment";
-  commentSubtab.value = subtabKey;
-  await nextTick();
-  await nextTick();  // 一个 tick 不够；watch handler 是 async，等两 tick 让 atomic load 跑完
-  commentModuleRef.value?.selectBatchAndVideo(payload.batchName, payload.taskId);
-}
-
-async function goToZhihuTask(payload: { taskId: number }) {
-  // selectedTaskId 现在归 ZhihuMonitorModule 管 —— 切到 zhihu tab 后等
-  // 模块挂载 + atomic load 跑完，再通过暴露的 selectTask 写入。两 tick
-  // 让 watch(activeTab) handler 跑完，跟 goToCommentTask 同语义。
-  activeTab.value = "zhihu";
-  await nextTick();
-  await nextTick();
-  zhihuModuleRef.value?.selectTask(payload.taskId);
-}
-
-function goToBaiduTask(_payload: { taskId: number }) {
-  // MVP: switch to baidu workspace tab. User can then click the task row there.
-  activeTab.value = "baidu";
-}
+// 数据中心 drill-down handlers 已搬到 DataCenterView —— sub-page 的
+// @navigate 现在在那边接住并 router.push 回 monitor + 对应 tab。
+// 原 commentModuleRef.selectBatchAndVideo / zhihuModuleRef.selectTask
+// 的自动 highlight 行为暂时丢失，等 MonitorView 加 watch route.query
+// 后再接回来（task / batch / platform query 已经在 push 时透传过来）。
 
 // batchRunState 已下沉到 CommentMonitorModule —— 评论 tab 的批次按钮
 // 文案 / 禁用态在模块内由 props.runningTaskIds 衍生计算。
@@ -622,8 +620,21 @@ watch(activeTab, async (t) => {
   } else if (t === "comment") {
     await loadTasksAndSnapshotsAtomic(PLATFORM_TYPE[commentSubtab.value]);
   }
+  // baidu tab 的数据由 BaiduRankingPage 自己 onMounted 拉，不走 atomic load。
   // 历史报告 sub-page self-loads via RetentionPage / ZhihuRankingPage onMounted
+  // tab 切换后尝试落 route.query.task；模块可能还没挂上去，selectTask 内部
+  // 各自有等任务列表就绪的兜底，调早不会丢。
+  void _applyTaskQueryIfPresent();
 });
+
+// 路由 query.task 单独变化时也触发 —— 比如已经在 monitor 页时再点首页
+// 同一 tab 的不同任务行，activeTab 没变但 task 变了，靠这个 watch 兜底。
+watch(
+  () => route.query.task,
+  () => {
+    void _applyTaskQueryIfPresent();
+  },
+);
 
 watch(commentSubtab, async (s) => {
   if (activeTab.value !== "comment") return;
@@ -647,7 +658,10 @@ onMounted(async () => {
       await loadTasks(currentTaskType.value);
       await loadTaskSnapshots();
     }
+    // baidu tab 自己 onMounted 拉数据；这里只负责通用启动流程。
     // 历史报告 sub-page self-loads via RetentionPage / ZhihuRankingPage onMounted
+    // Drill-down from home cards：?task=ID 在首次进入时也要落到子模块
+    void _applyTaskQueryIfPresent();
     startMonitorBus();
     // Force a /running hydrate so navigating away+back doesn't leave
     // stale state. The store also polls every 30 s, but mount-time
@@ -667,42 +681,33 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
   { k: "zhihu", l: "知乎问题", ic: "radar" },
   { k: "comment", l: "平台评论", ic: "warn" },
   { k: "baidu", l: "百度排名", ic: "search" },
-  { k: "report", l: "历史报告", ic: "fileText" },
 ];
 </script>
 
 <template>
   <div class="flex h-full flex-col" :style="{ gap: '24px' }">
     <!-- ── 顶部：title + pivot ───────────────────────────────────── -->
-    <div class="flex flex-shrink-0 items-end justify-between gap-4">
+    <div class="flex flex-shrink-0 items-center justify-between gap-4">
       <div class="min-w-0">
+        <!--
+          标题按用户要求改为小字 eyebrow 样式（11px / tracking 1.5px /
+          ink-3，跟 DataCenterView 同款）—— 大 H1 已被 pivot 视觉锚定，
+          这里只保留一个小型功能标签。文字也按用户要求统一：
+            zhihu   → 知乎问题监控（原 "知乎问题监测"）
+            comment → 评论留存率监控（不变）
+            baidu   → 百度排名监控（原 "百度排名 · 关键词监控"）
+          items-center 让标签和 pivot 中线对齐。
+        -->
         <div
           class="text-[11px] uppercase"
           :style="{ letterSpacing: '1.5px', color: 'var(--ink-3)' }"
-        >监测中心</div>
-        <div
-          class="font-display mt-2 font-bold"
-          :style="{ fontSize: '30px', letterSpacing: '-0.5px' }"
         >
           {{
             activeTab === "zhihu"
-              ? "知乎问题监测"
+              ? "知乎问题监控"
               : activeTab === "comment"
                 ? "评论留存率监控"
-                : activeTab === "baidu"
-                  ? "百度排名 · 关键词监控"
-                  : "历史监测报告"
-          }}
-        </div>
-        <div class="mt-1 text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
-          {{
-            activeTab === "zhihu"
-              ? "回答排名"
-              : activeTab === "comment"
-                ? "B站/抖音/快手"
-                : activeTab === "baidu"
-                  ? "百度搜索 · 默认 + 最新资讯 · 自家命中"
-                  : "日报 · 周报 · 按时间倒序"
+                : "百度排名监控"
           }}
         </div>
       </div>
@@ -804,68 +809,11 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
       />
     </template>
 
-    <!-- ── 历史报告（重构后：sub-pivot + 两个子页）──────────────────── -->
-    <template v-else>
-      <section
-        class="flex min-h-0 flex-1 flex-col"
-        :style="{
-          background: 'var(--card)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--radius-card)',
-          padding: '22px',
-        }"
-      >
-        <!-- sub-pivot：平台评论 / 知乎排名 / 百度排名 -->
-        <div class="mb-3 flex-shrink-0 flex justify-between items-center">
-          <div>
-            <div class="font-display text-[14px] font-semibold">
-              {{
-                historySubtab === 'retention' ? '评论平台 · 留存率分析'
-                : historySubtab === 'zhihu' ? '知乎排名 · 品牌占有率分析'
-                : '百度 SEO · 关键词排名分析'
-              }}
-            </div>
-          </div>
-          <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card-2)', border: '1px solid var(--line)' }">
-            <button
-              @click="historySubtab = 'retention'"
-              class="px-4 py-1.5 rounded-full text-[12.5px] font-medium"
-              :style="{
-                background: historySubtab === 'retention' ? 'var(--dark)' : 'transparent',
-                color: historySubtab === 'retention' ? 'var(--card)' : 'var(--ink-3)',
-              }"
-            >平台评论</button>
-            <button
-              @click="historySubtab = 'zhihu'"
-              class="px-4 py-1.5 rounded-full text-[12.5px] font-medium"
-              :style="{
-                background: historySubtab === 'zhihu' ? 'var(--dark)' : 'transparent',
-                color: historySubtab === 'zhihu' ? 'var(--card)' : 'var(--ink-3)',
-              }"
-            >知乎排名</button>
-            <button
-              @click="historySubtab = 'baidu'"
-              class="px-4 py-1.5 rounded-full text-[12.5px] font-medium"
-              :style="{
-                background: historySubtab === 'baidu' ? 'var(--dark)' : 'transparent',
-                color: historySubtab === 'baidu' ? 'var(--card)' : 'var(--ink-3)',
-              }"
-            >百度排名</button>
-          </div>
-        </div>
-
-        <!--
-          history sub-page wrapper —— overflow-hidden 让 sub-page 自己管
-          滚动。每个 sub-page 的根 div 用 h-full + flex 列布局，把滚动
-          锁在「问题列表 / 关键词列表」区块里，KPI + 图表保持固定。
-        -->
-        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <RetentionPage v-if="historySubtab === 'retention'" @navigate="goToCommentTask" />
-          <ZhihuRankingPage v-else-if="historySubtab === 'zhihu'" @navigate="goToZhihuTask" />
-          <BaiduSEOAnalytics v-else-if="historySubtab === 'baidu'" @navigate="goToBaiduTask" />
-        </div>
-      </section>
-    </template>
+    <!--
+      原 'report' tab 的 template v-else 整块（含 RetentionPage /
+      ZhihuRankingPage / BaiduSEOAnalytics 渲染）已搬到 DataCenterView。
+      Tab type 现在只剩 zhihu/comment/baidu，模板用 v-if/v-else-if 全部覆盖。
+    -->
 
     <!-- ── Modals ──────────────────────────────────────────────── -->
     <AddTaskModal
@@ -874,7 +822,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
       :default-type="
         activeTab === 'zhihu'
           ? 'zhihu_question'
-          : activeTab === 'baidu' || (activeTab === 'report' && historySubtab === 'baidu')
+          : activeTab === 'baidu'
             ? 'baidu_keyword'
             : commentSubtab === 'bilibili'
               ? 'bilibili_comment'

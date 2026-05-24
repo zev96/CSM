@@ -7,7 +7,7 @@
  * drill-down 行点击 emit('navigate', {platform, batchName, taskId})。
  */
 import { ref, computed, onMounted, watch } from "vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
+// Sparkline 已下线（用户要求 KPI 卡不再显示小曲线，主图区覆盖趋势）
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import LineChart from "./LineChart.vue";
@@ -32,6 +32,11 @@ interface DeletionEvent {
   comment_text: string;
   status: "deleted" | "folded";
   at: string;
+  /** 评论被删/折叠时的最后已知排名（后端 rank_from / rank_to 字段）。
+   *  目前 backend 总是 None，UI 列直接显示「无」；待后端补 prev-snapshot
+   *  追踪后即可不改 UI 自动生效。 */
+  rank_from?: number | null;
+  rank_to?: number | null;
 }
 interface RetentionResponse {
   range: Range;
@@ -109,10 +114,7 @@ const chartSeries = computed(() =>
   })),
 );
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
+// fmtTime 已下线 —— 事件列表 column 重构后不再显示检查时间。
 function fmtPct(x: number): string { return `${Math.round(x * 100)}%`; }
 function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "down" | "flat" } {
   const diff = Math.round((curr - prev) * 100);
@@ -129,7 +131,14 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
   <div v-else-if="!data" class="py-10 text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">
     暂无数据
   </div>
-  <div v-else class="flex flex-col gap-3">
+  <!--
+    Root：`flex h-full min-h-0 flex-col` —— 跟 ZhihuRankingPage /
+    BaiduSEOAnalytics 同模式。h-full 吃满父级、min-h-0 解锁收缩，
+    flex-col 排版三段：range picker / KPI / 图 全部 flex-shrink-0
+    保持固定，最后的「被删/折叠评论详情」卡用 flex-1 + min-h-0 +
+    overflow-y-auto 让列表行内部滚动。这样上面的图表不会跟着滚。
+  -->
+  <div v-else class="flex h-full min-h-0 flex-col gap-3">
     <!-- range picker -->
     <div class="flex items-center justify-end flex-shrink-0">
       <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">
@@ -147,8 +156,8 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
       </div>
     </div>
 
-    <!-- 3 KPI cards -->
-    <div class="grid grid-cols-3 gap-2.5">
+    <!-- 3 KPI cards —— flex-shrink-0 锁定自然高度，不参与下方列表的伸缩 -->
+    <div class="grid grid-cols-3 gap-2.5 flex-shrink-0">
       <div
         v-for="p in platformList" :key="p.key"
         :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }"
@@ -174,12 +183,8 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
         <div class="font-display font-bold" :style="{ fontSize: '28px', lineHeight: 1, letterSpacing: '-0.5px' }">
           {{ fmtPct(p.rate_today) }}
         </div>
-        <Sparkline
-          v-if="range !== '1d' && p.daily_series.length > 0"
-          :points="p.daily_series.map((d) => d.rate * 100)"
-          :stroke="p.color"
-          :height="28"
-        />
+        <!-- KPI Sparkline 按用户要求移除（切 range 直接换数字，下面主图区
+             覆盖趋势）。 -->
         <div class="flex justify-between text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
           <span>在显 <b :style="{ color: 'var(--ink)' }">{{ p.current_retained }}</b> / {{ p.current_total }}</span>
           <span>被删 <b :style="{ color: 'var(--red)' }">{{ p.current_deleted }}</b></span>
@@ -187,9 +192,10 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
       </div>
     </div>
 
-    <!-- 主图（1d 时隐藏） -->
+    <!-- 主图（1d 时隐藏）—— flex-shrink-0 让图表保持自然高度，不随下方列表收缩 -->
     <div
       v-if="range !== '1d'"
+      class="flex-shrink-0"
       :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }"
     >
       <div class="flex justify-between items-center mb-2">
@@ -203,11 +209,21 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
       <LineChart :labels="chartLabels" :series="chartSeries" :y-axis-formatter="(v) => `${v}%`" />
     </div>
 
-    <!-- drill-down 表 -->
-    <div :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }">
-      <div class="flex justify-between items-center mb-2">
+    <!--
+      drill-down 表 —— 卡本身 flex-1 + min-h-0 + overflow-hidden 吃完
+      KPI/图剩下的纵向空间；卡内 header 用 flex-shrink-0 锁顶部，列表
+      行容器再套一层 flex-1 + min-h-0 + overflow-y-auto，把滚动锁在
+      列表里。这样上面的 KPI、留存率趋势图、range picker 全部不动，
+      只有评论行可以上下滑。
+    -->
+    <div
+      class="flex min-h-0 flex-1 flex-col overflow-hidden"
+      :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }"
+    >
+      <div class="flex justify-between items-center mb-2 flex-shrink-0">
+        <!-- 「(N 条 · 点行进详情)」副标按用户要求移除 -->
         <div class="text-[12.5px] font-semibold">
-          被删 / 折叠评论详情 <span class="font-normal" :style="{ color: 'var(--ink-3)' }">({{ filteredEvents.length }} 条 · 点行进详情)</span>
+          被删 / 折叠评论详情
         </div>
         <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card-2)' }">
           <button
@@ -223,18 +239,43 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
           </button>
         </div>
       </div>
-      <div v-if="!filteredEvents.length" class="py-6 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">
+      <!--
+        表格：固定 header 行 + 滚动 body。grid 4 列：
+          平台 / 评论内容 / 排名 / 状态
+        - 平台：原 chip
+        - 评论内容：truncate（comment_text）
+        - 排名：rank_from/to（后端目前总是 None → 显示「无」；待后端补
+          prev-snapshot 追踪后 UI 自动生效）
+        - 状态：deleted → 黑色 "-"，folded → 橙色 ↓
+        移除了之前的检查时间列 + › chevron 列。
+      -->
+      <div
+        class="grid items-center gap-2 flex-shrink-0 text-[11px] uppercase"
+        :style="{
+          gridTemplateColumns: '60px 1fr 80px 60px',
+          padding: '8px 12px',
+          letterSpacing: '1px',
+          color: 'var(--ink-3)',
+          borderBottom: '1px solid var(--line)',
+        }"
+      >
+        <div>平台</div>
+        <div>评论内容</div>
+        <div class="text-center">排名</div>
+        <div class="text-center">状态</div>
+      </div>
+      <div v-if="!filteredEvents.length" class="py-6 text-center text-[12px] flex-shrink-0" :style="{ color: 'var(--ink-3)' }">
         无被删 / 折叠记录
       </div>
-      <div v-else>
+      <div v-else class="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div
           v-for="e in filteredEvents" :key="e.task_id + '-' + e.at"
           @click="emit('navigate', { platform: e.platform, batchName: e.batch_name, taskId: e.task_id })"
           class="grid items-center gap-2 cursor-pointer transition-colors"
           :style="{
-            gridTemplateColumns: '60px 1fr 110px 80px 18px',
-            padding: '9px 12px',
-            fontSize: '11.5px',
+            gridTemplateColumns: '60px 1fr 80px 60px',
+            padding: '11px 12px',
+            fontSize: '12px',
             borderRadius: '8px',
             borderTop: '1px solid rgba(28,26,23,0.06)',
           }"
@@ -247,18 +288,26 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
               :style="{ background: PLATFORM_CHIP_BG[e.platform], color: PLATFORM_CHIP_FG[e.platform] }"
             >{{ e.platform === "bilibili_comment" ? "B 站" : e.platform === "douyin_comment" ? "抖音" : "快手" }}</span>
           </div>
-          <div>
-            <div :style="{ color: 'var(--ink)' }">{{ e.comment_text || "（无文本）" }}</div>
-            <div class="text-[10.5px] mt-0.5" :style="{ color: 'var(--ink-3)' }">{{ e.video_title }} · {{ e.batch_name }} 批次</div>
+          <div :style="{ color: 'var(--ink)' }" class="truncate" :title="e.comment_text || '（无文本）'">
+            {{ e.comment_text || "（无文本）" }}
           </div>
-          <div>
-            <span
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-medium"
-              :style="{ background: 'rgba(216,90,72,0.12)', color: 'var(--red)' }"
-            >在显 → 无</span>
+          <!-- 排名：rank_from 或 rank_to 任一存在就显示，否则「无」 -->
+          <div class="text-center font-semibold">
+            <template v-if="(e.rank_from ?? e.rank_to ?? 0) > 0">
+              #{{ e.rank_from ?? e.rank_to }}
+            </template>
+            <span v-else :style="{ color: 'var(--ink-3)', fontWeight: 'normal' }">无</span>
           </div>
-          <div :style="{ color: 'var(--ink-3)' }">{{ fmtTime(e.at) }}</div>
-          <div class="text-[16px] text-center" :style="{ color: 'var(--ink-4)', lineHeight: 1 }">›</div>
+          <!--
+            状态：deleted 黑色 "-"（被删或无），folded 橙色 ↓（折叠/降权）。
+            hover title 给完整状态说明。
+          -->
+          <div class="text-center font-bold text-[14px]"
+            :style="{
+              color: e.status === 'folded' ? 'var(--primary, #ee6a2a)' : 'var(--ink, #1c1a17)',
+            }"
+            :title="e.status === 'folded' ? '评论被折叠（仍在显但被降权）' : '评论被删除'"
+          >{{ e.status === 'folded' ? '↓' : '-' }}</div>
         </div>
       </div>
     </div>

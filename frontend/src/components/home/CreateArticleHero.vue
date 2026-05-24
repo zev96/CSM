@@ -3,20 +3,16 @@
  * 首页 hero 卡 — 合并旧的 GreetingCard + KeywordHero。
  *
  * 设计稿约定：
- *   - 顶部 10.5px UPPERCASE 小标"创建新文章"
  *   - 26px 大标"<greeting>，<name>。今天写点什么？"
+ *   - 大标下方 11.5px 系统日期副标（"M/D · 周X"）—— 颜色 --ink-4（最淡）
  *   - 胶囊输入条：放大镜 + input + 黑色"创建 →"按钮
- *   - 两个 dropdown 胶囊：模板 / 风格（取代 V1 的 chip 行 + 4 个 quick tile）
- *
- * 不再渲染：
- *   - 旧 quick tiles（粘贴洗稿 / 模板库 / 监测 / Skill）—— 入口已迁到右栏
- *     ShortcutColumn + LeftNav。
- *   - 字数小计（昨日 / 本周）—— 放在 hero 内信息密度过低，等后续监测中心
- *     接入。
+ *   - 两个 dropdown 胶囊：模板 / 风格
  *
  * 数据：
  *   - templates / skills 从 /api/templates、/api/skills 拉，失败 fallback。
  *   - 用户名从 useConfig().data.user_name；问候语本地小时数算出。
+ *   - dateLabel 系统当前日期，hero mount 时算一次；日内切换日期不会自动刷新
+ *     （工作台 view 切回来会重 mount，跟 greeting 同语义）。
  */
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -56,6 +52,16 @@ const greeting = computed(() => {
   return "晚上好";
 });
 const userName = computed(() => cfg.data?.user_name || "你");
+
+// 系统当前日期 —— "5/22 · 周五"。挂载时算一次，hero 不重渲日期就不变；
+// 切日期需要 view 跳转触发重 mount，跟 greeting (按小时段) 同语义。
+const dateLabel = computed(() => {
+  const d = new Date();
+  const m = d.getMonth() + 1;
+  const day = d.getDate();
+  const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return `${m}/${day} · ${weekdays[d.getDay()]}`;
+});
 
 const tplLabel = computed(
   () => templates.value.find((t) => t.id === tplId.value)?.name ?? "未指定",
@@ -118,25 +124,43 @@ function takeoff() {
     输入条 max-width 让它不撑满整行，看起来更像 hero CTA 而不是表单。
   -->
   <div class="flex flex-col" :style="{ gap: '14px' }">
-    <!-- 问候 + CTA 大标 -->
-    <div
-      class="font-display font-bold leading-tight"
-      :style="{ fontSize: '26px', letterSpacing: '-0.5px' }"
-    >
-      {{ greeting }}，{{ userName }}。今天写点什么？
+    <!--
+      大标 + 日期副标包在同一 div 里，让两者贴近（mt-1.5 = 6px），不被
+      外层 gap:14 撑开。日期颜色 --ink-4 是 token 系统里最淡的灰，符合
+      "小字 + 颜色淡"要求。
+    -->
+    <div>
+      <div
+        class="font-display font-bold leading-tight"
+        :style="{ fontSize: '26px', letterSpacing: '-0.5px' }"
+      >
+        {{ greeting }}，{{ userName }}。今天写点什么？
+      </div>
+      <div
+        class="mt-1.5 text-[11.5px]"
+        :style="{ color: 'var(--ink-4)' }"
+      >
+        {{ dateLabel }}
+      </div>
     </div>
 
-    <!-- 一体胶囊输入条（窄，不撑满） -->
+    <!--
+      一体胶囊输入条（窄，不撑满）。marginTop 跟外层 gap:14 是 additive，
+      "大标块 → 输入框"实际间距 = 14 + 20 = 34px。
+    -->
     <div
       class="flex items-center"
       :style="{
         maxWidth: '460px',
-        background: 'var(--card-white)',
-        border: '1px solid var(--line)',
+        marginTop: '20px',
+        background: 'rgba(255, 255, 255, 0.65)',
+        backdropFilter: 'blur(14px) saturate(140%)',
+        WebkitBackdropFilter: 'blur(14px) saturate(140%)',
+        border: '1px solid rgba(255, 255, 255, 0.65)',
         borderRadius: 'var(--radius-pill)',
         padding: '6px',
         paddingLeft: '18px',
-        boxShadow: '0 1px 0 rgba(28,26,23,0.04)',
+        boxShadow: '0 4px 14px rgba(28,26,23,0.06), 0 1px 3px rgba(28,26,23,0.04)',
       }"
     >
       <Icon name="search" :size="16" class="opacity-60" />
@@ -173,12 +197,15 @@ function takeoff() {
             :style="{
               height: '32px',
               padding: '0 12px',
-              background: 'var(--card-white)',
-              border: '1px solid var(--line)',
+              background: 'rgba(255, 255, 255, 0.55)',
+              backdropFilter: 'blur(12px) saturate(140%)',
+              WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+              border: '1px solid rgba(255, 255, 255, 0.65)',
               borderRadius: 'var(--radius-pill)',
               fontSize: '12px',
               color: 'var(--ink-2)',
               cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(28,26,23,0.04), 0 1px 2px rgba(28,26,23,0.03)',
             }"
           >
             <span :style="{ color: 'var(--ink-3)' }">模板</span>
@@ -208,12 +235,15 @@ function takeoff() {
             :style="{
               height: '32px',
               padding: '0 12px',
-              background: 'var(--card-white)',
-              border: '1px solid var(--line)',
+              background: 'rgba(255, 255, 255, 0.55)',
+              backdropFilter: 'blur(12px) saturate(140%)',
+              WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+              border: '1px solid rgba(255, 255, 255, 0.65)',
               borderRadius: 'var(--radius-pill)',
               fontSize: '12px',
               color: 'var(--ink-2)',
               cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(28,26,23,0.04), 0 1px 2px rgba(28,26,23,0.03)',
             }"
           >
             <span :style="{ color: 'var(--ink-3)' }">风格</span>
@@ -252,8 +282,8 @@ function takeoff() {
 /*
   下拉胶囊的 label 宽度锁死到最长选项 —— grid cell 宽度 = 所有 children
   的 max-content max。ghost 与 current 都落在 row 1 / col 1，visibility:
-  hidden 的 ghost 不占视觉但占布局，撑出 cell 宽度；current 叠在上面正常
-  显示。current 是 source-order 最后一个，自然在 z-stack 顶层。
+  hidden 的 ghost 不占视觉但占布局，撑出 cell 宽度；current 是 source-order
+  最后一个，自然在 z-stack 顶层。
 */
 .dd-label-stack {
   display: inline-grid;

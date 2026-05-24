@@ -22,7 +22,8 @@ import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
+// Sparkline 已下线 —— 统一改用 LineChart 跟 BaiduRankingPage 总任务图一致。
+import LineChart from "./history/LineChart.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 
 import { useSidecar } from "@/stores/sidecar";
@@ -68,7 +69,8 @@ const SAMPLE_ZHIHU: SampleZhihu[] = [];
 
 const SAMPLE_TOP3: Array<{ who: string; title: string; rank: number }> = [];
 
-const SAMPLE_SPARK_RANK: number[] = [];
+// SAMPLE_SPARK_RANK 已下线 —— sparkBuckets 改用 calendar scaffold，demo
+// 模式 = 14 个 null bucket，不再需要单独的样本数据。
 
 // 告警详情 modal 用的真实数据。openZhihuAlert 时同步算好后通过 emit
 // 给父组件，父组件持有单一 modal 树。Null = 没数据，模态展示空态。
@@ -125,8 +127,10 @@ const taskResults = ref<Array<{ checked_at: string; status: string; rank: number
 
 async function loadResults(taskId: number) {
   try {
+    // 用户要求：趋势窗口从 14 天缩到 7 天。limit 拉 7 条够 sparkBuckets
+    // 填满 7 个 calendar bucket（同一天多次跑只取最新，理论上不会满）。
     const r = await sidecar.client.get("/api/monitor/results", {
-      params: { task_id: taskId, limit: 14 },
+      params: { task_id: taskId, limit: 7 },
     });
     taskResults.value = r.data.results ?? [];
   } catch {
@@ -134,19 +138,9 @@ async function loadResults(taskId: number) {
   }
 }
 
-// Sparkline 横轴日期 —— 用今天往回推 N 天，演示模式下纯前端生成。
-function daysAgoLabels(count: number, totalSpan: number): string[] {
-  // count: 想显示几个标签；totalSpan: 数据覆盖多少天
-  const out: string[] = [];
-  const now = new Date();
-  for (let i = 0; i < count; i++) {
-    const offset = Math.round(((count - 1 - i) / (count - 1)) * (totalSpan - 1));
-    const d = new Date(now.getTime() - offset * 24 * 60 * 60 * 1000);
-    out.push(`${d.getMonth() + 1}/${d.getDate()}`);
-  }
-  return out;
-}
-const ZHIHU_SPARK_LABELS = daysAgoLabels(5, 14); // 14 次快照横跨 14 天
+// daysAgoLabels / ZHIHU_SPARK_LABELS 已下线 —— 趋势图改用 LineChart，
+// 横轴 label 由 sparkChartLabels 从 taskResults.checked_at 派生（1:1 对齐
+// 数据点），不再需要预先生成的 5-anchor 抽稀 label。
 
 // 监测启停 + 频率 —— 演示模式下保存在本地 ref 里，真实模式改 PATCH
 // /api/monitor/tasks/{id}。每个任务一份独立设置，切任务不会丢状态。
@@ -313,13 +307,52 @@ async function openZhihuAlert(alert?: HeroAlert) {
   }
 }
 
-// 卡位趋势（Y 轴 = matched_count）—— 之前用 rank（越小越好），现在统一
-// 改成命中数语义跟新 KPI「卡位数量」对齐。无 metric 的旧 result 当 0 处理。
-const sparkPoints = computed(() => {
-  if (props.demoMode) return SAMPLE_SPARK_RANK;
-  return [...taskResults.value]
-    .reverse()
-    .map((r) => Number((r as any).metric?.matched_count ?? 0));
+// 卡位趋势 7 天 calendar bucket scaffold —— 跟 BaiduRankingPage 的
+// bucketByCalendarDay 同模式，永远 7 个 bucket（今天 → 6 天前）；
+// 把 taskResults 按 checked_at 的日期落到对应 bucket（同一天多次跑取
+// 最后一次）。这样 LineChart 永远能 render 完整 7 天的 frame，没数据
+// 的天为 null（chart.js spanGaps=false 自动画 gap），不再因为 taskResults
+// 为空就退到文本 fallback。原本 14 天，用户反馈太长，缩到 7 天。
+const sparkBuckets = computed<Array<{ label: string; value: number | null }>>(() => {
+  // 7 个空 bucket（label = 日期 only "10"，跟 baidu 一致）
+  const out: Array<{ iso: string; label: string; value: number | null }> = [];
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    out.push({ iso, label: String(d.getDate()), value: null });
+  }
+  // Demo mode 数据空（SAMPLE_SPARK_RANK 已清），直接返回纯 scaffold
+  if (props.demoMode) return out;
+  // 真实数据 → 按 iso 日期落桶；taskResults 按 checked_at desc 排（API
+  // 默认顺序），同一天多次 "立刻监测" 取第一个（即最新一次）
+  const placed = new Set<string>();
+  for (const r of taskResults.value) {
+    const d = new Date(r.checked_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (placed.has(iso)) continue;  // 同日只放最新一次
+    const bucket = out.find((b) => b.iso === iso);
+    if (bucket) {
+      bucket.value = Number((r as any).metric?.matched_count ?? 0);
+      placed.add(iso);
+    }
+  }
+  return out;
+});
+
+const sparkPoints = computed<(number | null)[]>(() => sparkBuckets.value.map((b) => b.value));
+const sparkChartLabels = computed<string[]>(() => sparkBuckets.value.map((b) => b.label));
+
+// 14 天卡位趋势的 Y 轴上限 = 当前选中任务的 Top-N（命中条数的容量上限）。
+// 优先级：最新一次 metric.top_n（运行时写入）→ task.config.top_n（用户编辑
+// 时存的）→ 10 兜底。这样曲线相对"容量"显示，而不是被某天小峰值放大。
+const selectedTopN = computed<number>(() => {
+  const fromMetric = taskResults.value[0]?.metric?.top_n;
+  if (typeof fromMetric === "number" && fromMetric > 0) return fromMetric;
+  const fromCfg = selectedTask.value?.config?.top_n;
+  if (typeof fromCfg === "number" && fromCfg > 0) return fromCfg;
+  return 10;
 });
 
 watch(selectedTaskId, async (id) => {
@@ -445,11 +478,16 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
 
 <template>
   <!--
-    Root: `space-y-6` 给 hero / table+detail grid 两个直接子节点统一 24px
-    间距（对齐 MonitorView root 的 gap-24 节奏）。原来是裸 <div>，hero
-    后面紧贴 grid，告警出现时和下方表格粘成一团。
+    Root：必须是 `flex min-h-0 flex-1 flex-col`（跟 CommentMonitorModule
+    同款修复）。MonitorView root 是 flex column + h-full，本模块作为子项
+    要"占满剩余高度 + 让内部 flex-1 子链生效"。原本 `space-y-6` 裸 <div>
+    不是 flex 容器也没 flex-1，下面 `grid min-h-0 flex-1` 的 grid container
+    高度退化到 max(content) —— 左卡(任务表 6 行)和右卡(任务详情)谁内容
+    多谁就把 grid row 撑高，另一边 h-full 跟着拉但内部 content 不填满，
+    视觉上两张卡高度对不齐（左 580 / 右 480，差 100px）。
+    flex-1 占满父剩余 + min-h-0 解锁子级收缩 + gap-24 替代 space-y-6 间距。
   -->
-  <div class="space-y-6">
+  <div class="flex min-h-0 flex-1 flex-col" :style="{ gap: '24px' }">
     <!--
       告警 hero 包裹层 —— 当告警数 > 1 时，hero 下方再放 1–2 张更窄
       更暗的「影子」卡，形成卡片堆叠的视觉；点右上角的 ‹ › 切换上一
@@ -636,25 +674,15 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
           <div class="min-w-0">
             <div class="font-display text-[14px] font-semibold">监测任务</div>
-            <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              问题列表
-            </div>
+            <!-- 「问题列表」subtitle 已按用户要求移除（卡片标题已说明用途） -->
           </div>
           <div class="flex flex-shrink-0 gap-2">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px]"
-              :style="{
-                background: 'transparent',
-                color: 'var(--ink-2)',
-                border: '1px solid var(--line)',
-                borderRadius: '999px',
-              }"
-              @click="emit('cookie-mgr')"
-            >
-              <Icon name="key" :size="12" />
-              <span>Cookie</span>
-            </button>
+            <!--
+              原 Cookie 按钮已移除：Cookie 管理统一走「设置 → 监测中心」，
+              避免每个 tab 都开一个入口造成重复。父组件的
+              CookieManagerModal + @cookie-mgr 监听保留不动（emit 没人
+              发就是 no-op），未来如要在 tab 内重启入口直接补回按钮即可。
+            -->
             <button
               type="button"
               class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px]"
@@ -956,14 +984,21 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           </div>
 
           <div class="mt-5">
-            <div class="mb-2 text-[12px] font-semibold">最近 14 次快照</div>
-            <Sparkline
-              :points="sparkPoints"
-              :width="380"
-              :height="70"
-              stroke="var(--red, #d85a48)"
-              :axis-labels="ZHIHU_SPARK_LABELS"
-              fluid
+            <div class="mb-2 text-[12px] font-semibold">最近 7 次快照</div>
+            <!--
+              demo 模式：sparkBuckets 永远是 14 个 null（SAMPLE_SPARK_RANK
+              已清空），LineChart 渲染空 frame；用户看到完整的 14 天日期
+              轴提示"这里将来会有趋势线"。
+            -->
+            <LineChart
+              :labels="sparkChartLabels"
+              :series="[
+                {
+                  label: '卡位数量',
+                  color: 'var(--red, #d85a48)',
+                  data: sparkPoints,
+                },
+              ]"
             />
           </div>
 
@@ -1148,20 +1183,30 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               之前的 Y 轴 = rank（越低越好）容易误读，跟新 KPI「卡位数量」
               语义保持一致。
             -->
+            <!--
+              真实数据：跟 BaiduRankingPage 总任务图组件一致（LineChart），
+              永远默认显示 14 天 frame —— sparkBuckets 是 14 个 calendar
+              bucket，没数据的天为 null，chart.js spanGaps=false 画 gap。
+              不再用 v-if 拦数据空场景（用户即使没数据也能看到完整时间轴）。
+            -->
             <div class="mt-5">
-              <div class="mb-2 text-[12px] font-semibold">最近 14 天卡位趋势</div>
-              <Sparkline
-                v-if="sparkPoints.length"
-                :points="sparkPoints"
-                :width="380"
-                :height="70"
-                stroke="var(--primary-deep, #c9521f)"
-                :axis-labels="ZHIHU_SPARK_LABELS"
-                fluid
+              <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
+              <!--
+                Y 轴上限锁 selectedTopN —— 命中条数的容量上限是 Top-N，
+                让趋势相对"满格"显示。chart.js auto-scale 在低基数（命中
+                0-2 条）时会把数据顶到天花板，视觉夸张，不直观。
+              -->
+              <LineChart
+                :labels="sparkChartLabels"
+                :series="[
+                  {
+                    label: '卡位数量',
+                    color: 'var(--primary-deep, #c9521f)',
+                    data: sparkPoints,
+                  },
+                ]"
+                :y-max="selectedTopN"
               />
-              <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
-                无历史数据 —— 跑过几次"立刻监测"才能成线。
-              </div>
             </div>
 
             <!--

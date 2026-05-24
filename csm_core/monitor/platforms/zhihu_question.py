@@ -18,12 +18,13 @@ render an at-a-glance Top-N preview without re-fetching.
 from __future__ import annotations
 import logging
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
+from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask, maybe_cancel
 from ..rate_limit import get_pacer, get_breaker
 from ..drivers import browser_driver
 from ..drivers.cookie_store import CookieStore, DEFAULT_COOLDOWN_SECONDS
@@ -89,7 +90,16 @@ class ZhihuQuestionAdapter:
         )
 
     # ── Public API ──────────────────────────────────────────────────────────
-    def fetch(self, task: MonitorTask) -> MonitorResult:
+    def fetch(
+        self,
+        task: MonitorTask,
+        cancel_token: threading.Event | None = None,
+        **_kwargs,
+    ) -> MonitorResult:
+        # **_kwargs swallows monitor_loop's progress_cb / resume_from —
+        # zhihu doesn't need them, but accepting unknown kwargs avoids the
+        # TypeError fallback chain on every call. cancel_token is the
+        # only one we actually honor (cooperative mid-fetch cancel).
         if not self._breaker.allow():
             return MonitorResult(
                 task_id=task.id or 0,
@@ -123,13 +133,24 @@ class ZhihuQuestionAdapter:
                 error_message="task.config.target_brand is required",
             )
 
+        # Cancel check #1 —— 用户在 pacer wait 之前就点了停止，立刻退出。
+        maybe_cancel(cancel_token)
+
         # Honor the configured request spacing before issuing any HTTP.
         self._pacer.wait()
+
+        # Cancel check #2 —— pacer 可能 sleep 了 N 秒（rate limit），用户期间
+        # 点停止应该立刻生效，不发 fast 请求。
+        maybe_cancel(cancel_token)
 
         # Fast path → fallback chain. On both success and final failure
         # we update the breaker so it can decide whether to open.
         answers, source = self._fetch_fast(qid)
         if answers is None:
+            # Cancel check #3 —— 这是最有价值的取消点：browser fallback 启动
+            # Playwright/DrissionPage 要 5-10s，cookies 解析 + 页面渲染都是
+            # 阻塞操作，触发后中途没法退。在这里 short-circuit 才有意义。
+            maybe_cancel(cancel_token)
             # browser fallback 现在按 top_n 滚动到加载够；早期版本固定切 20。
             answers, source = self._fetch_browser(task.target_url, qid, top_n=top_n)
         if answers is None:

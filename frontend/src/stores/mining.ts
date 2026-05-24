@@ -47,6 +47,13 @@ export interface MiningJob {
   created_at: string
   started_at: string | null
   finished_at: string | null
+  /** 该 job 通过 video_source_keywords 关联的视频数（list_jobs SQL 聚合）。
+   *  TaskListItem 状态派生：> 0 时根据 commented_count 区分 进行中 / 已完成。 */
+  video_count?: number
+  /** 该 job 关联视频中 already_commented=1 的数量。
+   *  = video_count → 用户已完成评论 → 显示「已完成」
+   *  < video_count → 用户还有视频未评论 → 显示「进行中」 */
+  commented_count?: number
 }
 
 export interface Video {
@@ -359,6 +366,24 @@ export const useMiningStore = defineStore("mining", () => {
     await refreshVideos()
   }
 
+  /**
+   * 删除整条任务：DELETE /api/mining/jobs/{id}。
+   *
+   * 后端如果还没接这个路由，会回 404/405 —— 直接 throw 出去让 caller
+   * 弹 toast 提示"暂未支持，等后端补"。成功的话本地 jobs[] 跟着移除，
+   * 若当前选中的就是被删的，currentJobId 复位为 null + 清 videos。
+   */
+  async function deleteJob(jobId: number): Promise<void> {
+    await api().delete(`/api/mining/jobs/${jobId}`)
+    jobs.value = jobs.value.filter(j => j.id !== jobId)
+    if (currentJobId.value === jobId) {
+      currentJobId.value = null
+      filters.value.job_id = null
+      videos.value = []
+      total.value = 0
+    }
+  }
+
   /** Absolute CSV-export URL including baseURL + token query string. */
   function exportUrl(): string {
     const params = new URLSearchParams()
@@ -513,7 +538,7 @@ export const useMiningStore = defineStore("mining", () => {
     hasRunningJob,
     startJob, cancelActive, refreshVideos,
     refreshLoginStatus, startLogin, confirmLogin,
-    deleteVideo, bulkDeleteVideos, loadJobs, selectJob, exportUrl,
+    deleteVideo, bulkDeleteVideos, loadJobs, selectJob, exportUrl, deleteJob,
     loadComments, createComment, updateComment, deleteComment,
     uploadImage, summarize, suggestComment, bulkMarkCommented,
   }

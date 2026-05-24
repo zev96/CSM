@@ -43,6 +43,7 @@ const NAV_TOP = [
   { key: "home", icon: "home", label: "工作台" },
   { key: "article", icon: "edit", label: "创作区" },
   { key: "monitor", icon: "radar", label: "监测中心" },
+  { key: "data-center", icon: "fileText", label: "数据中心" },
   { key: "mining", icon: "search", label: "引流" },
   { key: "templates", icon: "library", label: "模板库" },
 ] as const;
@@ -57,8 +58,16 @@ function go(key: string) {
 
 <template>
   <nav
-    class="flex flex-col items-center justify-between"
-    :style="{ width: '72px', padding: '18px 0', background: 'transparent' }"
+    class="relative flex flex-col items-center justify-between"
+    :style="{
+      width: '72px',
+      padding: '17px 0 18px 0',
+      background: 'rgba(255, 255, 255, 0.35)',
+      backdropFilter: 'blur(20px) saturate(150%)',
+      WebkitBackdropFilter: 'blur(20px) saturate(150%)',
+      borderRight: '1px solid rgba(255, 255, 255, 0.5)',
+      zIndex: 30,
+    }"
   >
     <div class="flex flex-col items-center gap-2">
       <!--
@@ -81,7 +90,7 @@ function go(key: string) {
         />
       </div>
 
-      <div class="mt-3 flex flex-col items-center gap-1.5">
+      <div class="mt-3 flex flex-col items-center gap-2">
         <button
           v-for="item in NAV_TOP"
           :key="item.key"
@@ -91,8 +100,14 @@ function go(key: string) {
             width: '44px',
             height: '44px',
             borderRadius: '14px',
-            background: active === item.key ? 'var(--primary)' : 'transparent',
-            color: active === item.key ? '#fff' : 'var(--ink-2)',
+            background: active === item.key ? 'rgba(255, 255, 255, 0.85)' : 'transparent',
+            color: active === item.key ? 'var(--ink)' : 'var(--ink-2)',
+            backdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
+            WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
+            border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
+            boxShadow: active === item.key
+              ? '0 6px 16px -2px rgba(28,26,23,0.12), 0 2px 6px rgba(28,26,23,0.06)'
+              : 'none',
           }"
           @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
           @mouseleave="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
@@ -116,7 +131,7 @@ function go(key: string) {
       </div>
     </div>
 
-    <div class="flex flex-col items-center gap-1.5">
+    <div class="flex flex-col items-center gap-2">
       <!--
         通知 bell —— 放在「设置」按钮正上方。badge 在有未读时显示。
         wrapper relative 给 NotificationDropdown absolute 定位用，
@@ -164,8 +179,14 @@ function go(key: string) {
           width: '44px',
           height: '44px',
           borderRadius: '14px',
-          background: active === item.key ? 'var(--primary)' : 'transparent',
-          color: active === item.key ? '#fff' : 'var(--ink-2)',
+          background: active === item.key ? 'rgba(255, 255, 255, 0.85)' : 'transparent',
+          color: active === item.key ? 'var(--ink)' : 'var(--ink-2)',
+          backdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
+          WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
+          border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
+          boxShadow: active === item.key
+            ? '0 6px 16px -2px rgba(28,26,23,0.12), 0 2px 6px rgba(28,26,23,0.06)'
+            : 'none',
         }"
         @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
         @mouseleave="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'transparent' }"

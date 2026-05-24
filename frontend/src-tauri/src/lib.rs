@@ -19,6 +19,10 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        // fs 插件 —— 前端通过 dialog.save() 选保存路径后，用 fs.writeFile
+        // 把 CSV bytes 写到磁盘（替代浏览器 <a download> 自动下载到
+        // Downloads 目录无提示的旧路径）。
+        .plugin(tauri_plugin_fs::init())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .targets([

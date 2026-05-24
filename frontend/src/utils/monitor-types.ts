@@ -18,6 +18,12 @@ export interface Task {
   schedule_cron: string;
   last_check_at: string | null;
   last_status: string | null;
+  /**
+   * 适配器特定配置 —— 知乎 ``{ target_brand, top_n }``，评论
+   * ``{ my_comment_text, top_n }``。后端 task_to_dict 总是返回这个字段
+   * （即便为 {}）；UI 按平台读所需的键。
+   */
+  config?: Record<string, any>;
 }
 
 export type CommentPlatform = "bilibili" | "douyin" | "kuaishou";

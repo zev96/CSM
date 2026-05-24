@@ -405,6 +405,11 @@ def get_baidu_keyword_history(range_str: str) -> dict[str, Any]:
             default_results = (curr_kw or {}).get("default_results") or []
             matched_ranks = [r["rank"] for r in default_results if r.get("matches_brand")]
 
+            # 资讯卡位 —— news SERP 里命中目标品牌的条数；UI 「资讯卡位」列
+            # 直接读这个值，没命中显示"无"。
+            news_results = (curr_kw or {}).get("news_results") or []
+            news_matched_count = sum(1 for r in news_results if r.get("matches_brand"))
+
             news_present_flag = bool((curr_kw or {}).get("news_present"))
             if news_present_flag:
                 news_present_kw_count += 1
@@ -416,6 +421,7 @@ def get_baidu_keyword_history(range_str: str) -> dict[str, Any]:
                 "target_brand": target_brand,
                 "matched_count": curr_matched,
                 "matched_count_prev": prev_matched,
+                "news_matched_count": news_matched_count,
                 "top_n": 10,
                 "matched_ranks": matched_ranks,
                 "best_rank": curr_best,
