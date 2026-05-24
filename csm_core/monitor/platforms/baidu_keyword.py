@@ -365,8 +365,10 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
 
 
 # ── 软着陆验证码 ────────────────────────────────────────────────
-_RISK_URL_PATTERNS = ("wappass", "verify.baidu", "safetycheck", "passport.baidu")
-_RISK_DOM_SELECTORS = (".passmod", "#captcha-mask", ".security-check")
+# 复用 risk_detector 的同一组 pattern，避免两边 drift（detect_risk 看到的就是
+# _try_human_solve 等的，反之亦然）。
+from ..drivers.risk_detector import _URL_PATTERNS as _RISK_URL_PATTERNS
+from ..drivers.risk_detector import _DOM_SELECTORS as _RISK_DOM_SELECTORS
 _notify_impl: Any = None
 
 
@@ -977,10 +979,9 @@ class BaiduKeywordAdapter:
                     )
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
-                # 任一层命中 → 软着陆：弹通知给用户解，解完 retry 当前 kw；失败 fallback 到 raise
+                # 任一层命中 → 软着陆：弹通知给用户解，解完 retry 当前 kw；失败 fallback 到 raise。
                 risk = detect_risk(page, serp_response)
                 if risk is not None:
-                    # 软着陆：弹通知给用户解，解完 retry 当前 kw；失败 fallback 到 raise
                     solved = _try_human_solve(
                         page=page, keyword=keyword, kw_idx=kw_idx,
                     )
