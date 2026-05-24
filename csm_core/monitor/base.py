@@ -7,9 +7,38 @@ treat all platforms uniformly while each adapter remains free to use
 whatever fetcher (curl_cffi, DrissionPage, raw httpx) it needs.
 """
 from __future__ import annotations
+import threading
 from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 from pydantic import BaseModel, Field
+
+
+def maybe_cancel(cancel_token: "threading.Event | None") -> None:
+    """Co-operative cancellation checkpoint.
+
+    Adapters call this at well-defined points in ``fetch()`` —— between
+    network requests, between page batches, before heavy browser spin-up.
+    If the user clicked 「停止」 via the UI, monitor_loop sets the event,
+    and we raise the sidecar's ``_CancelledFetch`` exception (lazy-imported
+    to avoid the csm_core → csm_sidecar circular dep).
+
+    The exception is caught by ``MonitorLoop._run_one`` which emits a
+    `failed` event with reason="cancelled by user", so the UI knows the
+    user's stop click was actually honored mid-fetch (vs. zhihu/comment's
+    previous behavior of running to completion regardless).
+
+    No-op when cancel_token is None (legacy callers / unit tests).
+    """
+    if cancel_token is None or not cancel_token.is_set():
+        return
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        # Running csm_core standalone (tests / scripts) — fall back to a
+        # generic RuntimeError; the worker layer (which catches
+        # _CancelledFetch by name) isn't present anyway.
+        _CancelledFetch = RuntimeError  # type: ignore[assignment]
+    raise _CancelledFetch("cancelled by user")
 
 
 TaskType = Literal[

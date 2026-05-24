@@ -118,6 +118,13 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <!--
+    Teleport to body —— 防止被 MiningView 的 .anim-up 祖先（fadeUp 用
+    transform 收尾）创建出来的新 containing block 困住，结果 fixed
+    overlay 只盖 main 区不到 LeftNav。挂到 body 后 inset:0 + fixed
+    真的覆盖整个视口（包括左侧 nav），符合用户要求"覆盖整个应用界面"。
+  -->
+  <Teleport to="body">
   <div class="drawer-overlay" @click.self="emit('close')">
     <aside class="drawer" role="dialog" aria-label="模板库">
       <header class="drawer-header">
@@ -188,27 +195,43 @@ onUnmounted(() => {
       </ul>
     </aside>
   </div>
+  </Teleport>
 </template>
 
 <style scoped>
+/*
+ * 按用户要求改为半屏居中弹窗（原侧拉抽屉布局已下线）。
+ *   - overlay：暗背景 + flex 居中
+ *   - drawer：min(560px, 80vw) 宽 × min(60vh, 540px) 高，圆角 16，左右边都有 border
+ *   - 进场动画：缩放 + 透明度淡入，不再走 translateX 滑入
+ * 不改变内部 header/search/list 布局，只换外壳尺寸 + 进场动画。
+ */
 .drawer-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.15);
+  background: rgba(0,0,0,0.25);
   z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
 }
 .drawer {
-  position: fixed; right: 0; top: 0; bottom: 0;
-  width: 420px;
+  position: relative;
+  width: min(560px, 80vw);
+  height: min(540px, 60vh);
+  max-height: 60vh;
   background: var(--card, #fffaef);
-  border-left: 1px solid var(--line, #d4c8a8);
+  border: 1px solid var(--line, #d4c8a8);
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
-  box-shadow: -8px 0 20px rgba(0,0,0,0.08);
-  animation: slide-in 180ms ease-out;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.22);
+  animation: pop-in 160ms ease-out;
+  overflow: hidden;
 }
-@keyframes slide-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
+@keyframes pop-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 .drawer-header {
   display: flex; align-items: center; justify-content: space-between;

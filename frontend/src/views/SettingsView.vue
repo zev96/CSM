@@ -19,6 +19,7 @@ import Btn from "@/components/ui/Btn.vue";
 import Card from "@/components/ui/Card.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
+// Spinner 已在下面跟 modal 一起 import，这里不重复
 import FormSelect from "@/components/forms/FormSelect.vue";
 import FormToggle from "@/components/forms/FormToggle.vue";
 import CookieManagerModal from "@/components/monitor/CookieManagerModal.vue";
@@ -161,26 +162,48 @@ async function pickChromePath() {
   if (v) setField("monitor.chrome_path", v);
 }
 
-// ── 9 个 section ────────────────────────────────────────────
+// ── 8 个 section + 三分组 ────────────────────────────────────
+// group 字段按用户重构方案分三段：
+//   basics   基础配置（通用 / 存储路径）—— 安装后基本不动的
+//   workflow 工作流相关（模型 / 历史查重 / 监测 / 评论模板库）—— 影响生成质量
+//   system   系统/元信息（账号 / 关于）—— 跟用户/版本相关
+// sidebar 模板按 group 分组渲染，组之间加灰色分隔 label。
 interface SectionDef {
   k: string;
   l: string;
   icon: string;
   sub: string;
+  group: "basics" | "workflow" | "system";
 }
 const SECTIONS: SectionDef[] = [
-  { k: "general", l: "通用", icon: "settings", sub: "外观 · 行为 · 通知 · 导出" },
-  { k: "paths", l: "存储路径", icon: "folder", sub: "Vault · 导出 · 模板 · Skills 目录" },
-  { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL" },
-  { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建" },
-  { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie" },
-  { k: "templates", l: "评论模板库", icon: "bookmark", sub: "查看 · 编辑 · 批量导入 · 导出" },
-  { k: "account", l: "账号", icon: "user", sub: "登录态 · 工作空间" },
-  { k: "about", l: "关于", icon: "info", sub: "版本与更新" },
+  { k: "general", l: "通用", icon: "settings", sub: "外观 · 行为 · 通知 · 导出", group: "basics" },
+  { k: "paths", l: "存储路径", icon: "folder", sub: "Vault · 导出 · 模板 · Skills 目录", group: "basics" },
+  { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL", group: "workflow" },
+  { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建", group: "workflow" },
+  { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie", group: "workflow" },
+  { k: "templates", l: "评论模板库", icon: "bookmark", sub: "查看 · 编辑 · 批量导入 · 导出", group: "workflow" },
+  { k: "account", l: "账号", icon: "user", sub: "登录态 · 工作空间", group: "system" },
+  { k: "about", l: "关于", icon: "info", sub: "版本与更新", group: "system" },
 ];
 
+const SECTION_GROUPS: Array<{ k: SectionDef["group"]; l: string }> = [
+  { k: "basics", l: "基础" },
+  { k: "workflow", l: "工作流" },
+  { k: "system", l: "系统" },
+];
+
+// 按 group 分桶（template 渲染时直接 v-for 一遍 SECTION_GROUPS）
+const sectionsByGroup = computed<Record<SectionDef["group"], SectionDef[]>>(() => {
+  const out: Record<SectionDef["group"], SectionDef[]> = {
+    basics: [], workflow: [], system: [],
+  };
+  for (const s of SECTIONS) out[s.group].push(s);
+  return out;
+});
+
 const section = ref<string>("general");
-const cur = computed(() => SECTIONS.find((g) => g.k === section.value)!);
+// cur 已下线 —— 主面板顶部的「section 名 + sub」标题块按用户重构方案
+// 移除（sidebar 上同样信息），不再需要这个 computed。
 
 // ── Autosave draft ─────────────────────────────────────────────
 // `draft` 是 cfg.data 的本地反射，所有 input/toggle 都通过 `setField`
@@ -274,7 +297,8 @@ onMounted(async () => {
   if (!cfg.data) await cfg.load();
   syncDraftFromCfg();
   refreshKeyringStatus();
-  refreshBaiduLoginStatus();
+  // refreshBaiduLoginStatus 已搬到 CookieManagerModal（用户要求融合到
+  // Cookie 管理器），SettingsView 不再持有 baidu 登录态。
   applyHash(route.hash);
 });
 
@@ -453,9 +477,34 @@ const filenameTemplateOptions = [
   { label: "仅文章标题（如 文章标题）", value: "{title}" },
 ];
 
-// ── 重建索引（暂时只 toast，后端接口 TBD）──────────────────────
-function rebuildIndex(kind: "history" | "vault") {
-  toast.info(`${kind === "history" ? "历史" : "Vault"} 索引重建：请到查重页操作`);
+// ── 重建索引 —— 实际调后端 POST /api/dedup/build-index ─────────
+// 之前这里只 toast「请到查重页操作」是错的：没有独立的查重页，本 section
+// 就是查重设置 + 入口。后端 dedup_service.submit_build() 早就支持 kind
+// = "history" | "vault" 异步建索引，前端只需要 POST 一下；progress 通过
+// SSE 流（这里暂不订阅，简单 toast 即可，建完用户下次跑文章的"质检报告
+// 重复率·历史"自然会看到对比结果）。
+const rebuildBusy = ref<{ history: boolean; vault: boolean }>({
+  history: false,
+  vault: false,
+});
+
+async function rebuildIndex(kind: "history" | "vault") {
+  if (rebuildBusy.value[kind]) return;
+  const label = kind === "history" ? "历史" : "Vault";
+  rebuildBusy.value[kind] = true;
+  try {
+    const r = await sidecar.client.post("/api/dedup/build-index", { kind });
+    if (r.status === 202) {
+      toast.success(`${label} 索引重建已启动，后台异步执行（job ${r.data?.job_id ?? "?"}）`);
+    } else {
+      toast.info(`${label} 索引重建返回 status=${r.status}`);
+    }
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail ?? e?.message ?? String(e);
+    toast.error(`${label} 索引重建失败：${detail}`);
+  } finally {
+    rebuildBusy.value[kind] = false;
+  }
 }
 
 // ── 关于：版本号从 sidecar 实时读 ───────────────────────────────
@@ -626,6 +675,9 @@ function saveExcludeDomains() {
   excludeDomainsModalOpen.value = false;
 }
 
+// 百度登录 state 已搬到 CookieManagerModal（融合到 Cookie 池下拉的
+// 「百度」选项里）。但「重置百度浏览器 profile」按用户要求放回设置 ——
+// 它是 cookie 烫坏时的修复操作，跟日常登录不同语义，放回设置项更合理。
 async function confirmResetBaiduProfile() {
   if (!confirm("确认重置百度浏览器 profile？\n下次任务会冷启重建，前几次抓取可能仍触发风控（cookie 需要慢慢累积）。")) {
     return;
@@ -636,56 +688,6 @@ async function confirmResetBaiduProfile() {
   } catch (e: any) {
     const detail = e.response?.data?.detail ?? e.message ?? "未知错误";
     toast.error(`重置失败：${detail}`);
-  }
-}
-
-// ── Baidu account login state ────────────────────────────────────────
-const baiduLoginStatus = ref<{
-  logged_in: boolean;
-  username: string | null;
-  expires_at: string | null;
-}>({ logged_in: false, username: null, expires_at: null });
-const baiduLoginBusy = ref(false);
-
-async function refreshBaiduLoginStatus() {
-  try {
-    const r = await sidecar.client.get("/api/monitor/baidu/login-status");
-    baiduLoginStatus.value = {
-      logged_in: !!r.data?.logged_in,
-      username: r.data?.username ?? null,
-      expires_at: r.data?.expires_at ?? null,
-    };
-  } catch (e) {
-    // Settings page shouldn't blow up if sidecar is wedged; just show "未登录"
-    baiduLoginStatus.value = { logged_in: false, username: null, expires_at: null };
-  }
-}
-
-async function startBaiduLogin() {
-  const msg = baiduLoginStatus.value.logged_in
-    ? "重新登录百度账号？\n会打开一个浏览器窗口，登录新账号后旧登录态会被覆盖。"
-    : "登录百度账号？\n会打开一个浏览器窗口，登录后 CSM 抓取任务自动用登录态访问。\n建议使用专用账号，避免日常使用的账号被风控。";
-  if (!confirm(msg)) return;
-
-  baiduLoginBusy.value = true;
-  try {
-    const r = await sidecar.client.post("/api/monitor/baidu/login");
-    const status = r.data?.status;
-    if (status === "success") {
-      toast.success("百度账号登录成功");
-    } else if (status === "cancelled") {
-      toast.info("登录已取消");
-    } else if (status === "timeout") {
-      toast.error("登录超时（窗口已关闭）");
-    } else {
-      toast.error(`登录失败：未知状态 ${status}`);
-    }
-  } catch (e: any) {
-    const detail = e.response?.data?.detail ?? e.message ?? "未知错误";
-    toast.error(`登录失败：${detail}`);
-  } finally {
-    baiduLoginBusy.value = false;
-    await refreshBaiduLoginStatus();
   }
 }
 
@@ -723,7 +725,11 @@ async function saveAccountEdit() {
 
 <template>
   <div class="anim-up flex h-full flex-col" style="gap: var(--density-gap)">
-    <!-- header -->
+    <!--
+      header —— 按用户要求只保留小字 eyebrow「设置」，原 H1「偏好 & 集成」
+      整段移除（跟 MiningView / MonitorView / DataCenterView / 模板库
+      顶部统一风格）。
+    -->
     <div class="flex-shrink-0">
       <div
         class="text-[11px] uppercase"
@@ -731,54 +737,94 @@ async function saveAccountEdit() {
       >
         设置
       </div>
-      <div
-        class="font-display mt-2 font-bold"
-        :style="{ fontSize: '28px', letterSpacing: '-0.5px' }"
-      >
-        偏好 &amp; 集成
-      </div>
     </div>
 
-    <!-- body -->
+    <!--
+      body —— 重构后布局：
+        sidebar 260px：分三组（基础 / 工作流 / 系统），每项 icon + 主名
+        + 副描述（原来藏在数据里的 sub 字段）。选中态用橙色竖条 + card-2
+        浅底（替代原 dark 块），跟应用其它页面的"选中"风格一致。
+        主面板：原顶部「section 大字 + sub」整段移除（sidebar 已经显示
+        了，重复占空间），直接渲染 SettingsRow 列表。
+    -->
     <div
       class="grid min-h-0 flex-1"
-      :style="{ gridTemplateColumns: '220px 1fr', gap: 'var(--density-gap)' }"
+      :style="{ gridTemplateColumns: '260px 1fr', gap: 'var(--density-gap)' }"
     >
-      <!-- 左侧导航 -->
-      <Card padless class="overflow-y-auto" :style="{ padding: '10px' }">
-        <button
-          v-for="g in SECTIONS"
-          :key="g.k"
-          type="button"
-          class="mb-1 flex w-full items-center gap-3 px-3 py-2.5 text-left transition"
-          :style="{
-            borderRadius: '10px',
-            background: section === g.k ? 'var(--dark)' : 'transparent',
-            color: section === g.k ? '#fbf7ec' : 'var(--ink-2)',
-          }"
-          @click="section = g.k"
-        >
-          <Icon :name="g.icon" :size="15" />
-          <span class="text-[12.5px] font-medium">{{ g.l }}</span>
-        </button>
+      <!-- 左侧导航 —— 分组 + 富信息 -->
+      <Card padless class="overflow-y-auto" :style="{ padding: '8px' }">
+        <template v-for="(grp, gi) in SECTION_GROUPS" :key="grp.k">
+          <!-- 组分隔 label（首组无 margin-top；其余组顶部留 padding 拉开） -->
+          <div
+            class="px-3 text-[10.5px] uppercase font-medium"
+            :style="{
+              color: 'var(--ink-4)',
+              letterSpacing: '1.2px',
+              paddingTop: gi === 0 ? '6px' : '14px',
+              paddingBottom: '6px',
+            }"
+          >
+            {{ grp.l }}
+          </div>
+          <button
+            v-for="g in sectionsByGroup[grp.k]"
+            :key="g.k"
+            type="button"
+            class="relative mb-0.5 flex w-full items-start gap-3 text-left transition"
+            :style="{
+              padding: '10px 12px 10px 14px',
+              borderRadius: '10px',
+              background: section === g.k ? 'var(--card-2)' : 'transparent',
+              color: 'var(--ink)',
+            }"
+            @click="section = g.k"
+            @mouseenter="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.04)' }"
+            @mouseleave="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
+          >
+            <!-- 选中态左侧 3px 橙竖条（仅选中时出） -->
+            <span
+              v-if="section === g.k"
+              :style="{
+                position: 'absolute',
+                left: '4px',
+                top: '12px',
+                bottom: '12px',
+                width: '3px',
+                borderRadius: '999px',
+                background: 'var(--primary)',
+              }"
+            />
+            <Icon
+              :name="g.icon"
+              :size="15"
+              :style="{
+                flexShrink: 0,
+                marginTop: '1px',
+                color: section === g.k ? 'var(--primary-deep)' : 'var(--ink-3)',
+              }"
+            />
+            <div class="min-w-0 flex-1">
+              <div
+                class="text-[12.5px]"
+                :style="{
+                  fontWeight: section === g.k ? 600 : 500,
+                  color: section === g.k ? 'var(--ink)' : 'var(--ink-2)',
+                }"
+              >{{ g.l }}</div>
+              <div
+                class="mt-0.5 text-[10.5px] truncate"
+                :style="{ color: 'var(--ink-4)', lineHeight: 1.4 }"
+                :title="g.sub"
+              >{{ g.sub }}</div>
+            </div>
+          </button>
+        </template>
       </Card>
 
-      <!-- 右侧面板 -->
-      <!--
-        没有「保存设置」按钮 —— setField 调一次就 PATCH 一次，改完即落
-        盘。这里只剩标题区。
-      -->
+      <!-- 右侧面板 —— 直接渲染当前 section 的内容，section 标题/副标
+           已下线（sidebar 上有同样信息，主面板再来一遍重复）。 -->
       <Card class="min-h-0 overflow-y-auto">
-        <div class="mb-1">
-          <div class="font-display font-bold" :style="{ fontSize: '20px' }">
-            {{ cur.l }}
-          </div>
-          <div class="mt-0.5 text-[12px]" :style="{ color: 'var(--ink-3)' }">
-            {{ cur.sub }}
-          </div>
-        </div>
-
-        <div class="mt-4 flex flex-col">
+        <div class="flex flex-col">
           <!-- ━━━━━━━━ 通用 ━━━━━━━━ -->
           <!--
             说明：用户名移到「账号」section；语言、检查更新、字体、强调色
@@ -1205,9 +1251,15 @@ async function saveAccountEdit() {
                   : '尚未建立'
               "
             >
-              <Btn variant="ghost" small @click="rebuildIndex('history')">
-                <Icon name="refresh" :size="13" />
-                <span>重建</span>
+              <Btn
+                variant="ghost"
+                small
+                :disabled="rebuildBusy.history"
+                @click="rebuildIndex('history')"
+              >
+                <Spinner v-if="rebuildBusy.history" :size="12" />
+                <Icon v-else name="refresh" :size="13" />
+                <span>{{ rebuildBusy.history ? '重建中…' : '重建' }}</span>
               </Btn>
             </SettingsRow>
             <SettingsRow
@@ -1228,9 +1280,15 @@ async function saveAccountEdit() {
                   : '尚未建立'
               "
             >
-              <Btn variant="ghost" small @click="rebuildIndex('vault')">
-                <Icon name="refresh" :size="13" />
-                <span>重建</span>
+              <Btn
+                variant="ghost"
+                small
+                :disabled="rebuildBusy.vault"
+                @click="rebuildIndex('vault')"
+              >
+                <Spinner v-if="rebuildBusy.vault" :size="12" />
+                <Icon v-else name="refresh" :size="13" />
+                <span>{{ rebuildBusy.vault ? '重建中…' : '重建' }}</span>
               </Btn>
             </SettingsRow>
             <SettingsRow label="重复率告警阈值" hint="超过则在检查面板告警">
@@ -1275,11 +1333,25 @@ async function saveAccountEdit() {
           -->
           <template v-else-if="section === 'monitor'">
             <!--
+              Cookie 池入口提到监测设置最顶 —— 按用户要求"比较重要且常用"，
+              百度账号登录 + 重置浏览器 profile 都融合到了 Cookie 管理器
+              modal 里，所以这里点击直接覆盖三项常用操作（百度登录 / 重置 /
+              4 平台 cookie 管理）。
+            -->
+            <SettingsRow
+              label="Cookie 池"
+              hint="管理各平台登录态 — 百度账号登录 / 知乎 / B 站 / 抖音 / 快手"
+            >
+              <Btn variant="solid" small @click="cookieMgrOpen = true">
+                <Icon name="key" :size="13" />
+                <span>打开管理器</span>
+              </Btn>
+            </SettingsRow>
+            <!--
               「常规设置」/「百度关键词」两块用同级 section header（粗体小标）
               + 顶部分割线分组，跟原来的深色 card-2 圈起来视觉权重大不一样。
-              第一块没有顶部分割线（页面已经是 panel 的顶部）。
             -->
-            <div class="mb-3 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
+            <div class="mb-3 mt-5 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
               常规设置
             </div>
             <SettingsRow label="平台并发" hint="单个平台同时发起的请求数">
@@ -1588,36 +1660,12 @@ async function saveAccountEdit() {
                     </Btn>
                   </div>
                 </SettingsRow>
-                <SettingsRow
-                  label="百度账号"
-                  hint="CSM 抓取任务用登录态访问百度，显著降低风控触发率。建议使用专用账号 —— 万一被风控，不会影响你日常使用的账号。"
-                >
-                  <div class="flex items-center gap-3">
-                    <span
-                      v-if="baiduLoginStatus.logged_in"
-                      class="text-[11.5px]"
-                      :style="{ color: 'var(--success, #16a34a)' }"
-                    >
-                      已登录{{ baiduLoginStatus.username ? ` @${baiduLoginStatus.username}` : "" }}
-                    </span>
-                    <span
-                      v-else
-                      class="text-[11.5px]"
-                      :style="{ color: 'var(--ink-3)' }"
-                    >
-                      未登录
-                    </span>
-                    <Btn
-                      variant="solid"
-                      small
-                      :disabled="baiduLoginBusy"
-                      @click="startBaiduLogin"
-                    >
-                      <Icon name="user" :size="12" />
-                      <span>{{ baiduLoginStatus.logged_in ? "重新登录" : "登录百度" }}</span>
-                    </Btn>
-                  </div>
-                </SettingsRow>
+                <!--
+                  「百度账号」登录已合并到 Cookie 池下拉的「百度」选项内。
+                  这里只保留「重置浏览器 profile」—— cookie 烫坏时的修复
+                  操作跟日常登录不同语义，留在设置项里更合理（也不容易
+                  被用户误点）。
+                -->
                 <SettingsRow
                   label="重置百度浏览器 profile"
                   hint="如果连续触发百度风控、cookie 已经烫坏，点这里清空浏览器数据从头来。期间不能有运行中的百度任务。"
@@ -1630,17 +1678,11 @@ async function saveAccountEdit() {
                 </SettingsRow>
               </div>
             </div>
-
-            <SettingsRow
-              label="Cookie 池"
-              hint="管理各平台登录态 — 知乎 / B 站 / 抖音 / 快手"
-              last
-            >
-              <Btn variant="solid" small @click="cookieMgrOpen = true">
-                <Icon name="key" :size="13" />
-                <span>打开管理器</span>
-              </Btn>
-            </SettingsRow>
+            <!--
+              Cookie 池入口的位置：之前作为 monitor section 最后一行；按用户
+              要求"是比较重要且常用的选项"——已在模板开头（SettingsRow 列表
+              顶部）单独渲染了一份，这里的旧 last-row 删除。
+            -->
           </template>
 
           <!-- ━━━━━━━━ 评论模板库 ━━━━━━━━ -->
@@ -1776,7 +1818,9 @@ async function saveAccountEdit() {
           :style="{
             width: '480px',
             maxWidth: '92vw',
+            height: '70vh',
             maxHeight: '80vh',
+            minHeight: '420px',
             borderRadius: 'var(--radius-card)',
             border: '1px solid var(--line)',
           }"
@@ -1793,12 +1837,19 @@ async function saveAccountEdit() {
             </button>
           </div>
           <div class="flex min-h-0 flex-1 flex-col" :style="{ padding: '4px 24px' }">
+            <!--
+              用户反馈：textarea 太小（之前 modal 无 height，flex-1 没空间撑开）。
+              对外 modal 加 height: 70vh / minHeight: 420px 给容器一个明确高度，
+              然后 textarea 走 flex-1 自然占满。同时给 textarea 兜 min-height
+              以防极小窗口下塌成一行。
+            -->
             <textarea
               v-model="excludeDomainsDraftRaw"
               class="bg-card-white px-3 py-2 text-[12.5px] outline-none flex-1 min-h-0"
               placeholder="jd.com&#10;taobao.com&#10;1688.com&#10;cewey.com"
               :style="{
                 width: '100%',
+                minHeight: '220px',
                 borderRadius: '10px',
                 border: '1px solid var(--line)',
                 fontFamily: 'ui-monospace, SF Mono, Menlo, Consolas, monospace',

@@ -2,28 +2,24 @@
 /**
  * 百度 SEO 首页卡 — Row 2 第 1 张。
  *
- *   ┌─────────────────────────────────────────┐
- *   │ MONITOR · 百度 SEO              [详情→]│
- *   │ 宠物家庭吸尘器推荐  近 7 天             │
- *   │ ◢ sparkline ◣                            │
- *   │ 周一  周二 ... 今天                       │
- *   │ ┌─────────────────────────────────────┐ │
- *   │ │ ★ 宠物家庭吸尘器推荐         [↗2]   │ │  ← 高亮主项
- *   │ ├─────────────────────────────────────┤ │
- *   │ │   扫地机器人推荐             [↘2]   │ │
- *   │ │   千元降噪耳机               [↘5]   │ │
- *   │ └─────────────────────────────────────┘ │
- *   └─────────────────────────────────────────┘
+ * 视图抽到 KeywordTrendCard。本组件负责数据获取 + Keyword[] → KeywordTrendItem[]
+ * 映射 + 行点击转 router.push 跳到监测中心百度 tab 对应任务。
+ *
+ * 全量映射不再 slice(0, 3) —— 窗口拉大时 KeywordTrendCard 的列表区
+ * (flex-1 + overflow-y-auto) 跟着涨高，更多关键词自动露出来直到塞满；
+ * 小窗口则滚动。
  *
  * 数据：GET /api/monitor/history/baidu-keyword?range=7d
- * Sparkline 暂用 fallback mock 序列（详见 Design.md §5.6），等后端 series
- * endpoint 落地后单独 PR 接入。
+ * Sparkline 暂用全局 fallback；后端 per-keyword series 接入后给 mapped
+ * item 加 series 字段即可，UI 自动用上。
  */
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import Icon from "@/components/ui/Icon.vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
+import KeywordTrendCard, {
+  type BadgeKind,
+  type KeywordTrendItem,
+} from "@/components/home/KeywordTrendCard.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 
@@ -71,38 +67,53 @@ const CHANGE_ORDER: Record<ChangeKind, number> = {
   flat: 4,
 };
 
-const sortedKeywords = computed<Keyword[]>(() => {
+function mapKind(k: ChangeKind): BadgeKind {
+  if (k === "up" || k === "new") return "up";
+  if (k === "down" || k === "dropped") return "down";
+  return "flat";
+}
+
+function badgeIcon(k: ChangeKind): string {
+  if (k === "up" || k === "new") return "arrowUp";
+  if (k === "down" || k === "dropped") return "arrowDown";
+  return ""; // flat：徽章只显示文字 "—"
+}
+
+function badgeText(kw: Keyword): string {
+  if (kw.change_kind === "flat") return "—";
+  return String(kw.matched_count);
+}
+
+// 首页这张卡列表最多 15 条（避免数据多时把 DOM 塞过满 / 列表撑太长）；
+// 完整列表走右上「→」按钮跳到监测中心百度 tab 看。
+const items = computed<KeywordTrendItem[]>(() => {
   if (!data.value) return [];
   return [...data.value.keywords]
     .sort((a, b) => CHANGE_ORDER[a.change_kind] - CHANGE_ORDER[b.change_kind])
-    .slice(0, 3);
+    .slice(0, 15)
+    .map((kw) => ({
+      id: kw.task_id,
+      label: kw.search_keyword,
+      badge: {
+        text: badgeText(kw),
+        icon: badgeIcon(kw.change_kind),
+        kind: mapKind(kw.change_kind),
+      },
+    }));
 });
 
-const topKeyword = computed(() => sortedKeywords.value[0] ?? null);
-const restKeywords = computed(() => sortedKeywords.value.slice(1));
-
-// fallback sparkline — 7 个点平稳上升，等后端给 series 再换真实数据。
 const SPARK_FALLBACK = [3, 4, 4, 5, 5, 6, 7];
-const SPARK_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "今天"];
-
-function chipStyle(kind: ChangeKind) {
-  if (kind === "up" || kind === "new")
-    return { background: "#dde7d2", color: "#4d6b2f" };
-  if (kind === "down" || kind === "dropped")
-    return { background: "#f3d3cd", color: "#a3382a" };
-  return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
-}
-
-function chipIcon(kind: ChangeKind) {
-  if (kind === "up" || kind === "new") return "arrowUp";
-  if (kind === "down" || kind === "dropped") return "arrowDown";
-  return "x"; // 持平：用 x 占位避免空字符串
-}
-
-function chipText(kw: Keyword) {
-  if (kw.change_kind === "flat") return "持平";
-  return String(kw.matched_count);
-}
+// 横轴标签：7 天日（"22"），不带月份；今天在最末。在 component setup
+// 时算一次，跟 hero dateLabel 同语义（hero remount 时跟着重算）。
+const SPARK_LABELS = ((): string[] => {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    out.push(String(d.getDate()));
+  }
+  return out;
+})();
 
 onMounted(async () => {
   try {
@@ -117,138 +128,33 @@ onMounted(async () => {
     loaded.value = true;
   }
 });
+
+function goDetail() {
+  router.push({ name: "monitor", query: { tab: "baidu" } });
+}
+
+// 点击关键词行 → 跳到监测中心百度 tab + 该任务。MonitorView 现在
+// 只读 tab query；task query 暂时透传不处理，留待 BaiduRankingPage
+// 后续接 task 路由 highlight。
+function onItemClick(item: KeywordTrendItem) {
+  router.push({
+    name: "monitor",
+    query: { tab: "baidu", task: item.id },
+  });
+}
 </script>
 
 <template>
-  <section
-    class="relative flex h-full flex-col overflow-hidden"
-    :style="{
-      background: 'var(--card)',
-      borderRadius: 'var(--radius-card)',
-      border: '1px solid var(--line)',
-      padding: '16px',
-    }"
-  >
-    <!-- 标题区（参考图样式：平台名 + 圆形跳转按钮） -->
-    <div class="flex flex-shrink-0 items-center justify-between">
-      <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">
-        百度 SEO
-      </div>
-      <button
-        type="button"
-        class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full"
-        :style="{
-          background: 'var(--card-2)',
-          color: 'var(--ink-2)',
-          border: '1px solid var(--line)',
-        }"
-        title="详情"
-        @click="router.push({ name: 'monitor', query: { tab: 'baidu' } })"
-      >
-        <Icon name="arrowRight" :size="11" />
-      </button>
-    </div>
-
-    <!-- 大标：当前主关键词 + 趋势 chip -->
-    <div class="mt-2 flex flex-shrink-0 items-center gap-2">
-      <div
-        class="font-display min-w-0 flex-1 truncate font-bold"
-        :style="{ fontSize: '15px', color: 'var(--ink)' }"
-      >
-        {{ topKeyword ? topKeyword.search_keyword : "百度关键词" }}
-      </div>
-      <span
-        v-if="topKeyword"
-        class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
-        :style="chipStyle(topKeyword.change_kind)"
-      >
-        <Icon :name="chipIcon(topKeyword.change_kind)" :size="9" />
-        {{ chipText(topKeyword) }}
-      </span>
-    </div>
-    <div class="mt-0.5 mb-2 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-      近 7 天
-    </div>
-
-    <!-- Sparkline + 日期标签 -->
-    <div class="mb-2 flex-shrink-0">
-      <Sparkline
-        :points="SPARK_FALLBACK"
-        :axis-labels="SPARK_LABELS"
-        :height="38"
-        stroke="var(--primary)"
-        :show-last="true"
-        fluid
-      />
-    </div>
-
-    <!-- 关键词列表 -->
-    <div
-      v-if="!loaded"
-      class="flex min-h-0 flex-1 items-center justify-center text-[12px]"
-      :style="{ color: 'var(--ink-3)' }"
-    >
-      加载中…
-    </div>
-    <div
-      v-else-if="sortedKeywords.length === 0"
-      class="flex min-h-0 flex-1 items-center justify-center text-center text-[12px]"
-      :style="{ color: 'var(--ink-3)' }"
-    >
-      暂无百度关键词任务<br />
-      <span class="text-[11px]">前往监测中心添加</span>
-    </div>
-    <div v-else class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-      <!--
-        高亮主项：深橙底 + 暖色字（参考图风格）。chip 也是深橙底，但字
-        色保持原 chipStyle 的语义色，避免红/绿趋势提示丢色 —— 用 ring
-        加亮 chip 的边缘让它在深底上仍清晰。
-      -->
-      <div
-        v-if="topKeyword"
-        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
-        :style="{
-          background: 'var(--primary)',
-          border: '1px solid var(--primary)',
-        }"
-      >
-        <div
-          class="min-w-0 flex-1 truncate text-[12px] font-semibold"
-          :style="{ color: 'var(--yellow)' }"
-        >
-          {{ topKeyword.search_keyword }}
-        </div>
-        <span
-          class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
-          :style="{
-            background: 'var(--primary-deep)',
-            color: 'var(--yellow)',
-          }"
-        >
-          <Icon :name="chipIcon(topKeyword.change_kind)" :size="9" />
-          {{ chipText(topKeyword) }}
-        </span>
-      </div>
-      <!-- 次项：白底简洁行，hover 浅灰 -->
-      <div
-        v-for="kw in restKeywords"
-        :key="kw.task_id"
-        class="flex items-center gap-2 rounded-[10px] px-2.5 py-2"
-        :style="{
-          background: 'transparent',
-        }"
-      >
-        <div class="min-w-0 flex-1 truncate text-[12px]">
-          {{ kw.search_keyword }}
-        </div>
-        <span
-          class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
-          :style="chipStyle(kw.change_kind)"
-        >
-          <Icon :name="chipIcon(kw.change_kind)" :size="9" />
-          {{ chipText(kw) }}
-        </span>
-      </div>
-    </div>
-  </section>
+  <KeywordTrendCard
+    category="百度 SEO"
+    sub-label="近 7 天"
+    :axis-labels="SPARK_LABELS"
+    :items="items"
+    :fallback-series="SPARK_FALLBACK"
+    :loaded="loaded"
+    empty-title="暂无百度关键词任务"
+    empty-hint="前往监测中心添加"
+    @detail="goDetail"
+    @item-click="onItemClick"
+  />
 </template>

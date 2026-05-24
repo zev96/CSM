@@ -1,13 +1,16 @@
 <script setup lang="ts">
 /**
  * Settings → 评论模板库 section.
- * Full CRUD + bulk import + JSON export + show-hidden toggle.
+ * Full CRUD + bulk import + JSON export. 隐藏/恢复 功能按用户要求下线
+ * （"这个功能没有用"）—— 改用直接删除。后端 hidden 字段保留兼容，
+ * UI 一律按 hidden=0 拉数据，hidden=1 的老数据不显示。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue"
+import { onMounted, onUnmounted, ref, watch } from "vue"
 
 import Icon from "@/components/ui/Icon.vue"
 import FormSelect from "@/components/forms/FormSelect.vue"
 import { useToast } from "@/composables/useToast"
+import { confirmDialog } from "@/composables/useConfirm"
 import { useTemplatesStore, type Template } from "@/stores/templates"
 
 import TemplateEditModal from "./TemplateEditModal.vue"
@@ -19,7 +22,6 @@ const toast = useToast()
 const search = ref("")
 const selectedTags = ref<string[]>([])
 const platform = ref<string>("")
-const showHidden = ref(false)
 const page = ref(0)
 const pageSize = 50
 
@@ -31,7 +33,7 @@ const showBulkImport = ref(false)
 let searchTimer: number | undefined
 
 // Filter changes → reset to page 0 + refresh
-watch([search, selectedTags, platform, showHidden], () => {
+watch([search, selectedTags, platform], () => {
   page.value = 0
   if (searchTimer) window.clearTimeout(searchTimer)
   searchTimer = window.setTimeout(refresh, 200)
@@ -44,22 +46,16 @@ watch(page, () => {
 })
 
 async function refresh() {
+  // hidden 永远 "0" —— UI 不再让用户切换显示隐藏的模板。
   await store.list({
     search: search.value || undefined,
     tags: selectedTags.value.length ? selectedTags.value : undefined,
     platform: platform.value || undefined,
-    hidden: showHidden.value ? "all" : "0",
+    hidden: "0",
     limit: pageSize,
     offset: page.value * pageSize,
   })
 }
-
-// Count hidden rows ONLY among current items — accurate when
-// "显示隐藏" is checked. When off, server filters them out so this
-// is always 0; we hide the badge in that case.
-const visibleHiddenCount = computed(() =>
-  store.items.filter(t => t.hidden).length,
-)
 
 onMounted(async () => {
   await store.loadAllTags()
@@ -108,16 +104,15 @@ async function toggleStar(tpl: Template) {
   await store.update(tpl.id, { starred: !tpl.starred })
 }
 
-async function toggleHidden(tpl: Template) {
-  await store.update(tpl.id, { hidden: !tpl.hidden })
-  await refresh()
-}
+// toggleHidden 已下线 —— 用户要求删除隐藏功能。需要清理就直接删除。
 
 async function doDelete(tpl: Template) {
+  // 不能用 window.confirm —— Tauri 2 把它转给已退役的 dialog|confirm IPC，
+  // 抛 "Command not found"。统一走 in-app confirmDialog。
   const msg = tpl.use_count > 0
     ? `这条用过 ${tpl.use_count} 次，确定删除？删除后无法恢复。`
     : "确定删除？删除后无法恢复。"
-  if (!window.confirm(msg)) return
+  if (!(await confirmDialog(msg, { title: "删除模板", okLabel: "删除" }))) return
   await store.remove(tpl.id)
   toast.success("已删除")
   await refresh()
@@ -163,21 +158,22 @@ function toggleTag(tag: string) {
         >{{ t }}</button>
         <span v-if="!store.allTags.length" class="muted">（暂无标签）</span>
       </div>
+      <!--
+        平台选择按用户要求精简：
+          1. 移除「手动」选项（实际没人手动入库）
+          2. 默认项文案 "平台：全部" → "全部"（前缀冗余，下拉本身已说明语义）
+        「显示隐藏」复选框 + 整套隐藏/恢复功能已下线。
+      -->
       <FormSelect
         :model-value="platform"
         :options="[
-          { label: '平台：全部', value: '' },
+          { label: '全部', value: '' },
           { label: '抖音', value: 'douyin' },
           { label: '快手', value: 'kuaishou' },
           { label: 'B 站', value: 'bilibili' },
-          { label: '手动', value: 'manual' },
         ]"
         @update:model-value="(v) => (platform = String(v))"
       />
-      <label class="show-hidden">
-        <input type="checkbox" v-model="showHidden" />
-        显示隐藏
-      </label>
     </header>
 
     <div class="actions">
@@ -191,7 +187,7 @@ function toggleTag(tag: string) {
         <Icon name="download" :size="12" /> 导出 JSON
       </button>
       <span class="count">
-        共 {{ store.total }} 条<span v-if="showHidden && visibleHiddenCount"> · 含 {{ visibleHiddenCount }} 已隐藏</span>
+        共 {{ store.total }} 条
       </span>
     </div>
 
@@ -206,7 +202,7 @@ function toggleTag(tag: string) {
         v-for="tpl in store.items"
         :key="tpl.id"
         class="row"
-        :class="{ starred: tpl.starred, hidden: tpl.hidden }"
+        :class="{ starred: tpl.starred }"
       >
         <span class="star-slot">
           <button @click="toggleStar(tpl)" :title="tpl.starred ? '取消精选' : '标精选'">
@@ -214,7 +210,7 @@ function toggleTag(tag: string) {
           </button>
         </span>
         <div class="body">
-          <div class="text">{{ tpl.hidden ? "[已隐藏] " : "" }}{{ tpl.text }}</div>
+          <div class="text">{{ tpl.text }}</div>
           <div class="meta">
             <span v-for="t in tpl.tags" :key="t" class="meta-tag">#{{ t }}</span>
             <span v-if="!tpl.tags.length" class="muted">(无标签)</span>
@@ -227,9 +223,7 @@ function toggleTag(tag: string) {
           <button @click="openEdit(tpl)" title="编辑">
             <Icon name="edit" :size="12" /> 编辑
           </button>
-          <button @click="toggleHidden(tpl)" :title="tpl.hidden ? '恢复' : '隐藏'">
-            <Icon name="eye" :size="12" /> {{ tpl.hidden ? "恢复" : "隐藏" }}
-          </button>
+          <!-- 隐藏/恢复按钮已下线（用户要求） -->
           <button class="danger" @click="doDelete(tpl)" title="删除">
             <Icon name="trash" :size="12" /> 删除
           </button>
@@ -282,7 +276,7 @@ function toggleTag(tag: string) {
   color: var(--ink, #6a5520); font-family: inherit;
 }
 .tag-chip.active { background: var(--accent, #e0a020); color: #fff; border-color: var(--accent, #e0a020); }
-.show-hidden { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink, #6b5a3a); }
+/* .show-hidden 样式已下线（隐藏功能整体移除） */
 .actions {
   display: flex; gap: 8px; align-items: center;
   margin-bottom: 14px; padding-bottom: 12px;
@@ -307,7 +301,7 @@ function toggleTag(tag: string) {
   padding: 11px 13px; margin-bottom: 8px;
 }
 .row.starred { border-color: var(--accent, #e0a020); background: var(--card-warm, #fffaee); }
-.row.hidden { opacity: 0.55; }
+/* .row.hidden 样式已下线（隐藏功能整体移除） */
 .star-slot button { background: transparent; border: none; cursor: pointer; padding: 2px; color: var(--ink-4, #c8b888); }
 .row.starred .star-slot button { color: var(--accent, #e0a020); }
 .body { flex: 1; min-width: 0; }

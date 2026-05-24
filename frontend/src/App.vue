@@ -126,12 +126,12 @@ onMounted(async () => {
       width: '100vw',
       height: '100vh',
       background: 'var(--bg-inner)',
-      borderRadius: '14px',
+      borderRadius: '24px',
       boxSizing: 'border-box',
-      // Top padding gives breathing room below the drag strip / traffic
-      // lights so the LeftNav logo and search bar aren't crammed against
-      // the window controls.
-      paddingTop: '44px',
+      // 不再在 root 加 paddingTop —— LeftNav 用 paddingTop:62 给 logo
+      // 留位置（44 drag strip + 18 原来的），main 用 paddingTop:66 给
+      // drag-strip 让出空间；这样 LeftNav 背景从 y=0 开始，毛玻璃覆盖
+      // 整个左侧高度（用户要求）。
     }"
   >
     <!--
@@ -175,7 +175,7 @@ onMounted(async () => {
       -->
       <main
         class="flex min-w-0 flex-1 flex-col overflow-hidden"
-        :style="{ padding: '22px 30px 30px 6px' }"
+        :style="{ padding: '66px 30px 30px 30px' }"
       >
     <!--
       router-view wrapper（min-h-0 flex-1 overflow-y-auto 给 ArticleView

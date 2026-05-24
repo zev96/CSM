@@ -269,3 +269,23 @@ body[data-radius="bold"] {
 .gap-d {
   gap: var(--density-gap);
 }
+
+/*
+ * 磨砂玻璃卡片表面 —— 首页 4 张监测卡 + 最近文档。把背景/边框/阴影集中
+ * 在这一个 class 里，方便 B+C 大改时整体替换。视觉目标：贴在 --bg-inner
+ * 暖底上呈现一层乳白浮玻，比 --card (#fbf7ec) 更"轻"，但仍能撑出层次。
+ *
+ * 注意：用 class 而不是 inline :style，因为子元素（比如 KeywordTrendCard
+ * 的 .row-active）需要在 hover 时改 background；inline :style 会压死
+ * class / :hover（详见 memory feedback_vue_inline_style_hover_clobber）。
+ */
+.card-frosted {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: var(--radius-card);
+  box-shadow:
+    0 1px 0 rgba(28, 26, 23, 0.03),
+    0 4px 14px rgba(28, 26, 23, 0.05);
+}

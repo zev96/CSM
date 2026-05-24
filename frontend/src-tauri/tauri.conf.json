@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "CSM · Content SEO Maker",
-        "width": 1652,
-        "height": 1147,
-        "minWidth": 1652,
-        "minHeight": 1147,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1280,
+        "minHeight": 800,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
@@ -58,5 +58,9 @@
       }
     }
   },
-  "plugins": {}
+  "plugins": {
+    "shell": {
+      "open": "^.{1,}"
+    }
+  }
 }

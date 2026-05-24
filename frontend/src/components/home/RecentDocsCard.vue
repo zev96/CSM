@@ -87,6 +87,20 @@ function chipStyle(status: Status) {
   return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
 }
 
+/**
+ * 把本地路径转 file:// URL（跟 RecentHistoryView.toFileURL 同款），
+ * 让 Tauri plugin-shell 的 open scope 校验更好通过（默认 scope 是
+ * mailto/tel/https 三种，纯 Windows 绝对路径会被拒）。
+ */
+function toFileURL(p: string): string {
+  if (!p) return "";
+  if (/^[a-z]+:\/\//i.test(p)) return p;
+  const normalized = p.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(normalized)) return `file:///${normalized}`;
+  if (normalized.startsWith("/")) return `file://${normalized}`;
+  return `file:///${normalized}`;
+}
+
 async function openDoc(d: Doc) {
   if (!d.path) {
     router.push({ name: "article" });
@@ -103,7 +117,7 @@ async function openDoc(d: Doc) {
       return;
     }
     const { open } = await import("@tauri-apps/plugin-shell");
-    await open(d.path);
+    await open(toFileURL(d.path));
   } catch (e: any) {
     const { useToast } = await import("@/composables/useToast");
     useToast().error(`打开失败：${e?.message ?? e}`);
@@ -113,13 +127,8 @@ async function openDoc(d: Doc) {
 
 <template>
   <section
-    class="relative flex h-full min-h-0 flex-col overflow-hidden"
-    :style="{
-      background: 'var(--card)',
-      borderRadius: 'var(--radius-card)',
-      border: '1px solid var(--line)',
-      padding: '12px 14px',
-    }"
+    class="card-frosted relative flex h-full min-h-0 flex-col overflow-hidden"
+    :style="{ padding: '12px 14px' }"
   >
     <!-- 标题区（紧凑单行：「最近文档」 + 「全部 →」） -->
     <div class="mb-2 flex flex-shrink-0 items-center justify-between">

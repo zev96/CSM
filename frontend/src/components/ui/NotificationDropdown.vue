@@ -67,7 +67,7 @@ function gotoSettings() {
 <template>
   <div
     v-if="open"
-    class="absolute z-30"
+    class="absolute z-50"
     :style="{
       bottom: '0',
       left: '52px',

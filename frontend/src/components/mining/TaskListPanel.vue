@@ -25,6 +25,12 @@ defineProps<{
 defineEmits<{
   (e: "select", id: number): void;
   (e: "new"): void;
+  /** TaskListItem ⋯ 菜单转发：导出该任务 CSV */
+  (e: "export", id: number): void;
+  /** TaskListItem ⋯ 菜单转发：删除该任务 */
+  (e: "delete", id: number): void;
+  /** TaskListItem 「停止」按钮转发：取消正在跑的抓取任务 */
+  (e: "cancel", id: number): void;
 }>();
 </script>
 
@@ -52,7 +58,7 @@ defineEmits<{
       }"
     >
       <div class="font-display font-bold text-[14px]" style="letter-spacing: -0.3px;">
-        抓取任务
+        任务列表
       </div>
       <button
         type="button"
@@ -89,6 +95,9 @@ defineEmits<{
           :selected="j.id === currentJobId"
           :running="j.id === runningJobId"
           @select="$emit('select', j.id)"
+          @export="(id) => $emit('export', id)"
+          @delete="(id) => $emit('delete', id)"
+          @cancel="(id) => $emit('cancel', id)"
         />
       </template>
 

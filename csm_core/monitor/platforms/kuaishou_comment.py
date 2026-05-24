@@ -15,9 +15,10 @@ that aren't covered by the path regex alone.
 from __future__ import annotations
 import logging
 import re
+import threading
 from typing import Any
 
-from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
+from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask, maybe_cancel
 from ..rate_limit import get_pacer, get_breaker
 from ..drivers.cookie_store import CookieStore
 from ._comment_common import build_match_result, fail_result, risk_control_result
@@ -95,7 +96,15 @@ class KuaishouCommentAdapter:
         self._breaker = get_breaker(self.platform)
         self._ua_idx = 0
 
-    def fetch(self, task: MonitorTask) -> MonitorResult:
+    def fetch(
+        self,
+        task: MonitorTask,
+        cancel_token: threading.Event | None = None,
+        **_kwargs,
+    ) -> MonitorResult:
+        # **_kwargs 吞掉 monitor_loop 的 progress_cb / resume_from。
+        # cancel_token 让用户「停止」点击在 fetch 中途生效（不再等整个
+        # GraphQL 分页拉完）。
         if not self._breaker.allow():
             return risk_control_result(task, "breaker_open")
 
@@ -120,12 +129,20 @@ class KuaishouCommentAdapter:
         if cred:
             session.headers["Cookie"] = cred.cookies_text
 
+        # Cancel check #1 —— 短链/HTML 解析前快速退出
+        maybe_cancel(cancel_token)
+
         photo_id, err = self._extract_video_id(session, task.target_url)
         if not photo_id:
             return fail_result(task, "extract", err or "could not parse Kuaishou URL")
 
+        # Cancel check #2 —— GraphQL 拉取前再查（最长 15 页 POST 请求）
+        maybe_cancel(cancel_token)
+
         self._pacer.wait()
-        comments, ok, err = self._fetch_comments(session, photo_id, limit=200)
+        comments, ok, err = self._fetch_comments(
+            session, photo_id, limit=200, cancel_token=cancel_token,
+        )
         if not ok:
             self._breaker.record_failure()
             if cred:
@@ -192,6 +209,7 @@ class KuaishouCommentAdapter:
         session: Any,
         photo_id: str,
         limit: int,
+        cancel_token: threading.Event | None = None,
     ) -> tuple[list[dict[str, Any]], bool, str | None]:
         all_comments: list[dict[str, Any]] = []
         pcursor = ""
@@ -199,6 +217,9 @@ class KuaishouCommentAdapter:
         for _ in range(15):
             if len(all_comments) >= limit:
                 break
+            # Cancel check per page —— pacer 可能 sleep 秒级 + GraphQL POST
+            # 1-3s，不希望再下载一页才听用户的停止。
+            maybe_cancel(cancel_token)
             self._pacer.wait()
             payload = {
                 "operationName": "commentListQuery",

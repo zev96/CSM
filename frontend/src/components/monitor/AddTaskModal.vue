@@ -415,9 +415,13 @@ async function submit() {
               hint="该关键词下目标品牌软文的理想卡位总数 ＝ 默认搜索卡位 ＋ 最新资讯卡位（若有）"
               inline
             >
+              <!--
+                跟 Top-N 同 bug：单向绑定时 proxy 卡死，blur commit 旧值。
+                改 v-model 双向；@commit 保留做 clamp + 空值 fallback。
+              -->
               <FormInput
                 type="number"
-                :model-value="baiduIdealRank"
+                v-model="baiduIdealRank"
                 :width="100"
                 @commit="(v) => (baiduIdealRank = Math.min(50, Math.max(1, Number(v) || 5)))"
               />
@@ -529,11 +533,18 @@ async function submit() {
             "
             inline
           >
+            <!--
+              v-model 双向绑定（之前只有 :model-value + @commit 单向是 bug
+              根因 —— FormInput 内部 proxy computed 的 getter 永远读父级
+              props.modelValue，单向绑定时 proxy 实际从未变，blur 时 commit
+              的还是旧值，用户改完保存毫无反应）。@commit 保留做"空值/非
+              数字 fallback 到默认值"语义。
+            -->
             <FormInput
               type="number"
-              :model-value="topN"
+              v-model="topN"
               :width="100"
-              @commit="(v) => (topN = Number(v) || (isComment ? 5 : 10))"
+              @commit="(v) => { if (v == null) topN = isComment ? 5 : 10; }"
             />
           </FormField>
 

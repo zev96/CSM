@@ -71,6 +71,29 @@ def cancel(job_id: int) -> dict[str, Any]:
     return {"job_id": job_id, "cancelled": True}
 
 
+@router.delete("/api/mining/jobs/{job_id}")
+def delete_job_route(job_id: int) -> dict[str, Any]:
+    """Hard-delete a mining job + cascade-clean orphan videos.
+
+    409 if the job is currently running — UX wise the caller should hit
+    /cancel first and wait for the SSE finalize, otherwise we'd be
+    deleting DB rows underneath a still-writing executor (data race +
+    risk that the finalize step re-inserts video_source_keywords for a
+    job_id that no longer exists, which would FK-fail loudly).
+
+    404 if the job doesn't exist (already deleted in another tab).
+    """
+    if mining_service.active_job_id() == job_id:
+        raise HTTPException(
+            status_code=409,
+            detail="job is running — cancel and wait for it to finish before deleting",
+        )
+    if mining_storage.get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
+    result = mining_storage.delete_job(job_id)
+    return {"job_id": job_id, "deleted": True, **result}
+
+
 @router.get("/api/mining/jobs/{job_id}/events")
 async def stream_events(job_id: int):
     """SSE stream of mining.* events for one job."""
@@ -175,44 +198,58 @@ def export_csv(
     video_ids = [int(r["id"]) for r in rows]
     comments_by_video, max_tier = _fetch_comments_by_video(video_ids)
 
+    # ─────────────────────────────────────────────────────────────────────
+    # CSV format —— 按用户「给兼职人填返图」需求改造（2026-05 重排）：
+    #   序号 | 平台 | 视频链接
+    #   | 第1层评论内容 | 评论图片 | 评论返图
+    #   | 第2层评论内容 | 评论图片 | 评论返图
+    #   | ...（按 max_tier 展开 N 组三连列）
+    #
+    # 字段约定：
+    #   - 序号：纯顺序号，从 1 开始
+    #   - 平台：中文显示（B 站 / 抖音 / 快手 / 知乎），方便兼职人识别
+    #   - 视频链接：r["url"]，直接复制到浏览器就能打开（短链 douyin/v.kuaishou
+    #     在入库时已展开成 long form）
+    #   - 第N层评论内容：tier=N 的 c["text"]，没有就空串
+    #   - 评论图片：tier=N 的 image_ids，转成「images/{id}」相对路径（跟旧
+    #     版一致；目前 image_ids 是 db 内 image_id 字符串）
+    #   - 评论返图：永远空 —— 兼职人填完照片后手动补这一列
+    #
+    # 旧版的 video_id / title / author / duration / play / like / source_keywords
+    # / already_commented / first_seen_at / ai_summary 全部下线（用户场景里
+    # 这些字段对兼职人没用，反而让 CSV 变宽难读）。
+    # ─────────────────────────────────────────────────────────────────────
+    PLATFORM_LABEL_CN = {
+        "bilibili": "B 站",
+        "douyin": "抖音",
+        "kuaishou": "快手",
+        "zhihu": "知乎",
+    }
+
     buf = io.StringIO()
     buf.write("﻿")  # BOM so Excel auto-detects UTF-8
     writer = csv.writer(buf)
-    header = [
-        "platform", "video_id", "url", "title", "author",
-        "duration_sec", "play_count", "like_count",
-        "source_keywords", "already_commented", "first_seen_at",
-        "ai_summary",
-    ]
-    # If no comments exist for any selected video (max_tier == 0), don't
-    # add comment_tier_N columns at all — keeps the old export shape for
-    # callers who don't use the new feature (spec §4.5 "向后兼容").
+    header: list[str] = ["序号", "平台", "视频链接"]
     for tier in range(1, max_tier + 1):
-        header.append(f"comment_tier_{tier}")
-        header.append(f"images_tier_{tier}")
+        header.append(f"第{tier}层评论内容")
+        header.append("评论图片")
+        header.append("评论返图")
     writer.writerow(header)
 
-    for r in rows:
-        row = [
-            r["platform"], r["platform_video_id"], r["url"], r["title"],
-            r["author_name"], r["duration_sec"] or "",
-            r["play_count"] or "", r["like_count"] or "",
-            "|".join(r["source_keywords"]),
-            "1" if r["already_commented"] else "0",
-            r["first_seen_at"],
-            r.get("ai_summary") or "",
-        ]
+    for seq, r in enumerate(rows, start=1):
+        platform_cn = PLATFORM_LABEL_CN.get(r["platform"], r["platform"])
+        row: list[str | int] = [seq, platform_cn, r["url"]]
         tiers_for_video = comments_by_video.get(int(r["id"]), {})
         for tier in range(1, max_tier + 1):
             c = tiers_for_video.get(tier)
             if c is None:
-                row.append("")
-                row.append("")
+                row.append("")          # 第N层评论内容
+                row.append("")          # 评论图片
+                row.append("")          # 评论返图
             else:
                 row.append(c["text"])
-                # Relative URLs so the export is portable; could be zipped
-                # alongside an ``images/`` directory later (spec §4.5).
                 row.append(",".join(f"images/{img}" for img in c["image_ids"]))
+                row.append("")          # 评论返图永远空——给兼职人手填
         writer.writerow(row)
 
     return StreamingResponse(

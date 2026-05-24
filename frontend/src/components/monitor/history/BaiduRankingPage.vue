@@ -12,7 +12,7 @@ import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 import { subscribe } from "@/api/client";
-import Sparkline from "@/components/ui/Sparkline.vue";
+// Sparkline 已下线 —— BaiduRankingPage 内所有图表统一用 LineChart。
 import Pill from "@/components/ui/Pill.vue";
 import Icon from "@/components/ui/Icon.vue";
 import LineChart from "./LineChart.vue";
@@ -208,11 +208,12 @@ function bucketByCalendarDay<T extends { checked_at: string }>(
   for (let i = totalDays - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
     out.push({
       iso,
-      label: `${mm}-${dd}`,
+      // label 按用户要求只显示日期（不带月份）—— "05-10" → "10"。
+      // 用 String(d.getDate()) 不补 0 让 1-9 号显示成 "1","2"... 更紧凑，
+      // 也避免双位 "01" 跟双位 "21" 视觉权重一样。
+      label: String(d.getDate()),
       record: buckets.get(iso) ?? null,
     });
   }
@@ -485,20 +486,9 @@ const levelTwoCalendarBuckets = computed(() =>
   bucketByCalendarDay(chronoHistory.value, 14),
 );
 
-// 5 个等间距日历日 label，从 14 天 bucket 中等距抽取 —— Sparkline 的 axis-labels
-// 跟 points 长度可以不一致（Sparkline 文档明确允许），所以这里仍然给 5 条
-// 视觉锚点，避免 14 条 MM-DD 挤在一起。
-const sparkLabels = computed<string[]>(() => {
-  const all = levelTwoCalendarBuckets.value;
-  if (all.length === 0) return [];
-  const count = 5;
-  const out: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const idx = Math.round((i / (count - 1)) * (all.length - 1));
-    out.push(all[Math.min(idx, all.length - 1)].label);
-  }
-  return out;
-});
+// sparkLabels 已下线 —— Level 2 改用 LineChart，labels 直接来自
+// levelTwoCalendarBuckets.map(b => b.label)，1:1 对齐 data points，
+// chart.js 自动按宽度抽稀 tick，不再需要前端预先抽 5 条 anchor。
 
 // Get ideal_rank from selected task config (default 5)
 const idealRank = computed<number>(() => {
@@ -615,7 +605,15 @@ async function loadTasks() {
     // await; let them stream in. Each completion updates taskHistories
     // and Vue reactivity refreshes the affected cells.
     void loadAllTaskHistories();
-    // Do NOT auto-select for drill-down: Level 1 is the default landing.
+    // Drill-down from home Baidu card —— route.query.task 写到 pending，
+    // 这里 tasks 加载完后消化它，进 Level 2 详情。
+    if (pendingSelectTaskId.value !== null) {
+      const pid = pendingSelectTaskId.value;
+      if (tasks.value.some((t) => t.id === pid)) {
+        pendingSelectTaskId.value = null;
+        void enterDetail(pid);
+      }
+    }
   } catch (e: any) {
     toast.error(`加载任务列表失败: ${e?.message ?? e}`);
   } finally {
@@ -825,6 +823,20 @@ async function enterDetail(id: number): Promise<void> {
   selectedId.value = id;
 }
 
+// 父组件 (MonitorView) 在路由 query.task 命中时调用：把这个 id 钉成"待选"。
+// 若 tasks 已加载过，立刻 enterDetail；否则 loadTasks 完成时会自动消化。
+// 用 ref 而不是临时变量是因为 BaiduRankingPage onMounted 的 loadTasks 跟
+// 父组件 selectTask 之间有竞态 —— 钉住一份持久状态，无论先后顺序都能落地。
+const pendingSelectTaskId = ref<number | null>(null);
+
+async function selectTask(taskId: number): Promise<void> {
+  pendingSelectTaskId.value = taskId;
+  if (tasks.value.some((t) => t.id === taskId)) {
+    pendingSelectTaskId.value = null;
+    await enterDetail(taskId);
+  }
+}
+
 // ──────────────────────────── lifecycle ────────────────────────────
 
 // ──────────────────────────── SSE bus ────────────────────────────
@@ -917,7 +929,7 @@ watch(() => selectedTask.value?.config?.search_keywords, (kws) => {
 
 // Parent (MonitorView) calls this after a create/update from the shared
 // AddTaskModal so the new task shows up immediately without tab-switching.
-defineExpose({ reload: loadTasks });
+defineExpose({ reload: loadTasks, selectTask });
 </script>
 
 <template>
@@ -1086,9 +1098,7 @@ defineExpose({ reload: loadTasks });
           <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
             <div class="min-w-0">
               <div class="font-display text-[14px] font-semibold">监测任务</div>
-              <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                任务列表
-              </div>
+              <!-- 「任务列表」subtitle 已按用户要求移除（与其他监测页保持一致） -->
             </div>
             <div class="flex flex-shrink-0 gap-2">
               <button
@@ -1109,7 +1119,7 @@ defineExpose({ reload: loadTasks });
                 type="button"
                 class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium"
                 :style="{
-                  background: 'var(--primary-deep)',
+                  background: 'var(--primary)',
                   color: '#fff',
                   borderRadius: '999px',
                 }"
@@ -1379,7 +1389,7 @@ defineExpose({ reload: loadTasks });
                 class="flex-1 text-[12.5px] font-medium"
                 :style="{
                   padding: '9px 14px',
-                  background: 'var(--primary-deep)',
+                  background: 'var(--primary)',
                   color: '#fff',
                   border: 'none',
                   borderRadius: '8px',
@@ -1659,17 +1669,24 @@ defineExpose({ reload: loadTasks });
             </div>
           </div>
 
-          <!-- Sparkline: 卡位数量 最近 14 天 -->
+          <!--
+            Level 2 趋势图 —— 用户要求跟 Level 1 总任务图一样默认显示。
+            统一用 LineChart（替代原 Sparkline），数据走 levelTwoCalendarBuckets
+            的 14 天 bucket scaffold —— 缺失天数据为 null，chart.js 自动画 gap。
+            label 已经在 bucketByCalendarDay 里改成日期-only (e.g. "10")。
+          -->
           <div class="mb-4 flex-shrink-0">
             <div class="text-[12.5px] font-semibold mb-2">最近 14 天关键词卡位趋势</div>
-            <Sparkline
-              v-if="sparkPointsPlaced.filter(v => v > 0).length > 1"
-              :points="sparkPointsPlaced"
-              :width="380"
-              :height="70"
-              stroke="var(--primary, #ee6a2a)"
-              :axis-labels="sparkLabels"
-              fluid
+            <LineChart
+              v-if="levelTwoCalendarBuckets.length >= 2"
+              :labels="levelTwoCalendarBuckets.map((b) => b.label)"
+              :series="[
+                {
+                  label: '理想卡位关键词数',
+                  color: '#ee6a2a',
+                  data: levelTwoCalendarBuckets.map((b, i) => (b.record ? sparkPointsPlaced[i] : null)),
+                },
+              ]"
             />
             <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
               无历史数据 —— 跑几次「启动监测」后会成线。

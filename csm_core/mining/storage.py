@@ -364,6 +364,52 @@ def cancel_job_if_running(job_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def delete_job(job_id: int) -> dict[str, int]:
+    """Hard-delete a mining job + clean up orphan videos.
+
+    Three steps inside one transaction:
+
+      1. Find videos that are sourced **only** by this job (orphans-to-be).
+         A video with multiple job links survives because other jobs still
+         "own" it.
+      2. ``DELETE FROM mining_jobs WHERE id=?`` — FK cascades clear out
+         ``video_source_keywords`` rows for this job.
+      3. Hard-delete the orphan videos. FK cascade on ``video_comments``
+         takes their comment drafts with them.
+
+    Returns ``{"orphan_videos": N}`` so the caller can log + ship the
+    count back to the UI as observability.
+
+    Caller MUST cancel the job runner first if the job is currently
+    running — this function only touches DB state; killing the executor
+    Future is the route layer's job. Doing both atomically is overkill
+    given how rare delete-while-running is (UI requires confirm + the job
+    is on the left panel where status pill shows "抓取中").
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT vsk.video_id FROM video_source_keywords vsk
+        WHERE vsk.job_id = ?
+          AND NOT EXISTS (
+              SELECT 1 FROM video_source_keywords vsk2
+              WHERE vsk2.video_id = vsk.video_id AND vsk2.job_id != ?
+          )
+        """,
+        (job_id, job_id),
+    ).fetchall()
+    orphan_ids = [r[0] for r in rows]
+    conn.execute("DELETE FROM mining_jobs WHERE id=?", (job_id,))
+    if orphan_ids:
+        placeholders = ",".join("?" * len(orphan_ids))
+        conn.execute(
+            f"DELETE FROM videos WHERE id IN ({placeholders})",
+            orphan_ids,
+        )
+    conn.commit()
+    return {"orphan_videos": len(orphan_ids)}
+
+
 def mark_interrupted_jobs() -> int:
     """At sidecar startup, flip orphaned status=running rows to interrupted."""
     conn = get_conn()
@@ -381,13 +427,39 @@ def get_job(job_id: int) -> dict[str, Any] | None:
 
 def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
     conn = get_conn()
+    # 在 mining_jobs SELECT 里挂两个相关子查询，给每个 job 算出：
+    #   _video_count     —— 该 job 通过 video_source_keywords 关联的视频数
+    #                       （COUNT DISTINCT 因为同一视频可能命中多个关键词）
+    #   _commented_count —— 同上但 only videos.already_commented=1
+    # 前端 TaskListItem 用 (commented_count >= video_count) 判定「已完成」/
+    # 「进行中」（用户要求"全部已评论=已完成，否则=进行中"），跟纯
+    # mining_jobs.status（抓取层面的成功/失败）解耦。
+    # idx_vsk_job 索引覆盖；少量 jobs 时性能可忽略。
     rows = conn.execute(
-        "SELECT * FROM mining_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+        """
+        SELECT mj.*,
+               (SELECT COUNT(DISTINCT vsk.video_id)
+                FROM video_source_keywords vsk
+                WHERE vsk.job_id = mj.id) AS _video_count,
+               (SELECT COUNT(DISTINCT v.id)
+                FROM videos v
+                JOIN video_source_keywords vsk2 ON vsk2.video_id = v.id
+                WHERE vsk2.job_id = mj.id AND v.already_commented = 1) AS _commented_count
+        FROM mining_jobs mj
+        ORDER BY mj.created_at DESC LIMIT ?
+        """,
+        (limit,),
     ).fetchall()
     return [_row_to_job_dict(r) for r in rows]
 
 
 def _row_to_job_dict(row) -> dict[str, Any]:
+    # video_count / commented_count 仅 list_jobs() SQL 注入了；get_job()
+    # 的简单 SELECT * 没这两列。用 row.keys() 做存在性检查避免 KeyError，
+    # 调用方拿到 0 表示"未知 / 未聚合"。
+    keys = row.keys()
+    video_count = int(row["_video_count"] or 0) if "_video_count" in keys else 0
+    commented_count = int(row["_commented_count"] or 0) if "_commented_count" in keys else 0
     return {
         "id": row["id"],
         "keyword": row["keyword"],
@@ -399,6 +471,10 @@ def _row_to_job_dict(row) -> dict[str, Any]:
         "created_at": row["created_at"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
+        # 用户重构 TaskListItem 状态语义所需的两个汇总值：
+        # 全部已评论 → 已完成；有未评论 → 进行中；抓取层失败 → 失败
+        "video_count": video_count,
+        "commented_count": commented_count,
     }
 
 

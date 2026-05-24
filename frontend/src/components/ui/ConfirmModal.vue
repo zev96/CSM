@@ -31,7 +31,17 @@ function onOpenChange(open: boolean) {
 </script>
 
 <template>
-  <Dialog :open="confirmState.open" size="sm" @update:open="onOpenChange">
+  <!--
+    z-[60] 让 confirm 永远盖在普通 Dialog (z-50) 之上 —— 否则在
+    CookieManagerModal 里点"登录百度"弹出的确认框会被 cookie 弹窗压住。
+    Confirm 是用户决策中断点，本质应该在 modal 栈顶。
+  -->
+  <Dialog
+    :open="confirmState.open"
+    size="sm"
+    z-class="z-[60]"
+    @update:open="onOpenChange"
+  >
     <div class="flex items-start gap-3">
       <div
         class="flex flex-shrink-0 items-center justify-center"

@@ -5,14 +5,15 @@
  * drill-down 行点击 emit('navigate', {taskId})。
  */
 import { ref, computed, onMounted, watch } from "vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import LineChart from "./LineChart.vue";
 
 type Range = "1d" | "7d" | "30d";
 type ChangeKind = "down" | "up" | "new" | "dropped" | "flat";
-type Filter = "all" | "down" | "up" | "new" | "dropped";
+// Filter 按用户要求收窄到 3 项 —— 新上榜 / 掉出 Top 两个分类视图下线，
+// 用户认为太碎；up/down 已经覆盖核心异动场景。
+type Filter = "all" | "down" | "up";
 
 interface Kpis {
   monitored_questions: number;
@@ -101,16 +102,8 @@ function fmtDeltaPts(curr: number, prev: number) {
   if (diff < 0) return { text: `↓ ${Math.abs(diff)} pts`, tone: "down" as const };
   return { text: "持平", tone: "flat" as const };
 }
-function fmtTime(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-function arrowFor(kind: ChangeKind): { glyph: string; color: string } {
-  if (kind === "up" || kind === "new") return { glyph: "▲", color: "#5e7848" };
-  if (kind === "down" || kind === "dropped") return { glyph: "▼", color: "var(--red)" };
-  return { glyph: "—", color: "#a89f8d" };
-}
+// fmtTime / arrowFor 已下线 —— 问题列表行 column 重构后不再显示检查时间，
+// 也不再用左侧三角箭头标记 change_kind（状态列箭头已覆盖语义）。
 function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "flat" } {
   if (q.change_kind === "dropped") return { text: `#${q.best_rank_prev} → 无`, tone: "down" };
   if (q.change_kind === "new") return { text: `无 → #${q.best_rank}`, tone: "up" };
@@ -173,13 +166,8 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
           >{{ fmtDeltaPts(data.kpis.avg_share_today, data.kpis.avg_share_prev).text }}</span>
         </div>
         <div class="font-display font-bold" :style="{ fontSize: '28px', lineHeight: 1 }">{{ fmtPct(data.kpis.avg_share_today) }}</div>
-        <!-- Sparkline 真实 props 是 :points + :stroke + :height -->
-        <Sparkline
-          v-if="range !== '1d' && data.daily_series.length > 0"
-          :points="data.daily_series.map((d) => d.avg_share * 100)"
-          stroke="#ee6a2a"
-          :height="28"
-        />
+        <!-- Sparkline 按用户要求移除 —— 切 range 时直接换数字即可，
+             不再画 7d/30d 的趋势小曲线（主图区已有大图覆盖趋势）。 -->
         <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
           命中位 <b :style="{ color: 'var(--ink)' }">{{ data.kpis.hit_count_total }}</b> / {{ data.kpis.topn_total }}
         </div>
@@ -225,12 +213,14 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
       :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }"
     >
       <div class="flex justify-between items-center mb-2 flex-shrink-0">
+        <!-- 「(N 条 · 点行进详情)」副标按用户要求移除 -->
         <div class="text-[12.5px] font-semibold">
-          问题列表 <span class="font-normal" :style="{ color: 'var(--ink-3)' }">({{ filtered.length }} 条 · 点行进详情)</span>
+          问题列表
         </div>
+        <!-- 过滤 pivot 收窄到 3 项：全部 / 下降 / 上升 -->
         <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card-2)' }">
           <button
-            v-for="f in (['all','down','up','new','dropped'] as Filter[])" :key="f"
+            v-for="f in (['all','down','up'] as Filter[])" :key="f"
             @click="filter = f"
             class="px-3 py-1 rounded-full text-[11.5px] font-medium"
             :style="{
@@ -238,9 +228,30 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
               color: filter === f ? 'var(--card)' : 'var(--ink-3)',
             }"
           >
-            {{ f === "all" ? "全部" : f === "down" ? "↓ 下降" : f === "up" ? "↑ 上升" : f === "new" ? "新上榜" : "掉出 Top" }}
+            {{ f === "all" ? "全部" : f === "down" ? "↓ 下降" : "↑ 上升" }}
           </button>
         </div>
+      </div>
+      <!--
+        表格：固定 header 行 + 滚动 body。grid 模板拆 4 列：
+          关键词 / 卡位 / 排名 / 状态
+        每列宽度比例固定，header 和 body 共享同一个 gridTemplateColumns
+        保证对齐。
+      -->
+      <div
+        class="grid items-center gap-2.5 flex-shrink-0 text-[11px] uppercase"
+        :style="{
+          gridTemplateColumns: '1.6fr 80px 80px 60px',
+          padding: '8px 12px',
+          letterSpacing: '1px',
+          color: 'var(--ink-3)',
+          borderBottom: '1px solid var(--line)',
+        }"
+      >
+        <div>关键词</div>
+        <div class="text-center">卡位</div>
+        <div class="text-center">排名</div>
+        <div class="text-center">状态</div>
       </div>
       <div v-if="!filtered.length" class="py-6 text-center text-[12px] flex-shrink-0" :style="{ color: 'var(--ink-3)' }">无符合条件的问题</div>
       <div v-else class="flex-1 min-h-0 overflow-y-auto">
@@ -249,44 +260,36 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
           @click="emit('navigate', { taskId: q.task_id })"
           class="grid items-center gap-2.5 cursor-pointer"
           :style="{
-            gridTemplateColumns: '24px 1.6fr 100px 110px 80px 18px',
-            padding: '9px 12px',
-            fontSize: '11.5px',
+            gridTemplateColumns: '1.6fr 80px 80px 60px',
+            padding: '11px 12px',
+            fontSize: '12px',
             borderRadius: '8px',
             borderTop: '1px solid rgba(28,26,23,0.06)',
           }"
           @mouseenter="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
           @mouseleave="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'transparent')"
         >
-          <div class="text-[14px] text-center" :style="{ color: arrowFor(q.change_kind).color }">{{ arrowFor(q.change_kind).glyph }}</div>
-          <div>
-            <div :style="{ color: 'var(--ink)' }">{{ q.title }}</div>
-            <div class="text-[10.5px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-              target:
-              <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10.5px]"
-                :style="{ background: 'rgba(238,106,42,0.12)', color: '#c9521f' }">{{ q.target_brand }}</span>
-              <span v-if="q.matched_ranks.length"> · 命中位 {{ q.matched_ranks.map((r) => "#" + r).join(" ") }} ({{ q.matched_count }}/{{ q.top_n }})</span>
-            </div>
+          <!-- 关键词（问题标题）—— truncate 防止挤压其他列 -->
+          <div :style="{ color: 'var(--ink)' }" class="truncate" :title="q.title">{{ q.title }}</div>
+          <!-- 卡位：matched_count，0 显示「无」-->
+          <div class="text-center font-semibold">
+            <template v-if="q.matched_count > 0">{{ q.matched_count }}</template>
+            <span v-else :style="{ color: 'var(--ink-3)', fontWeight: 'normal' }">无</span>
           </div>
-          <div>
-            <div class="text-[12px] font-semibold">{{ q.matched_count }} / {{ q.top_n }}</div>
-            <div :style="{ height: '6px', background: 'rgba(28,26,23,0.06)', borderRadius: '3px', overflow: 'hidden', marginTop: '4px' }">
-              <div :style="{ height: '100%', background: '#ee6a2a', borderRadius: '3px', width: `${Math.min(100, (q.matched_count / q.top_n) * 100)}%` }" />
-            </div>
+          <!-- 排名：best_rank（最高排名），未命中显示「无」-->
+          <div class="text-center font-semibold">
+            <template v-if="q.best_rank > 0">#{{ q.best_rank }}</template>
+            <span v-else :style="{ color: 'var(--ink-3)', fontWeight: 'normal' }">无</span>
           </div>
-          <div>
-            <span
-              class="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-medium"
-              :style="{
-                background: rankChangeText(q).tone === 'up' ? 'rgba(122,155,94,0.15)' :
-                            rankChangeText(q).tone === 'down' ? 'rgba(216,90,72,0.12)' : 'rgba(28,26,23,0.05)',
-                color: rankChangeText(q).tone === 'up' ? '#5e7848' :
-                       rankChangeText(q).tone === 'down' ? 'var(--red)' : 'var(--ink-3)',
-              }"
-            >{{ rankChangeText(q).text }}</span>
-          </div>
-          <div :style="{ color: 'var(--ink-3)' }">{{ fmtTime(q.checked_at) }}</div>
-          <div class="text-[16px] text-center" :style="{ color: 'var(--ink-4)', lineHeight: 1 }">›</div>
+          <!-- 状态：上下箭头（up 绿 / down 橙 / 其他黑 -） -->
+          <div class="text-center font-bold text-[14px]"
+            :style="{
+              color: rankChangeText(q).tone === 'up' ? '#5e7848'
+                : rankChangeText(q).tone === 'down' ? 'var(--primary, #ee6a2a)'
+                : 'var(--ink, #1c1a17)',
+            }"
+            :title="rankChangeText(q).text"
+          >{{ rankChangeText(q).tone === 'up' ? '↑' : rankChangeText(q).tone === 'down' ? '↓' : '-' }}</div>
         </div>
       </div>
     </div>

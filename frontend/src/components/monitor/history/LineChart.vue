@@ -57,6 +57,12 @@ const props = defineProps<{
   series: Series[];
   yAxisFormatter?: (v: number) => string;
   dualAxis?: boolean;
+  /**
+   * 强制 y 轴上限 —— 百分比类图表传 100 给出固定刻度（0/20/40/60/80/100），
+   * 避免 chart.js auto-scale 把 60% 数据点顶到最顶（导致曲线视觉上"压在
+   * 天花板"）。不传 = 走默认 auto-scale。
+   */
+  yMax?: number;
 }>();
 
 const data = computed(() => ({
@@ -102,6 +108,8 @@ const options = computed<any>(() => {
       },
       y: {
         beginAtZero: true,
+        // yMax 显式 set 时强制上限（百分比固定 0-100 是典型场景）
+        ...(typeof props.yMax === "number" ? { max: props.yMax } : {}),
         grid: { color: "rgba(28,26,23,0.05)" },
         ticks: {
           color: props.dualAxis ? props.series[0]?.color || "#7a7569" : "#7a7569",

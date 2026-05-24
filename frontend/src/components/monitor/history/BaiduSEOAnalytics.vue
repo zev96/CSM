@@ -5,14 +5,14 @@
  * drill-down 行点击 emit('navigate', {taskId})。
  */
 import { ref, computed, onMounted, watch } from "vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import LineChart from "./LineChart.vue";
 
 type Range = "1d" | "7d" | "30d";
 type ChangeKind = "down" | "up" | "new" | "dropped" | "flat";
-type Filter = "all" | "down" | "up" | "new" | "dropped";
+// Filter 按用户要求收窄到 3 项（全部/下降/上升），原先 4 项太碎。
+type Filter = "all" | "down" | "up";
 
 interface Kpis {
   monitored_keywords: number;
@@ -39,8 +39,13 @@ interface KeywordRow {
   task_name: string;
   search_keyword: string;
   target_brand: string;
+  /** 默认 SERP 命中条数（百度普通搜索结果命中目标品牌的条数） */
   matched_count: number;
   matched_count_prev: number | null;
+  /** 资讯 SERP 命中条数（百度资讯/新闻区命中目标品牌的条数）—— 后端
+   *  history_service.py 新加的字段，沿用 default_results 同样的
+   *  matches_brand sum 逻辑。 */
+  news_matched_count: number;
   top_n: number;
   matched_ranks: number[];
   best_rank: number;
@@ -90,8 +95,10 @@ const chartLabels = computed(() =>
 );
 const chartSeries = computed(() => {
   if (!data.value) return [];
+  // 按用户要求把"命中率"折线从蓝色 #2563eb 改成应用主色调橙色 #ee6a2a。
+  // "异动关键词数" 保持黑色 #1e1c19 作为双轴对比。
   return [
-    { label: "命中率 %", color: "#2563eb", data: data.value.daily_series.map((d) => Math.round(d.avg_match_rate * 100)) },
+    { label: "命中率 %", color: "#ee6a2a", data: data.value.daily_series.map((d) => Math.round(d.avg_match_rate * 100)) },
     { label: "异动关键词数", color: "#1e1c19", data: data.value.daily_series.map((d) => d.changed_count) },
   ];
 });
@@ -103,16 +110,8 @@ function fmtDeltaPts(curr: number, prev: number) {
   if (diff < 0) return { text: `↓ ${Math.abs(diff)} pts`, tone: "down" as const };
   return { text: "持平", tone: "flat" as const };
 }
-function fmtTime(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-function arrowFor(kind: ChangeKind): { glyph: string; color: string } {
-  if (kind === "up" || kind === "new") return { glyph: "▲", color: "#5e7848" };
-  if (kind === "down" || kind === "dropped") return { glyph: "▼", color: "var(--red)" };
-  return { glyph: "—", color: "#a89f8d" };
-}
+// fmtTime / arrowFor 已下线 —— 关键词列表 column 重构后不再显示检查时间，
+// 也不再用左侧三角箭头标记 change_kind（状态列箭头已覆盖语义）。
 function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "flat" } {
   if (k.change_kind === "dropped") return { text: `#${k.best_rank_prev} → 无`, tone: "down" };
   if (k.change_kind === "new") return { text: `无 → #${k.best_rank}`, tone: "up" };
@@ -159,7 +158,7 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
       <div :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }" class="flex flex-col gap-1.5">
         <div class="flex justify-between items-start">
           <div class="flex items-center gap-1.5 text-[11.5px] font-medium" :style="{ color: 'var(--ink-2)' }">
-            <span :style="{ width: '8px', height: '8px', borderRadius: '50%', background: '#2563eb' }" />
+            <span :style="{ width: '8px', height: '8px', borderRadius: '50%', background: '#ee6a2a' }" />
             命中率（平均）
           </div>
           <span
@@ -173,12 +172,7 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
           >{{ fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).text }}</span>
         </div>
         <div class="font-display font-bold" :style="{ fontSize: '28px', lineHeight: 1 }">{{ fmtPct(data.kpis.avg_match_rate_today) }}</div>
-        <Sparkline
-          v-if="range !== '1d' && data.daily_series.length > 0"
-          :points="data.daily_series.map((d) => d.avg_match_rate * 100)"
-          stroke="#2563eb"
-          :height="28"
-        />
+        <!-- Sparkline 按用户要求移除（切 range 直接换数字，主图区已覆盖趋势）-->
         <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
           命中位 <b :style="{ color: 'var(--ink)' }">{{ data.kpis.hit_count_total }}</b> / {{ data.kpis.topn_total }}
         </div>
@@ -211,8 +205,9 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
     >
       <div class="flex justify-between items-center mb-2">
         <div class="text-[12.5px] font-semibold">命中率与异动趋势</div>
+        <!-- 图例小点：命中率改为主色调橙色（#ee6a2a），跟折线一致 -->
         <div class="flex gap-3 text-[11px]" :style="{ color: 'var(--ink-2)' }">
-          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#2563eb', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />命中率 %</span>
+          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#ee6a2a', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />命中率 %</span>
           <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#1e1c19', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动关键词数</span>
         </div>
       </div>
@@ -228,12 +223,14 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
       :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '12px' }"
     >
       <div class="flex justify-between items-center mb-2 flex-shrink-0">
+        <!-- 「(N 条 · 点行进详情)」副标按用户要求移除 -->
         <div class="text-[12.5px] font-semibold">
-          关键词列表 <span class="font-normal" :style="{ color: 'var(--ink-3)' }">({{ filtered.length }} 条 · 点行进详情)</span>
+          关键词列表
         </div>
+        <!-- Filter pivot 收窄到 3 项：全部 / 下降 / 上升 -->
         <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card-2)' }">
           <button
-            v-for="f in (['all','down','up','new','dropped'] as Filter[])" :key="f"
+            v-for="f in (['all','down','up'] as Filter[])" :key="f"
             @click="filter = f"
             class="px-3 py-1 rounded-full text-[11.5px] font-medium"
             :style="{
@@ -241,9 +238,31 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
               color: filter === f ? 'var(--card)' : 'var(--ink-3)',
             }"
           >
-            {{ f === "all" ? "全部" : f === "down" ? "↓ 下降" : f === "up" ? "↑ 上升" : f === "new" ? "新上榜" : "掉出 Top" }}
+            {{ f === "all" ? "全部" : f === "down" ? "↓ 下降" : "↑ 上升" }}
           </button>
         </div>
+      </div>
+      <!--
+        表格：固定 header 行 + 滚动 body。
+          关键词 / 默认卡位 / 资讯卡位 / 状态
+        默认卡位 = matched_count（百度默认 SERP 命中）；
+        资讯卡位 = news_matched_count（百度新闻区命中）；
+        都没命中显示「无」；状态走 rankChangeText.tone → 箭头。
+      -->
+      <div
+        class="grid items-center gap-2.5 flex-shrink-0 text-[11px] uppercase"
+        :style="{
+          gridTemplateColumns: '1.8fr 80px 80px 60px',
+          padding: '8px 12px',
+          letterSpacing: '1px',
+          color: 'var(--ink-3)',
+          borderBottom: '1px solid var(--line)',
+        }"
+      >
+        <div>关键词</div>
+        <div class="text-center">默认卡位</div>
+        <div class="text-center">资讯卡位</div>
+        <div class="text-center">状态</div>
       </div>
       <div v-if="!filtered.length" class="py-6 text-center text-[12px] flex-shrink-0" :style="{ color: 'var(--ink-3)' }">无符合条件的关键词</div>
       <div v-else class="flex-1 min-h-0 overflow-y-auto">
@@ -252,47 +271,33 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
           @click="emit('navigate', { taskId: k.task_id })"
           class="grid items-center gap-2.5 cursor-pointer"
           :style="{
-            gridTemplateColumns: '24px 1.8fr 100px 110px 80px 18px',
-            padding: '9px 12px',
-            fontSize: '11.5px',
+            gridTemplateColumns: '1.8fr 80px 80px 60px',
+            padding: '11px 12px',
+            fontSize: '12px',
             borderRadius: '8px',
             borderTop: '1px solid rgba(28,26,23,0.06)',
           }"
           @mouseenter="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
           @mouseleave="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'transparent')"
         >
-          <div class="text-[14px] text-center" :style="{ color: arrowFor(k.change_kind).color }">{{ arrowFor(k.change_kind).glyph }}</div>
-          <div>
-            <div :style="{ color: 'var(--ink)' }" class="truncate" :title="k.search_keyword">{{ k.search_keyword.slice(0, 80) }}</div>
-            <div class="text-[10.5px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-              target:
-              <span
-                class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10.5px] mr-0.5"
-                :style="{ background: 'rgba(37,99,235,0.10)', color: '#1d4ed8' }"
-              >{{ k.target_brand }}</span>
-              <span> · 任务: {{ k.task_name }}</span>
-              <span v-if="k.matched_ranks.length"> · 命中位 {{ k.matched_ranks.map((r) => '#' + r).join(' ') }} ({{ k.matched_count }}/{{ k.top_n }})</span>
-            </div>
+          <div :style="{ color: 'var(--ink)' }" class="truncate" :title="k.search_keyword">{{ k.search_keyword }}</div>
+          <div class="text-center font-semibold">
+            <template v-if="k.matched_count > 0">{{ k.matched_count }}</template>
+            <span v-else :style="{ color: 'var(--ink-3)', fontWeight: 'normal' }">无</span>
           </div>
-          <div>
-            <div class="text-[12px] font-semibold">{{ k.matched_count }} / {{ k.top_n }}</div>
-            <div :style="{ height: '6px', background: 'rgba(28,26,23,0.06)', borderRadius: '3px', overflow: 'hidden', marginTop: '4px' }">
-              <div :style="{ height: '100%', background: '#2563eb', borderRadius: '3px', width: `${Math.min(100, (k.matched_count / k.top_n) * 100)}%` }" />
-            </div>
+          <div class="text-center font-semibold">
+            <template v-if="k.news_matched_count > 0">{{ k.news_matched_count }}</template>
+            <span v-else :style="{ color: 'var(--ink-3)', fontWeight: 'normal' }">无</span>
           </div>
-          <div>
-            <span
-              class="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-medium"
-              :style="{
-                background: rankChangeText(k).tone === 'up' ? 'rgba(122,155,94,0.15)' :
-                            rankChangeText(k).tone === 'down' ? 'rgba(216,90,72,0.12)' : 'rgba(28,26,23,0.05)',
-                color: rankChangeText(k).tone === 'up' ? '#5e7848' :
-                       rankChangeText(k).tone === 'down' ? 'var(--red)' : 'var(--ink-3)',
-              }"
-            >{{ rankChangeText(k).text }}</span>
-          </div>
-          <div :style="{ color: 'var(--ink-3)' }">{{ fmtTime(k.checked_at) }}</div>
-          <div class="text-[16px] text-center" :style="{ color: 'var(--ink-4)', lineHeight: 1 }">›</div>
+          <div class="text-center font-bold text-[14px]"
+            :style="{
+              color: rankChangeText(k).tone === 'up' ? '#5e7848'
+                : rankChangeText(k).tone === 'down' ? 'var(--primary, #ee6a2a)'
+                : 'var(--ink, #1c1a17)',
+            }"
+            :title="rankChangeText(k).text"
+          >{{ rankChangeText(k).tone === 'up' ? '↑' : rankChangeText(k).tone === 'down' ? '↓' : '-' }}</div>
+          <!-- 末列 › chevron 已移除 —— 行整体可点跳 detail，箭头是冗余装饰 -->
         </div>
       </div>
     </div>

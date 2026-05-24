@@ -27,7 +27,7 @@ import FormInput from "@/components/forms/FormInput.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 import Icon from "@/components/ui/Icon.vue";
 import CascadePicker from "./CascadePicker.vue";
-import MultiValuePicker from "./MultiValuePicker.vue";
+// MultiValuePicker 已下线 —— 段落筛选改为单选（用 FormSelect 替代）。
 import { useSidecar } from "@/stores/sidecar";
 
 const props = defineProps<{
@@ -74,19 +74,9 @@ const NUMBER_STYLES = [
   { label: "无", value: "none" },
 ];
 
-const friendlyTitle = computed(() => {
-  const b = block.value;
-  switch (b.kind) {
-    case "heading":
-      return b.text || "（未填写）";
-    case "hero_brand":
-      return b.title || "（未填写）";
-    case "literal":
-      return (b.text || "（空文本）").split("\n")[0]?.slice(0, 32) || "（空文本）";
-    default:
-      return b.label || KIND_LABELS[b.kind] || "区块";
-  }
-});
+// friendlyTitle 已下线 —— 区块编辑器顶部大字标题按用户要求移除
+// （跟下面 "区块名"/"标题" 输入框内容重复）。eyebrow「区块 N / 类型」
+// 单独保留作为定位锚点。
 
 const hasModule = computed(() =>
   ["paragraph", "numbered_list", "competitor_pool"].includes(block.value.kind),
@@ -126,39 +116,47 @@ function rowsFromBlock(b: any): FilterRow[] {
 // 历史上这里有个 same 检查试图避免抹除，但它依赖 incoming.length ===
 // filterRows.length，而"用户刚选 key 但 value 还空"恰好就是 length
 // 不等的场景，所以 same 永远 false，本地状态被吃掉。
+// 按用户要求改为单选 —— 不再支持多行 filter 也不再支持多值。filterRows
+// 永远 length === 1。老数据如果有多行/多值，watch 时只保留 first row +
+// first value（不破坏 source.filter 已存在的其它条目，但 UI 只暴露一个）。
 watch(
   () => block.value?.id,
   () => {
-    filterRows.value = rowsFromBlock(block.value);
+    const rows = rowsFromBlock(block.value);
+    if (rows.length === 0) {
+      filterRows.value = [{ key: "", value: "" }];
+    } else {
+      const first = rows[0];
+      // 若 value 是多值（逗号分隔），只取第一个
+      const v = first.value.split(",")[0]?.trim() ?? "";
+      filterRows.value = [{ key: first.key, value: v }];
+    }
   },
   { immediate: true },
 );
 
 function commitFilters() {
   const out: Record<string, any> = {};
-  for (const r of filterRows.value) {
+  // 单选模式下只看 filterRows[0]
+  const r = filterRows.value[0];
+  if (r) {
     const key = r.key.trim();
-    if (!key) continue;
-    const parts = r.value
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!parts.length) continue;
-    out[key] = parts.length === 1 ? parts[0] : parts;
+    const value = r.value.trim();
+    if (key && value) {
+      out[key] = value;
+    }
   }
   patchSource({ filter: out });
 }
 
-function addFilterRow() {
-  filterRows.value.push({ key: "", value: "" });
-  // 不立刻 commit —— 空 key 行不会写入 dict，但留在 UI 上等用户填。
-}
-function removeFilterRow(i: number) {
-  filterRows.value.splice(i, 1);
-  commitFilters();
-}
 function updateFilterRow(i: number, p: Partial<FilterRow>) {
-  filterRows.value[i] = { ...filterRows.value[i], ...p };
+  const old = filterRows.value[i];
+  const next = { ...old, ...p };
+  // 切 key 时清掉 value（不同属性取值集不同，残留旧值会变成无效筛选）
+  if (p.key !== undefined && p.key !== old.key) {
+    next.value = "";
+  }
+  filterRows.value[i] = next;
   commitFilters();
 }
 
@@ -189,13 +187,16 @@ const attrKeyOptions = computed(() => {
   const usedKeys = filterRows.value.map((r) => r.key).filter(Boolean);
   const set = new Set<string>(usedKeys);
   for (const a of vaultAttrs.value) set.add(a.key);
-  return Array.from(set).map((k) => {
+  const opts = Array.from(set).map((k) => {
     const meta = vaultAttrs.value.find((a) => a.key === k);
     const label = meta
       ? `${k}  ·  ${meta.note_count} 篇`
       : `${k}  ·  自定义`;
     return { label, value: k };
   });
+  // 首位插「不筛选」—— 单选模式下用户没有"删除筛选行"按钮，得在
+  // 下拉里能选回空（覆盖之前选过的 key）
+  return [{ label: "不筛选", value: "" }, ...opts];
 });
 
 function valueHintFor(key: string): string {
@@ -366,7 +367,11 @@ function insertKeyword(field: "text") {
 
 <template>
   <div class="flex flex-col gap-3">
-    <!-- ── eyebrow + title ─────────────────────────────────────────── -->
+    <!--
+      eyebrow only —— 大字 friendlyTitle 标题按用户要求移除（跟下面的
+      「区块名」/「标题」输入框内容重复，看着是一个 block 名字写两次）。
+      eyebrow「区块 N / 类型」保留作为定位锚点。
+    -->
     <div>
       <div
         class="text-[11.5px]"
@@ -377,12 +382,6 @@ function insertKeyword(field: "text") {
         </template>
         <template v-else>—</template>
         · {{ KIND_LABELS[block.kind] ?? block.kind }}
-      </div>
-      <div
-        class="font-display mt-1 font-semibold"
-        :style="{ fontSize: '18px', letterSpacing: '-0.2px' }"
-      >
-        {{ friendlyTitle }}
       </div>
     </div>
 
@@ -457,9 +456,14 @@ function insertKeyword(field: "text") {
       />
     </FormField>
 
-    <!-- ── 推荐理由前缀（hero_brand / competitor_pool） ─────────────── -->
+    <!--
+      推荐理由前缀 —— 只在 hero_brand 显示。competitor_pool 按用户要求
+      不再单独设置，直接继承前面 hero_brand 的 reason_label（assembler
+      render.py:195 已经做了 "competitor_pool inherits the preceding
+      hero's reason_label" 的回退，UI 隐藏即可，无需后端改动）。
+    -->
     <FormField
-      v-if="['hero_brand', 'competitor_pool'].includes(block.kind)"
+      v-if="block.kind === 'hero_brand'"
       label="推荐理由前缀"
     >
       <FormInput
@@ -598,64 +602,41 @@ function insertKeyword(field: "text") {
             :style="{ color: 'var(--ink-4)' }"
           >当前范围未发现属性</div>
         </div>
-        <div class="flex flex-col gap-2">
-          <div
-            v-for="(row, i) in filterRows"
-            :key="i"
-            class="flex items-center gap-2"
-          >
-            <!--
-              key 字段 —— FormSelect 走 Teleport popover，options 是 vault
-              扫出来的 frontmatter key 列表。flex-[2] 让它跟 value 输入
-              视觉比例对齐。
-            -->
-            <div class="flex-[2]" :style="{ minWidth: '0' }">
-              <FormSelect
-                :model-value="row.key"
-                :options="attrKeyOptions"
-                placeholder="选择属性…"
-                width="100%"
-                @update:model-value="(v) => updateFilterRow(i, { key: String(v) })"
-              />
-            </div>
-            <div class="flex-[3]" :style="{ minWidth: '0' }">
-              <MultiValuePicker
-                :model-value="row.value"
-                :options="valueOptionsFor(row.key)"
-                :placeholder="valueHintFor(row.key)"
-                @update:model-value="(v) => updateFilterRow(i, { value: v })"
-              />
-            </div>
-            <button
-              type="button"
-              class="inline-flex h-7 w-7 items-center justify-center"
-              :style="{
-                background: 'transparent',
-                border: '1px solid var(--line)',
-                borderRadius: '8px',
-                color: 'var(--ink-3)',
-              }"
-              title="删除该筛选条件"
-              @click="removeFilterRow(i)"
-            >
-              <Icon name="trash" :size="12" />
-            </button>
+        <!--
+          单选筛选 —— 按用户要求改为只有一行 key + value 下拉。原来支持
+          多行 filter + 每行 value 多选（checkbox-style MultiValuePicker），
+          被用户判定为"容易出错"+"UI 跟应用其它下拉不一致"。
+          - key 走 FormSelect（含「不筛选」首选项，用户能清掉）
+          - value 当有候选值时走 FormSelect（跟 key 同款下拉），
+            没候选值（vault 高基数 / 未扫）时回退 FormInput 兜底
+          - 不再有 添加 / 删除 按钮
+        -->
+        <div class="flex items-center gap-2">
+          <div class="flex-[2]" :style="{ minWidth: '0' }">
+            <FormSelect
+              :model-value="filterRows[0]?.key ?? ''"
+              :options="attrKeyOptions"
+              placeholder="选择属性…"
+              width="100%"
+              @update:model-value="(v) => updateFilterRow(0, { key: String(v) })"
+            />
           </div>
-          <div>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px]"
-              :style="{
-                background: 'var(--card-2)',
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--radius-inner)',
-                color: 'var(--ink-2)',
-              }"
-              @click="addFilterRow"
-            >
-              <Icon name="plus" :size="11" />
-              <span>添加</span>
-            </button>
+          <div class="flex-[3]" :style="{ minWidth: '0' }">
+            <FormSelect
+              v-if="filterRows[0]?.key && valueOptionsFor(filterRows[0].key).length > 0"
+              :model-value="filterRows[0]?.value ?? ''"
+              :options="valueOptionsFor(filterRows[0].key).map((v) => ({ label: v, value: v }))"
+              placeholder="选择值…"
+              width="100%"
+              @update:model-value="(v) => updateFilterRow(0, { value: String(v) })"
+            />
+            <FormInput
+              v-else
+              :model-value="filterRows[0]?.value ?? ''"
+              :placeholder="valueHintFor(filterRows[0]?.key ?? '')"
+              :disabled="!filterRows[0]?.key"
+              @update:model-value="(v) => updateFilterRow(0, { value: String(v) })"
+            />
           </div>
         </div>
       </template>

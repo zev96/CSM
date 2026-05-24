@@ -402,12 +402,15 @@ async function polishAll() {
 //   50-90%  整篇润色中（无可靠 polishProgress，固定 75% 占位）
 //   100%    成稿完成（finalText 有值）
 const overallProgress = computed<number>(() => {
+  // ⚠ ProgressBar expects a 0–1 ratio (see ProgressBar.vue: `Math.min(1, value)`).
+  // 之前这里返回 0-100，>1 的值都被 clamp 到 100% —— 所以 step 2/4
+  // 时进度条几乎"满格"显示，跟左侧的 2/4 计数对不上。改回 0-1。
   if (article.status === "idle" || article.status === "error") return 0;
-  if (article.status === "running") return article.progress * 50;
+  if (article.status === "running") return article.progress * 0.5;
   // status === "done"
-  if (polishing.value) return 75;
-  if (article.finalText.trim()) return 100;
-  return 50;  // 初稿就绪、等待润色
+  if (polishing.value) return 0.75;
+  if (article.finalText.trim()) return 1;
+  return 0.5; // 初稿就绪、等待润色
 });
 
 const overallLabel = computed<string>(() => {
@@ -434,8 +437,21 @@ const overallStep = computed<number | null>(() => {
  * "查重"/"标题候选" 时切到对应的子视图，整张卡内部 swap，不再用
  * Teleport 弹整页 drawer。点回另一个 mode 或顶部"返回"按钮回到列表。
  */
-type PanelMode = "checks" | "dedup" | "titles";
+type PanelMode = "checks" | "dedup" | "titles" | "density";
 const panelMode = ref<PanelMode>("checks");
+
+/**
+ * 切到关键词密度详情页 —— 跟 openDedup / openTitleCandidates 同语义。
+ * 底部「算密度」按钮 + 一级页"关键词密度"卡 click 都走这里。还没算
+ * 过密度时顺便触发 refreshDensity 拉数据（function 声明会 hoist，所
+ * 以 refreshDensity 在下面定义不影响这里调用）。
+ */
+async function openDensity() {
+  panelMode.value = "density";
+  if (!article.keywordDensity) {
+    await refreshDensity();
+  }
+}
 
 async function openTitleCandidates() {
   panelMode.value = "titles";
@@ -679,7 +695,79 @@ const checkItems = computed<CheckItem[]>(() => {
 
   return items;
 });
-const passCount = computed(() => checkItems.value.filter((c) => c.pass).length);
+// _passCount kept as a derived helper in case the UI brings back a
+// "通过 X / 总数 Y" pill. Currently unused — prefix with _ to silence
+// vue-tsc unused-var warning without losing the intent.
+const _passCount = computed(() => checkItems.value.filter((c) => c.pass).length);
+void _passCount;
+
+/**
+ * 一级页只保留"重复率·历史"和"关键词密度"两张大卡（用户简化设计）；
+ * 每条带 key 让 click 时分流到 openDedup / openDensity。标题候选不
+ * 进卡片，走底部「标题候选」按钮去二级页。
+ */
+const primaryChecks = computed<
+  Array<{
+    key: "dedup" | "density";
+    label: string;
+    value: string;
+    pass: boolean;
+    tone: "ok" | "warn" | "primary";
+  }>
+>(() => {
+  const out: Array<{
+    key: "dedup" | "density";
+    label: string;
+    value: string;
+    pass: boolean;
+    tone: "ok" | "warn" | "primary";
+  }> = [];
+  // 重复率·历史
+  if (dedupRatio.value !== null) {
+    const pct = (dedupRatio.value * 100).toFixed(1);
+    const safe = dedupRatio.value < 0.3;
+    out.push({
+      key: "dedup",
+      label: "重复率 · 历史",
+      value: `${pct}%`,
+      pass: safe,
+      tone: safe ? "ok" : "warn",
+    });
+  } else {
+    out.push({
+      key: "dedup",
+      label: "重复率 · 历史",
+      value: "—",
+      pass: false,
+      tone: "warn",
+    });
+  }
+  // 关键词密度
+  const kd = article.keywordDensity;
+  if (kd) {
+    const pct = (kd.density * 100).toFixed(1);
+    const ok = kd.density >= 0.015 && kd.density <= 0.04;
+    out.push({
+      key: "density",
+      label: "关键词密度",
+      value: `${pct}%`,
+      pass: ok,
+      tone: ok ? "ok" : "warn",
+    });
+  } else {
+    out.push({
+      key: "density",
+      label: "关键词密度",
+      value: "—",
+      pass: false,
+      tone: "warn",
+    });
+  }
+  return out;
+});
+const primaryPassCount = computed(
+  () => primaryChecks.value.filter((c) => c.pass).length,
+);
 
 onMounted(async () => {
   try {
@@ -782,9 +870,10 @@ const TAB_DEFS: Array<{ id: Tab; label: string; icon: string }> = [
 ];
 
 const tabSectionLabel = computed(() => {
-  if (activeTab.value === "assembly") return "组装 · 框架 + 采样";
-  if (activeTab.value === "draft") return "初稿 · 手动编辑 + 整篇润色";
-  return "成稿 · 可编辑 + 导出";
+  // tab section label 简化为单词（用户反馈 "· 框架 + 采样" 类副词太繁琐）
+  if (activeTab.value === "assembly") return "组装";
+  if (activeTab.value === "draft") return "初稿";
+  return "成稿";
 });
 
 </script>
@@ -793,6 +882,14 @@ const tabSectionLabel = computed(() => {
   <!--
     根用 h-full + flex-col：和 HomeView 同款收口策略，整页不滚，由内部
     组件自行 overflow-y-auto。
+  -->
+  <!--
+    根用 h-full + flex-col：和 HomeView 同款收口策略，整页不滚，由
+    内部组件自行 overflow-y-auto。
+    注：曾尝试加 padding 14px 给 main editor card 留 box-shadow 的
+    visible 空间，但用户希望 card 保持原位 —— 改方案为去掉 outer
+    shadow、用 border + 顶部 inset 高光模拟弱立体感（详见
+    :deep(section) 的 box-shadow 实现）。
   -->
   <div class="flex h-full flex-col" :style="{ gap: '14px' }">
     <!--
@@ -837,8 +934,9 @@ const tabSectionLabel = computed(() => {
       模态 + router.push("home") 一起执行，用户不会卡在半成品页面。
     -->
 
-    <!-- ── 主内容行：左编辑卡 + 右 300px 检查面板 ────────────────── -->
-    <div class="flex min-h-0 flex-1" :style="{ gap: '12px' }">
+    <!-- ── 主内容行：左编辑卡 + 右 288px 检查面板 ────────────────── -->
+    <!-- gap 14（原 12，+2 让左右两块距离加大）-->
+    <div class="flex min-h-0 flex-1" :style="{ gap: '14px' }">
       <!-- LEFT — editor card -->
       <Card padless class="flex min-w-0 flex-1 flex-col overflow-hidden">
         <!-- tab bar：左 section 文字 + 右 segmented pill 控件 -->
@@ -955,12 +1053,11 @@ const tabSectionLabel = computed(() => {
                 >
                   模板框架
                 </div>
-                <div class="flex items-center gap-2 mb-3">
-                  <Pill>{{ templateName || "未选模板" }}</Pill>
-                  <span class="text-[10.5px]" :style="{ color: 'var(--ink-4, var(--ink-3))' }">
-                    {{ assemblyRows.length }} 个槽位
-                  </span>
-                </div>
+                <!--
+                  templateName Pill + "X 个槽位" 子标删除（用户反馈这里
+                  跟 header 顶部的模板 chip 重复，不需要再显示一次）。
+                -->
+                <div class="mb-3" />
                 <!--
                   Slot 行：不再渲染圆角小方块图标 —— 设计稿要求只保留
                   序号、双行标题（label + sublabel）和右侧状态色点。
@@ -1044,16 +1141,16 @@ const tabSectionLabel = computed(() => {
                     /产品池等真正需要采样的 slot。
                   -->
                   <div class="flex flex-col gap-3">
+                    <!--
+                      段落卡视觉：背景/边框/阴影/hover/选中全部走 scoped
+                      class（assembly-block + selected），inline :style 没
+                      办法定义 :hover 状态。选中态在 scoped CSS 里加浅橙
+                      底 + 橙色光晕，hover 用普通软阴影。
+                    -->
                     <div
                       v-for="b in assemblyRows.filter((x) => x.kind !== 'heading')"
                       :key="b.id"
-                      class="transition cursor-pointer"
-                      :style="{
-                        background: selectedSlot === b.id ? 'var(--card-white)' : 'var(--card-2)',
-                        border: selectedSlot === b.id ? '1px solid rgba(238,106,42,0.25)' : '1px solid var(--line)',
-                        borderRadius: '14px',
-                        padding: '14px',
-                      }"
+                      :class="['assembly-block', { selected: selectedSlot === b.id }]"
                       @click="selectedSlot = b.id"
                     >
                       <!--
@@ -1133,6 +1230,11 @@ const tabSectionLabel = computed(() => {
                           :style="{ color: 'var(--primary-deep)' }"
                         >生成 →</span>
                       </div>
+                      <!--
+                        正文 inline 在段落卡背景上 —— 不加独立白底 box，
+                        不加 border。用户最终设计：卡内统一一致背景，
+                        正文只靠 font-serif-cn + 字色营造质感。
+                      -->
                       <div v-else
                         class="font-serif-cn"
                         :style="{ fontSize: '13.5px', lineHeight: 1.85, color: 'var(--ink-2)' }"
@@ -1172,12 +1274,9 @@ const tabSectionLabel = computed(() => {
                 >初稿 v1</span>
                 <span class="text-[10px]" :style="{ color: 'var(--ink-3)' }">自动保存于 12:34</span>
               </div>
+              <!-- 初稿 tab 只显示"初稿 X 字"（用户反馈：成稿字数 + 阅读时间这里冗余） -->
               <div class="flex items-center gap-3 text-[11px]" :style="{ color: 'var(--ink-3)' }">
                 <span>初稿 {{ (article.draftText || SAMPLE_VARIATIONS[sampleIndex].draft).length }} 字</span>
-                <span :style="{ width: '1px', height: '10px', background: 'var(--line-2)' }" />
-                <span>成稿 {{ (article.finalText || SAMPLE_VARIATIONS[sampleIndex].final).length }} 字</span>
-                <span :style="{ width: '1px', height: '10px', background: 'var(--line-2)' }" />
-                <span>约需阅读 1 分钟</span>
               </div>
               <div class="mt-3" :style="{ height: '1px', background: 'var(--line)' }" />
             </div>
@@ -1246,12 +1345,9 @@ const tabSectionLabel = computed(() => {
                   @click="openTitleCandidates"
                 >换标题…</button>
               </div>
+              <!-- 成稿 tab 只显示"成稿 X 字"（用户反馈：初稿字数 + 阅读时间这里冗余） -->
               <div class="flex items-center gap-3 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                <span>初稿 {{ (article.draftText || SAMPLE_VARIATIONS[sampleIndex].draft).length }} 字</span>
-                <span :style="{ width: '1px', height: '10px', background: 'var(--line-2)' }" />
                 <span>成稿 {{ (article.finalText || SAMPLE_VARIATIONS[sampleIndex].final).length }} 字</span>
-                <span :style="{ width: '1px', height: '10px', background: 'var(--line-2)' }" />
-                <span>约需阅读 1 分钟</span>
               </div>
               <div class="mt-3" :style="{ height: '1px', background: 'var(--line)' }" />
             </div>
@@ -1286,9 +1382,13 @@ const tabSectionLabel = computed(() => {
         外层加 min-h-0 + h-full 是关键 —— 没有 min-h-0 的话，flex-1 的
         质检报告会"摆烂"撑到内容自然高度，把 3 和 4 顶出可视区。
       -->
+      <!--
+        right rail width 288px（原 300，缩 12px）+ 主行 gap +2px (12→14)：
+        中间 main editor card 净宽 +10px（用户指定），整体布局收紧。
+      -->
       <div
-        class="flex h-full min-h-0 flex-shrink-0 flex-col"
-        :style="{ width: '300px', gap: '12px' }"
+        class="right-rail flex h-full min-h-0 flex-shrink-0 flex-col"
+        :style="{ width: '288px', gap: '12px' }"
       >
         <!--
           进度卡 —— 永远渲染，状态分两路：
@@ -1379,7 +1479,9 @@ const tabSectionLabel = computed(() => {
                     ? "查重报告"
                     : panelMode === "titles"
                       ? "标题候选"
-                      : "质检报告"
+                      : panelMode === "density"
+                        ? "关键词密度"
+                        : "质检报告"
                 }}
               </div>
               <div class="text-[10.5px] truncate" :style="{ color: 'var(--ink-3)' }">
@@ -1394,56 +1496,80 @@ const tabSectionLabel = computed(() => {
                 <template v-else-if="panelMode === 'titles'">
                   AI 已生成 {{ article.titleCandidates.length }} 个候选
                 </template>
+                <template v-else-if="panelMode === 'density' && article.keywordDensity">
+                  <span class="font-mono">
+                    {{ (article.keywordDensity.density * 100).toFixed(1) }}%
+                  </span>
+                  · 在健康区间 1.5%-4%
+                </template>
                 <template v-else>
-                  {{ passCount }}/{{ checkItems.length }} 项通过
+                  {{ primaryPassCount }}/{{ primaryChecks.length }} 项通过
                 </template>
               </div>
             </div>
+            <!--
+              二级页 header 右上「← 返回」按钮：以前是 X，但 user spec
+              要求"返回"心智更明确。只在非 checks (详情态) 显示。
+            -->
             <button
               v-if="panelMode !== 'checks'"
               type="button"
-              title="返回检查项"
-              class="inline-flex items-center justify-center transition hover:bg-card-2"
+              title="返回质检报告"
+              class="inline-flex items-center gap-1 transition hover:bg-card-2"
               :style="{
-                width: '26px',
                 height: '26px',
+                padding: '0 8px',
                 borderRadius: '7px',
                 color: 'var(--ink-3)',
+                fontSize: '11px',
               }"
               @click="panelMode = 'checks'"
             >
-              <Icon name="x" :size="14" />
+              <Icon name="arrowLeft" :size="12" />
+              <span>返回</span>
             </button>
           </div>
           <div :style="{ height: '1px', background: 'var(--line)', margin: '0 16px' }" />
 
           <!-- body —— 三种 mode 在这里 swap -->
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" :style="{ padding: '12px' }">
-            <!-- mode: checks（默认）—— 6 项检查项卡片 -->
+            <!--
+              mode: checks（一级页）—— 简化为两张大卡（重复率·历史 /
+              关键词密度），layout: 标题(左上) / 通过徽章(右上) / 大字
+              (左下) / "详情→"(右下)。整卡可点击 hover 上浮+阴影。
+            -->
             <div v-if="panelMode === 'checks'" class="flex flex-col gap-2">
-              <div
-                v-for="r in checkItems"
-                :key="r.label"
+              <button
+                v-for="r in primaryChecks"
+                :key="r.key"
+                type="button"
+                class="qc-primary-card text-left w-full"
                 :style="{
-                  padding: '12px',
+                  padding: '14px 14px 12px',
                   borderRadius: 'var(--radius-inner)',
-                  background: r.pass ? 'var(--card-2)' : 'rgba(216,90,72,0.06)',
-                  border: r.pass ? '1px solid var(--line)' : '1px solid rgba(216,90,72,0.15)',
+                  border: '1px solid var(--line)',
                 }"
+                @click="r.key === 'dedup' ? openDedup() : openDensity()"
               >
                 <div class="flex items-center justify-between">
-                  <span class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                  <span class="text-[11.5px] font-medium" :style="{ color: 'var(--ink-2)' }">
                     {{ r.label }}
                   </span>
                   <Pill :tone="r.tone">{{ r.pass ? "通过" : "复查" }}</Pill>
                 </div>
-                <div class="font-display font-bold mt-1" :style="{ fontSize: '17px' }">
-                  {{ r.value }}
+                <div class="mt-1 flex items-end justify-between">
+                  <div class="font-display font-bold" :style="{ fontSize: '22px', lineHeight: 1.1 }">
+                    {{ r.value }}
+                  </div>
+                  <span
+                    class="inline-flex items-center gap-0.5 text-[10.5px]"
+                    :style="{ color: 'var(--ink-3)' }"
+                  >
+                    详情
+                    <Icon name="arrowRight" :size="10" />
+                  </span>
                 </div>
-                <div class="text-[10.5px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-                  {{ r.desc }}
-                </div>
-              </div>
+              </button>
             </div>
 
             <!-- mode: dedup —— 查重结果 -->
@@ -1535,6 +1661,133 @@ const tabSectionLabel = computed(() => {
               </template>
             </div>
 
+            <!-- mode: density —— 关键词密度详情页（新建） -->
+            <div v-else-if="panelMode === 'density'" class="flex flex-col gap-3">
+              <!-- 顶部大数字 + 副词 -->
+              <div class="flex items-baseline gap-2">
+                <span
+                  class="font-display font-bold"
+                  :style="{
+                    fontSize: '28px',
+                    lineHeight: 1,
+                    letterSpacing: '-0.5px',
+                  }"
+                >
+                  {{
+                    article.keywordDensity
+                      ? (article.keywordDensity.density * 100).toFixed(1) + "%"
+                      : "—"
+                  }}
+                </span>
+                <span class="text-[11.5px]" :style="{ color: 'var(--ink-2)' }">
+                  {{
+                    article.keywordDensity
+                      ? article.keywordDensity.density >= 0.015 &&
+                        article.keywordDensity.density <= 0.04
+                        ? "在 1.5%-4% 区间"
+                        : "建议 1.5%-4%"
+                      : "尚未计算"
+                  }}
+                </span>
+              </div>
+
+              <!--
+                区间色条 —— 红 0-1.5% / 绿 1.5-4% / 红 4-10%，让"健康
+                区间"占视觉中段。当前位置由 density (clamp 到 10%) 映射
+                到色条上的圆点。
+              -->
+              <div v-if="article.keywordDensity">
+                <div
+                  class="relative"
+                  :style="{
+                    height: '6px',
+                    borderRadius: '999px',
+                    background:
+                      'linear-gradient(to right, #d85a48 0%, #d85a48 15%, #7a9b5e 15%, #7a9b5e 40%, #d85a48 40%, #d85a48 100%)',
+                  }"
+                >
+                  <span
+                    :style="{
+                      position: 'absolute',
+                      top: '50%',
+                      left:
+                        Math.min(article.keywordDensity.density * 10, 1) * 100 +
+                        '%',
+                      transform: 'translate(-50%, -50%)',
+                      width: '14px',
+                      height: '14px',
+                      borderRadius: '50%',
+                      background: '#7a9b5e',
+                      border: '3px solid #fff',
+                      boxShadow: '0 1px 3px rgba(28,26,23,0.18)',
+                    }"
+                  />
+                </div>
+                <div
+                  class="mt-1 flex justify-between text-[10px]"
+                  :style="{ color: 'var(--ink-3)' }"
+                >
+                  <span>0%</span>
+                  <span>1.5%</span>
+                  <span>4%</span>
+                  <span>10%</span>
+                </div>
+              </div>
+
+              <!-- 出现统计（store 只有单关键词的 count，多关键词字段后续接） -->
+              <div v-if="article.keywordDensity && article.lastRequest">
+                <div class="font-display text-[12px] font-semibold mb-1.5">
+                  出现统计
+                </div>
+                <ul class="flex flex-col gap-1">
+                  <li
+                    class="flex items-center justify-between text-[11.5px]"
+                    :style="{
+                      padding: '6px 10px',
+                      borderRadius: 'var(--radius-inner)',
+                      background: 'var(--card-2)',
+                      border: '1px solid var(--line)',
+                    }"
+                  >
+                    <span :style="{ color: 'var(--ink)' }">
+                      {{ article.lastRequest.keyword }}
+                    </span>
+                    <span
+                      class="font-mono tabular-nums"
+                      :style="{ color: 'var(--ink-2)' }"
+                    >
+                      {{ article.keywordDensity.count }} 次
+                    </span>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- 建议卡 —— 橙色软底，3 条 static 建议（按 user spec） -->
+              <div
+                :style="{
+                  padding: '12px 14px',
+                  borderRadius: 'var(--radius-inner)',
+                  background: 'rgba(238,106,42,0.10)',
+                  border: '1px solid rgba(238,106,42,0.20)',
+                }"
+              >
+                <div
+                  class="font-display text-[12px] font-semibold mb-1.5"
+                  :style="{ color: 'var(--primary-deep)' }"
+                >
+                  建议
+                </div>
+                <ul
+                  class="flex flex-col gap-1 text-[11.5px]"
+                  :style="{ color: 'var(--ink-2)' }"
+                >
+                  <li>· 密度在健康区间，可保持当前用词节奏</li>
+                  <li>· "宠物" 出现较少，可在段首段尾适度补充</li>
+                  <li>· 品牌名累计 12 次，注意广告嫌疑</li>
+                </ul>
+              </div>
+            </div>
+
             <!-- mode: titles —— 标题候选列表 -->
             <div v-else class="flex flex-col gap-2">
               <Spinner v-if="article.titleLoading" />
@@ -1574,49 +1827,46 @@ const tabSectionLabel = computed(() => {
             </div>
           </div>
 
-          <!-- footer 操作行（钉在卡片底）—— 点过的 mode 高亮 -->
+          <!--
+            footer 三按钮 —— 跟卡片 mode 联动（点对应一级页卡片 / 直接
+            点底部按钮都进同 mode）。
+              默认: 透明 + ink-2
+              Hover: 主色实心 + 白字 + 橙色外阴影 + 微上浮
+              Active: 同 hover (当前 mode 命中时常驻)
+            divider 删除让 hover/active 的橙底块在 3 段并排时更连贯。
+            class 名 qc-footer-btn / qc-footer-active 样式定义在文件末尾
+            <style scoped>。
+          -->
           <div
-            class="flex flex-shrink-0 items-center justify-between"
+            class="flex flex-shrink-0 items-center gap-1"
             :style="{ padding: '6px', borderTop: '1px solid var(--line)' }"
           >
             <button
               type="button"
-              class="flex-1 text-center text-[12px] font-medium transition hover:bg-card-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              :style="{
-                height: '32px',
-                borderRadius: '8px',
-                color: panelMode === 'dedup' ? 'var(--primary-deep)' : 'var(--ink-2)',
-                background: panelMode === 'dedup' ? 'var(--primary-soft)' : 'transparent',
-                fontWeight: panelMode === 'dedup' ? 600 : 500,
-              }"
+              :class="[
+                'qc-footer-btn flex-1 text-[12px] font-medium',
+                { 'qc-footer-active': panelMode === 'dedup' },
+              ]"
               @click="openDedup"
             >
               查重
             </button>
-            <span :style="{ width: '1px', height: '16px', background: 'var(--line-2)' }" />
             <button
               type="button"
-              class="flex-1 text-center text-[12px] font-medium transition hover:bg-card-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              :style="{
-                height: '32px',
-                borderRadius: '8px',
-                color: 'var(--ink-2)',
-              }"
-              @click="refreshDensity"
+              :class="[
+                'qc-footer-btn flex-1 text-[12px] font-medium',
+                { 'qc-footer-active': panelMode === 'density' },
+              ]"
+              @click="openDensity"
             >
               算密度
             </button>
-            <span :style="{ width: '1px', height: '16px', background: 'var(--line-2)' }" />
             <button
               type="button"
-              class="flex-1 text-center text-[12px] font-medium transition hover:bg-card-2"
-              :style="{
-                height: '32px',
-                borderRadius: '8px',
-                color: panelMode === 'titles' ? 'var(--primary-deep)' : 'var(--ink-2)',
-                background: panelMode === 'titles' ? 'var(--primary-soft)' : 'transparent',
-                fontWeight: panelMode === 'titles' ? 600 : 500,
-              }"
+              :class="[
+                'qc-footer-btn flex-1 text-[12px] font-medium',
+                { 'qc-footer-active': panelMode === 'titles' },
+              ]"
               @click="openTitleCandidates"
             >
               标题候选
@@ -1627,15 +1877,11 @@ const tabSectionLabel = computed(() => {
         <!--
           模板区块 —— 框架模板 + AI 润色 Skill 两个下拉合并到一张卡，
           padding 紧凑，下拉框 width:100% 撑满卡片宽度（右栏 300px）。
+          「模板区块」eyebrow 按用户要求移除（卡内字段名 = 框架模板 / AI
+          润色 Skill，已足够自解释）。
         -->
         <Card padless class="flex-shrink-0">
           <div class="flex flex-col gap-3" :style="{ padding: '12px 14px' }">
-            <div
-              class="text-[10.5px] uppercase font-medium"
-              :style="{ color: 'var(--ink-3)', letterSpacing: '1.5px' }"
-            >
-              模板区块
-            </div>
             <div class="flex flex-col gap-1.5">
               <div
                 class="text-[10.5px] font-medium"
@@ -1668,38 +1914,43 @@ const tabSectionLabel = computed(() => {
         </Card>
 
         <!--
-          操作卡 —— 加高让整篇润色按钮和下面两个次按钮更显眼。padding
-          从默认 pad-d 改为更舒展的 18px，主按钮高度 42 → 与 V1 设计
-          稿里的视觉权重一致。
+          操作卡 —— 按用户要求改为两行布局：
+            行 1：整篇润色（primary）+ 重新随机（card-2）  ← h=42
+            行 2：清空（red 文字）+ 导出文章（dark）       ← h=36
+          flex-1 让同行的两个按钮等宽；行内 gap 2，行间 gap 2.5。
+          主按钮 整篇润色 保留 primary 配色 + 42 高度的视觉权重，
+          导出文章 保留 dark 底，整体优先级比原 3 行没变，只是
+          重排成 2×2 网格更紧凑。
         -->
         <Card padless class="flex-shrink-0">
           <div class="flex flex-col gap-2.5" :style="{ padding: '18px' }">
-            <button
-              type="button"
-              class="w-full inline-flex items-center justify-center gap-1.5 transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              :style="{
-                height: '42px',
-                fontSize: '13px',
-                fontWeight: 500,
-                borderRadius: '10px',
-                background: 'var(--primary)',
-                color: '#fff',
-                border: '1px solid var(--primary)',
-              }"
-              :disabled="!article.draftText.trim() || polishing"
-              @click="polishAll"
-            >
-              <Spinner v-if="polishing" :size="13" />
-              <Icon v-else name="wand" :size="13" />
-              <span>{{ polishing ? "润色中…" : "整篇润色" }}</span>
-            </button>
+            <!-- 行 1：整篇润色 + 重新随机 -->
             <div class="flex gap-2">
               <button
                 type="button"
                 class="flex-1 inline-flex items-center justify-center gap-1.5 transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 :style="{
-                  height: '36px',
-                  fontSize: '12px',
+                  height: '42px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  borderRadius: '10px',
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  border: '1px solid var(--primary)',
+                }"
+                :disabled="!article.draftText.trim() || polishing"
+                @click="polishAll"
+              >
+                <Spinner v-if="polishing" :size="13" />
+                <Icon v-else name="wand" :size="13" />
+                <span>{{ polishing ? "润色中…" : "整篇润色" }}</span>
+              </button>
+              <button
+                type="button"
+                class="flex-1 inline-flex items-center justify-center gap-1.5 transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                :style="{
+                  height: '42px',
+                  fontSize: '13px',
                   fontWeight: 500,
                   borderRadius: '10px',
                   background: 'var(--card-2)',
@@ -1709,15 +1960,18 @@ const tabSectionLabel = computed(() => {
                 :disabled="!article.lastRequest"
                 @click="rerun"
               >
-                <Icon name="refresh" :size="11" />
+                <Icon name="refresh" :size="12" />
                 <span>重新随机</span>
               </button>
+            </div>
+            <!-- 行 2：清空 + 导出文章 -->
+            <div class="flex gap-2">
               <button
                 type="button"
                 class="flex-1 inline-flex items-center justify-center gap-1.5 transition hover:brightness-95"
                 :style="{
-                  height: '32px',
-                  fontSize: '11px',
+                  height: '36px',
+                  fontSize: '12px',
                   fontWeight: 500,
                   borderRadius: '10px',
                   background: 'var(--card-2)',
@@ -1726,27 +1980,27 @@ const tabSectionLabel = computed(() => {
                 }"
                 @click="clearAll"
               >
-                <Icon name="x" :size="11" />
+                <Icon name="x" :size="12" />
                 <span>清空</span>
               </button>
+              <button
+                type="button"
+                class="flex-1 inline-flex items-center justify-center gap-1.5 transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                :style="{
+                  height: '36px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: '10px',
+                  background: 'var(--dark)',
+                  color: '#fbf7ec',
+                  border: '1px solid var(--dark)',
+                }"
+                @click="showExportModal = true"
+              >
+                <Icon name="copy" :size="12" />
+                <span>导出文章</span>
+              </button>
             </div>
-            <button
-              type="button"
-              class="w-full inline-flex items-center justify-center gap-1.5 transition hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              :style="{
-                height: '36px',
-                fontSize: '12px',
-                fontWeight: 500,
-                borderRadius: '10px',
-                background: 'var(--dark)',
-                color: '#fbf7ec',
-                border: '1px solid var(--dark)',
-              }"
-              @click="showExportModal = true"
-            >
-              <Icon name="copy" :size="12" />
-              <span>导出文章</span>
-            </button>
           </div>
         </Card>
       </div>
@@ -2036,3 +2290,172 @@ const tabSectionLabel = computed(() => {
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+/*
+ * 质检报告卡 hover / active 样式集中在这。inline :style 没办法定义
+ * :hover 状态（class 才行），所以一级页大卡 + 底部 3 按钮的 hover/
+ * active 视觉都走 class。
+ *
+ * 创作区右侧 3 张卡（进度 / 质检报告 / 模板 / 操作）的浮动阴影也
+ * 加在这（用户要求"创作区卡片增加浮动阴影效果"），通过 ArticleView
+ * 包给 Card 组件的 wrapper 添加 box-shadow。
+ */
+
+/*
+ * 一级页两张大卡：默认 card-2 cream 底，hover 切到 #fbfaf6（用户指定
+ * 的暖奶白） + 微上浮 + 软阴影。background 从 inline :style 移到这里，
+ * inline 特异度 1000 会压死 :hover 的 background 切换（memory:
+ * feedback_vue_inline_style_hover_clobber）。
+ */
+.qc-primary-card {
+  background: var(--card-2);
+  transition:
+    background-color 0.14s ease,
+    transform 0.14s ease,
+    box-shadow 0.14s ease;
+  cursor: pointer;
+}
+.qc-primary-card:hover {
+  background: #fbfaf6;
+  transform: translateY(-2px);
+  box-shadow:
+    0 6px 14px -2px rgba(28, 26, 23, 0.10),
+    0 2px 6px rgba(28, 26, 23, 0.05);
+}
+
+/* 底部三按钮：默认透明深灰，hover/active 切到主色橙实心 + 阴影 + 微浮起 */
+.qc-footer-btn {
+  height: 32px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease,
+    transform 0.12s ease;
+}
+.qc-footer-btn:hover,
+.qc-footer-btn.qc-footer-active {
+  background: var(--primary);
+  color: #ffffff;
+  box-shadow:
+    0 4px 12px -2px rgba(238, 106, 42, 0.40),
+    0 1px 3px rgba(28, 26, 23, 0.06);
+  transform: translateY(-1px);
+}
+.qc-footer-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.qc-footer-btn:disabled:hover {
+  background: transparent;
+  color: var(--ink-2);
+  box-shadow: none;
+  transform: none;
+}
+
+/*
+ * 创作区右侧 4 张 Card 加浮动阴影 —— 给 ArticleView 用 :deep() 触达
+ * Card 子组件的根 section 元素。这样不用改 Card 组件本身。
+ */
+/*
+ * ArticleView 内所有 Card section（中间 main editor 卡 + 右侧
+ * 4 张 inspector 卡）背景统一为 #fbfaf6 —— 用户精确指定，比默认
+ * var(--card) (#fbf7ec) 略亮的暖奶白。:deep(section) 用一般选择器
+ * 穿透 scoped，编译为 [data-v-xxx] section，Card 组件 root section
+ * 因继承父 scope 也命中。
+ */
+:deep(section) {
+  background-color: #fbfaf6;
+  /*
+   * Multi-layer box-shadow 解决 overflow-hidden 裁切问题：
+   * 父 main 是 `overflow-hidden` + padding 30px，单层大 blur (60+px)
+   * shadow 在远端被父 padding 边界裁掉，看起来"半截阴影"。改成 4 层
+   * 浅深叠加 —— 每层 visible 范围 (offset + blur - spread) 都 ≤30px
+   * 在 padding 内不被裁；叠加后整体厚度感 + 自然光"近实远虚"过渡，
+   * 比单层强 shadow 更柔和真实。
+   *
+   * 同时顶部加 inset 白色高光（1px），模拟环境光打在卡片上边的反射
+   * 亮边，让"浮起"立体感更强。
+   *
+   * H 偏移全部负值 (-2~-6) → 阴影集中在卡片左下，跟用户指定的"向左
+   * 下浮起"方向一致。右侧 inspector 4 张卡靠 .right-rail :deep(section)
+   * specificity 覆盖回标准居中阴影。
+   */
+  /*
+   * 不用 outer box-shadow —— 父 router-view wrapper (App.vue L190
+   * `overflow-y-auto`) 紧贴 card 边缘，任何方向 outer shadow 都被
+   * 立即裁掉看不见完整效果。改成靠 Card 组件自带的 1px border +
+   * 顶部 inset 白色高光模拟"环境光打在卡上沿"的弱浮起立体感。
+   * 不引入位移，也不被 overflow 影响。
+   */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+.right-rail :deep(section) {
+  /*
+   * inspector 卡：outer shadow + 顶部 inset 高光，跟 main editor 的
+   * inset 高光呼应视觉一致。outer 部分收缩 1px + 减淡（用户反馈右栏
+   * 卡阴影过重）。
+   */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    0 3px 10px -2px rgba(28, 26, 23, 0.07),
+    0 2px 5px rgba(28, 26, 23, 0.04);
+  transition: box-shadow 0.14s ease;
+}
+.right-rail :deep(section):hover {
+  /* hover 同步减一档，跟默认态保持比例 */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    0 8px 20px -4px rgba(28, 26, 23, 0.10),
+    0 4px 8px rgba(28, 26, 23, 0.05);
+}
+
+/*
+ * 组装预览段落卡（中间内容区）—— 默认白底 + 普通边框；hover 微上浮
+ * + 软阴影；选中态浅橙底 + 橙色光晕阴影（参考用户设计：选中明显浮起）。
+ * 之前用 inline :style 切换 background/border，没办法定义 :hover；
+ * 现在 class-driven 让 hover/selected 都走 scoped CSS。
+ */
+.assembly-block {
+  background: #fbfaf6;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  /* 默认就有轻微阴影 —— 让段落卡跟外层组装预览容器有视觉分层 */
+  box-shadow:
+    0 2px 6px -1px rgba(28, 26, 23, 0.05),
+    0 1px 3px rgba(28, 26, 23, 0.04);
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    transform 0.14s ease;
+  cursor: pointer;
+}
+.assembly-block:hover {
+  /* hover 明显浮起 —— 阴影加大 + 上移 2px */
+  box-shadow:
+    0 10px 24px -4px rgba(28, 26, 23, 0.14),
+    0 4px 10px rgba(28, 26, 23, 0.06);
+  transform: translateY(-2px);
+}
+.assembly-block.selected {
+  /*
+   * 选中态：纯白底 + 橙色边 + 轻量橙色光晕。background 切到
+   * var(--card-white) (#ffffff)，跟其他卡 #fbfaf6 暖奶白形成对比，
+   * 一眼就能看出"当前选中是哪张"。
+   */
+  background: var(--card-white);
+  border-color: rgba(238, 106, 42, 0.45);
+  box-shadow:
+    0 4px 14px -2px rgba(238, 106, 42, 0.20),
+    0 1px 4px rgba(28, 26, 23, 0.04);
+}
+/* selected 状态下 hover 不再额外 translate，避免重复浮起抖动 */
+.assembly-block.selected:hover {
+  transform: none;
+}
+</style>

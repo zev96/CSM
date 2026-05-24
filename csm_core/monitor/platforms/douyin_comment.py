@@ -20,10 +20,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 from typing import Any
 from urllib.parse import urlencode
 
-from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
+from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask, maybe_cancel
 from ..rate_limit import get_pacer, get_breaker
 from ..drivers.cookie_store import CookieStore
 from ._comment_common import build_match_result, fail_result, risk_control_result
@@ -52,7 +53,14 @@ class DouyinCommentAdapter:
         self._breaker = get_breaker(self.platform)
         self._ua_idx = 0
 
-    def fetch(self, task: MonitorTask) -> MonitorResult:
+    def fetch(
+        self,
+        task: MonitorTask,
+        cancel_token: threading.Event | None = None,
+        **_kwargs,
+    ) -> MonitorResult:
+        # **_kwargs 吞掉 monitor_loop 的 progress_cb / resume_from。
+        # cancel_token 是协作取消（用户点「停止」时 monitor_loop set 它）。
         if not self._breaker.allow():
             return risk_control_result(task, "breaker_open")
 
@@ -74,14 +82,22 @@ class DouyinCommentAdapter:
         if cred:
             session.headers["Cookie"] = cred.cookies_text
 
+        # Cancel check #1 —— 短链解析前快速退出
+        maybe_cancel(cancel_token)
+
         # 1. Resolve URL → aweme_id, expanding short links if needed.
         aweme_id, err = self._extract_video_id(session, task.target_url)
         if not aweme_id:
             return fail_result(task, "extract", err or "unknown URL parse error")
 
+        # Cancel check #2 —— 进入主拉取（最长 15 页）前再查一次
+        maybe_cancel(cancel_token)
+
         # 2. Fetch comment list with X-Bogus signed query (best-effort).
         self._pacer.wait()
-        comments, ok, err = self._fetch_comments(session, aweme_id, limit=200)
+        comments, ok, err = self._fetch_comments(
+            session, aweme_id, limit=200, cancel_token=cancel_token,
+        )
         if not ok:
             self._breaker.record_failure()
             if cred:
@@ -128,6 +144,7 @@ class DouyinCommentAdapter:
         session: Any,
         aweme_id: str,
         limit: int,
+        cancel_token: threading.Event | None = None,
     ) -> tuple[list[dict[str, Any]], bool, str | None]:
         all_comments: list[dict[str, Any]] = []
         cursor = 0
@@ -137,6 +154,9 @@ class DouyinCommentAdapter:
         for _ in range(15):
             if len(all_comments) >= limit:
                 break
+            # Cancel check per page —— pacer 可能 sleep 秒级 + 请求 1-3s，
+            # 不想再翻一页才听取消。
+            maybe_cancel(cancel_token)
             self._pacer.wait()
             params: dict[str, Any] = {
                 "device_platform": "webapp",

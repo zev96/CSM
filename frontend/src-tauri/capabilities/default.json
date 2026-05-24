@@ -23,6 +23,8 @@
     "shell:default",
     "shell:allow-open",
     "dialog:default",
+    "fs:default",
+    "fs:allow-write-file",
     "log:default"
   ]
 }
