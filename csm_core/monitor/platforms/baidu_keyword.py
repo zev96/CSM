@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -361,6 +362,94 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
         "fetch_error": None if text else "browser content empty after readability",
         "needs_browser_fallback": False,
     }
+
+
+# ── 软着陆验证码 ────────────────────────────────────────────────
+_RISK_URL_PATTERNS = ("wappass", "verify.baidu", "safetycheck", "passport.baidu")
+_RISK_DOM_SELECTORS = (".passmod", "#captcha-mask", ".security-check")
+_notify_impl: Any = None
+
+
+def _notify(*, title: str, body: str) -> None:
+    """通知发送 indirection —— sidecar 注入实现。csm_core 不直接依赖 sidecar。"""
+    if _notify_impl is None:
+        logger.warning("notifier not configured; skip: title=%s body=%s", title, body)
+        return
+    try:
+        _notify_impl(title=title, body=body)
+    except Exception:
+        logger.exception("notifier raised; continue")
+
+
+def set_notifier(fn: Any) -> None:
+    """Sidecar 启动时注入。"""
+    global _notify_impl
+    _notify_impl = fn
+
+
+def _try_human_solve(
+    *,
+    page: Any,
+    keyword: str,
+    kw_idx: int,
+    timeout_s: int = 300,
+    poll_interval_s: float = 1.0,
+    task_id: int | None = None,
+    event_publisher: Any = None,
+) -> bool:
+    """命中风控时弹通知 + 轮询等用户解题。
+
+    Args:
+        page, keyword, kw_idx: 当前 SERP 上下文。
+        timeout_s, poll_interval_s: 超时和轮询。
+        task_id: 关联监控任务 ID（用于 SSE）。
+        event_publisher: 同 chrome_preflight，DI 注入。
+            签名：fn({"kind": str, "task_id": int, "keyword": str, "kw_idx": int}) -> None。
+
+    Returns:
+        True  — 用户解完，URL 离开风控域名 + DOM 验证码元素消失。caller retry 当前 kw。
+        False — 超时仍在风控页。caller 走原 raise RiskControlException 路径。
+    """
+    _notify(
+        title="CSM 百度监控",
+        body=f"需要人工解验证码（关键词：{keyword}），点击浏览器窗口完成",
+    )
+    if event_publisher is not None and task_id is not None:
+        try:
+            event_publisher({
+                "kind": "needs_captcha",
+                "task_id": task_id,
+                "keyword": keyword,
+                "kw_idx": kw_idx,
+            })
+        except Exception:
+            logger.exception("event_publisher raised; continue")
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        time.sleep(poll_interval_s)
+        try:
+            cur_url = page.url or ""
+        except Exception:
+            cur_url = ""
+        in_risk = any(p in cur_url for p in _RISK_URL_PATTERNS)
+        if in_risk:
+            continue
+        # URL 已离开风控域名 → 再检 DOM 验证码元素是否消失
+        any_captcha_dom = False
+        for sel in _RISK_DOM_SELECTORS:
+            try:
+                if page.query_selector(sel) is not None:
+                    any_captcha_dom = True
+                    break
+            except Exception:
+                continue
+        if not any_captcha_dom:
+            logger.info("human solve detected; resuming keyword #%d (%s)", kw_idx, keyword)
+            return True
+
+    logger.warning("human solve timeout for keyword #%d (%s)", kw_idx, keyword)
+    return False
 
 
 def _navigate_to_serp(page: Any, keyword: str) -> Any:
@@ -888,10 +977,27 @@ class BaiduKeywordAdapter:
                     )
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
-                # 任一层命中 → 抛 RiskControlException，runner (Task 4) 捕获写断点。
+                # 任一层命中 → 软着陆：弹通知给用户解，解完 retry 当前 kw；失败 fallback 到 raise
                 risk = detect_risk(page, serp_response)
                 if risk is not None:
-                    raise RiskControlException(risk, progress=kw_idx)
+                    # 软着陆：弹通知给用户解，解完 retry 当前 kw；失败 fallback 到 raise
+                    solved = _try_human_solve(
+                        page=page, keyword=keyword, kw_idx=kw_idx,
+                    )
+                    if solved:
+                        # 重新 navigate + 重新 detect_risk，本轮 kw 重跑
+                        try:
+                            serp_response = _navigate_to_serp(page, keyword)
+                        except Exception as e:
+                            kw_entry["fetch_error"] = f"serp navigate after solve raised: {e!r}"
+                            keyword_results.append(kw_entry)
+                            continue
+                        risk2 = detect_risk(page, serp_response)
+                        if risk2 is not None:
+                            raise RiskControlException(risk2, progress=kw_idx)
+                        # 解完 + 重导成功 → 继续往下走正常 SERP 解析流程
+                    else:
+                        raise RiskControlException(risk, progress=kw_idx)
 
                 try:
                     serp_html = page.content() or ""
