@@ -65,8 +65,10 @@ ea98475  refactor: simplify _navigate_to_serp to direct page.goto  ← 全部回
 - 100 词/天能流畅跑完，单轮耗时 < 20 分钟
 - 单轮触发风控次数稳态 ≤ 2 次
 - 偶发风控时浏览器已在用户面前，解题流程 ≤ 30 秒
-- 用户首次启用 ≤ 10 秒（不养号、不复制文件）
+- 用户首次启用 ≤ 10 秒（不养号、不复制文件，配置面板自动探测）
 - 不改用户日常 Chrome 启动方式
+- 关键事件（等关 Chrome / 完成 / 需验证）通过系统通知推送，CSM 在后台也能收到
+- 不破坏现有用户的零感知升级（`baidu_use_native_chrome=False` 默认行为不变）
 
 ## Non-goals
 
@@ -313,6 +315,151 @@ def fetch(self, task, *, progress_cb=None, cancel_token=None, resume_from=0):
 - **用户 Chrome profile 加了 Windows Hello 解锁 password manager**：第一次启动可能弹系统凭据框，记 known limitation 到文档（不算 bug）
 - **用户 100 词跑到一半 Chrome 被自己手动开了**：CSM 不监控这种情况（profile lock 已经由 OS 强制，Chrome 会自己开不起来或冲突；这种边角不优化）
 
+## UI 设计
+
+### 总原则
+
+- **全局/机器级配置 vs 任务级配置**：native mode 的 4 个新字段都是机器级（一台电脑只有一组 Chrome 安装），不放进 per-task 的 [AddTaskModal.vue](frontend/src/components/monitor/AddTaskModal.vue)，而是新增"全局百度抓取设置"区
+- **沿用现有组件**：FormField / FormInput / FormToggle（[frontend/src/components/ui/](frontend/src/components/ui/)）—— 不引新组件库
+- **避免大改 IA**：只往现有页面增量加 section，不重排导航 / 不重做布局（参考已知约束：CSM UI 即将做 B+C 大改，本次只做最小必要 UI 补丁）
+
+### 1. 新增"全局百度抓取设置"区
+
+**位置**：监控页 / 设置侧栏 / 或新加"全局设置 → 监控" 二级页（实施时确认现有 IA 最自然落点；如果没有合适落点，先放在 [BaiduRankingPage.vue](frontend/src/components/monitor/history/BaiduRankingPage.vue) 顶部一个可折叠的「⚙ 抓取模式」section，等 IA 大改时再迁移）
+
+**字段布局**（自上而下）：
+
+```
+┌─ ⚙ 抓取模式（默认折叠）──────────────────────────────────┐
+│                                                          │
+│  [Toggle] 启用日常 Chrome profile 模式                    │
+│           ──────────────                                  │
+│           说明：跑监控时会借用你的真实 Chrome profile，    │
+│           大幅降低风控触发。需要在跑监控时关闭 Chrome。    │
+│                                                          │
+│  ↓ 开关 ON 后展开：                                       │
+│                                                          │
+│  Chrome 可执行文件路径                                    │
+│  [输入框：C:\Program Files\Google\Chrome\Application\chrome.exe]  [🔍 自动探测] [📁 选择文件]│
+│                                                          │
+│  Chrome User Data 目录                                    │
+│  [输入框：%LOCALAPPDATA%\Google\Chrome\User Data]  [🔍 自动探测] [📁 选择目录]│
+│                                                          │
+│  使用 Profile                                             │
+│  [下拉框：Default（fh13430366543@gmail.com）▾]            │
+│   └ 选项例：                                              │
+│     ├ Default（fh13430366543@gmail.com）                  │
+│     ├ Profile 1（另一个邮箱）                              │
+│     └ Profile 2（未登录）                                  │
+│                                                          │
+│  [🧪 测试启动]    [💾 保存]                                │
+│                                                          │
+│  ▸ 状态：✓ 配置可用 / ⚠ 路径无效 / ✗ Chrome 未安装         │
+└──────────────────────────────────────────────────────────┘
+```
+
+**字段交互**：
+
+- **启用 toggle**：默认 OFF（向后兼容）。OFF 时下面 4 个字段灰显折叠
+- **自动探测**按钮：调后端新 API `POST /api/monitor/baidu/detect-chrome`，返回探测到的 executable + user_data_dir + profile 列表，前端 fill 字段
+- **选择文件 / 选择目录**：调 Tauri `@tauri-apps/plugin-dialog` 的 `open()`，让用户挑路径
+- **Profile 下拉框**：依赖 user_data_dir，user_data_dir 改变后自动重新加载（调 `POST /api/monitor/baidu/list-profiles`，返回 `{name, account_email}[]`）
+- **测试启动**按钮：调 `POST /api/monitor/baidu/test-native`，后端尝试用配置参数启动一次 Chrome 再关掉，前端展示结果（最多 30s timeout）
+- **未装 Chrome / 配置无效**时：保存按钮灰显 + 红字说明
+
+### 2. 任务级配置（AddTaskModal）—— **不动**
+
+[AddTaskModal.vue:430-493](frontend/src/components/monitor/AddTaskModal.vue) 的"百度高级设置"折叠区**完全不改**。
+单任务的 `headless / exclude_domains / use_default_excludes` 等都保留。
+
+### 3. 监控运行时 UI 扩展
+
+在 [BaiduRankingPage.vue:1220-1251](frontend/src/components/monitor/history/BaiduRankingPage.vue) 现有进度条状态机里加 1 个新状态：
+
+**新状态：`waiting_chrome_close`**
+
+```
+┌─ 任务 #X 正在等待 Chrome 关闭 ──────────────────┐
+│                                                 │
+│  ⏳ 请关闭 Chrome 浏览器以继续监控               │
+│  剩余等待时间：1:47                              │
+│                                                 │
+│  [取消任务]                                      │
+└─────────────────────────────────────────────────┘
+```
+
+- 后端 sidecar 通过 SSE 推 `{status: "waiting_chrome_close", remaining_s: 107}` → [monitorStatus.ts](frontend/src/stores/monitorStatus.ts) 接收 → BaiduRankingPage 显示
+- 用户关 Chrome → 后端 1s 内检测到 → 状态变 `running` + 现有进度条接管
+- 倒计时归零 → 状态变 `error` + 错误文案"Chrome 关闭超时"
+
+**现有状态文案微调**（仅 native mode 启用时）：
+- 完成 → "已抓 N 词，可以重新打开 Chrome"
+- 验证码 → "需要人工解验证码（点击通知或浏览器窗口）"
+
+### 4. 系统通知集成（新增依赖）
+
+**新增依赖**：`@tauri-apps/plugin-notification` v2.x（package.json + src-tauri/Cargo.toml + src-tauri/capabilities）
+
+**新增前端封装**：`frontend/src/composables/useSystemNotify.ts`
+
+```typescript
+import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification"
+
+export function useSystemNotify() {
+  async function notify(title: string, body: string) {
+    let granted = await isPermissionGranted()
+    if (!granted) granted = (await requestPermission()) === "granted"
+    if (granted) await sendNotification({ title, body })
+  }
+  return { notify }
+}
+```
+
+**触发场景**（在 sidecar 通过 SSE event 推到前端 → 前端调 useSystemNotify）：
+
+| 事件 | title | body |
+|---|---|---|
+| 等待 Chrome 关闭 | "CSM 百度监控" | "请关闭 Chrome 浏览器以开始监控（自动检测中）" |
+| 监控完成 | "CSM 百度监控" | "已抓 N 词，可以重新打开 Chrome" |
+| 需要人工验证 | "CSM 百度监控" | "需要人工解验证码（关键词：xxx），点击此处" |
+| 失败（Chrome 未关）| "CSM 百度监控" | "等待 Chrome 关闭超时" |
+
+**保留现有内存通知**（[useNotifications.ts](frontend/src/composables/useNotifications.ts)）：所有这些事件**同时**写入内存通知日志，用户事后能在 NotificationDropdown 里翻历史。
+
+### 5. 错误兜底 UI
+
+| 错误场景 | UI 表现 |
+|---|---|
+| 探测 Chrome 失败（未装）| 设置页保存按钮灰显 + "未检测到 Chrome 安装，请安装 Chrome 后重试 [下载链接]" |
+| 路径手动填写无效 | 输入框红边 + "路径不存在，请重新选择" |
+| 测试启动失败 | 测试按钮下方红色 banner + 完整错误信息（不截断）+ "复制错误" 按钮 |
+| 跑监控时启动 Chrome 失败 | 任务状态变 `error` + 错误详情可点开 + 显示 "切回自建 profile 模式（这次运行）" 按钮 |
+| Chrome 关闭超时 | 任务状态变 `error` + 文案 "等待 Chrome 关闭超时（120s），请关闭后手动重试" + "重试" 按钮 |
+
+### 6. 不做的 UI 改动（显式排除）
+
+- ❌ 不重做 [BaiduRankingPage.vue](frontend/src/components/monitor/history/BaiduRankingPage.vue) 整体布局 / IA
+- ❌ 不引入 Element-Plus / Naive-UI / Ant Design Vue 等第三方组件库
+- ❌ 不做"账号管理 / 多 profile 切换" 高级页（用户选 D 即接受单 profile，多 profile 是后续需求）
+- ❌ 不做 onboarding 引导 wizard（首次启用 toggle 时只给 inline 说明即可）
+
+### 7. 后端新 API（配合 UI）
+
+| Method | Path | 用途 |
+|---|---|---|
+| GET | `/api/monitor/baidu/native-config` | 读当前 native mode 配置 |
+| POST | `/api/monitor/baidu/native-config` | 保存 native mode 配置 |
+| POST | `/api/monitor/baidu/detect-chrome` | 自动探测 Chrome 安装 + user_data_dir |
+| POST | `/api/monitor/baidu/list-profiles` | 列出 user_data_dir 下所有 profile + 账号名 |
+| POST | `/api/monitor/baidu/test-native` | 试启动 Chrome 验证配置可用 |
+
+SSE 现有 `/api/monitor/stream` 增加事件类型：
+- `waiting_chrome_close` (payload: `{task_id, remaining_s}`)
+- `chrome_closed` (payload: `{task_id}`)
+- `needs_captcha` (payload: `{task_id, keyword, kw_idx}`)
+
+---
+
 ## 兼容性 / 兜底
 
 - `baidu_use_native_chrome=False`（默认）→ 行为完全不变，所有现有用户零感知
@@ -322,36 +469,74 @@ def fetch(self, task, *, progress_cb=None, cancel_token=None, resume_from=0):
 
 ## 测试策略
 
-### 单元
+### 后端单元
 
 - `chrome_preflight.is_chrome_running`：mock `psutil.process_iter` 模拟有/无 chrome.exe 进程
 - `chrome_preflight.wait_for_chrome_closed`：mock + 模拟 1s/3s 后关闭、超时三种场景
 - `baidu_browser_session(use_native_chrome=True)`：mock `pw.chromium.launch_persistent_context`，断言 kwargs 包含正确的 `channel="chrome"` / `executable_path` / `--profile-directory`
 - 配置探测：mock 注册表读取、文件系统、Preferences JSON 解析
+- 新 API 路由单元：`detect-chrome` / `list-profiles` / `test-native` / `native-config` GET/POST
 
-### 集成
+### 后端集成
 
 - mock Patchright + 注入假 SERP HTML → 跑 fetch with `use_native_chrome=True` → 断言走 native 分支、其他逻辑不变
 - mock 风控触发 → 验证 `_try_human_solve` 调用、超时 fallback 正常
+- SSE 事件推送：mock fetch 流程触发 `waiting_chrome_close` / `chrome_closed` / `needs_captcha` 事件 → 断言 SSE stream 收到
+
+### 前端单元
+
+- `useSystemNotify` composable：mock `@tauri-apps/plugin-notification`，验证权限请求 + sendNotification 调用
+- 新增设置页组件：mock API → 验证字段渲染、自动探测按钮触发、profile 下拉框联动 user_data_dir 变化
+- `BaiduRankingPage` 新状态：mock SSE 推 `waiting_chrome_close` → 断言 UI 显示倒计时 banner
 
 ### 手动
 
 - 真机实测：用户日常电脑装好 native mode → 跑 100 词 → 记录耗时、风控触发次数、人工解题次数
 - 故意制造风控：连续抓 5-10 个高频热词不间隔 → 验证软着陆体验顺畅
 - Chrome 关闭检测：跑监控期间手动开 Chrome 看 CSM 是否抢、关 Chrome 看是否自动开跑
+- 通知体验：CSM 最小化时跑监控 → 验证系统通知能弹出 + 点击能拉回窗口
+- 多 profile 用户：装两个 Chrome profile、各自登不同百度账号 → 验证下拉框正确显示账号名 + 切换 profile 跑监控行为正确
 
 ## 工期估算
 
+### 后端
+
 | 阶段 | 工作量 |
 |---|---|
-| 配置 + 自动探测 + UI | 1 天 |
+| 配置 schema + 自动探测逻辑（chrome_path / user_data_dir / profile 列表）| 1 天 |
 | `chrome_preflight.py` 新文件 + 单元测试 | 1 天 |
 | `baidu_browser.py` native mode + 单元测试 | 1 天 |
 | `baidu_keyword.py` fetch hook + 集成测试 | 1 天 |
-| 软着陆验证码集成 | 1-2 天 |
-| 通知集成（Tauri 通知 API 接入 sidecar）| 0.5 天 |
-| 手动测试 + 调优 | 1-2 天 |
-| **合计** | **6-8 个工作日** |
+| 软着陆验证码集成（`_try_human_solve` 函数 + 集成测试）| 1-2 天 |
+| 5 个新 API 路由（detect-chrome / list-profiles / test-native / native-config GET/POST）+ 测试 | 1 天 |
+| SSE 事件推送扩展（3 个新事件类型）+ 测试 | 0.5 天 |
+
+**后端合计：6.5-7.5 天**
+
+### 前端
+
+| 阶段 | 工作量 |
+|---|---|
+| 新增依赖 `@tauri-apps/plugin-notification`（package.json + Cargo.toml + capabilities）| 0.5 天 |
+| `useSystemNotify` composable + 单元测试 | 0.5 天 |
+| 新增"全局百度抓取设置"区组件（沿用 FormField/FormInput/FormToggle）| 1.5-2 天 |
+| 自动探测按钮 + 文件/目录选择对话框接入 | 0.5 天 |
+| `BaiduRankingPage` 新状态 `waiting_chrome_close` 倒计时 banner | 0.5 天 |
+| 错误兜底 UI（5 种错误场景的 inline 提示 / banner）| 0.5 天 |
+| 前端单元 + 手动测试 | 1 天 |
+
+**前端合计：5-5.5 天**
+
+### 联调 / 手动测试
+
+| 阶段 | 工作量 |
+|---|---|
+| 前后端 SSE / API 联调 | 1 天 |
+| 真机实测 + 修磨（100 词、多 profile、故意触发风控等场景） | 1-2 天 |
+
+**联调合计：2-3 天**
+
+### **总计：13-16 个工作日**（约 3 周）
 
 ## 不做的事（显式排除）
 
