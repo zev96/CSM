@@ -23,6 +23,10 @@ PlatformPhase = Literal[
     "queued", "launching", "logging_in",
     "scrolling", "done", "failed",
     "needs_login", "risk_control", "cancelled",
+    # v0.5.6: 撞 captcha 时不再立刻 bail (risk_control)，先停在浏览器
+    # 里 poll 等用户手动解。这个 phase 期间 job.status 保持 "running"，
+    # 前端能看到任务"等待验证"的中间态。解完回 scrolling；超时才 bail。
+    "captcha_waiting",
 ]
 
 

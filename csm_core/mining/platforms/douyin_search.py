@@ -115,8 +115,23 @@ class DouyinSearchAdapter:
                 # /search/* (which don't change the URL) get caught too.
                 # FEASIBILITY_ANALYSIS.md §1.1 Bug 2.
                 if _risk.detect(page):
-                    risk_detected = True
-                    break
+                    # v0.5.6: 不再立刻 bail —— 浏览器是 headed 状态，用户能
+                    # 看到 captcha 并手解。Poll 等 _risk.detect 转 False（解
+                    # 决/页面变化），超时才真的 bail。这样抖音首次冷启动
+                    # 撞 captcha 不再是"直接失败"的死路。
+                    if not _wait_for_captcha_cleared(
+                        page, on_progress, cancel_event,
+                        emitted=emitted, target_count=target_count,
+                        platform=self.platform,
+                    ):
+                        risk_detected = True
+                        break
+                    # captcha 解掉，回 scrolling 状态继续抓
+                    on_progress(ProgressUpdate(
+                        platform=self.platform, phase="scrolling",
+                        got=emitted, target=target_count,
+                    ))
+                    continue
                 page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
                 time.sleep(2.0)
 
@@ -182,6 +197,55 @@ def _ts_to_iso(ts) -> str | None:
         return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return None
+
+
+# v0.5.6 — captcha wait helper. Extracted so we can unit-test the polling
+# loop without spinning up an actual Patchright browser.
+_CAPTCHA_WAIT_TIMEOUT_S = 300.0   # 5 min — generous for image+slider captchas
+_CAPTCHA_POLL_INTERVAL_S = 3.0    # check every 3s; balances responsiveness vs CPU
+
+
+def _wait_for_captcha_cleared(
+    page: Any,
+    on_progress: Any,
+    cancel_event: threading.Event,
+    *,
+    emitted: int,
+    target_count: int,
+    platform: Platform,
+) -> bool:
+    """Poll ``_risk.detect`` until the page is no longer flagged.
+
+    Returns True if the user solved the captcha in time (or page navigated
+    away from the risk page), False on timeout / cancellation.
+
+    The headed Patchright browser stays visible the whole time, so the user
+    can interact with the captcha widget directly. We emit
+    ``captcha_waiting`` progress updates every poll so the UI can show a
+    distinct "需验证" state instead of the misleading 抓取中 spinner.
+    """
+    signal = _risk.detect_signal(page)
+    layer = getattr(signal, "layer", "?") if signal else "?"
+    logger.info(
+        "%s captcha detected (layer=%s); waiting up to %.0fs for user to solve",
+        platform, layer, _CAPTCHA_WAIT_TIMEOUT_S,
+    )
+    on_progress(ProgressUpdate(
+        platform=platform, phase="captcha_waiting",
+        got=emitted, target=target_count,
+        note="请在弹出的浏览器中手动完成验证，验证后将自动继续抓取",
+    ))
+    deadline = time.monotonic() + _CAPTCHA_WAIT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if cancel_event.is_set():
+            logger.info("%s captcha wait cancelled by user", platform)
+            return False
+        time.sleep(_CAPTCHA_POLL_INTERVAL_S)
+        if not _risk.detect(page):
+            logger.info("%s captcha cleared, resuming scroll", platform)
+            return True
+    logger.warning("%s captcha wait timed out after %.0fs", platform, _CAPTCHA_WAIT_TIMEOUT_S)
+    return False
 
 
 # NB: the URL-only ``_is_captcha_or_login`` helper that used to live here

@@ -117,11 +117,15 @@ const PLATFORM_META: Record<Platform, { letter: string; color: string }> = {
 //   已完成  —— 抓取成功 + 该 job 关联的全部视频都 already_commented=1
 // video_count == 0 时（抓取成功但 0 视频）fallback 到「完成」原色，
 // 避免"已完成 0 条"的歧义。
-type DerivedStatus = "pending" | "running" | "failed" | "in_progress" | "fully_completed" | "done_empty";
+type DerivedStatus = "pending" | "running" | "captcha_waiting" | "failed" | "in_progress" | "fully_completed" | "done_empty";
 
 const STATUS_LABEL: Record<DerivedStatus, string> = {
   pending: "等待",
   running: "抓取中",
+  // v0.5.6: 抖音/快手撞 captcha 时浏览器留开等用户手解。这个 state 期间
+  // backend job.status 仍是 "running"，但某个 platform progress.phase
+  // 报 "captcha_waiting"，前端据此换 chip 文案/颜色。
+  captcha_waiting: "需验证",
   failed: "失败",
   in_progress: "进行中",
   fully_completed: "已完成",
@@ -131,6 +135,8 @@ const STATUS_LABEL: Record<DerivedStatus, string> = {
 const STATUS_TONE: Record<DerivedStatus, { bg: string; fg: string }> = {
   pending: { bg: "rgba(28,26,23,0.08)", fg: "var(--ink-3)" },
   running: { bg: "rgba(238,106,42,0.16)", fg: "#b34d12" },
+  // 需验证：紫色 — 跟 抓取中 / 失败 / 进行中 都拉开（用户一眼能区分"轮到我操作了"）
+  captcha_waiting: { bg: "rgba(124,77,180,0.18)", fg: "#5a3e8c" },
   failed: { bg: "rgba(196,68,57,0.16)", fg: "var(--red)" },
   // 进行中：黄色（暖告知"等用户操作"，跟 抓取中 的橙红区分开）
   in_progress: { bg: "rgba(245,192,66,0.20)", fg: "#7a5400" },
@@ -145,7 +151,16 @@ const derivedStatus = computed<DerivedStatus>(() => {
   if (raw === "failed" || raw === "cancelled" || raw === "interrupted") {
     return "failed";
   }
-  if (raw === "running") return "running";
+  if (raw === "running") {
+    // 任一平台 phase = captcha_waiting → 整个任务卡片切到「需验证」
+    // chip。backend 在 douyin_search 等了用户在浏览器里手解 captcha 期间
+    // 一直发 captcha_waiting progress，解掉后自动回 scrolling。
+    const phases = Object.values(props.job.progress ?? {});
+    if (phases.some(p => p?.phase === "captcha_waiting")) {
+      return "captcha_waiting";
+    }
+    return "running";
+  }
   if (raw === "pending") return "pending";
   // done / partial_done —— 抓取层 OK，看用户评论进度
   const total = props.job.video_count ?? 0;
@@ -153,6 +168,15 @@ const derivedStatus = computed<DerivedStatus>(() => {
   if (total === 0) return "done_empty";      // 抓到 0 视频的边角，显示「完成」
   if (commented >= total) return "fully_completed";
   return "in_progress";
+});
+
+// 任务行有 captcha 等待时，给 status pill 加 native :title tooltip 显示
+// 「请在浏览器手解」提示，避免用户以为程序卡死。
+const statusTitle = computed(() => {
+  if (derivedStatus.value !== "captcha_waiting") return undefined;
+  const phases = Object.values(props.job.progress ?? {});
+  const waiting = phases.find(p => p?.phase === "captcha_waiting");
+  return waiting?.note || "请在弹出的浏览器中手动完成验证";
 });
 
 const status = derivedStatus; // 兼容下面 isRunning 引用
@@ -255,6 +279,7 @@ const keywordShort = computed(() => {
           background: statusTone.bg,
           color: statusTone.fg,
         }"
+        :title="statusTitle"
       >
         <span
           v-if="isRunning"
