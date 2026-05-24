@@ -101,7 +101,7 @@ def test_baidu_keyword_config_native_mode_fields_round_trip(client):
 
 - [ ] **Step 3: 运行测试确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_config_routes.py::test_baidu_keyword_config_native_mode_fields_round_trip -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_config_routes.py::test_baidu_keyword_config_native_mode_fields_round_trip -v`
 Expected: FAIL — `KeyError: 'use_native_chrome'`
 
 - [ ] **Step 4: 修改 BaiduKeywordConfig 加 4 个字段**
@@ -123,19 +123,19 @@ Expected: FAIL — `KeyError: 'use_native_chrome'`
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_config_routes.py::test_baidu_keyword_config_native_mode_fields_round_trip -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_config_routes.py::test_baidu_keyword_config_native_mode_fields_round_trip -v`
 Expected: PASS
 
 - [ ] **Step 6: 跑全套 config 测试确保没破坏现有行为**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_config_routes.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_config_routes.py -v`
 Expected: ALL PASS
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git -C D:/CSM add csm_core/config.py sidecar/tests/test_config_routes.py
-git -C D:/CSM commit -m "feat(monitor): add baidu native chrome mode config fields
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add csm_core/config.py sidecar/tests/test_config_routes.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(monitor): add baidu native chrome mode config fields
 
 引入 use_native_chrome / chrome_executable_path / chrome_user_data_dir /
 chrome_profile_name 四个字段。默认 False = 行为不变。
@@ -246,7 +246,7 @@ class TestListProfiles:
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_chrome_detect.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_chrome_detect.py -v`
 Expected: FAIL — ModuleNotFoundError: chrome_detect
 
 - [ ] **Step 3: 创建 chrome_detect.py 实现**
@@ -373,14 +373,14 @@ def _read_account_email(preferences_path: Path) -> str | None:
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_chrome_detect.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_chrome_detect.py -v`
 Expected: ALL PASS（10 个测试用例都过）
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C D:/CSM add csm_core/monitor/drivers/chrome_detect.py sidecar/tests/test_chrome_detect.py
-git -C D:/CSM commit -m "feat(monitor): add chrome_detect for native mode setup
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add csm_core/monitor/drivers/chrome_detect.py sidecar/tests/test_chrome_detect.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(monitor): add chrome_detect for native mode setup
 
 探测 Chrome.exe（注册表 + 默认路径 fallback）、user_data_dir、
 profile 列表（含账号 email）。Best-effort，失败返回 None。
@@ -491,7 +491,7 @@ class TestWaitForChromeClosed:
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_chrome_preflight.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_chrome_preflight.py -v`
 Expected: FAIL — ModuleNotFoundError
 
 - [ ] **Step 3: 创建 chrome_preflight.py**
@@ -620,14 +620,14 @@ def set_notifier(fn) -> None:
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_chrome_preflight.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_chrome_preflight.py -v`
 Expected: ALL PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C D:/CSM add csm_core/monitor/drivers/chrome_preflight.py sidecar/tests/test_chrome_preflight.py
-git -C D:/CSM commit -m "feat(monitor): add chrome_preflight for native mode wait-loop
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add csm_core/monitor/drivers/chrome_preflight.py sidecar/tests/test_chrome_preflight.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(monitor): add chrome_preflight for native mode wait-loop
 
 是否在跑 + 轮询等待关闭（带超时 + 通知 indirection）。
 通知 impl 用注入模式避免 csm_core ↔ sidecar 循环依赖。
@@ -717,7 +717,7 @@ def test_baidu_browser_session_self_built_mode_unchanged(monkeypatch, tmp_path):
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_baidu_browser.py::test_baidu_browser_session_native_mode_uses_chrome_channel sidecar/tests/test_baidu_browser.py::test_baidu_browser_session_self_built_mode_unchanged -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_baidu_browser.py::test_baidu_browser_session_native_mode_uses_chrome_channel sidecar/tests/test_baidu_browser.py::test_baidu_browser_session_self_built_mode_unchanged -v`
 Expected: FAIL — `TypeError: baidu_browser_session() got an unexpected keyword argument 'use_native_chrome'`
 
 - [ ] **Step 3: 修改 baidu_browser_session 加 native mode 分支**
@@ -818,14 +818,14 @@ def baidu_browser_session(
 
 - [ ] **Step 4: 运行新测试 + 全套现有测试**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_baidu_browser.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_baidu_browser.py -v`
 Expected: ALL PASS（含新 2 个 + 现有用例）
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C D:/CSM add csm_core/monitor/drivers/baidu_browser.py sidecar/tests/test_baidu_browser.py
-git -C D:/CSM commit -m "feat(monitor): add native chrome branch to baidu_browser_session
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add csm_core/monitor/drivers/baidu_browser.py sidecar/tests/test_baidu_browser.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(monitor): add native chrome branch to baidu_browser_session
 
 use_native_chrome=True 时用 channel='chrome' + 用户 Chrome.exe +
 用户 user_data_dir 启动，headless 入参被忽略。默认 False = 行为不变。
@@ -966,7 +966,7 @@ def test_fetch_returns_error_when_chrome_close_times_out(monkeypatch):
 
 - [ ] **Step 3: 运行测试确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_baidu_keyword.py -k "chrome_preflight or native" -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_baidu_keyword.py -k "chrome_preflight or native" -v`
 Expected: FAIL（功能没实现）
 
 - [ ] **Step 4: 修改 fetch() 入口加 preflight + 透传 native 参数**
@@ -1019,14 +1019,14 @@ from csm_core import config as csm_config
 
 - [ ] **Step 5: 运行 native 相关测试 + 全套 baidu_keyword 测试**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_baidu_keyword.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_baidu_keyword.py -v`
 Expected: ALL PASS（含新 3 个 + 现有所有用例）
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C D:/CSM add csm_core/monitor/platforms/baidu_keyword.py sidecar/tests/test_baidu_keyword.py
-git -C D:/CSM commit -m "feat(monitor): wire chrome_preflight + native session args into baidu fetch
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add csm_core/monitor/platforms/baidu_keyword.py sidecar/tests/test_baidu_keyword.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(monitor): wire chrome_preflight + native session args into baidu fetch
 
 native mode 启用时：① fetch 入口调 wait_for_chrome_closed ② 透传 native
 参数给 baidu_browser_session ③ 超时返回 status=error。默认 False = 不变。
@@ -1107,7 +1107,7 @@ def test_try_human_solve_emits_notification_with_keyword(monkeypatch):
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_baidu_keyword.py -k "try_human_solve" -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_baidu_keyword.py -k "try_human_solve" -v`
 Expected: FAIL — `AttributeError: module 'baidu_keyword' has no attribute '_try_human_solve'`
 
 - [ ] **Step 3: 在 baidu_keyword.py 加 _try_human_solve 函数 + _notify**
@@ -1242,14 +1242,14 @@ def _try_human_solve(
 
 - [ ] **Step 5: 运行新测试 + 全套**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_baidu_keyword.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_baidu_keyword.py -v`
 Expected: ALL PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C D:/CSM add csm_core/monitor/platforms/baidu_keyword.py sidecar/tests/test_baidu_keyword.py
-git -C D:/CSM commit -m "feat(monitor): add _try_human_solve soft-landing for baidu captcha
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add csm_core/monitor/platforms/baidu_keyword.py sidecar/tests/test_baidu_keyword.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(monitor): add _try_human_solve soft-landing for baidu captcha
 
 命中风控时弹通知 + 轮询等用户在浏览器里解，解完 retry 当前关键词；
 超时 fallback 到原 raise RiskControlException 路径（断点续抓兜底）。
@@ -1397,7 +1397,7 @@ class TestBaiduNativeModeRoutes:
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_monitor_routes.py::TestBaiduNativeModeRoutes -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_monitor_routes.py::TestBaiduNativeModeRoutes -v`
 Expected: FAIL（路由不存在 404）
 
 - [ ] **Step 3: 在 routes/monitor.py 加 5 个新路由**
@@ -1491,19 +1491,19 @@ def baidu_set_native_config(body: NativeConfigBody) -> dict[str, Any]:
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_monitor_routes.py::TestBaiduNativeModeRoutes -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_monitor_routes.py::TestBaiduNativeModeRoutes -v`
 Expected: ALL PASS（8 个用例）
 
 - [ ] **Step 5: 跑全套 monitor_routes 测试确保没破坏现有路由**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_monitor_routes.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_monitor_routes.py -v`
 Expected: ALL PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C D:/CSM add sidecar/csm_sidecar/routes/monitor.py sidecar/tests/test_monitor_routes.py
-git -C D:/CSM commit -m "feat(api): add 5 baidu native mode routes
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add sidecar/csm_sidecar/routes/monitor.py sidecar/tests/test_monitor_routes.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(api): add 5 baidu native mode routes
 
 POST /detect-chrome, /list-profiles, /test-native;
 GET+POST /native-config — 给前端 Settings 新 tab 配置 native mode。
@@ -1576,7 +1576,7 @@ def test_event_to_dict_needs_captcha_carries_keyword_and_idx():
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_monitor_bus.py -k "waiting_chrome or chrome_closed or needs_captcha" -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_monitor_bus.py -k "waiting_chrome or chrome_closed or needs_captcha" -v`
 Expected: FAIL — `TypeError: __init__() got an unexpected keyword argument 'remaining_s'`
 
 - [ ] **Step 3: 扩展 EventKind + MonitorEvent dataclass**
@@ -1618,14 +1618,14 @@ EventKind = Literal[
 
 - [ ] **Step 5: 运行新测试 + 全套 bus 测试**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_monitor_bus.py -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_monitor_bus.py -v`
 Expected: ALL PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C D:/CSM add sidecar/csm_sidecar/services/monitor_loop.py sidecar/csm_sidecar/monitor_bus.py sidecar/tests/test_monitor_bus.py
-git -C D:/CSM commit -m "feat(events): add waiting_chrome_close / chrome_closed / needs_captcha events
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add sidecar/csm_sidecar/services/monitor_loop.py sidecar/csm_sidecar/monitor_bus.py sidecar/tests/test_monitor_bus.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(events): add waiting_chrome_close / chrome_closed / needs_captcha events
 
 3 个新 EventKind 给 native mode 用：等关 Chrome 倒计时、Chrome 已关、
 命中验证码需人工解。MonitorEvent 加 remaining_s / keyword / kw_idx 三个
@@ -1689,8 +1689,8 @@ Expected: 编译通过，无 error。
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C D:/CSM add frontend/package.json frontend/package-lock.json frontend/src-tauri/Cargo.toml frontend/src-tauri/Cargo.lock frontend/src-tauri/src/lib.rs frontend/src-tauri/capabilities/
-git -C D:/CSM commit -m "feat(tauri): add @tauri-apps/plugin-notification
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add frontend/package.json frontend/package-lock.json frontend/src-tauri/Cargo.toml frontend/src-tauri/Cargo.lock frontend/src-tauri/src/lib.rs frontend/src-tauri/capabilities/
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(tauri): add @tauri-apps/plugin-notification
 
 给 native mode 软着陆验证码 / 跑完 / 等 Chrome 关闭 发系统通知用。
 
@@ -1809,8 +1809,8 @@ Expected: ALL PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C D:/CSM add frontend/src/composables/useSystemNotify.ts frontend/src/composables/__tests__/useSystemNotify.test.ts
-git -C D:/CSM commit -m "feat(frontend): add useSystemNotify composable
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add frontend/src/composables/useSystemNotify.ts frontend/src/composables/__tests__/useSystemNotify.test.ts
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(frontend): add useSystemNotify composable
 
 Wrap @tauri-apps/plugin-notification with permission handling +
 silent fallback when denied. 给 native mode 3 类通知用。
@@ -2036,10 +2036,10 @@ cd D:/CSM/frontend && npm run dev
 按 Step 3 实际修改的 Settings 容器文件路径填入 git add（不要留占位文本）：
 
 ```bash
-git -C D:/CSM add frontend/src/components/settings/BaiduScrapeSettings.vue
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add frontend/src/components/settings/BaiduScrapeSettings.vue
 # + Step 3 改的 Settings 容器文件（具体路径以 Step 1 grep 结果为准），例如：
-# git -C D:/CSM add frontend/src/components/settings/SettingsModal.vue
-git -C D:/CSM commit -m "feat(frontend): add Baidu native mode settings tab
+# git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add frontend/src/components/settings/SettingsModal.vue
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(frontend): add Baidu native mode settings tab
 
 复用 FormField/FormToggle/FormInput 自建组件。包含自动探测、profile 选择、
 测试启动、保存配置。
@@ -2176,8 +2176,8 @@ cd D:/CSM/frontend && npm run dev
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C D:/CSM add frontend/src/components/monitor/history/BaiduRankingPage.vue frontend/src/stores/monitorStatus.ts
-git -C D:/CSM commit -m "feat(frontend): handle native mode events + waiting-chrome banner
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add frontend/src/components/monitor/history/BaiduRankingPage.vue frontend/src/stores/monitorStatus.ts
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(frontend): handle native mode events + waiting-chrome banner
 
 3 个新事件接入 monitorStatus + 倒计时 banner + 系统通知触发
 （等关 Chrome / 监控完成 / 需要人工解验证码）。
@@ -2291,7 +2291,7 @@ bk_module.BAIDU_ADAPTER.set_event_publisher(_publish_native_event)
 
 - [ ] **Step 5: 跑全套后端测试确保没破坏现有行为**
 
-Run: `cd D:/CSM && pytest sidecar/tests/ -v -x`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/ -v -x`
 Expected: ALL PASS
 
 如果 Task 5/6 的测试因 publisher 参数变化失败，是因为 publisher=None 时默认不应抛 —— 测试本身不需要改（功能层面 publisher 是 optional）。
@@ -2366,14 +2366,14 @@ def test_fetch_publishes_waiting_chrome_close_event(monkeypatch):
 
 - [ ] **Step 7: 跑新集成测试**
 
-Run: `cd D:/CSM && pytest sidecar/tests/test_baidu_keyword.py::test_fetch_publishes_waiting_chrome_close_event -v`
+Run: `cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 && pytest sidecar/tests/test_baidu_keyword.py::test_fetch_publishes_waiting_chrome_close_event -v`
 Expected: PASS
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git -C D:/CSM add csm_core/monitor/platforms/baidu_keyword.py sidecar/csm_sidecar/lifespan.py sidecar/tests/test_baidu_keyword.py
-git -C D:/CSM commit -m "feat(monitor): wire native mode events through monitor_bus
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add csm_core/monitor/platforms/baidu_keyword.py sidecar/csm_sidecar/lifespan.py sidecar/tests/test_baidu_keyword.py
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "feat(monitor): wire native mode events through monitor_bus
 
 BaiduKeywordAdapter 加 set_event_publisher；sidecar lifespan 启动时注入
 把 dict 形态事件包成 MonitorEvent publish 到 monitor_bus。集成测试覆盖
@@ -2392,8 +2392,8 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 1: 在主仓 git pull 最新代码 + worktree merge**
 
 ```bash
-git -C D:/CSM checkout main
-git -C D:/CSM pull --ff-only
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 checkout main
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 pull --ff-only
 git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 fetch origin
 ```
 
@@ -2467,8 +2467,8 @@ cd D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634/frontend && ./dev.ps1
 - [ ] **Step 8: 最终 commit**
 
 ```bash
-git -C D:/CSM add docs/superpowers/specs/2026-05-24-baidu-anti-risk-design.md
-git -C D:/CSM commit -m "docs(monitor): record native mode first-week real-world data
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 add docs/superpowers/specs/2026-05-24-baidu-anti-risk-design.md
+git -C D:/CSM/.claude/worktrees/tender-brahmagupta-f4a634 commit -m "docs(monitor): record native mode first-week real-world data
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
