@@ -20,6 +20,36 @@ logger = logging.getLogger(__name__)
 
 _PROFILE_DIR_RE = re.compile(r"^(Default|Profile \d+)$")
 
+# Chrome 各种 cache / runtime 子目录 ── 占空间不影响登录态/书签/history
+_PROFILE_CACHE_DIRS_TO_SKIP = frozenset({
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "Service Worker",
+    "DawnCache",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "ShaderCache",
+    "GrShaderCache",
+    "Application Cache",
+    "blob_storage",
+    "File System",
+    "VideoDecodeStats",
+    "Storage",
+    "Crashpad",
+    "PnaclTranslationCache",
+    # extension caches，不影响扩展功能
+    "Extension State",
+    "Extension Cookies-journal",
+    # 老 IndexedDB / leveldb 可能很大但不影响百度登录态
+    # 保留 IndexedDB （某些站登录态依赖）── 不在这里排除
+})
+
+
+def _copy_ignore_caches(dir_path: str, names: list[str]) -> list[str]:
+    """shutil.copytree ignore callback：跳过 Chrome cache 子目录。"""
+    return [n for n in names if n in _PROFILE_CACHE_DIRS_TO_SKIP]
+
 
 # ── Chrome executable ────────────────────────────────────────────
 def find_chrome_executable() -> str | None:
@@ -155,7 +185,7 @@ def copy_profile_to(
 
     # 复制 profile 内容 → target/Default/
     target_profile = target / "Default"
-    shutil.copytree(source_profile, target_profile)
+    shutil.copytree(source_profile, target_profile, ignore=_copy_ignore_caches)
 
     # 复制 Local State（如果存在）── Chrome 解密 cookie 必需
     source_local_state = Path(source_user_data_dir) / "Local State"

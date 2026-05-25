@@ -144,7 +144,8 @@ class TestCopyProfileTo:
         assert (target / "Default").is_dir()
         assert (target / "Default" / "Cookies").is_file()
         assert (target / "Default" / "History").is_file()
-        assert (target / "Default" / "Cache" / "data_0").is_file()
+        # Cache dir is excluded by the ignore callback (tested separately)
+        assert not (target / "Default" / "Cache").exists()
 
     def test_copies_local_state(self, tmp_path):
         """Local State 必须被复制到副本根目录。"""
@@ -240,3 +241,41 @@ class TestCopyProfileTo:
         # target inner dir is always Default
         assert (target / "Default").is_dir()
         assert (target / "Default" / "Cookies").is_file()
+
+    def test_copy_profile_to_skips_cache_dirs(self, tmp_path):
+        """复制时跳过 Cache / Code Cache / Service Worker 等无用的临时数据。"""
+        src_user_data = tmp_path / "src_user_data"
+        src_default = src_user_data / "Default"
+        src_default.mkdir(parents=True)
+        # 关键文件（保留）
+        (src_default / "Cookies").write_text("cookies-data")
+        (src_default / "Login Data").write_text("login-data")
+        (src_default / "Preferences").write_text('{"profile":{}}')
+        (src_user_data / "Local State").write_text('{"os_crypt":{}}')
+        # cache 子目录（应该被跳过）
+        (src_default / "Cache").mkdir()
+        (src_default / "Cache" / "data_0").write_text("cache-blob-1MB")
+        (src_default / "Code Cache").mkdir()
+        (src_default / "Code Cache" / "js").mkdir()
+        (src_default / "Code Cache" / "js" / "f.bin").write_text("js-cache")
+        (src_default / "Service Worker").mkdir()
+        (src_default / "Service Worker" / "CacheStorage").mkdir()
+        (src_default / "GPUCache").mkdir()
+
+        target = tmp_path / "target"
+        chrome_detect.copy_profile_to(
+            source_user_data_dir=str(src_user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+
+        # 关键文件复制了
+        assert (target / "Default" / "Cookies").exists()
+        assert (target / "Default" / "Login Data").exists()
+        assert (target / "Default" / "Preferences").exists()
+        assert (target / "Local State").exists()
+        # cache 目录没复制
+        assert not (target / "Default" / "Cache").exists()
+        assert not (target / "Default" / "Code Cache").exists()
+        assert not (target / "Default" / "Service Worker").exists()
+        assert not (target / "Default" / "GPUCache").exists()
