@@ -26,7 +26,7 @@ from csm_core.browser_infra import mining_browser, rate_limit
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
-from csm_core.mining.platforms import _http, _risk
+from csm_core.mining.platforms import _risk
 from csm_core.mining.platforms._common import OnCard, OnProgress
 
 logger = logging.getLogger(__name__)
@@ -106,170 +106,171 @@ class KuaishouSearchAdapter:
                     cards_emitted=0, error_message="captcha at bootstrap",
                 )
 
-            try:
-                cookies_str, _ = _http.cookies_from_context(
-                    page.context, urls=_COOKIE_URLS,
-                )
-            except Exception as e:
-                logger.exception("kuaishou cookies_from_context failed: %s", e)
-                return SearchOutcome(
-                    platform=self.platform, status="failed",
-                    cards_emitted=0, error_message=f"cookie extraction failed: {e}",
-                )
-            if not cookies_str:
-                return SearchOutcome(
-                    platform=self.platform, status="needs_login",
-                    cards_emitted=0, error_message="no cookies in context",
-                )
-
-            try:
-                ua = page.evaluate("navigator.userAgent") or _DEFAULT_UA
-            except Exception:
-                ua = _DEFAULT_UA
-
             on_progress(ProgressUpdate(
                 platform=self.platform, phase="scrolling",
                 got=0, target=target_count,
             ))
 
-            # v0.5.7: switched from build_httpx_client to build_stealth_client.
-            # Server returned 200 + empty feeds + pcursor='no_more' under vanilla
-            # httpx — JA3 fingerprint shadow-ban. curl_cffi impersonate='chrome120'
-            # forges the TLS handshake so 快手 treats it as a real Chrome.
-            with _http.build_stealth_client(
-                cookies_str=cookies_str,
-                user_agent=ua,
-                referer=_REFERER,
-                extra_headers={
-                    "Content-Type": "application/json",
-                    "Origin": "https://www.kuaishou.com",
-                },
-            ) as client:
-                pcursor = ""
-                search_session_id = ""
-                page_index = 0
+            # v0.5.8: GraphQL POST 改走 patchright page 内 fetch —— 之前两
+            # 层 fix 都被 server 端识别 (vanilla httpx 撞 JA3，curl_cffi
+            # impersonate=chrome120 仍被综合指纹识破)。让 fetch 从 Chrome
+            # 的 JS 上下文发出去，credentials: 'include' 自动带 BrowserContext
+            # 里注入的 cookie —— server 看到的就是一次真实 Chrome XHR，没
+            # 任何指纹差异可识别。Cookie 不再需要提取到 Python 这一侧。
+            #
+            # 调试 logging：raw response 前 500 字符进 log，下次卡住能立刻
+            # 看到 server 实际返了什么（cookie 失效 / 关键词风控 / API 变化 / 真没结果）。
+            _fetch_js = (
+                "async ({url, body}) => {\n"
+                "  const resp = await fetch(url, {\n"
+                "    method: 'POST',\n"
+                "    credentials: 'include',\n"
+                "    headers: {\n"
+                "      'Content-Type': 'application/json',\n"
+                "      'Accept': 'application/json, text/plain, */*'\n"
+                "    },\n"
+                "    body: body\n"
+                "  });\n"
+                "  const text = await resp.text();\n"
+                "  return { status: resp.status, body: text };\n"
+                "}"
+            )
 
-                while emitted < target_count and not cancel_event.is_set():
-                    if page_index > 0:
-                        # Honor 5-15s jitter between paginated POSTs.
-                        pacer.wait()
-                    page_index += 1
+            pcursor = ""
+            search_session_id = ""
+            page_index = 0
 
-                    if not breaker.allow():
-                        logger.warning("kuaishou circuit breaker open — pausing")
-                        break
+            while emitted < target_count and not cancel_event.is_set():
+                if page_index > 0:
+                    # Honor 5-15s jitter between paginated POSTs.
+                    pacer.wait()
+                page_index += 1
 
-                    post_body = {
-                        "operationName": "visionSearchPhoto",
-                        "variables": {
-                            "keyword": keyword,
-                            "pcursor": pcursor,
-                            "page": "search",
-                            "searchSessionId": search_session_id,
-                        },
-                        "query": query,
-                    }
-                    # Match MediaCrawler kuaishou/client.py:87 — compact JSON,
-                    # raw UTF-8 (no \uXXXX escapes). Some GraphQL gateways
-                    # care about exact payload bytes for rate-limit fingerprint.
-                    payload = json.dumps(
-                        post_body, separators=(",", ":"), ensure_ascii=False,
-                    ).encode("utf-8")
+                if not breaker.allow():
+                    logger.warning("kuaishou circuit breaker open — pausing")
+                    break
 
-                    try:
-                        # curl_cffi.Session.post uses ``data=`` (not httpx's
-                        # ``content=``); both pass raw bytes through.
-                        resp = client.post(_GRAPHQL_ENDPOINT, data=payload)
-                    except Exception as e:
-                        breaker.record_failure()
-                        logger.warning("kuaishou graphql POST raised: %s", e)
-                        return SearchOutcome(
-                            platform=self.platform, status="failed",
-                            cards_emitted=emitted,
-                            error_message=f"graphql POST failed: {e}",
-                        )
+                post_body = {
+                    "operationName": "visionSearchPhoto",
+                    "variables": {
+                        "keyword": keyword,
+                        "pcursor": pcursor,
+                        "page": "search",
+                        "searchSessionId": search_session_id,
+                        # v0.5.8: 补 schema 接受但之前漏发的 webPageArea。
+                        # MediaCrawler client 不发也 work，但 server 端
+                        # 偶有严格校验场景，加上无副作用。
+                        "webPageArea": "",
+                    },
+                    "query": query,
+                }
+                # 跟 MediaCrawler kuaishou/client.py:87 同款：compact JSON、
+                # raw UTF-8（不转 \uXXXX）。Some GraphQL gateways care about
+                # exact payload bytes for rate-limit fingerprint.
+                payload = json.dumps(
+                    post_body, separators=(",", ":"), ensure_ascii=False,
+                )
 
-                    if resp.status_code in (401, 403):
-                        breaker.record_failure()
-                        return SearchOutcome(
-                            platform=self.platform, status="needs_login",
-                            cards_emitted=emitted,
-                            error_message=(
-                                f"graphql {resp.status_code} (session expired)"
-                            ),
-                        )
-
-                    if resp.status_code in (429, 451, 503):
-                        breaker.record_failure()
-                        return SearchOutcome(
-                            platform=self.platform, status="risk_control",
-                            cards_emitted=emitted,
-                            error_message=f"graphql {resp.status_code}",
-                        )
-
-                    if resp.status_code != 200:
-                        breaker.record_failure()
-                        return SearchOutcome(
-                            platform=self.platform, status="failed",
-                            cards_emitted=emitted,
-                            error_message=f"graphql HTTP {resp.status_code}",
-                        )
-
-                    try:
-                        body = resp.json()
-                    except Exception as e:
-                        breaker.record_failure()
-                        return SearchOutcome(
-                            platform=self.platform, status="failed",
-                            cards_emitted=emitted,
-                            error_message=f"graphql non-json: {e}",
-                        )
-
-                    data = (body or {}).get("data") or {}
-                    vsp = data.get("visionSearchPhoto") or {}
-                    if not isinstance(vsp, dict):
-                        # cookies invalid / abuse-flagged / wrong domain.
-                        breaker.record_failure()
-                        return SearchOutcome(
-                            platform=self.platform, status="needs_login",
-                            cards_emitted=emitted,
-                            error_message="visionSearchPhoto null (cookies invalid?)",
-                        )
-
-                    feeds = vsp.get("feeds") or []
-                    search_session_id = (
-                        vsp.get("searchSessionId") or search_session_id
+                try:
+                    result = page.evaluate(
+                        _fetch_js,
+                        {"url": _GRAPHQL_ENDPOINT, "body": payload},
                     )
-                    new_pcursor = vsp.get("pcursor") or "no_more"
-
-                    new_this_round = 0
-                    for feed in feeds:
-                        if emitted >= target_count or cancel_event.is_set():
-                            break
-                        card = self._feed_to_card(feed, rank=emitted + 1)
-                        if card is None:
-                            continue
-                        if card.platform_video_id in seen:
-                            continue
-                        seen.add(card.platform_video_id)
-                        emitted += 1
-                        new_this_round += 1
-                        on_card(card)
-
-                    on_progress(ProgressUpdate(
-                        platform=self.platform, phase="scrolling",
-                        got=emitted, target=target_count,
-                    ))
-                    logger.info(
-                        "[ks-graphql] page=%d new=%d emitted=%d pcursor=%r",
-                        page_index, new_this_round, emitted, new_pcursor,
+                except Exception as e:
+                    breaker.record_failure()
+                    logger.warning("kuaishou page.evaluate fetch raised: %s", e)
+                    return SearchOutcome(
+                        platform=self.platform, status="failed",
+                        cards_emitted=emitted,
+                        error_message=f"page.evaluate fetch failed: {e}",
                     )
 
-                    breaker.record_success()
+                status_code = int((result or {}).get("status") or 0)
+                body_text = (result or {}).get("body") or ""
+                # v0.5.8 raw-response logging — 下次卡住能直接定位是 server
+                # 端给空 / 404 / 风控页面，不用再发一版加 log。
+                logger.info(
+                    "[ks-graphql] http=%d len=%d first500=%s",
+                    status_code, len(body_text), body_text[:500],
+                )
 
-                    if new_pcursor == "no_more" or new_this_round == 0:
+                if status_code in (401, 403):
+                    breaker.record_failure()
+                    return SearchOutcome(
+                        platform=self.platform, status="needs_login",
+                        cards_emitted=emitted,
+                        error_message=f"graphql {status_code} (session expired)",
+                    )
+                if status_code in (429, 451, 503):
+                    breaker.record_failure()
+                    return SearchOutcome(
+                        platform=self.platform, status="risk_control",
+                        cards_emitted=emitted,
+                        error_message=f"graphql {status_code}",
+                    )
+                if status_code != 200:
+                    breaker.record_failure()
+                    return SearchOutcome(
+                        platform=self.platform, status="failed",
+                        cards_emitted=emitted,
+                        error_message=f"graphql HTTP {status_code}",
+                    )
+
+                try:
+                    body = json.loads(body_text)
+                except Exception as e:
+                    breaker.record_failure()
+                    return SearchOutcome(
+                        platform=self.platform, status="failed",
+                        cards_emitted=emitted,
+                        error_message=f"graphql non-json: {e}",
+                    )
+
+                data = (body or {}).get("data") or {}
+                vsp = data.get("visionSearchPhoto") or {}
+                if not isinstance(vsp, dict):
+                    # cookies invalid / abuse-flagged / wrong domain.
+                    breaker.record_failure()
+                    return SearchOutcome(
+                        platform=self.platform, status="needs_login",
+                        cards_emitted=emitted,
+                        error_message="visionSearchPhoto null (cookies invalid?)",
+                    )
+
+                feeds = vsp.get("feeds") or []
+                search_session_id = (
+                    vsp.get("searchSessionId") or search_session_id
+                )
+                new_pcursor = vsp.get("pcursor") or "no_more"
+
+                new_this_round = 0
+                for feed in feeds:
+                    if emitted >= target_count or cancel_event.is_set():
                         break
-                    pcursor = new_pcursor
+                    card = self._feed_to_card(feed, rank=emitted + 1)
+                    if card is None:
+                        continue
+                    if card.platform_video_id in seen:
+                        continue
+                    seen.add(card.platform_video_id)
+                    emitted += 1
+                    new_this_round += 1
+                    on_card(card)
+
+                on_progress(ProgressUpdate(
+                    platform=self.platform, phase="scrolling",
+                    got=emitted, target=target_count,
+                ))
+                logger.info(
+                    "[ks-graphql] page=%d new=%d emitted=%d pcursor=%r",
+                    page_index, new_this_round, emitted, new_pcursor,
+                )
+
+                breaker.record_success()
+
+                if new_pcursor == "no_more" or new_this_round == 0:
+                    break
+                pcursor = new_pcursor
 
         if cancel_event.is_set():
             return SearchOutcome(

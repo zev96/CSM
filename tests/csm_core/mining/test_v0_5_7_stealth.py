@@ -95,42 +95,16 @@ def test_build_stealth_client_carries_cookie_and_referer():
         client.close()
 
 
-def test_kuaishou_search_uses_stealth_client_not_httpx():
-    """Guard: kuaishou_search.py must call ``build_stealth_client``, not
-    ``build_httpx_client``. If someone later reverts this in a refactor,
-    快手 抓取 will silently fall back to the v0.5.6 shadow-ban state
-    (200 OK + 0 cards) — a really nasty regression to debug because
-    nothing crashes.
-    """
-    src = (
-        REPO_ROOT / "csm_core" / "mining" / "platforms" / "kuaishou_search.py"
-    ).read_text(encoding="utf-8")
-
-    assert "_http.build_stealth_client" in src, (
-        "kuaishou_search.py must call _http.build_stealth_client(...) — "
-        "the JA3 fingerprint fix from v0.5.7. If you reverted to "
-        "build_httpx_client the symptom is 0 视频 + 'completed' status."
-    )
-    assert "_http.build_httpx_client" not in src, (
-        "kuaishou_search.py still references build_httpx_client (vanilla "
-        "httpx). That's the variant 快手 server shadow-bans — switch to "
-        "build_stealth_client."
-    )
-
-
-def test_curl_cffi_post_accepts_data_kwarg():
-    """curl_cffi.Session.post takes ``data=`` (NOT httpx's ``content=``).
-    kuaishou_search.py was updated to use ``data=`` in v0.5.7; if anyone
-    flips it back to ``content=``, every POST will TypeError at runtime.
-
-    We check the kuaishou_search source rather than the curl_cffi API
-    so the test doesn't break if curl_cffi adds a ``content=`` alias.
-    """
-    src = (
-        REPO_ROOT / "csm_core" / "mining" / "platforms" / "kuaishou_search.py"
-    ).read_text(encoding="utf-8")
-
-    assert "client.post(_GRAPHQL_ENDPOINT, data=payload)" in src, (
-        "kuaishou_search.py must call client.post(..., data=payload) — "
-        "curl_cffi's Session.post takes ``data=``, not httpx's ``content=``"
-    )
+# NB: ``test_kuaishou_search_uses_stealth_client_not_httpx`` and
+# ``test_curl_cffi_post_accepts_data_kwarg`` lived here in v0.5.7. They
+# guarded kuaishou_search.py against falling back to vanilla httpx. v0.5.8
+# moved past the whole Python-client family — GraphQL POST now runs inside
+# the patchright Chrome via ``page.evaluate('fetch(...)')`` because curl_cffi
+# impersonate was *also* being identified by 快手's composite fingerprint
+# (cookie state + device + headers, not just JA3). The v0.5.7 invariants
+# don't apply to the new code path; the v0.5.8 invariants in
+# ``test_v0_5_8_page_evaluate.py``守 the new path instead.
+#
+# ``_http.build_stealth_client`` itself is kept in tree (and still tested
+# above) so future B-站 search refactors can use it without re-deriving
+# the curl_cffi setup.
