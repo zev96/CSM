@@ -130,6 +130,8 @@ async function importProfile() {
     }>("/api/monitor/baidu/copy-profile", {
       source_user_data_dir: detected.user_data_dir,
       source_profile_name: "Default",
+    }, {
+      timeout: 600_000,  // 10 分钟 ── 用户可能有大 profile (14.6GB 实测过)，默认 60s 不够
     });
     importResult.value = copyResp.data;
     if (copyResp.data.ok) {
