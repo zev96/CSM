@@ -15,13 +15,12 @@ See FEASIBILITY_ANALYSIS.md §1.3 / §2 阶段 4.
 from __future__ import annotations
 
 import logging
-import random
 import re
 import threading
 from typing import Any
 
 from csm_core.browser_infra import mining_browser, rate_limit
-from csm_core.mining.config import PAGE_DELAY_RANGE_SEC, get_max_attempts
+from csm_core.mining.config import get_max_attempts
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
