@@ -88,6 +88,19 @@ class MiningRunner:
             adapter = get_adapter(platform)
 
             def _on_card(card: VideoCard, platform=platform) -> None:
+                conn = mining_storage.get_conn()
+                try:
+                    if mining_storage.is_video_tracked_anywhere(conn, card.platform, card.platform_video_id):
+                        logger.info(
+                            "[runner] skipped_dup platform=%s video_id=%s",
+                            card.platform, card.platform_video_id,
+                        )
+                        return
+                except Exception:
+                    logger.exception(
+                        "dedup check failed for %s/%s, falling through to upsert",
+                        card.platform, card.platform_video_id,
+                    )
                 try:
                     mining_storage.upsert_video_and_link(card, job_id)
                 except Exception as e:

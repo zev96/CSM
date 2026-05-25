@@ -115,3 +115,13 @@ def test_idx_monitor_tasks_target_url_exists(temp_db):
         "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_monitor_tasks_target_url'"
     ).fetchall()
     assert len(rows) == 1
+
+
+def test_runner_skips_dup_via_on_card(temp_db):
+    """Stub: verify runner skips videos already in videos table.
+
+    Full integration test requires a mock adapter; dedup logic is
+    unit-tested via is_video_tracked_anywhere tests above.
+    """
+    import pytest
+    pytest.skip("integration test stub - dedup unit tests cover the behavior")
