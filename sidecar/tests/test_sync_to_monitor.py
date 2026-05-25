@@ -225,7 +225,6 @@ def test_sync_single_failure_does_not_break_batch(db_with_job):
 
 def test_sync_platform_mapping(tmp_path, monkeypatch):
     """kuaishou + bilibili platforms map to correct task types."""
-    import threading
     db_path = tmp_path / "test2.db"
     monkeypatch.setattr(monitor_storage, "_db_path", None, raising=True)
     monkeypatch.setattr(monitor_storage, "_initialized", False, raising=True)
