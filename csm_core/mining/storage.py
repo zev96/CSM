@@ -1119,3 +1119,30 @@ def is_video_in_videos_table(
         (platform, platform_video_id),
     ).fetchone()
     return row is not None
+
+
+def is_video_in_monitor_tasks(
+    conn: sqlite3.Connection,
+    platform: str,
+    platform_video_id: str,
+) -> bool:
+    """monitor_tasks 反查：LIKE + 正则精确匹配。
+
+    monitor_tasks 没有独立的 platform_video_id 列，所以走两步：
+      1. LIKE 加速过滤（带 idx_monitor_tasks_target_url 索引）
+      2. 用 extract_platform_video_id() 正则二次确认，避免 url 子串误判
+    """
+    task_type = _PLATFORM_TO_MONITOR_TYPE.get(platform)
+    if not task_type:
+        return False
+
+    candidates = conn.execute(
+        "SELECT target_url FROM monitor_tasks WHERE type=? AND target_url LIKE ?",
+        (task_type, f"%{platform_video_id}%"),
+    ).fetchall()
+
+    for (target_url,) in candidates:
+        extracted = extract_platform_video_id(platform, target_url)
+        if extracted == platform_video_id:
+            return True
+    return False
