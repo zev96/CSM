@@ -461,7 +461,10 @@ def _navigate_to_serp(page: Any, keyword: str) -> Any:
     是 baidu organic 流量的主要形态。
     """
     serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)
-    return page.goto(serp_url, wait_until="domcontentloaded", timeout=30000)
+    # timeout 60s ── native mode 副本 Chrome 首次启动 + 加载首个 SERP 慢
+    # （包括 OS profile lock 检查、Chrome extension 初始化、Network 服务起
+    # 等），实测 30s 不够，第一个 keyword 经常 timeout 失败。
+    return page.goto(serp_url, wait_until="domcontentloaded", timeout=60000)
 
 
 class BaiduKeywordAdapter:
