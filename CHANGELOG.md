@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.5.8] - 2026-05-25
 
 ### Fixed
 - **快手抓取 v0.5.7 仍然 0 视频 + "完成"**：v0.5.7 把 HTTP 客户端从 vanilla httpx 换成 curl_cffi `impersonate="chrome120"`，sidecar.log 显示 `httpx: HTTP Request` 那一行确实消失了（curl_cffi 接管了），但 server 仍返回 `[ks-graphql] page=1 new=0 emitted=0 pcursor='no_more'`——**快手 server 的指纹识别不只 JA3**，还查 cookie 状态 / 设备 hint / header 顺序综合，Python 客户端任何变种都会被识破。本版根治：GraphQL POST 整个从 Python 抬到 patchright 浏览器内，用 `page.evaluate("async ({url, body}) => { const resp = await fetch(url, {method: 'POST', credentials: 'include', ...}); return { status, body }; }")` 在 Chrome 的 JS 上下文里发请求 —— server 看到的就是一次真实 Chrome XHR，TLS handshake / cookie / header order 全是 Chrome 原生，没有指纹差异可识别。`credentials: 'include'` 让浏览器自动带上 `mining_browser.launched_page` 注入的 BrowserContext cookie，不再需要 `_http.cookies_from_context` 提取到 Python 再绕一圈。
