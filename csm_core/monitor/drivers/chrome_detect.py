@@ -137,10 +137,19 @@ def copy_profile_to(
         raise FileNotFoundError(f"source profile not found: {source_profile}")
 
     target = Path(target_path)
-    # 清旧
+    # 清旧 ── ignore_errors=True 之前用过会让 leveldb 文件锁残留 + mkdir
+    # 撞 WinError 183。改成 raise 让 caller 看到清晰错误（"请关 Chrome
+    # 进程再重试"），mkdir 加 exist_ok=True 容忍轻微残留。
     if target.exists():
-        shutil.rmtree(target, ignore_errors=True)
-    target.mkdir(parents=True)
+        try:
+            shutil.rmtree(target)
+        except OSError as e:
+            raise OSError(
+                f"旧副本目录无法清空（可能有 Chromium / Chrome 进程占着文件锁）："
+                f"{target}. 请关掉所有 Chrome / Chromium 进程后重试，"
+                f"或手动删除该目录. 原因: {e}"
+            ) from e
+    target.mkdir(parents=True, exist_ok=True)
 
     start = time.monotonic()
 
