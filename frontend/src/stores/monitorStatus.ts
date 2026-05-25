@@ -38,16 +38,6 @@ interface ProgressEntry {
   total: number;
 }
 
-/**
- * Extra per-task state for native-Chrome mode events.
- * status "waiting_chrome_close" means the sidecar is blocked
- * waiting for the user to close Chrome before it can start.
- */
-interface TaskWaitState {
-  status: "waiting_chrome_close" | "running";
-  waiting_remaining_s: number | null;
-}
-
 // Module-level notify singleton — store is created once per app lifetime,
 // so this is effectively module-level. Must be called inside the store
 // factory (after Pinia is active) to satisfy Tauri plugin constraints.
@@ -70,9 +60,6 @@ const _optimisticMarkedAt = new Map<number, number>();
 export const useMonitorStatus = defineStore("monitorStatus", () => {
   const runningTaskIds = ref<Set<number>>(new Set());
   const taskProgress = ref<Record<number, ProgressEntry>>({});
-  // Per-task native-mode wait state (waiting_chrome_close + countdown).
-  // Keyed by task_id (number). Components read this to show the banner.
-  const taskWaitStates = ref<Record<number, TaskWaitState>>({});
   const toast = useToast();
   // Lazy-initialise the notify singleton the first time the store is created.
   if (!_notify) {
@@ -251,27 +238,6 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
         setProgress(d.task_id, cur, tot);
       },
       // ── Native-Chrome mode events ──────────────────────────────────
-      waiting_chrome_close: (d: any) => {
-        if (typeof d.task_id !== "number") return;
-        taskWaitStates.value = {
-          ...taskWaitStates.value,
-          [d.task_id]: {
-            status: "waiting_chrome_close",
-            waiting_remaining_s: typeof d.remaining_s === "number" ? d.remaining_s : 120,
-          },
-        };
-        void _notify?.("CSM 百度监控", "请关闭 Chrome 浏览器以开始监控（自动检测中）");
-      },
-      chrome_closed: (d: any) => {
-        if (typeof d.task_id !== "number") return;
-        taskWaitStates.value = {
-          ...taskWaitStates.value,
-          [d.task_id]: {
-            status: "running",
-            waiting_remaining_s: null,
-          },
-        };
-      },
       needs_captcha: (d: any) => {
         const kw = typeof d.keyword === "string" ? d.keyword : "";
         void _notify?.("CSM 百度监控", `需要人工解验证码（关键词：${kw}），点击浏览器窗口`);
@@ -280,12 +246,6 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
       finished: (d: any) => {
         if (typeof d.task_id === "number") {
           clearRunning(d.task_id);
-          // Clear any native-mode wait state on finish.
-          if (d.task_id in taskWaitStates.value) {
-            const next = { ...taskWaitStates.value };
-            delete next[d.task_id];
-            taskWaitStates.value = next;
-          }
           // System notification for completed tasks.
           const total = typeof d.progress_total === "number" ? String(d.progress_total) : "?";
           void _notify?.("CSM 百度监控", `监控完成，已抓 ${total} 词`);
@@ -318,26 +278,6 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     pollTimer = setInterval(() => void hydrate(), 30000);
   }
 
-  /**
-   * Decrement waiting_remaining_s for all tasks in waiting_chrome_close state.
-   * Called by BaiduRankingPage every second to drive the countdown display.
-   */
-  function tickWaitCountdown(): void {
-    const next: Record<number, TaskWaitState> = {};
-    let changed = false;
-    for (const k in taskWaitStates.value) {
-      const id = Number(k);
-      const s = taskWaitStates.value[id];
-      if (s.status === "waiting_chrome_close" && (s.waiting_remaining_s ?? 0) > 0) {
-        next[id] = { ...s, waiting_remaining_s: (s.waiting_remaining_s ?? 0) - 1 };
-        changed = true;
-      } else {
-        next[id] = s;
-      }
-    }
-    if (changed) taskWaitStates.value = next;
-  }
-
   function stop(): void {
     if (stopSse) {
       stopSse();
@@ -353,7 +293,6 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
   return {
     runningTaskIds,
     taskProgress,
-    taskWaitStates,
     isRunning,
     progressOf,
     markRunning,
@@ -363,7 +302,6 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     cancel,
     start,
     stop,
-    tickWaitCountdown,
     taskMutationNonce,
     bumpTaskMutation,
   };

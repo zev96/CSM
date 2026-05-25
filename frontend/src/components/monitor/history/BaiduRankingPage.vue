@@ -121,8 +121,6 @@ function isRunning(taskId: number): boolean {
   return monitorStatus.isRunning(taskId);
 }
 const taskProgress = computed(() => monitorStatus.taskProgress);
-// Native-mode per-task wait state (waiting_chrome_close + countdown).
-const taskWaitStates = computed(() => monitorStatus.taskWaitStates);
 
 // markRunning / clearRunning delegate to the store — local helpers kept
 // only for the optimistic mark we still do in runNow before the SSE
@@ -588,17 +586,6 @@ function _keywordSummary(cfg: TaskItem["config"]): string {
 }
 void _keywordSummary; // suppress unused warning
 
-/**
- * Format seconds remaining for the waiting-chrome-close banner countdown.
- * Returns "mm:ss" or "--" when s is null/undefined/0.
- */
-function formatRemaining(s: number | null | undefined): string {
-  if (!s || s <= 0) return "--"
-  const mm = Math.floor(s / 60)
-  const ss = s % 60
-  return `${mm}:${ss.toString().padStart(2, "0")}`
-}
-
 // ──────────────────────────── data loading ────────────────────────────
 
 async function loadTasks() {
@@ -857,7 +844,6 @@ async function selectTask(taskId: number): Promise<void> {
 // task is actually fetching, and clears + reloads history on finish.
 
 let stopSse: (() => void) | null = null;
-let countdownTimer: number | undefined;
 
 function startSse(): void {
   // The monitorStatus store owns the canonical SSE subscription that
@@ -906,11 +892,6 @@ onMounted(() => {
   // "navigate away → come back" case. The store also polls every 30 s,
   // but mount-time hydrate eliminates the visible delay.
   void monitorStatus.hydrate();
-  // Countdown ticker for waiting_chrome_close banners.
-  // Ticks every second; only decrements tasks that are actively waiting.
-  countdownTimer = window.setInterval(() => {
-    monitorStatus.tickWaitCountdown();
-  }, 1000);
 });
 
 // Fan-in for task mutations triggered from anywhere in the app (single
@@ -927,7 +908,6 @@ watch(() => monitorStatus.taskMutationNonce, () => {
 onUnmounted(() => {
   if (stopSse) stopSse();
   stopSse = null;
-  clearInterval(countdownTimer);
 });
 
 watch(selectedId, (id) => {
@@ -1242,14 +1222,7 @@ defineExpose({ reload: loadTasks, selectTask });
                   waiting_chrome_close: 显示倒计时 banner（native-Chrome 模式）。
                 -->
                 <div class="flex flex-col items-center gap-1">
-                  <template v-if="taskWaitStates[t.id]?.status === 'waiting_chrome_close'">
-                    <div class="waiting-chrome-banner">
-                      <span>等待关闭 Chrome</span><br>
-                      <small>请关闭 Chrome 浏览器以继续监控。剩余 {{ formatRemaining(taskWaitStates[t.id]?.waiting_remaining_s) }}</small>
-                      <button type="button" class="cancel-btn" @click.stop="cancelTask(t.id)">取消任务</button>
-                    </div>
-                  </template>
-                  <template v-else-if="isRunning(t.id)">
+                  <template v-if="isRunning(t.id)">
                     <div class="text-[11.5px] font-medium" :style="{ color: 'var(--primary-deep)' }">
                       {{ taskProgress[t.id]?.current ?? 0 }} / {{ taskProgress[t.id]?.total ?? (t.config.search_keywords?.length ?? 0) }}
                     </div>
@@ -1864,30 +1837,4 @@ defineExpose({ reload: loadTasks, selectTask });
 </template>
 
 <style scoped>
-.waiting-chrome-banner {
-  padding: 0.5rem 0.6rem;
-  background: var(--warning-bg, #fff8e1);
-  color: var(--warning, #f57c00);
-  border-radius: var(--radius-inner, 6px);
-  font-size: 11px;
-  line-height: 1.5;
-  text-align: center;
-  width: 100%;
-}
-
-.cancel-btn {
-  display: block;
-  margin: 0.3rem auto 0;
-  padding: 0.2rem 0.6rem;
-  background: var(--danger, #d85a48);
-  color: white;
-  border: none;
-  border-radius: var(--radius-inner, 6px);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.cancel-btn:hover {
-  opacity: 0.88;
-}
 </style>

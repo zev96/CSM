@@ -1,20 +1,23 @@
 <script setup lang="ts">
 /**
- * 百度抓取 — Native Chrome profile 配置
+ * 百度抓取 — Native Chrome profile 副本模式（方案 B'）
  *
- * 后端 API（Task 7 routes）：
+ * 后端 API：
  *   GET  /api/monitor/baidu/native-config
- *     → { use_native_chrome, chrome_executable_path, chrome_user_data_dir, chrome_profile_name }
- *   POST /api/monitor/baidu/native-config   Body = 上述同结构
+ *     → { use_native_chrome, chrome_executable_path, chrome_user_data_dir,
+ *          chrome_profile_name, chrome_profile_copy_path,
+ *          chrome_profile_copy_imported_at }
+ *   POST /api/monitor/baidu/native-config   Body = 同结构（省略 copy_path 字段）
  *   POST /api/monitor/baidu/detect-chrome
  *     → { executable_path, user_data_dir }
- *   POST /api/monitor/baidu/list-profiles   Body = { user_data_dir }
- *     → { profiles: [{ name, account_email }] }
+ *   POST /api/monitor/baidu/copy-profile
+ *     Body = { source_user_data_dir, source_profile_name }
+ *     → { ok, copy_path?, imported_at?, size_mb?, elapsed_s?, error? }
  *   POST /api/monitor/baidu/test-native
- *     Body = { chrome_executable_path, chrome_user_data_dir, chrome_profile_name }
+ *     Body = { chrome_executable_path, chrome_profile_copy_path }
  *     → { ok, error? }
  */
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -27,13 +30,10 @@ import { useToast } from "@/composables/useToast";
 interface NativeConfig {
   use_native_chrome: boolean;
   chrome_executable_path: string | null;
-  chrome_user_data_dir: string | null;
+  chrome_user_data_dir: string | null;  // 保留，记录上次导入的源
   chrome_profile_name: string;
-}
-
-interface ProfileInfo {
-  name: string;
-  account_email: string | null;
+  chrome_profile_copy_path: string | null;  // B' 副本路径
+  chrome_profile_copy_imported_at: string | null;  // B' 导入时间戳
 }
 
 const sidecar = useSidecar();
@@ -44,22 +44,39 @@ const config = ref<NativeConfig>({
   chrome_executable_path: null,
   chrome_user_data_dir: null,
   chrome_profile_name: "Default",
+  chrome_profile_copy_path: null,
+  chrome_profile_copy_imported_at: null,
 });
-const profiles = ref<ProfileInfo[]>([]);
+
 const testResult = ref<{ ok: boolean; error?: string } | null>(null);
 const loading = ref(false);
 const detectLoading = ref(false);
 const testLoading = ref(false);
 const saveLoading = ref(false);
+const importing = ref(false);
+const importResult = ref<{
+  ok: boolean;
+  copy_path?: string;
+  imported_at?: string;
+  size_mb?: number;
+  elapsed_s?: number;
+  error?: string;
+} | null>(null);
+
+function formatTimestamp(iso: string | null | undefined): string {
+  if (!iso) return "--";
+  try {
+    return new Date(iso).toLocaleString("zh-CN");
+  } catch {
+    return iso;
+  }
+}
 
 async function loadConfig() {
   loading.value = true;
   try {
     const resp = await sidecar.client.get<NativeConfig>("/api/monitor/baidu/native-config");
     config.value = resp.data;
-    if (config.value.chrome_user_data_dir) {
-      await loadProfiles();
-    }
   } catch (e: any) {
     const detail = e?.response?.data?.detail ?? e?.message ?? "未知错误";
     toast.error(`读取配置失败：${detail}`);
@@ -76,10 +93,6 @@ async function detectChrome() {
     );
     const data = resp.data;
     config.value.chrome_executable_path = data.executable_path;
-    config.value.chrome_user_data_dir = data.user_data_dir;
-    if (data.user_data_dir) {
-      await loadProfiles();
-    }
     if (!data.executable_path) {
       toast.warn("未检测到 Chrome 安装，请手动填写路径或先安装 Chrome");
     } else {
@@ -93,29 +106,45 @@ async function detectChrome() {
   }
 }
 
-async function loadProfiles() {
-  if (!config.value.chrome_user_data_dir) {
-    profiles.value = [];
-    return;
-  }
+async function importProfile() {
+  importing.value = true;
+  importResult.value = null;
   try {
-    const resp = await sidecar.client.post<{ profiles: ProfileInfo[] }>(
-      "/api/monitor/baidu/list-profiles",
-      { user_data_dir: config.value.chrome_user_data_dir },
+    // 用 detect-chrome 拿到 user_data_dir
+    const detectResp = await sidecar.client.post<{ executable_path: string | null; user_data_dir: string | null }>(
+      "/api/monitor/baidu/detect-chrome",
     );
-    profiles.value = resp.data.profiles ?? [];
-    // 若当前 profile_name 不在列表内，默认切到第一个
-    if (profiles.value.length > 0 && !profiles.value.some((p) => p.name === config.value.chrome_profile_name)) {
-      config.value.chrome_profile_name = profiles.value[0].name;
+    const detected = detectResp.data;
+    if (!detected.user_data_dir) {
+      importResult.value = { ok: false, error: "未检测到 Chrome User Data 目录，请确认 Chrome 已安装" };
+      return;
     }
-  } catch {
-    // 静默失败：user_data_dir 可能还没生效
-    profiles.value = [];
+    // 复制 Default profile
+    const copyResp = await sidecar.client.post<{
+      ok: boolean;
+      copy_path?: string;
+      imported_at?: string;
+      size_mb?: number;
+      elapsed_s?: number;
+      error?: string;
+    }>("/api/monitor/baidu/copy-profile", {
+      source_user_data_dir: detected.user_data_dir,
+      source_profile_name: "Default",
+    });
+    importResult.value = copyResp.data;
+    if (copyResp.data.ok) {
+      // reload config 看新 copy_path + imported_at
+      await loadConfig();
+    }
+  } catch (e) {
+    importResult.value = { ok: false, error: String(e) };
+  } finally {
+    importing.value = false;
   }
 }
 
 async function testStartup() {
-  if (!config.value.chrome_executable_path || !config.value.chrome_user_data_dir) return;
+  if (!config.value.chrome_executable_path || !config.value.chrome_profile_copy_path) return;
   testLoading.value = true;
   testResult.value = null;
   try {
@@ -123,8 +152,7 @@ async function testStartup() {
       "/api/monitor/baidu/test-native",
       {
         chrome_executable_path: config.value.chrome_executable_path,
-        chrome_user_data_dir: config.value.chrome_user_data_dir,
-        chrome_profile_name: config.value.chrome_profile_name,
+        chrome_profile_copy_path: config.value.chrome_profile_copy_path,
       },
     );
     testResult.value = resp.data;
@@ -145,7 +173,12 @@ async function testStartup() {
 async function saveConfig() {
   saveLoading.value = true;
   try {
-    await sidecar.client.post("/api/monitor/baidu/native-config", config.value);
+    await sidecar.client.post("/api/monitor/baidu/native-config", {
+      use_native_chrome: config.value.use_native_chrome,
+      chrome_executable_path: config.value.chrome_executable_path,
+      chrome_user_data_dir: config.value.chrome_user_data_dir,
+      chrome_profile_name: config.value.chrome_profile_name,
+    });
     toast.success("百度抓取配置已保存");
   } catch (e: any) {
     const detail = e?.response?.data?.detail ?? e?.message ?? "未知错误";
@@ -159,14 +192,6 @@ function copyError() {
   const err = testResult.value?.error ?? "";
   navigator.clipboard.writeText(err).catch(() => {});
 }
-
-watch(
-  () => config.value.chrome_user_data_dir,
-  (newVal) => {
-    if (newVal) loadProfiles();
-    else profiles.value = [];
-  },
-);
 
 onMounted(loadConfig);
 </script>
@@ -192,14 +217,14 @@ onMounted(loadConfig);
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-semibold">启用日常 Chrome profile 模式</div>
           <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-            借用你的真实 Chrome profile 运行百度抓取，降低风控触发率。<br />
-            跑监控任务前需先关闭 Chrome 浏览器（OS 单用户数据目录限制）。
+            启用后用你 Chrome profile 的副本跑监控，降低风控触发率。<br />
+            跑监控时不需要关 Chrome（副本独立运行）。
           </div>
         </div>
         <div class="flex flex-shrink-0 items-center gap-2">
           <FormToggle
             :model-value="config.use_native_chrome"
-            @update:model-value="(v) => { config.use_native_chrome = v; testResult = null; }"
+            @update:model-value="(v) => { config.use_native_chrome = v; testResult = null; saveConfig(); }"
           />
         </div>
       </div>
@@ -241,66 +266,57 @@ onMounted(loadConfig);
           </div>
         </div>
 
-        <!-- Chrome User Data 目录 -->
+        <!-- Chrome profile 副本 -->
         <div
           class="flex items-center gap-4 py-3.5"
           :style="{ borderBottom: '1px solid var(--line)' }"
         >
           <div class="min-w-0 flex-1">
-            <div class="text-[13px] font-semibold">Chrome User Data 目录</div>
-            <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              通常位于 %LOCALAPPDATA%\Google\Chrome\User Data
+            <div class="text-[13px] font-semibold">Chrome profile 副本</div>
+            <div v-if="config.chrome_profile_copy_path" class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              <div>副本路径：<code>{{ config.chrome_profile_copy_path }}</code></div>
+              <div>导入时间：{{ formatTimestamp(config.chrome_profile_copy_imported_at) }}</div>
+            </div>
+            <div v-else class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              还未导入。点右侧按钮一键复制你的 Chrome Default profile（约 30-60 秒）。
             </div>
           </div>
-          <div class="flex flex-shrink-0 items-center">
-            <FormInput
-              :model-value="config.chrome_user_data_dir ?? ''"
-              placeholder="%LOCALAPPDATA%\Google\Chrome\User Data"
-              :width="340"
-              debounce="live"
-              @update:model-value="(v) => { config.chrome_user_data_dir = v ? String(v) : null }"
-            />
+          <div class="flex flex-shrink-0 items-center gap-2">
+            <Btn variant="ghost" small :disabled="importing" @click="importProfile">
+              <Spinner v-if="importing" :size="12" />
+              <Icon v-else name="copy" :size="13" />
+              <span>{{ importing ? '复制中…' : (config.chrome_profile_copy_path ? '重新导入' : '复制 Chrome profile') }}</span>
+            </Btn>
           </div>
         </div>
 
-        <!-- Profile 选择 -->
+        <!-- 导入进度提示 -->
         <div
-          class="flex items-center gap-4 py-3.5"
-          :style="{ borderBottom: '1px solid var(--line)' }"
+          v-if="importing"
+          class="py-2 text-[11.5px]"
+          :style="{ color: 'var(--ink-3)' }"
         >
-          <div class="min-w-0 flex-1">
-            <div class="text-[13px] font-semibold">使用 Profile</div>
-            <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              {{ profiles.length > 0 ? `检测到 ${profiles.length} 个 profile` : '填写 User Data 目录后自动加载' }}
-            </div>
-          </div>
-          <div class="flex flex-shrink-0 items-center">
-            <select
-              v-if="profiles.length > 0"
-              v-model="config.chrome_profile_name"
-              class="bg-card-2 px-3 py-2 text-[13px] outline-none transition-colors"
-              :style="{
-                borderRadius: 'var(--radius-inner)',
-                border: '1px solid var(--line)',
-                minWidth: '220px',
-              }"
-            >
-              <option v-for="p in profiles" :key="p.name" :value="p.name">
-                {{ p.name }}{{ p.account_email ? ` (${p.account_email})` : '' }}
-              </option>
-            </select>
-            <input
-              v-else
-              v-model="config.chrome_profile_name"
-              placeholder="Default"
-              class="bg-card-2 px-3 py-2 text-[13px] outline-none transition-colors"
-              :style="{
-                borderRadius: 'var(--radius-inner)',
-                border: '1px solid var(--line)',
-                width: '220px',
-              }"
-            />
-          </div>
+          正在复制中（约 30-60 秒，副本约 200MB）…
+        </div>
+
+        <!-- 导入结果 -->
+        <div
+          v-if="importResult !== null"
+          class="flex items-center gap-3 rounded-[10px] px-4 py-3 text-[12.5px]"
+          :style="{
+            background: importResult.ok ? 'color-mix(in srgb, var(--success, #4caf50) 12%, transparent)' : 'color-mix(in srgb, var(--danger, #ef4444) 12%, transparent)',
+            color: importResult.ok ? 'var(--success, #2e7d32)' : 'var(--danger, #c62828)',
+            border: `1px solid ${importResult.ok ? 'color-mix(in srgb, var(--success, #4caf50) 30%, transparent)' : 'color-mix(in srgb, var(--danger, #ef4444) 30%, transparent)'}`,
+            marginTop: '0.5rem',
+          }"
+        >
+          <Icon :name="importResult.ok ? 'check' : 'x'" :size="14" />
+          <span v-if="importResult.ok">
+            复制成功（{{ importResult.size_mb }} MB / {{ importResult.elapsed_s }}s）
+          </span>
+          <span v-else class="flex-1 truncate" :title="importResult.error">
+            复制失败：{{ importResult.error }}
+          </span>
         </div>
 
         <!-- 操作按钮行 -->
@@ -308,7 +324,7 @@ onMounted(loadConfig);
           <Btn
             variant="ghost"
             small
-            :disabled="testLoading || !config.chrome_executable_path || !config.chrome_user_data_dir"
+            :disabled="testLoading || !config.chrome_executable_path || !config.chrome_profile_copy_path"
             @click="testStartup"
           >
             <Spinner v-if="testLoading" :size="12" />
