@@ -104,6 +104,19 @@ export interface UpdateCommentPayload {
   status?: Comment["status"]
 }
 
+export interface SyncToMonitorRequest {
+  task_name_prefix: string
+  top_n: number
+  schedule_cron?: string | null
+}
+
+export interface SyncToMonitorResult {
+  created: number
+  skipped_dup: number
+  skipped_no_draft: number
+  errors: Record<string, unknown>[]
+}
+
 /**
  * Thrown when the sidecar returns 503 + code="llm_not_configured" from
  * the AI routes. Callers (composer / video card) catch this to show
@@ -158,6 +171,11 @@ export const useMiningStore = defineStore("mining", () => {
   const aiSummaryLoading = ref<Record<number, boolean>>({})
   // Spinner state for "发布第 N 层" in CommentComposer.
   const commentSavingByVideo = ref<Record<number, boolean>>({})
+
+  // sync-to-monitor state
+  const syncingJobId = ref<number | null>(null)
+  const syncResult = ref<SyncToMonitorResult | null>(null)
+  const syncError = ref<string | null>(null)
 
   const hasRunningJob = computed(
     () => activeJob.value !== null
@@ -531,15 +549,40 @@ export const useMiningStore = defineStore("mining", () => {
     return resp.data.updated
   }
 
+  async function syncToMonitor(
+    jobId: number,
+    req: SyncToMonitorRequest,
+  ): Promise<SyncToMonitorResult> {
+    syncingJobId.value = jobId
+    syncResult.value = null
+    syncError.value = null
+    try {
+      const resp = await api().post<SyncToMonitorResult>(
+        `/api/mining/jobs/${jobId}/sync_to_monitor`,
+        req,
+      )
+      syncResult.value = resp.data
+      return resp.data
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail ?? e?.message ?? String(e)
+      syncError.value = String(detail)
+      throw e
+    } finally {
+      syncingJobId.value = null
+    }
+  }
+
   return {
     activeJob, videos, total, loading, filters, loginStatus,
     jobs, currentJobId,
     commentsByVideo, aiSummaryLoading, commentSavingByVideo,
+    syncingJobId, syncResult, syncError,
     hasRunningJob,
     startJob, cancelActive, refreshVideos,
     refreshLoginStatus, startLogin, confirmLogin,
     deleteVideo, bulkDeleteVideos, loadJobs, selectJob, exportUrl, deleteJob,
     loadComments, createComment, updateComment, deleteComment,
     uploadImage, summarize, suggestComment, bulkMarkCommented,
+    syncToMonitor,
   }
 })
