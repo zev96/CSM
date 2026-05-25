@@ -123,5 +123,4 @@ def test_runner_skips_dup_via_on_card(temp_db):
     Full integration test requires a mock adapter; dedup logic is
     unit-tested via is_video_tracked_anywhere tests above.
     """
-    import pytest
     pytest.skip("integration test stub - dedup unit tests cover the behavior")
