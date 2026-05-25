@@ -54,6 +54,7 @@ def run(
         LEFT JOIN video_comments vc
           ON vc.video_id = v.id AND vc.tier = 1
         WHERE vsk.job_id = ?
+        GROUP BY v.id
         """,
         (job_id,),
     ).fetchall()
