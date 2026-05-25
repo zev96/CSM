@@ -1148,6 +1148,16 @@ class BaiduKeywordAdapter:
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
+            # 诊断日志（漏检 debug 用）：title / content_len / matched / fetch_error
+            # 用 INFO 级让用户开 default log level 就能看到。漏检的 root cause
+            # 通常是：① content_len=0（SPA 壳页 / fetch fail）② content_len>200
+            # 但 matched=None（正文里没字面品牌词，需要 title fallback）
+            logger.info(
+                "[baidu] article: rank=%d host=%s content_len=%d matched=%s title=%r%s",
+                rank, host, len(content), matched_brand or "-",
+                link.get("title", "")[:80],
+                f" fetch_error={attempt.get('fetch_error')!r}" if attempt.get("fetch_error") else "",
+            )
             out.append({
                 "rank": rank,
                 "title": link.get("title", ""),
