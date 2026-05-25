@@ -1,8 +1,70 @@
-# 百度抓取反风控：直接挂载日常 Chrome profile（方案 D）
+# 百度抓取反风控：复制日常 Chrome profile 副本（方案 D → pivot to B'）
 
-**Date:** 2026-05-24
-**Status:** Draft (brainstorm 完成，待 review)
+**Date:** 2026-05-24（初版方案 D）/ 2026-05-25（pivot 到 B'）
+**Status:** D 实现完成后真机测试遇 Chrome 安全限制 → pivot 到 B'
 **Owner:** zev96
+
+## ⚠️ 2026-05-25 Pivot 通知
+
+方案 D（"直接挂载用户日常 Chrome user_data_dir"）实现完成、PyInstaller binary 跑通后，**真机测试失败**。原因：
+
+> **Chrome 91+ DevTools 安全限制**：Chrome 拒绝在"默认 user_data_dir"上启用 DevTools 协议（Playwright/Patchright 走的协议）。错误：
+>
+> `DevTools remote debugging requires a non-default data directory. Specify this using --user-data-dir.`
+>
+> 这是 Chrome 防止恶意软件接管用户日常 session 的硬限制，无法绕过 ── 不管 `--user-data-dir` 怎么设，只要指向 Chrome 已知的"默认目录"（Windows: `%LOCALAPPDATA%\Google\Chrome\User Data`、Mac: `~/Library/Application Support/Google/Chrome`、Linux: `~/.config/google-chrome`），都会被拒绝。
+
+### Pivot 方向：B'（一键复制 profile 副本）
+
+brainstorming 阶段曾讨论过的方案 B' 现在成为唯一可行路径：
+
+- CSM 一键把 `<Chrome User Data>/Default` 整个**复制**到 `<config_dir>/baidu_chrome_profile_copy/`
+- 副本路径**不在 Chrome 已知默认目录**里 → DevTools 接管不被拒绝
+- 副本里有用户真实 cookie / history / 书签（含百度登录态） → 伪装度 ~95%
+- 跑监控时**不需要关 Chrome**（副本独立 OS lock）── 反而比方案 D 体验更好
+- 副本"老化"了 → 用户点"重新导入"刷新（30-60s）
+
+### B' 改动与 D 的差异
+
+| 维度 | 方案 D（pivot 前）| 方案 B'（pivot 后）|
+|---|---|---|
+| Chrome profile 来源 | 用户默认 user_data_dir 直挂 | 复制到 `<config_dir>/baidu_chrome_profile_copy/` |
+| 跑监控前要关 Chrome | 必须 | 不需要 |
+| `chrome_preflight` 集成 | 必需（等关 Chrome）| **删除** |
+| `waiting_chrome_close` / `chrome_closed` SSE 事件 | 必需 | **删除** |
+| BaiduRankingPage 倒计时 banner | 必需 | **删除** |
+| 配置字段 | `chrome_user_data_dir` + `chrome_profile_name` | **`chrome_profile_copy_path`** + `chrome_profile_copy_imported_at` |
+| 新 API `POST /api/monitor/baidu/copy-profile` | 不存在 | **新增** |
+| Settings UI | toggle + 路径字段 + profile 下拉 + 测试启动 | toggle + "📋 复制 Chrome profile" 按钮 + 副本路径 + 时间戳 + "🔄 重新导入" |
+| 软着陆验证码（`_try_human_solve`）| 保留 | **保留**（核心价值不变）|
+| `needs_captcha` SSE + 系统通知 | 保留 | **保留** |
+| Tauri plugin-notification | 必需 | **保留** |
+| useSystemNotify composable | 必需 | **保留** |
+
+### D 实现的 commits（保留，B' 在上面做 forward-fix）
+
+```
+a18585e feat(monitor): add baidu native chrome mode config fields
+050fff8 + c57f53e: chrome_detect.py
+72575ab + ebe8e3f: chrome_preflight.py
+95d1fca feat(monitor): add native chrome branch to baidu_browser_session
+8eac988 + 7d57058: baidu_keyword fetch hook + Task 5 fixes
+e81c6e1 + e239c20: _try_human_solve 软着陆
+af83a87 feat(api): add 5 baidu native mode routes
+2cba221 feat(events): add waiting_chrome_close / chrome_closed / needs_captcha
+112bcb6 feat(tauri): add @tauri-apps/plugin-notification
+d5792d6 feat(frontend): useSystemNotify composable
+386bb93 feat(frontend): Baidu native-Chrome settings section
+29c560d feat(frontend): handle native mode events + waiting-chrome banner
+8bf2e52 feat(monitor): wire native mode events through monitor_bus
+e7d7e8f fix(monitor): inject log-only notifier in lifespan
+```
+
+B' 改造在以上 commits 之上做 forward-fix（不 revert），新 commits 用 `pivot(monitor):` / `feat(monitor):` 前缀。
+
+---
+
+
 
 ## Background
 
