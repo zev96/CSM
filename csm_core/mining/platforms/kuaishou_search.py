@@ -132,7 +132,11 @@ class KuaishouSearchAdapter:
                 got=0, target=target_count,
             ))
 
-            with _http.build_httpx_client(
+            # v0.5.7: switched from build_httpx_client to build_stealth_client.
+            # Server returned 200 + empty feeds + pcursor='no_more' under vanilla
+            # httpx — JA3 fingerprint shadow-ban. curl_cffi impersonate='chrome120'
+            # forges the TLS handshake so 快手 treats it as a real Chrome.
+            with _http.build_stealth_client(
                 cookies_str=cookies_str,
                 user_agent=ua,
                 referer=_REFERER,
@@ -173,7 +177,9 @@ class KuaishouSearchAdapter:
                     ).encode("utf-8")
 
                     try:
-                        resp = client.post(_GRAPHQL_ENDPOINT, content=payload)
+                        # curl_cffi.Session.post uses ``data=`` (not httpx's
+                        # ``content=``); both pass raw bytes through.
+                        resp = client.post(_GRAPHQL_ENDPOINT, data=payload)
                     except Exception as e:
                         breaker.record_failure()
                         logger.warning("kuaishou graphql POST raised: %s", e)

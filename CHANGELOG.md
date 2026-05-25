@@ -2,6 +2,12 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Fixed
+- **快手抓取在 v0.5.6 不再报 FileNotFoundError，但 GraphQL POST 返回 200 OK + 空 feeds + `pcursor='no_more'`，UI 显示「完成 0 条」**：v0.5.6 的 `.graphql` 模板已经进 bundle、HTTP 请求也能发出去，但**快手 server 端按 JA3 TLS 指纹做反爬识别**，vanilla `httpx.Client` 一握手就被识破，server 返回 200 但 feeds 列表是空（soft shadow-ban —— 看起来像"没结果"，实际是"我知道你是脚本"）。修法：`csm_core/mining/platforms/_http.py` 加 `build_stealth_client()` 用 `curl_cffi.requests.Session(impersonate="chrome120")`，把 TLS 握手 / ALPN / cipher 顺序 / HTTP/2 frame ordering 全模拟成真实 Chrome 120 —— 跟 zhihu_question / baidu_keyword / *_comment 已经在用的同款 stealth 套路。`kuaishou_search.py` 切到 stealth client（`client.post(content=...)` → `data=...`，curl_cffi 的 API 差异）。B 站搜索这次不动（用户没报问题），等后续单独验证再决定。
+- 配 5 个 invariant 单测守住：return type 必须是 curl_cffi Session、impersonate 必须是 chrome120、cookie/referer/UA 必须透传、`kuaishou_search.py` 必须调 `build_stealth_client` (不能回退到 `build_httpx_client`)、POST 必须用 `data=` 参数（用 httpx 的 `content=` 会 TypeError）。
+
 ## [0.5.6] - 2026-05-24
 
 ### Fixed

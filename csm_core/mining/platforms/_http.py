@@ -2,9 +2,20 @@
 
 The Patchright Page is used to ESTABLISH login state (cookies land in the
 BrowserContext). Then we extract those cookies and make signed API calls
-via httpx — same pattern as MediaCrawler kuaishou/client.py:142-145 and
-bilibili/client.py:169-176. Bypasses SPA bot fingerprinting that hits the
-rendered search pages.
+out-of-browser — same pattern as MediaCrawler kuaishou/client.py:142-145
+and bilibili/client.py:169-176. Bypasses SPA bot fingerprinting that
+hits the rendered search pages.
+
+Two client builders:
+
+- :func:`build_httpx_client` — vanilla httpx. Fine for platforms that
+  don't fingerprint TLS handshakes (B 站 search held up here on v0.5.6).
+- :func:`build_stealth_client` — curl_cffi with ``impersonate="chrome120"``
+  to forge the JA3 fingerprint, header order, and HTTP/2 frame ordering.
+  Required for 快手 GraphQL: vanilla httpx returns 200 OK + empty
+  ``feeds`` + ``pcursor='no_more'`` (soft shadow-ban) — server saw the
+  fake TLS handshake and silently dropped the result set. Same impersonate
+  strategy is what zhihu_question / baidu_keyword / *_comment use.
 """
 from __future__ import annotations
 
@@ -14,6 +25,7 @@ import httpx
 
 
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
+_STEALTH_TIMEOUT_S = 20.0  # curl_cffi takes a single seconds value, not Timeout
 
 
 def cookies_from_context(
@@ -73,4 +85,50 @@ def build_httpx_client(
         headers=headers,
         timeout=_DEFAULT_TIMEOUT,
         follow_redirects=True,
+    )
+
+
+def build_stealth_client(
+    *,
+    cookies_str: str,
+    user_agent: str,
+    referer: str,
+    extra_headers: dict[str, str] | None = None,
+) -> Any:
+    """Build a ``curl_cffi.requests.Session`` that impersonates Chrome 120.
+
+    Why not vanilla httpx: 快手's GraphQL endpoint inspects the JA3 TLS
+    fingerprint and silently shadow-bans non-Chrome clients (returns 200
+    OK + empty ``visionSearchPhoto.feeds`` + ``pcursor='no_more'`` — looks
+    like "no search results" but the request never really reached the
+    real index). curl_cffi's ``impersonate="chrome120"`` forges the TLS
+    handshake / ALPN / cipher order / HTTP/2 frame ordering, which makes
+    the server treat the request as a real Chrome 120 instance.
+
+    Same impersonate is what ``zhihu_question`` (fast path) and
+    ``baidu_keyword`` already use.
+
+    API surface kept compatible with the httpx variant so callers can
+    swap by changing the constructor call: ``client.post(url, data=bytes)``
+    works on both. NB curl_cffi takes ``data=`` (httpx uses ``content=``).
+
+    Returns a Session that supports ``with`` (``__enter__/__exit__``) —
+    callers should use ``with ... as client:`` for guaranteed close.
+    """
+    from curl_cffi import requests as cc_requests
+
+    headers = {
+        "User-Agent": user_agent,
+        "Referer": referer,
+        "Cookie": cookies_str,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Connection": "keep-alive",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    return cc_requests.Session(
+        headers=headers,
+        timeout=_STEALTH_TIMEOUT_S,
+        impersonate="chrome120",
     )
