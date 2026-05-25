@@ -1105,3 +1105,17 @@ def list_used_tags() -> list[str]:
         "SELECT DISTINCT value FROM comment_templates, json_each(tags_json) ORDER BY value"
     ).fetchall()
     return [r[0] for r in rows]
+
+
+# ── Dedup helpers (used by mining collection) ─────────────────────────
+def is_video_in_videos_table(
+    conn: sqlite3.Connection,
+    platform: str,
+    platform_video_id: str,
+) -> bool:
+    """videos 表精确 UNIQUE 查询，O(1)。供 mining 采集时跳过已抓视频。"""
+    row = conn.execute(
+        "SELECT 1 FROM videos WHERE platform=? AND platform_video_id=? LIMIT 1",
+        (platform, platform_video_id),
+    ).fetchone()
+    return row is not None
