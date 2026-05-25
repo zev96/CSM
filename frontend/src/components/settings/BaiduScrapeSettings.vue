@@ -34,6 +34,7 @@ interface NativeConfig {
   chrome_profile_name: string;
   chrome_profile_copy_path: string | null;  // B' 副本路径
   chrome_profile_copy_imported_at: string | null;  // B' 导入时间戳
+  chrome_profile_copy_last_logged_in_at: string | null;  // B' 上次登录时间
 }
 
 const sidecar = useSidecar();
@@ -46,6 +47,7 @@ const config = ref<NativeConfig>({
   chrome_profile_name: "Default",
   chrome_profile_copy_path: null,
   chrome_profile_copy_imported_at: null,
+  chrome_profile_copy_last_logged_in_at: null,
 });
 
 const testResult = ref<{ ok: boolean; error?: string } | null>(null);
@@ -54,6 +56,7 @@ const detectLoading = ref(false);
 const testLoading = ref(false);
 const saveLoading = ref(false);
 const importing = ref(false);
+const launching = ref(false);
 const importResult = ref<{
   ok: boolean;
   copy_path?: string;
@@ -142,6 +145,25 @@ async function importProfile() {
     importResult.value = { ok: false, error: String(e) };
   } finally {
     importing.value = false;
+  }
+}
+
+async function launchLoginWindow() {
+  launching.value = true;
+  try {
+    const resp = await sidecar.client.post<{ ok: boolean; pid?: number; error?: string }>(
+      "/api/monitor/baidu/launch-login-window",
+    );
+    if (!resp.data.ok) {
+      importResult.value = { ok: false, error: resp.data.error };
+    }
+    // 成功：不立即 reset launching，让 UI 短暂显示"副本已启动"提示
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail ?? e?.message ?? String(e);
+    importResult.value = { ok: false, error: detail };
+  } finally {
+    // 立刻 reset launching ── 用户可以再点（重新启动副本登录窗，无副作用）
+    setTimeout(() => { launching.value = false; }, 2000);
   }
 }
 
@@ -278,6 +300,12 @@ onMounted(loadConfig);
             <div v-if="config.chrome_profile_copy_path" class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
               <div>副本路径：<code>{{ config.chrome_profile_copy_path }}</code></div>
               <div>导入时间：{{ formatTimestamp(config.chrome_profile_copy_imported_at) }}</div>
+              <div v-if="config.chrome_profile_copy_last_logged_in_at">
+                上次登录：{{ formatTimestamp(config.chrome_profile_copy_last_logged_in_at) }}
+              </div>
+              <div v-else :style="{ color: 'var(--warning, #f57c00)' }">
+                ⚠ 还未登录副本。Chrome 复制 cookie 加密后副本解不开，需要在副本里登录一次。
+              </div>
             </div>
             <div v-else class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
               还未导入。点右侧按钮一键复制你的 Chrome Default profile（约 30-60 秒）。
@@ -289,6 +317,17 @@ onMounted(loadConfig);
               <Icon v-else name="copy" :size="13" />
               <span>{{ importing ? '复制中…' : (config.chrome_profile_copy_path ? '重新导入' : '复制 Chrome profile') }}</span>
             </Btn>
+            <Btn
+              v-if="config.chrome_profile_copy_path"
+              variant="ghost"
+              small
+              :disabled="launching"
+              @click="launchLoginWindow"
+            >
+              <Spinner v-if="launching" :size="12" />
+              <Icon v-else name="lock" :size="13" />
+              <span>{{ launching ? '启动中…' : '登录百度（副本）' }}</span>
+            </Btn>
           </div>
         </div>
 
@@ -299,6 +338,15 @@ onMounted(loadConfig);
           :style="{ color: 'var(--ink-3)' }"
         >
           正在复制中（约 30-60 秒，副本约 200MB）…
+        </div>
+
+        <!-- 副本登录提示 -->
+        <div
+          v-if="launching"
+          class="py-2 text-[11.5px]"
+          :style="{ color: 'var(--ink-3)' }"
+        >
+          副本 Chrome 已弹出，登录百度后请完全关闭浏览器
         </div>
 
         <!-- 导入结果 -->
