@@ -441,10 +441,14 @@ class ListProfilesBody(BaseModel):
     user_data_dir: str = Field(min_length=1)
 
 
+class CopyProfileBody(BaseModel):
+    source_user_data_dir: str = Field(min_length=1)
+    source_profile_name: str = Field(default="Default")
+
+
 class TestNativeBody(BaseModel):
     chrome_executable_path: str = Field(min_length=1)
-    chrome_user_data_dir: str = Field(min_length=1)
-    chrome_profile_name: str = Field(default="Default")
+    chrome_profile_copy_path: str = Field(min_length=1)
 
 
 class NativeConfigBody(BaseModel):
@@ -469,16 +473,60 @@ def baidu_list_profiles(body: ListProfilesBody) -> dict[str, Any]:
     return {"profiles": chrome_detect.list_profiles(body.user_data_dir)}
 
 
+@router.post("/api/monitor/baidu/copy-profile")
+def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
+    """一键复制 Chrome profile 到 CSM 专用目录（B' 方案）。
+
+    副本路径独立于 Chrome 默认目录，绕过 Chrome 91+ DevTools 安全限制。
+    返回包含 copy_path 给前端展示 + 更新 config。
+    """
+    from csm_core import config as _core_config
+
+    target = _core_config.default_config_dir() / "baidu_chrome_profile_copy"
+    try:
+        meta = chrome_detect.copy_profile_to(
+            source_user_data_dir=body.source_user_data_dir,
+            source_profile_name=body.source_profile_name,
+            target_path=str(target),
+        )
+    except FileNotFoundError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"复制失败: {e}"}
+
+    # 更新 config
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    bk.chrome_profile_copy_path = str(target)
+    bk.chrome_profile_copy_imported_at = meta["imported_at"]
+    # 源信息记下来给 re-import 用
+    bk.chrome_user_data_dir = body.source_user_data_dir
+    bk.chrome_profile_name = body.source_profile_name
+    _cfg_svc.save(cfg)
+
+    return {
+        "ok": True,
+        "copy_path": str(target),
+        "imported_at": meta["imported_at"],
+        "size_mb": meta["size_mb"],
+        "elapsed_s": meta["elapsed_s"],
+    }
+
+
 @router.post("/api/monitor/baidu/test-native")
 def baidu_test_native(body: TestNativeBody) -> dict[str, Any]:
-    """试启动 Chrome 验证配置可用。成功 close 后返回 ok=True。"""
+    """试启动 Chrome 验证副本可用。成功 close 后返回 ok=True。
+
+    Preflight check 已经不需要 ── 副本路径独立于 Chrome 默认目录，
+    可以跟用户日常 Chrome 共存。
+    """
     try:
         with baidu_browser_session(
-            headless=False,  # native 模式下被忽略
-            user_data_dir=_Path(body.chrome_user_data_dir),
+            headless=False,
+            user_data_dir=_Path(body.chrome_profile_copy_path),
             use_native_chrome=True,
             chrome_executable_path=body.chrome_executable_path,
-            chrome_profile_name=body.chrome_profile_name,
+            chrome_profile_name="Default",  # 副本内固定叫 Default
         ):
             pass  # 启动成功立即关
         return {"ok": True}
@@ -496,6 +544,8 @@ def baidu_get_native_config() -> dict[str, Any]:
         "chrome_executable_path": bk.chrome_executable_path,
         "chrome_user_data_dir": bk.chrome_user_data_dir,
         "chrome_profile_name": bk.chrome_profile_name,
+        "chrome_profile_copy_path": bk.chrome_profile_copy_path,
+        "chrome_profile_copy_imported_at": bk.chrome_profile_copy_imported_at,
     }
 
 

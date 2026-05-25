@@ -10,6 +10,9 @@ import json
 import logging
 import os
 import re
+import shutil
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +103,63 @@ def list_profiles(user_data_dir: str) -> list[dict[str, Any]]:
         email = _read_account_email(entry / "Preferences")
         out.append({"name": entry.name, "account_email": email})
     return out
+
+
+# ── B' profile copy ──────────────────────────────────────────────
+def copy_profile_to(
+    source_user_data_dir: str,
+    source_profile_name: str,
+    target_path: str,
+) -> dict[str, Any]:
+    """复制 Chrome profile 到 CSM 专用目录（B' 方案）。
+
+    流程：
+    1. 删除 target_path 下旧副本（如有）
+    2. cp 整个 <source_user_data_dir>/<source_profile_name>/ 到 <target_path>/Default/
+       注意：内层目录必须叫 'Default'，让 launch_persistent_context 的
+       --profile-directory=Default 能找到（user_data_dir = target_path）
+    3. 复制 source_user_data_dir 下的 "Local State" 文件到 target_path/
+       （Chrome encrypted password store 引用 Local State 的 encryption_key）
+
+    Args:
+        source_user_data_dir: 用户 Chrome User Data 目录绝对路径
+        source_profile_name: "Default" / "Profile 1" 等
+        target_path: 副本目标目录（通常 <config_dir>/baidu_chrome_profile_copy/）
+
+    Returns:
+        dict with keys:
+          imported_at: ISO8601 时间戳
+          size_mb: 副本大小（MB）
+          elapsed_s: 复制耗时
+    """
+    source_profile = Path(source_user_data_dir) / source_profile_name
+    if not source_profile.is_dir():
+        raise FileNotFoundError(f"source profile not found: {source_profile}")
+
+    target = Path(target_path)
+    # 清旧
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True)
+
+    start = time.monotonic()
+
+    # 复制 profile 内容 → target/Default/
+    target_profile = target / "Default"
+    shutil.copytree(source_profile, target_profile)
+
+    # 复制 Local State（如果存在）── Chrome 解密 cookie 必需
+    source_local_state = Path(source_user_data_dir) / "Local State"
+    if source_local_state.is_file():
+        shutil.copy2(source_local_state, target / "Local State")
+
+    elapsed = time.monotonic() - start
+    size_bytes = sum(p.stat().st_size for p in target.rglob("*") if p.is_file())
+    return {
+        "imported_at": datetime.utcnow().isoformat(),
+        "size_mb": round(size_bytes / 1024 / 1024, 1),
+        "elapsed_s": round(elapsed, 1),
+    }
 
 
 def _read_account_email(preferences_path: Path) -> str | None:

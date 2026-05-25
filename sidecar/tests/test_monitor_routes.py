@@ -309,11 +309,14 @@ class TestBaiduNativeModeRoutes:
         assert resp.status_code in (400, 422)
 
     def test_test_native_success(self, client, monkeypatch):
-        """mock baidu_browser_session 不抛 → 返回 {"ok": True}。"""
+        """mock baidu_browser_session 不抛 → 返回 {"ok": True}。
+        B' pivot: 用 chrome_profile_copy_path 而不是 chrome_user_data_dir。
+        """
         from contextlib import contextmanager
         @contextmanager
         def fake_session(**kw):
             assert kw["use_native_chrome"] is True
+            assert kw["chrome_profile_name"] == "Default"  # 副本内固定 Default
             yield MagicMock()
         monkeypatch.setattr(
             "csm_sidecar.routes.monitor.baidu_browser_session", fake_session,
@@ -322,8 +325,7 @@ class TestBaiduNativeModeRoutes:
             "/api/monitor/baidu/test-native",
             json={
                 "chrome_executable_path": "C:/Chrome/chrome.exe",
-                "chrome_user_data_dir": "C:/User Data",
-                "chrome_profile_name": "Default",
+                "chrome_profile_copy_path": "C:/CSM-Data/baidu_chrome_profile_copy",
             },
         )
         assert resp.status_code == 200
@@ -342,14 +344,67 @@ class TestBaiduNativeModeRoutes:
             "/api/monitor/baidu/test-native",
             json={
                 "chrome_executable_path": "C:/bad/chrome.exe",
-                "chrome_user_data_dir": "C:/User Data",
-                "chrome_profile_name": "Default",
+                "chrome_profile_copy_path": "C:/CSM-Data/baidu_chrome_profile_copy",
             },
         )
         assert resp.status_code == 200
         body = resp.json()
         assert body["ok"] is False
         assert "chrome.exe not found" in body["error"]
+
+    def test_copy_profile_success(self, client, monkeypatch):
+        """copy_profile_to 成功 → 返回 ok=True + copy_path + metadata，config 更新。"""
+        fake_meta = {
+            "imported_at": "2026-05-25T10:00:00",
+            "size_mb": 180.5,
+            "elapsed_s": 12.3,
+        }
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.copy_profile_to",
+            lambda **kw: fake_meta,
+        )
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={
+                "source_user_data_dir": "C:/User Data",
+                "source_profile_name": "Default",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert "copy_path" in data
+        assert data["imported_at"] == "2026-05-25T10:00:00"
+        assert data["size_mb"] == 180.5
+        assert data["elapsed_s"] == 12.3
+
+    def test_copy_profile_failure_source_not_found(self, client, monkeypatch):
+        """source profile 不存在 → 返回 ok=False + error，不抛 500。"""
+        def _raise(**kw):
+            raise FileNotFoundError("source profile not found: C:/User Data/Default")
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.copy_profile_to",
+            _raise,
+        )
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={
+                "source_user_data_dir": "C:/User Data",
+                "source_profile_name": "Default",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "source profile not found" in data["error"]
+
+    def test_copy_profile_empty_source_422(self, client):
+        """source_user_data_dir 为空 → Pydantic 验证失败 422。"""
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": ""},
+        )
+        assert resp.status_code == 422
 
     def test_native_config_get_returns_current_settings(self, client):
         resp = client.get("/api/monitor/baidu/native-config")
@@ -359,6 +414,9 @@ class TestBaiduNativeModeRoutes:
         assert "chrome_executable_path" in data
         assert "chrome_user_data_dir" in data
         assert "chrome_profile_name" in data
+        # B' new fields
+        assert "chrome_profile_copy_path" in data
+        assert "chrome_profile_copy_imported_at" in data
 
     def test_native_config_post_persists(self, client):
         resp = client.post(

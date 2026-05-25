@@ -108,3 +108,135 @@ class TestListProfiles:
         )
         result = chrome_detect.list_profiles(str(tmp_path))
         assert result[0]["account_email"] is None
+
+
+# ── copy_profile_to ───────────────────────────────────────────────
+class TestCopyProfileTo:
+    def _make_source(self, tmp_path, profile_name: str = "Default") -> tuple:
+        """Create a minimal fake Chrome User Data dir with a profile + Local State."""
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+        profile = user_data / profile_name
+        profile.mkdir()
+        # A few fake files inside the profile
+        (profile / "Cookies").write_bytes(b"fake-cookies-data-" * 100)
+        (profile / "History").write_bytes(b"fake-history-data-" * 100)
+        subdir = profile / "Cache"
+        subdir.mkdir()
+        (subdir / "data_0").write_bytes(b"cache" * 50)
+        # Local State (encryption_key reference)
+        (user_data / "Local State").write_text(
+            '{"os_crypt": {"encrypted_key": "dGVzdGtleQ=="}}',
+            encoding="utf-8",
+        )
+        return user_data, profile
+
+    def test_copies_profile_to_default_subdir(self, tmp_path):
+        """副本内层目录固定叫 Default，让 Playwright user_data_dir=target 能找到。"""
+        user_data, _ = self._make_source(tmp_path)
+        target = tmp_path / "copy_dest"
+        result = chrome_detect.copy_profile_to(
+            source_user_data_dir=str(user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+        assert result["ok"] is True if "ok" in result else True  # dict has keys
+        assert (target / "Default").is_dir()
+        assert (target / "Default" / "Cookies").is_file()
+        assert (target / "Default" / "History").is_file()
+        assert (target / "Default" / "Cache" / "data_0").is_file()
+
+    def test_copies_local_state(self, tmp_path):
+        """Local State 必须被复制到副本根目录。"""
+        user_data, _ = self._make_source(tmp_path)
+        target = tmp_path / "copy_dest"
+        chrome_detect.copy_profile_to(
+            source_user_data_dir=str(user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+        assert (target / "Local State").is_file()
+        text = (target / "Local State").read_text(encoding="utf-8")
+        assert "encrypted_key" in text
+
+    def test_returns_metadata(self, tmp_path):
+        """返回 imported_at + size_mb + elapsed_s。"""
+        user_data, _ = self._make_source(tmp_path)
+        target = tmp_path / "copy_dest"
+        meta = chrome_detect.copy_profile_to(
+            source_user_data_dir=str(user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+        assert "imported_at" in meta
+        assert "size_mb" in meta
+        assert "elapsed_s" in meta
+        assert isinstance(meta["size_mb"], float)
+        assert meta["size_mb"] >= 0  # may round to 0.0 for tiny test files
+        assert "T" in meta["imported_at"]  # ISO8601 timestamp has 'T'
+
+    def test_clears_old_copy_before_reimport(self, tmp_path):
+        """重新导入时先清旧副本，不留残留文件。"""
+        user_data, _ = self._make_source(tmp_path)
+        target = tmp_path / "copy_dest"
+        # First import
+        chrome_detect.copy_profile_to(
+            source_user_data_dir=str(user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+        # Plant a stale file in the copy
+        stale = target / "Default" / "stale_file.db"
+        stale.write_bytes(b"stale")
+        assert stale.is_file()
+        # Second import should wipe the target first
+        chrome_detect.copy_profile_to(
+            source_user_data_dir=str(user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+        assert not stale.is_file(), "stale file should have been cleared on re-import"
+
+    def test_raises_file_not_found_when_source_missing(self, tmp_path):
+        """source profile 不存在 → FileNotFoundError（不是静默失败）。"""
+        import pytest
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+        # No profile dir created
+        with pytest.raises(FileNotFoundError, match="source profile not found"):
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(user_data),
+                source_profile_name="NonExistent",
+                target_path=str(tmp_path / "dest"),
+            )
+
+    def test_works_without_local_state(self, tmp_path):
+        """没有 Local State 文件时不抛，只复制 profile。"""
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+        profile = user_data / "Default"
+        profile.mkdir()
+        (profile / "Cookies").write_bytes(b"data")
+        # No "Local State" file
+        target = tmp_path / "dest"
+        meta = chrome_detect.copy_profile_to(
+            source_user_data_dir=str(user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+        assert (target / "Default" / "Cookies").is_file()
+        assert not (target / "Local State").is_file()
+        assert "imported_at" in meta
+
+    def test_non_default_profile_name_maps_to_default(self, tmp_path):
+        """源 Profile 1 → 副本内层目录叫 Default（不是 Profile 1）。"""
+        user_data, _ = self._make_source(tmp_path, profile_name="Profile 1")
+        target = tmp_path / "dest"
+        chrome_detect.copy_profile_to(
+            source_user_data_dir=str(user_data),
+            source_profile_name="Profile 1",
+            target_path=str(target),
+        )
+        # target inner dir is always Default
+        assert (target / "Default").is_dir()
+        assert (target / "Default" / "Cookies").is_file()
