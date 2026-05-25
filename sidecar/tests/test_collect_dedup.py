@@ -85,3 +85,33 @@ def test_is_video_in_monitor_tasks_wrong_type_not_matched(temp_db):
 def test_is_video_in_monitor_tasks_unknown_platform(temp_db):
     """未知 platform 直接返回 False，不查 monitor。"""
     assert mining_storage.is_video_in_monitor_tasks(temp_db, "weibo", "7000000000001") is False
+
+
+def test_is_video_tracked_anywhere_in_videos(temp_db):
+    conn = temp_db
+    conn.execute(
+        "INSERT INTO videos(platform, platform_video_id, url, title) VALUES (?, ?, ?, ?)",
+        ("douyin", "7000000000001", "https://www.douyin.com/video/7000000000001", "x"),
+    )
+    assert mining_storage.is_video_tracked_anywhere(conn, "douyin", "7000000000001") is True
+
+
+def test_is_video_tracked_anywhere_in_monitor(temp_db):
+    conn = temp_db
+    _create_monitor_task(
+        conn, "douyin_comment",
+        "https://www.douyin.com/video/7000000000001"
+    )
+    assert mining_storage.is_video_tracked_anywhere(conn, "douyin", "7000000000001") is True
+
+
+def test_is_video_tracked_anywhere_nowhere(temp_db):
+    assert mining_storage.is_video_tracked_anywhere(temp_db, "douyin", "9999999999") is False
+
+
+def test_idx_monitor_tasks_target_url_exists(temp_db):
+    """V6 migration 必须建索引。"""
+    rows = temp_db.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_monitor_tasks_target_url'"
+    ).fetchall()
+    assert len(rows) == 1

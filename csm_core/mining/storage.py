@@ -1146,3 +1146,31 @@ def is_video_in_monitor_tasks(
         if extracted == platform_video_id:
             return True
     return False
+
+
+def is_video_tracked_anywhere(
+    conn: sqlite3.Connection,
+    platform: str,
+    platform_video_id: str,
+) -> bool:
+    """采集时用：videos OR monitor_tasks 任一存在即跳过。"""
+    return (
+        is_video_in_videos_table(conn, platform, platform_video_id)
+        or is_video_in_monitor_tasks(conn, platform, platform_video_id)
+    )
+
+
+# V6 migration: composite index on monitor_tasks for dedup lookup performance.
+_DDL_V6_MINING: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_monitor_tasks_target_url "
+    "ON monitor_tasks(type, target_url)",
+]
+
+
+def apply_v6_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v5 → v6.
+
+    Idempotent: CREATE INDEX IF NOT EXISTS handles re-runs.
+    """
+    for stmt in _DDL_V6_MINING:
+        conn.execute(stmt)
