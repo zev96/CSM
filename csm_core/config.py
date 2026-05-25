@@ -54,6 +54,8 @@ class BaiduKeywordConfig(BaseModel):
     # native mode 真正用的是 copy_path，不是 chrome_user_data_dir
     chrome_profile_copy_path: str | None = None
     chrome_profile_copy_imported_at: str | None = None  # ISO8601 时间戳
+    # B' 副本上次登录百度的时间（用户在副本里手动登录后写入）。None = 从未登录。
+    chrome_profile_copy_last_logged_in_at: str | None = None
     breaker_failures: int = 3
     breaker_cooldown_seconds: int = 600
 

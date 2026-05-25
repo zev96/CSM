@@ -435,3 +435,57 @@ class TestBaiduNativeModeRoutes:
         assert data["use_native_chrome"] is True
         assert data["chrome_executable_path"] == "C:/x/chrome.exe"
         assert data["chrome_profile_name"] == "Profile 1"
+
+    def test_launch_login_window_returns_error_when_copy_not_imported(self, client, monkeypatch):
+        # 让 config 返回 copy_path=None
+        fake_cfg = MagicMock()
+        fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = None
+        fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/x/chrome.exe"
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor._cfg_svc.load", lambda: fake_cfg,
+        )
+        resp = client.post("/api/monitor/baidu/launch-login-window")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "导入" in data["error"]
+
+    def test_launch_login_window_returns_error_when_no_executable(self, client, monkeypatch):
+        fake_cfg = MagicMock()
+        fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = "C:/x/copy"
+        fake_cfg.monitor.baidu_keyword.chrome_executable_path = None
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor._cfg_svc.load", lambda: fake_cfg,
+        )
+        resp = client.post("/api/monitor/baidu/launch-login-window")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+
+    def test_launch_login_window_spawns_subprocess(self, client, monkeypatch):
+        fake_cfg = MagicMock()
+        fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = "C:/x/copy"
+        fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/Chrome/chrome.exe"
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor._cfg_svc.load", lambda: fake_cfg,
+        )
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.wait.return_value = 0
+        captured: dict = {}
+        def fake_popen(args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return fake_proc
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        resp = client.post("/api/monitor/baidu/launch-login-window")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["pid"] == 12345
+        # 断言启动命令包含正确的 user-data-dir + URL
+        args = captured["args"]
+        assert args[0] == "C:/Chrome/chrome.exe"
+        assert "--user-data-dir=C:/x/copy" in args
+        assert "--profile-directory=Default" in args
+        assert "https://www.baidu.com" in args

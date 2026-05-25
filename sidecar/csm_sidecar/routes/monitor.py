@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -546,6 +547,7 @@ def baidu_get_native_config() -> dict[str, Any]:
         "chrome_profile_name": bk.chrome_profile_name,
         "chrome_profile_copy_path": bk.chrome_profile_copy_path,
         "chrome_profile_copy_imported_at": bk.chrome_profile_copy_imported_at,
+        "chrome_profile_copy_last_logged_in_at": bk.chrome_profile_copy_last_logged_in_at,
     }
 
 
@@ -560,3 +562,67 @@ def baidu_set_native_config(body: NativeConfigBody) -> dict[str, Any]:
     bk.chrome_profile_name = body.chrome_profile_name
     _cfg_svc.save(cfg)
     return {"ok": True}
+
+
+# 启动副本 Chrome 让用户登录百度（B' 必须 ── DPAPI 复制不了 cookies）
+@router.post("/api/monitor/baidu/launch-login-window")
+def baidu_launch_login_window() -> dict[str, Any]:
+    """Spawn detached headed Chrome 副本 + 打开 baidu.com 让用户登录。
+
+    用户在副本里登录后关闭浏览器 → Chrome 把 BDUSS 写入副本 Cookies（用副本
+    Local State master key 加密）→ 后续 fetch 用副本能正常解密。
+
+    本 API 不等待用户登录完成（subprocess 启动后立即返回）；后台线程监听
+    进程退出，进程退出时更新 chrome_profile_copy_last_logged_in_at config。
+    """
+    import subprocess
+    import threading
+    from datetime import datetime
+
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    if not bk.chrome_profile_copy_path:
+        return {"ok": False, "error": "还未导入 Chrome profile 副本，请先点'复制 Chrome profile'"}
+    if not bk.chrome_executable_path:
+        return {"ok": False, "error": "缺 Chrome 可执行文件路径"}
+
+    # Spawn 副本 Chrome detached（独立进程，CSM sidecar 退出不影响它）
+    try:
+        proc = subprocess.Popen(
+            [
+                bk.chrome_executable_path,
+                f"--user-data-dir={bk.chrome_profile_copy_path}",
+                "--profile-directory=Default",
+                "https://www.baidu.com",
+            ],
+            # detached：sidecar 退出不杀子 process
+            creationflags=subprocess.DETACHED_PROCESS if os.name == "nt" else 0,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"启动 Chrome 副本失败: {e}"}
+
+    # 后台监听进程退出 → 更新 last_logged_in_at
+    def _watch_login_window(pid: int) -> None:
+        try:
+            proc.wait()  # 阻塞直到 Chrome 完全退出
+        except Exception:
+            return
+        # Chrome 退出 = 用户关了登录窗 = BDUSS 已经持久化到副本 Cookies
+        cfg2 = _cfg_svc.load()
+        bk2 = cfg2.monitor.baidu_keyword
+        bk2.chrome_profile_copy_last_logged_in_at = datetime.utcnow().isoformat()
+        _cfg_svc.save(cfg2)
+        # 也通过 monitor_bus publish 一个事件给前端
+        from csm_sidecar.monitor_bus import monitor_bus
+        from csm_sidecar.services.monitor_loop import MonitorEvent
+        monitor_bus.publish(MonitorEvent(
+            kind="needs_captcha",  # reuse 现有 event kind 让前端弹通知
+            task_id=0,
+            at=datetime.utcnow(),
+            keyword="副本登录态已保存",
+            kw_idx=0,
+        ))
+
+    threading.Thread(target=_watch_login_window, args=(proc.pid,), daemon=True).start()
+
+    return {"ok": True, "pid": proc.pid}
