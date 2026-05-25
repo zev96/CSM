@@ -1,6 +1,7 @@
 """Tests for cross-table dedup helpers used by mining collection."""
 from __future__ import annotations
 
+import json
 import threading
 
 import pytest
@@ -51,7 +52,6 @@ def test_is_video_in_videos_table_different_platform_same_id(temp_db):
 
 def _create_monitor_task(conn, type_, target_url, my_text="x"):
     """Helper to insert a monitor task directly."""
-    import json
     conn.execute(
         "INSERT INTO monitor_tasks(type, name, target_url, config_json, enabled) "
         "VALUES (?, ?, ?, ?, ?)",
