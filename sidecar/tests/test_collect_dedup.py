@@ -20,6 +20,7 @@ def temp_db(tmp_path, monkeypatch):
     conn = monitor_storage.get_conn()
     yield conn
     conn.close()
+    monitor_storage._local.conn = None  # explicit eviction before monkeypatch undo
 
 
 def test_is_video_in_videos_table_when_present(temp_db):
