@@ -1129,7 +1129,7 @@ def is_video_in_monitor_tasks(
     """monitor_tasks 反查：LIKE + 正则精确匹配。
 
     monitor_tasks 没有独立的 platform_video_id 列，所以走两步：
-      1. LIKE 加速过滤（Task 4 建 idx_monitor_tasks_target_url 索引后进一步提速）
+      1. LIKE 加速过滤（idx_monitor_tasks_target_url 索引加速）
       2. 用 extract_platform_video_id() 正则二次确认，避免 url 子串误判
     """
     task_type = _PLATFORM_TO_MONITOR_TYPE.get(platform)
