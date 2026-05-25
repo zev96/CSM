@@ -28,7 +28,6 @@ from lxml import html as lxml_html
 
 from .. import rate_limit
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask
-from ..drivers import chrome_preflight
 from ..drivers.baidu_browser import baidu_browser_session
 from ..drivers.baidu_login import detect_login_required
 from ..drivers.risk_detector import (
@@ -725,9 +724,9 @@ class BaiduKeywordAdapter:
                 error_message="config.search_keywords (non-empty list) + target_brand required",
             )
 
-        # ── Native mode preflight ────────────────────────────────
-        # use_native_chrome=True → 跑前等用户关 Chrome（OS profile lock）。
-        # 超时返回 error，不进 session。
+        # ── Native mode config ────────────────────────────────────
+        # B' pivot (2026-05-25): 不再调 chrome_preflight ── 副本路径独立 OS lock，
+        # 跟用户日常 Chrome 可以共存。
         #
         # lazy import 避免 csm_core → csm_sidecar 循环；用 config_service.load()
         # 而非 csm_config.get_config() 是为了拿测试 fixture (sidecar/tests/conftest.py
@@ -737,37 +736,32 @@ class BaiduKeywordAdapter:
         baidu_cfg = app_cfg.monitor.baidu_keyword
         use_native = bool(baidu_cfg.use_native_chrome)
 
-        if use_native:
-            if not baidu_cfg.chrome_executable_path or not baidu_cfg.chrome_user_data_dir:
-                return MonitorResult(
-                    task_id=task.id or 0,
-                    checked_at=datetime.utcnow(),
-                    status="error",
-                    rank=-1,
-                    error_message="请在设置中配置 Chrome 路径（chrome_executable_path 和 chrome_user_data_dir）",
-                )
-            try:
-                chrome_preflight.wait_for_chrome_closed(
-                    timeout_s=120,
-                    task_id=task.id or 0,
-                    event_publisher=self._event_publisher,
-                )
-            except chrome_preflight.ChromeStillRunningError as e:
-                return MonitorResult(
-                    task_id=task.id or 0,
-                    checked_at=datetime.utcnow(),
-                    status="error",
-                    rank=-1,
-                    error_message=str(e),
-                )
+        # native 模式必须先导入副本（chrome_profile_copy_path）
+        if use_native and not baidu_cfg.chrome_profile_copy_path:
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="error",
+                rank=-1,
+                error_message="native mode 启用但未导入 Chrome profile 副本，请到设置页点'复制 Chrome profile'",
+            )
+        # native mode 还要 executable
+        if use_native and not baidu_cfg.chrome_executable_path:
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="error",
+                rank=-1,
+                error_message="native mode 启用但缺 Chrome 可执行文件路径，请到设置页配置",
+            )
 
         session_kwargs: dict[str, Any] = {}
         if use_native:
             session_kwargs.update(
                 use_native_chrome=True,
-                user_data_dir=Path(baidu_cfg.chrome_user_data_dir),
+                user_data_dir=Path(baidu_cfg.chrome_profile_copy_path),
                 chrome_executable_path=baidu_cfg.chrome_executable_path,
-                chrome_profile_name=baidu_cfg.chrome_profile_name,
+                chrome_profile_name="Default",  # 副本内固定叫 Default
             )
         # native 强制 headless=False（baidu_browser_session 内部也会忽略）
         # ─────────────────────────────────────────────────────────
