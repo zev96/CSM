@@ -31,6 +31,8 @@ const emit = defineEmits<{
   (e: "delete", id: number): void;
   /** 运行中的任务点「停止」按钮 → 父组件 store.cancelActive() */
   (e: "cancel", id: number): void;
+  /** 任务的 ⋯ 菜单 → 同步到监控：让父组件打开 SyncToMonitorModal */
+  (e: "sync", id: number): void;
 }>();
 
 // ⋯ 下拉菜单：点击 ⋯ 切换；点 outside 自动关；滚动 / 窗口尺寸变也自动关。
@@ -93,6 +95,12 @@ function onDeleteClick(ev: MouseEvent) {
   ev.stopPropagation();
   menuOpen.value = false;
   emit("delete", props.job.id);
+}
+
+function onSyncClick(ev: MouseEvent) {
+  ev.stopPropagation();
+  menuOpen.value = false;
+  emit("sync", props.job.id);
 }
 
 function onCancelClick(ev: MouseEvent) {
@@ -378,6 +386,25 @@ const keywordShort = computed(() => {
           >
             <Icon name="download" :size="12" />
             <span>导出 CSV</span>
+          </button>
+          <button
+            type="button"
+            :disabled="job.status !== 'done' && job.status !== 'partial_done'"
+            class="flex w-full items-center gap-2 text-left"
+            :style="{
+              height: '30px', padding: '0 10px', borderRadius: '7px',
+              fontSize: '12px',
+              color: (job.status === 'done' || job.status === 'partial_done') ? 'var(--ink)' : 'var(--ink-4)',
+              background: 'transparent',
+              cursor: (job.status === 'done' || job.status === 'partial_done') ? 'pointer' : 'not-allowed',
+              opacity: (job.status === 'done' || job.status === 'partial_done') ? 1 : 0.45,
+            }"
+            @mouseenter="if (job.status === 'done' || job.status === 'partial_done') ($event.currentTarget as HTMLElement).style.background = 'var(--card-2)'"
+            @mouseleave="($event.currentTarget as HTMLElement).style.background = 'transparent'"
+            @click="onSyncClick"
+          >
+            <Icon name="upload" :size="12" />
+            <span>同步到监控</span>
           </button>
           <button
             type="button"

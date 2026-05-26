@@ -31,6 +31,8 @@ defineEmits<{
   (e: "delete", id: number): void;
   /** TaskListItem 「停止」按钮转发：取消正在跑的抓取任务 */
   (e: "cancel", id: number): void;
+  /** TaskListItem ⋯ 菜单转发：同步该任务视频到监控 */
+  (e: "sync", id: number): void;
 }>();
 </script>
 
@@ -98,6 +100,7 @@ defineEmits<{
           @export="(id) => $emit('export', id)"
           @delete="(id) => $emit('delete', id)"
           @cancel="(id) => $emit('cancel', id)"
+          @sync="(id) => $emit('sync', id)"
         />
       </template>
 
