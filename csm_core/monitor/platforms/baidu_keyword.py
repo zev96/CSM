@@ -267,8 +267,6 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
         # 里没有真实文章正文（正文 JS 渲染），readability 主内容算法
         # 提不出来。直接拿整个 <body> text_content ── meta / 标题 /
         # nav / 偶尔在 HTML 里残留的 brand 字符串都能被 match_brand 看到。
-        # 准确度比 readability 差（可能含 nav noise），但比 content_len=0
-        # 完全漏检强 ── 用户已确认接受 raw HTML grep 的 false positive。
         raw_text = _extract_raw_body_text(raw)
         if len(raw_text) > len(content):
             return {
@@ -279,6 +277,19 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
                     f"fallback to raw body text ({len(raw_text)} chars)"
                 ),
                 "needs_browser_fallback": False,
+            }
+        # 方案 C 兜底：JS challenge 反爬站（smzdm 等）── 第一次 HTTP 拿到的
+        # 只是 < 500 字符的 JS 探针壳页（probe.js fingerprint check），body
+        # 完全是空的，连 raw_text 也拿不出来。这种 case 让 caller 用 SERP
+        # title 兜底匹配 brand（标题党概率低于反爬概率，且明确 mark 了
+        # is_js_challenge 让 caller 知道是反爬触发的 fallback）。
+        if len(raw) < 500:
+            return {
+                "content": "",
+                "source": "http_js_challenge_no_body",
+                "fetch_error": f"JS challenge shell ({len(raw)} chars HTML), use SERP title fallback",
+                "needs_browser_fallback": False,
+                "is_js_challenge": True,
             }
         return {
             "content": content,
@@ -1195,6 +1206,17 @@ class BaiduKeywordAdapter:
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
+            # 方案 C SPA 反爬兜底：smzdm 等 JS challenge 站 fetch 拿不到任何正文
+            # （< 500 字符的 probe.js 壳页），让 SERP title 参与匹配。只在明确
+            # 反爬触发时启用，不影响 baijiahao/zhihu 等正常抓到正文的 host。
+            if not matched_brand and attempt.get("is_js_challenge"):
+                title = link.get("title", "")
+                matched_brand = match_brand(title, brands)
+                if matched_brand:
+                    logger.info(
+                        "[baidu] js_challenge title fallback matched: host=%s brand=%s title=%r",
+                        host, matched_brand, title[:80],
+                    )
             # 诊断日志（漏检 debug 用）：title / content_len / matched / fetch_error
             # 用 INFO 级让用户开 default log level 就能看到。漏检的 root cause
             # 通常是：① content_len=0（SPA 壳页 / fetch fail）② content_len>200
