@@ -2,6 +2,18 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.9] - 2026-05-26
+
+### Added
+- **「同步到监控」功能**：采集任务完成后，点击任务行三点菜单 → **同步到监控**，可将该批次所有视频的 tier-1 草稿评论一键同步为 `monitor_tasks`（`enabled=False`，默认手动触发）。操作入口只在任务状态为 `done` / `partial_done` 时可用；所有视频都有草稿才能同步（防止漏评论）。弹窗支持设置任务名前缀、`top_n`（1–50）、可选 cron 表达式；同步后展示已创建/跳过重复/无草稿计数。
+- **采集全局去重**：`on_card` 回调新增跨表去重检查（`is_video_tracked_anywhere`）——视频已在 `videos` 表 **或** 已存在对应 `monitor_tasks` 记录时直接跳过，不再写入重复数据。
+- **搜索翻页保护（`max_attempts`）**：三个搜索 adapter（抖音/快手/B 站）新增 `max_attempts` 参数（默认抖音 3、快手 5、B 站 8），超出后停止翻页并 log，防止无限分页触发平台反爬。
+- **V6 数据库迁移**：`monitor_tasks(type, target_url)` 联合索引（`idx_monitor_tasks_target_url`），加速去重反查。
+- **`csm_core/mining/config.py`**：新增 `MAX_ATTEMPTS_PER_PLATFORM`、`PAGE_DELAY_RANGE_SEC`、`DEFAULT_MONITOR_TOP_N`、`DEFAULT_MONITOR_SCRAPE_TOP_N` 常量集中管理。
+- **`csm_core/mining/sync_to_monitor.py`**：`SyncParams` / `SyncResult` dataclass + `run()` 服务函数（幂等，单条失败不中断整批，收集到 `errors[]`）。
+- **HTTP 端点 `POST /api/mining/jobs/{job_id}/sync_to_monitor`**：带 404 / 409（状态未完成 / 未全部评论）/ 422（参数校验）防护。
+- 新增单测 24 条：`test_collect_dedup.py`（11 条）、`test_sync_to_monitor.py`（7 条）、`test_sync_to_monitor_api.py`（6 条）。
+
 ## [0.5.8] - 2026-05-25
 
 ### Fixed
