@@ -130,7 +130,12 @@ class MonitorLoop:
         self._adapters = adapters if adapters is not None else dict(ADAPTERS)
         # Clock is injectable for the same reason: tests fast-forward
         # without sleeping for 60s.
-        self._clock = clock or datetime.now
+        # ⚠ 用 utcnow（不是 datetime.now）：storage 把 timestamp 当 UTC 存（标 Z 后缀），
+        # 而 csm_core/monitor/platforms/*.py 的成功路径都用 datetime.utcnow。如果这里用
+        # datetime.now（local time），失败路径 timestamp 比成功路径晚 8 小时（CST），
+        # ORDER BY checked_at DESC 把 risk_control result 排到 ok 后面 → 前端误展示
+        # 历史 banner。统一 UTC。
+        self._clock = clock or datetime.utcnow
 
         self._scheduler: BackgroundScheduler | None = None
         self._executor: ThreadPoolExecutor | None = None
