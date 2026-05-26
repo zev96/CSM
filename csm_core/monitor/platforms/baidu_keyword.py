@@ -263,6 +263,23 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
 
     content = _extract_readable_text(raw)
     if len(content) < _HTTP_MIN_CONTENT_CHARS:
+        # 方案 A 兜底：SPA / 前端渲染站（如 post.smzdm.com）服务端 HTML
+        # 里没有真实文章正文（正文 JS 渲染），readability 主内容算法
+        # 提不出来。直接拿整个 <body> text_content ── meta / 标题 /
+        # nav / 偶尔在 HTML 里残留的 brand 字符串都能被 match_brand 看到。
+        # 准确度比 readability 差（可能含 nav noise），但比 content_len=0
+        # 完全漏检强 ── 用户已确认接受 raw HTML grep 的 false positive。
+        raw_text = _extract_raw_body_text(raw)
+        if len(raw_text) > len(content):
+            return {
+                "content": raw_text,
+                "source": "http_raw_fallback",
+                "fetch_error": (
+                    f"readable too short ({len(content)} chars), "
+                    f"fallback to raw body text ({len(raw_text)} chars)"
+                ),
+                "needs_browser_fallback": False,
+            }
         return {
             "content": content,
             "source": "http",
@@ -276,6 +293,33 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
         "fetch_error": None,
         "needs_browser_fallback": False,
     }
+
+
+def _extract_raw_body_text(raw_html: str) -> str:
+    """lxml fallback ── 不走 readability 主内容识别，直接拿 <body> text。
+
+    用于 SPA / 前端渲染站（smzdm 等）── readability 找不到主内容但 HTML
+    里仍有 brand 字符串（meta、og:title、nav 链接、JSON-LD 等）的场景。
+    准确度低于 readability，但比 content_len=0 漏检强。
+
+    script / style tag 被 lxml 的 text_content() 自动 strip 在文本之外，
+    所以不会拿到 JS 代码 noise。但 SPA 的 inline JSON state（写在 <script
+    type="application/json"> 里）会被 strip ── 那部分需要更专门的 SPA
+    解析器（方案 C），本 fallback 不 cover。
+    """
+    if not raw_html.strip():
+        return ""
+    try:
+        doc = lxml_html.fromstring(raw_html)
+    except Exception as e:
+        logger.info("raw body text extraction failed: %s", e)
+        return ""
+    body = doc.find(".//body") if doc is not None else None
+    target = body if body is not None else doc
+    try:
+        return (target.text_content() or "").strip()
+    except Exception:
+        return ""
 
 
 def _extract_readable_text(raw_html: str) -> str:
