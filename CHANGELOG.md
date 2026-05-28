@@ -2,9 +2,12 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [0.5.9] - 2026-05-26
+## [0.5.9] - 2026-05-28
 
 ### Added
+- **百度排名监测「原生 Chrome 副本」模式（方案 B'，默认关闭）**：针对百度对自动化浏览器（Patchright 指纹）的强反爬，新增可选的原生 Chrome 模式。设置 → 百度抓取 一键把用户日常 Chrome profile **复制**到 CSM 独占目录（`<config_dir>/baidu_chrome_profile_copy/`，非 Chrome 默认目录——直接挂默认目录会被 Chrome 91+ 拒绝 "DevTools remote debugging requires a non-default data directory"），用真实 cookie/历史/书签伪装抓取。复制时跳过 Cache / Code Cache / Service Worker / GPUCache / Crashpad 等临时目录（实测 ~14GB → ~500MB）。因 DPAPI 限制副本 cookie 启动时被清空，提供「在副本里登录百度」一键按钮（spawn headed Chrome、监听退出、记录上次登录时间），登录一次后持久复用。共 7 个新 monitor 路由（`detect-chrome` / `list-profiles` / `copy-profile` / `launch-login-window` / `test-native` + `native-config` GET/POST）；SERP `page.goto` 超时放宽到 60s（副本 Chrome 首次冷启动 + extension 初始化需 ~30-45s）。
+- **百度抓取设置页**：新建 `BaiduScrapeSettings.vue`（设置 → 工作流 → 百度抓取），原生模式开关、检测 Chrome、导入 profile（10 分钟超时容大 profile）、上次登录时间、测试抓取均在 UI 内完成，开关切换即自动保存。
+- **系统通知（`@tauri-apps/plugin-notification`）**：新增 `useSystemNotify` composable（无权限时静默降级），原生模式「需人工解验证码 / 监控完成」等场景弹桌面通知；前端首次接入 vitest 测试运行器。
 - **「同步到监控」功能**：采集任务完成后，点击任务行三点菜单 → **同步到监控**，可将该批次所有视频的 tier-1 草稿评论一键同步为 `monitor_tasks`（`enabled=False`，默认手动触发）。操作入口只在任务状态为 `done` / `partial_done` 时可用；所有视频都有草稿才能同步（防止漏评论）。弹窗支持设置任务名前缀、`top_n`（1–50）、可选 cron 表达式；同步后展示已创建/跳过重复/无草稿计数。
 - **采集全局去重**：`on_card` 回调新增跨表去重检查（`is_video_tracked_anywhere`）——视频已在 `videos` 表 **或** 已存在对应 `monitor_tasks` 记录时直接跳过，不再写入重复数据。
 - **搜索翻页保护（`max_attempts`）**：三个搜索 adapter（抖音/快手/B 站）新增 `max_attempts` 参数（默认抖音 3、快手 5、B 站 8），超出后停止翻页并 log，防止无限分页触发平台反爬。
@@ -13,6 +16,22 @@
 - **`csm_core/mining/sync_to_monitor.py`**：`SyncParams` / `SyncResult` dataclass + `run()` 服务函数（幂等，单条失败不中断整批，收集到 `errors[]`）。
 - **HTTP 端点 `POST /api/mining/jobs/{job_id}/sync_to_monitor`**：带 404 / 409（状态未完成 / 未全部评论）/ 422（参数校验）防护。
 - 新增单测 24 条：`test_collect_dedup.py`（11 条）、`test_sync_to_monitor.py`（7 条）、`test_sync_to_monitor_api.py`（6 条）。
+- 百度原生模式新增大量后端单测：`test_chrome_detect.py`、`test_chrome_preflight.py`、`test_baidu_browser.py`、`test_monitor_routes.py`、`test_monitor_bus.py`、`test_config_routes.py` 及 `test_baidu_keyword.py` 扩充（合计数百行）。
+
+### Changed
+- **软着陆验证码风控模式复用 `risk_detector`**：`_try_human_solve` 不再 hardcode 风控 URL/DOM 子集，改引用 `risk_detector._URL_PATTERNS` / `_DOM_SELECTORS` 同源，杜绝与 `detect_risk` drift。
+- **文章漏检诊断日志**：`_check_block` 每条 article fetch 记一行 INFO log（rank / host / content_len / matched / title / fetch_error），用户报漏检时跑一次即可定位根因（壳页 / 抓取失败 / 正文无字面品牌词）。
+
+### Fixed
+- **强反爬站文章漏检（什么值得买 / 知乎等品牌软文）**：`fetch_article_http` 是 curl_cffi 纯 HTTP GET，不渲染 JS，SPA 反爬站只拿到 < 500 字符的 JS challenge 壳页 → 品牌词匹配必然漏。新增多级兜底链：① readability 提取过短时 fallback 抽整个 `<body>` 文本（`http_raw_fallback`）；② 壳页标记 `is_js_challenge` 时 fallback 到 SERP title 匹配品牌；③ `fetch_article_browser_isolated` 用独立 tab 渲染 SPA 后提正文（不污染百度主 page，B' 副本模式独有）；④ 文章级软着陆验证码：smzdm 等弹验证码时保持 tab 打开 + 弹通知 + 轮询等用户手动解（最多 180s），解掉继续提正文，超时才退到 title 兜底。
+- **验证码解完判定卡死到超时**：解完判定改用正文 body 长度（≥ 800 字）而非「验证码关键词消失」——smzdm 正文页 `<head>` 残留 captcha SDK 引用会让旧逻辑永远以为还在验证码页，用户已进正文却卡到 180s 超时。
+- **监测失败路径时间戳用错时区，误报「百度账号未登录」**：`MonitorLoop._clock` 默认 `datetime.now`（本地时间）但 `checked_at` 带 'Z' 当 UTC 存，比成功路径（`utcnow`）晚 8 小时 → `ORDER BY checked_at DESC` 把过期的 `risk_control` 断点排到 `ok` 之前 → 副本登录成功跑出 rank 仍显示风控 banner。默认 clock 改 `datetime.utcnow`。
+- **首页「视频抓取」卡片显示抓取时的旧数量**：hero 数字与状态原先用 `progress.got`（抓取时计数）+ 原始抓取状态，裁剪 + 评论完的任务仍显示「30 / 完成」。改为 hero = Σ live `video_count`（后端已排除软删），逐行状态镜像 `TaskListItem`（抓取中 / 进行中 / 已完成 / 失败 / 排队）。
+- **软删视频仍被计入致同步到监控 409**：同步闸门 / 同步服务 / 任务列表计数 / 卡片徽章原先都数原始抓取总数，裁剪后评论完的任务显示「进行中 · 30 条」并 409（「13/30」）。所有 per-job 计数加 `WHERE v.excluded=0`（与 `list_videos` 对齐）；同步端点 404/409 文案中文化。
+- **同步弹窗崩溃 + 未处理 rejection**：`TaskListItem` `@mouseenter` 内联用了 `if` 语句（Vue 模板只接受表达式）导致整个 MiningView 动态 import 崩溃，改三元；`SyncToMonitorModal` 重设计对齐 `BatchImportTaskModal` 布局，并吞掉已通过错误条展示过的 409，避免冒泡成原生 Tauri 错误弹窗。
+- **模板文件夹扫描砍错目录**：设置页「默认模板目录」是文件夹选择器，旧 `resolve_dir()` 无条件 `.parent` 上提一级（只对 `.json` 文件路径成立），选了文件夹反而扫不到里面的模板。改用所选目录本身扫描。
+- **透明无边框窗口需切页/右键才重绘**：关闭 `CalculateNativeWinOcclusion`（保留 Tauri 其余默认 browser args），修复所有状态变更不刷新 UI、以及 onboarding 点「下一步」无反应（step 已切但 WebView2 未重绘）。
+- **重装后反复弹欢迎页**：`cfg.load` 轮询重试到成功再判首启、拿不到 config 时不弹欢迎页——修复重装后 WebView2 localStorage flag 被卸载器清掉 + sidecar handshake 早于 HTTP 就绪的冷启动竞态，导致用户名仍在却反复弹欢迎页。
 
 ## [0.5.8] - 2026-05-25
 
