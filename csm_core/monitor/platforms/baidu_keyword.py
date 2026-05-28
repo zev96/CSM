@@ -424,6 +424,11 @@ def _is_captcha_page(raw: str, url: str) -> bool:
     detect_risk_by_* 是百度专用 pattern，这里再补一组跨站通用的验证码
     关键词（smzdm / 知乎 / 其他站）。
     """
+    # 正文 body text 已经够长 → 不是验证码页（即使 <head> 残留 captcha SDK
+    # 的 script 引用含 "captcha" 字样也不误判）。验证码页 body 很短（验证 UI
+    # 文字少），正文页 body 几 KB。这条短路避免"进了正文还被判验证码"卡死。
+    if len(_extract_raw_body_text(raw)) >= 800:
+        return False
     if detect_risk_by_text(raw) or detect_risk_by_url(url):
         return True
     head = raw[:5000]
@@ -515,7 +520,12 @@ def fetch_article_browser_isolated(
                     cur_url = new_page.url or ""
                 except Exception:
                     break
-                if not _is_captcha_page(raw, cur_url):
+                # 解完判定：用"正文是否出现"（body text 够长）而不是"验证码
+                # 关键词消失"。smzdm 正文页 <head> 残留 captcha SDK 的
+                # script 引用（probe.js 等含 "captcha" 字样），靠关键词消失
+                # 会误判"还在验证码页"卡到超时。验证码页 body text 很短
+                # (< 300)，正文页很长 (> 800) ── 用长度区分稳得多。
+                if len(_extract_raw_body_text(raw)) >= 800:
                     solved = True
                     logger.info("[baidu] article captcha solved, resuming: %s", url[:80])
                     # 解完后页面可能刚跳转，再等一下让正文渲染
