@@ -418,33 +418,47 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
     }
 
 
+def _is_captcha_page(raw: str, url: str) -> bool:
+    """检测一段 rendered HTML + URL 是不是验证码 / 反爬页。
+
+    detect_risk_by_* 是百度专用 pattern，这里再补一组跨站通用的验证码
+    关键词（smzdm / 知乎 / 其他站）。
+    """
+    if detect_risk_by_text(raw) or detect_risk_by_url(url):
+        return True
+    head = raw[:5000]
+    return any(
+        kw in head
+        for kw in (
+            "人机验证", "滑动验证", "请完成安全验证", "拖动滑块",
+            "captcha", "verify you are human", "security check",
+        )
+    )
+
+
 def fetch_article_browser_isolated(
     context: Any,
     url: str,
     *,
     timeout_ms: int = 20000,
     spa_wait_ms: int = 3000,
+    solve_timeout_s: int = 180,
+    solve_poll_s: float = 2.0,
 ) -> dict[str, Any]:
     """方案 B：用独立 tab 打开文章 URL 让 JS 跑完后提正文。
 
     跟 ``fetch_article_browser`` 的区别：不用 baidu 主 page，而是
-    ``context.new_page()`` 开一个独立 tab。这样：
-    - 不污染 baidu 主 page 的 navigation/cookies（baidu 风控不会怪罪连续打开 N 个 article）
-    - 对反爬站（zhihu / smzdm 等 HTTP 拿不到正文）能用真正"点击进文章"
-      的方式拿 rendered HTML
+    ``context.new_page()`` 开一个独立 tab，对反爬站（zhihu / smzdm 等
+    HTTP 拿不到正文）用真正"点击进文章"的方式拿 rendered HTML。
 
-    用户 native mode 副本 Chrome 是真实日常 profile ── 知乎/smzdm 都认账，
-    不会撞反爬。
+    **article 级软着陆**（2026-05-28，用户要求）：smzdm 等强反爬站对
+    自动化浏览器弹验证码（用户日常 Chrome 不弹，但 Patchright 有自动化
+    指纹）。检测到验证码页时**不立即关 tab**，而是弹通知 + 保持 tab 打开
+    + 轮询等用户手动解。解完后页面进真正文章 → 拿 rendered HTML 提正文
+    match。超时（默认 180s）才放弃。用户明确要"输验证码进页面后筛正文"，
+    而不是退到 SERP title。
 
-    流程：
-    1. context.new_page() → 独立 tab
-    2. page.goto(url, wait_until="domcontentloaded", timeout=20s)
-    3. wait_for_timeout(spa_wait_ms) ── 给 SPA 跑 JS 渲染时间
-    4. page.content() 拿 rendered HTML
-    5. readability 提正文，失败 fallback 到 body.text_content
-    6. close 独立 tab
-
-    Returns 跟 fetch_article_http 同 shape。
+    Returns 跟 fetch_article_http 同 shape，额外 is_blocked 字段。
     """
     new_page = None
     try:
@@ -473,6 +487,7 @@ def fetch_article_browser_isolated(
             pass
         try:
             raw = new_page.content() or ""
+            cur_url = new_page.url or ""
         except Exception as e:
             return {
                 "content": "",
@@ -480,37 +495,56 @@ def fetch_article_browser_isolated(
                 "fetch_error": f"new_page.content raised: {e!r}",
                 "needs_browser_fallback": False,
             }
-        # 反爬/验证码页检测 ── smzdm 等强反爬站对自动化浏览器弹验证码（用户
-        # 日常 Chrome 不弹，但 Patchright 启动的有自动化指纹）。渲染出来是
-        # 验证码页时，里面没有真实正文 → 标 is_blocked 让 caller 回退 SERP
-        # title，而不是把验证码文案当正文（白白漏检 + 误导用户手动解）。
-        cur_url = ""
-        try:
-            cur_url = new_page.url or ""
-        except Exception:
-            pass
-        blocked = bool(detect_risk_by_text(raw) or detect_risk_by_url(cur_url))
-        # 通用验证码关键词（detect_risk_by_text 是百度专用 pattern，补一组
-        # 跨站通用的）
-        if not blocked:
-            low = raw[:5000]
-            blocked = any(
-                kw in low for kw in ("人机验证", "滑动验证", "请完成安全验证", "captcha", "verify you are human")
+
+        # article 级软着陆：检测到验证码页 → 弹通知 + 等用户手动解
+        if _is_captcha_page(raw, cur_url):
+            _notify(
+                title="CSM 文章验证",
+                body=f"文章页需要验证（{cur_url[:50]}），请在弹出的浏览器标签页完成验证后等待自动继续",
             )
+            logger.info("[baidu] article captcha, waiting for human solve: %s", url[:80])
+            deadline = time.monotonic() + solve_timeout_s
+            solved = False
+            while time.monotonic() < deadline:
+                try:
+                    new_page.wait_for_timeout(int(solve_poll_s * 1000))
+                except Exception:
+                    break
+                try:
+                    raw = new_page.content() or ""
+                    cur_url = new_page.url or ""
+                except Exception:
+                    break
+                if not _is_captcha_page(raw, cur_url):
+                    solved = True
+                    logger.info("[baidu] article captcha solved, resuming: %s", url[:80])
+                    # 解完后页面可能刚跳转，再等一下让正文渲染
+                    try:
+                        new_page.wait_for_timeout(spa_wait_ms)
+                        raw = new_page.content() or ""
+                    except Exception:
+                        pass
+                    break
+            if not solved:
+                logger.warning("[baidu] article captcha solve timeout: %s", url[:80])
+                return {
+                    "content": "",
+                    "source": "browser_isolated",
+                    "fetch_error": f"验证码解题超时（{solve_timeout_s}s）",
+                    "needs_browser_fallback": False,
+                    "is_blocked": True,
+                }
 
         # readability 提正文，失败 fallback raw body text
         text = _extract_readable_text(raw)
         if len(text) < _HTTP_MIN_CONTENT_CHARS:
             text = _extract_raw_body_text(raw)
         return {
-            "content": "" if blocked else text,
+            "content": text,
             "source": "browser_isolated",
-            "fetch_error": (
-                "反爬/验证码页" if blocked
-                else (None if text else f"browser_isolated empty (raw={len(raw)} chars)")
-            ),
+            "fetch_error": None if text else f"browser_isolated empty (raw={len(raw)} chars)",
             "needs_browser_fallback": False,
-            "is_blocked": blocked,
+            "is_blocked": False,
         }
     finally:
         if new_page is not None:
