@@ -1,0 +1,43 @@
+name: CI
+
+# Lightweight pre-release gate. The heavy PyInstaller + Tauri/NSIS release
+# build lives in release.yml (tag-triggered) and is intentionally NOT
+# duplicated here. The point of this workflow is to catch the cheap,
+# high-value failures at PR time instead of only when a release tag is cut:
+#   - vue-tsc strict type errors
+#   - package.json / package-lock.json desync (the npm ci step below)
+# A Python (pytest) job is deliberately omitted for now — the suite needs a
+# triage pass first; add it here once it's green.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch / PR cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (vue-tsc + vite + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # `npm ci` is strict about package.json / package-lock.json being in
+      # sync — this is the step that would have caught the v0.5.9 esbuild
+      # lockfile desync before the release tag.
+      - run: npm ci
+      # `npm run build` == `vue-tsc -b && vite build`.
+      - name: Typecheck + build
+        run: npm run build
+      - name: Unit tests (vitest)
+        run: npm run test
