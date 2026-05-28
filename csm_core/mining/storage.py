@@ -428,23 +428,29 @@ def get_job(job_id: int) -> dict[str, Any] | None:
 def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
     conn = get_conn()
     # 在 mining_jobs SELECT 里挂两个相关子查询，给每个 job 算出：
-    #   _video_count     —— 该 job 通过 video_source_keywords 关联的视频数
+    #   _video_count     —— 该 job 关联的、**未被删除（excluded=0）** 的视频数
     #                       （COUNT DISTINCT 因为同一视频可能命中多个关键词）
     #   _commented_count —— 同上但 only videos.already_commented=1
     # 前端 TaskListItem 用 (commented_count >= video_count) 判定「已完成」/
     # 「进行中」（用户要求"全部已评论=已完成，否则=进行中"），跟纯
     # mining_jobs.status（抓取层面的成功/失败）解耦。
+    # ⚠ 必须过滤 v.excluded=0：用户抓取后会删（软删 excluded=1）一批视频，
+    #   两个计数都要按「当前实际剩余」算，否则分母虚高 → 永远 commented<video
+    #   → chip 卡在「进行中」、同步守卫误判未评论完。与 list_videos 的
+    #   `v.excluded=0` 口径保持一致。
     # idx_vsk_job 索引覆盖；少量 jobs 时性能可忽略。
     rows = conn.execute(
         """
         SELECT mj.*,
-               (SELECT COUNT(DISTINCT vsk.video_id)
-                FROM video_source_keywords vsk
-                WHERE vsk.job_id = mj.id) AS _video_count,
+               (SELECT COUNT(DISTINCT v.id)
+                FROM videos v
+                JOIN video_source_keywords vsk ON vsk.video_id = v.id
+                WHERE vsk.job_id = mj.id AND v.excluded = 0) AS _video_count,
                (SELECT COUNT(DISTINCT v.id)
                 FROM videos v
                 JOIN video_source_keywords vsk2 ON vsk2.video_id = v.id
-                WHERE vsk2.job_id = mj.id AND v.already_commented = 1) AS _commented_count
+                WHERE vsk2.job_id = mj.id AND v.already_commented = 1
+                      AND v.excluded = 0) AS _commented_count
         FROM mining_jobs mj
         ORDER BY mj.created_at DESC LIMIT ?
         """,

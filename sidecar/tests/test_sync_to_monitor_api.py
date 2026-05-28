@@ -107,7 +107,7 @@ def test_sync_404_unknown_job(client: TestClient, monitor_db: Path):
     """POST with a job_id that does not exist → 404."""
     r = client.post("/api/mining/jobs/9999/sync_to_monitor", json=_BODY)
     assert r.status_code == 404
-    assert "job not found" in r.json()["detail"]
+    assert "未找到" in r.json()["detail"]
 
 
 def test_sync_409_job_not_done(client: TestClient, monitor_db: Path):
@@ -115,7 +115,7 @@ def test_sync_409_job_not_done(client: TestClient, monitor_db: Path):
     job_id = _create_job(status="running")
     r = client.post(f"/api/mining/jobs/{job_id}/sync_to_monitor", json=_BODY)
     assert r.status_code == 409
-    assert "running" in r.json()["detail"]
+    assert "running" in r.json()["detail"]  # status echoed in the zh message
 
 
 def test_sync_409_not_all_commented(client: TestClient, monitor_db: Path):
@@ -126,7 +126,7 @@ def test_sync_409_not_all_commented(client: TestClient, monitor_db: Path):
 
     r = client.post(f"/api/mining/jobs/{job_id}/sync_to_monitor", json=_BODY)
     assert r.status_code == 409
-    assert "not all videos have comments" in r.json()["detail"]
+    assert "未填写评论" in r.json()["detail"]
 
 
 def test_sync_422_top_n_zero(client: TestClient, monitor_db: Path):
@@ -147,3 +147,32 @@ def test_sync_422_empty_prefix(client: TestClient, monitor_db: Path):
         json={"task_name_prefix": "", "top_n": 5},
     )
     assert r.status_code == 422
+
+
+def _exclude_video(video_id: int) -> None:
+    """Soft-delete a video (excluded=1), mirroring storage.soft_delete_video."""
+    monitor_storage.get_conn().execute(
+        "UPDATE videos SET excluded=1 WHERE id=?", (video_id,)
+    )
+
+
+def test_sync_excludes_soft_deleted_videos(client: TestClient, monitor_db: Path):
+    """Soft-deleted (excluded=1) videos drop out of the total, so an
+    all-commented job stays syncable after the user prunes the batch.
+
+    2 commented videos + 1 soft-deleted uncommented video. Without the
+    excluded filter the gate would see total=3 commented=2 → spurious 409.
+    With it: total=2 commented=2 → 200, created=2 (the deleted one is never
+    synced either).
+    """
+    job_id = _create_job(status="done")
+    _add_video_with_comment(job_id, "v1", "comment one")
+    _add_video_with_comment(job_id, "v2", "comment two")
+    vid3 = _add_video_with_comment(job_id, "v3", None)  # no comment
+    _exclude_video(vid3)
+
+    r = client.post(f"/api/mining/jobs/{job_id}/sync_to_monitor", json=_BODY)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["created"] == 2
+    assert data["skipped_no_draft"] == 0

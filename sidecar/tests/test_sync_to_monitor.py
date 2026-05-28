@@ -133,6 +133,27 @@ def test_sync_creates_monitor_tasks(db_with_job):
         assert cfg["scrape_top_n"] == 150
 
 
+def test_sync_skips_soft_deleted_videos(db_with_job):
+    """Soft-deleted (excluded=1) videos are not synced at all.
+
+    v1 has a tier=1 draft but is excluded → must drop out of the query, so
+    created counts only v2/v3 and no monitor_task is made for v1.
+    """
+    conn, job_id = db_with_job
+    conn.execute("UPDATE videos SET excluded=1 WHERE platform_video_id='v1'")
+
+    result = sync_to_monitor.run(
+        conn, job_id, SyncParams(task_name_prefix="x", top_n=5)
+    )
+    assert result.created == 2  # v2, v3 (v1 excluded out entirely)
+    assert result.skipped_no_draft == 2  # v4, v5 still counted, no draft
+
+    urls = [r[0] for r in conn.execute(
+        "SELECT target_url FROM monitor_tasks"
+    ).fetchall()]
+    assert not any("/v1" in u for u in urls)
+
+
 def test_sync_skips_dup_in_monitor_tasks(db_with_job_numeric):
     conn, job_id = db_with_job_numeric
     # Pre-insert a monitor_task for 7000000000001 (the first numeric video)

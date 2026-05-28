@@ -5,7 +5,7 @@
 输出：SyncResult{created, skipped_dup, skipped_no_draft, errors}
 
 约束：
-- 只同步该 job 的 videos
+- 只同步该 job 的 videos，且跳过已删除的（excluded=1）
 - 每条 video 取 tier=1 的 video_comments；text 为空也算"无草稿"
 - 跳过已在 monitor_tasks 出现的 (platform, video_id)
 - 单条失败不中断整批，收集到 errors[]
@@ -53,7 +53,7 @@ def run(
         JOIN video_source_keywords vsk ON vsk.video_id = v.id
         LEFT JOIN video_comments vc
           ON vc.video_id = v.id AND vc.tier = 1
-        WHERE vsk.job_id = ?
+        WHERE vsk.job_id = ? AND v.excluded = 0
         GROUP BY v.id
         """,
         (job_id,),

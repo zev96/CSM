@@ -804,6 +804,10 @@ def bulk_import_templates(body: BulkImportBody) -> dict[str, int]:
 def _get_video_stats_for_job(conn, job_id: int) -> tuple[int, int]:
     """Return (total_videos, commented_videos) for a mining job.
     commented_videos = videos with at least one tier=1, non-empty text comment.
+
+    Excludes soft-deleted videos (v.excluded=1): users often scrape a batch
+    then delete some, and the "all commented?" gate must measure the videos
+    that actually remain — the same v.excluded=0 filter list_videos uses.
     """
     row = conn.execute(
         """
@@ -816,7 +820,7 @@ def _get_video_stats_for_job(conn, job_id: int) -> tuple[int, int]:
         JOIN video_source_keywords vsk ON vsk.video_id = v.id
         LEFT JOIN video_comments vc
           ON vc.video_id = v.id AND vc.tier = 1
-        WHERE vsk.job_id = ?
+        WHERE vsk.job_id = ? AND v.excluded = 0
         """,
         (job_id,),
     ).fetchone()
@@ -831,17 +835,19 @@ def sync_job_to_monitor(
     conn = monitor_storage.get_conn()
     job = mining_storage.get_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise HTTPException(status_code=404, detail="未找到该采集任务")
     if job["status"] not in ("done", "partial_done"):
         raise HTTPException(
             status_code=409,
-            detail=f"job status is '{job['status']}', expected done or partial_done",
+            detail=f"采集任务尚未完成（当前状态：{job['status']}），完成后才能同步",
         )
     total, commented = _get_video_stats_for_job(conn, job_id)
-    if total == 0 or commented < total:
+    if total == 0:
+        raise HTTPException(status_code=409, detail="该任务下没有可同步的视频")
+    if commented < total:
         raise HTTPException(
             status_code=409,
-            detail=f"not all videos have comments ({commented}/{total})",
+            detail=f"还有视频未填写评论（已评论 {commented}/共 {total}），请全部填写后再同步",
         )
     params = SyncParams(
         task_name_prefix=body.task_name_prefix,

@@ -200,6 +200,14 @@ const totalGot = computed(() => {
   return n;
 });
 
+// 任务卡徽章「· N 条」的数字：
+//   抓取中 —— 实时抓取进度 totalGot（视频还在陆续入库，video_count 会滞后）
+//   已完成 —— video_count（当前实际剩余视频数，后端已过滤用户删除的 excluded）
+// 用户抓取后删掉一批视频时，徽章按实际剩余数显示，不再停留在抓取时的总数。
+const displayCount = computed(() =>
+  isRunning.value ? totalGot.value : (props.job.video_count ?? totalGot.value),
+);
+
 const totalTarget = computed(() => {
   let n = 0;
   for (const plat of props.job.platforms) {
@@ -437,7 +445,7 @@ const keywordShort = computed(() => {
         }"
       >{{ PLATFORM_META[p].letter }}</span>
       <span class="text-[11px]" style="color: var(--ink-3); margin-left: 4px;">
-        · {{ totalGot }} 条
+        · {{ displayCount }} 条
       </span>
     </div>
 
