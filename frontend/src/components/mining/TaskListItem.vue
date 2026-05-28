@@ -399,7 +399,7 @@ const keywordShort = computed(() => {
               cursor: (job.status === 'done' || job.status === 'partial_done') ? 'pointer' : 'not-allowed',
               opacity: (job.status === 'done' || job.status === 'partial_done') ? 1 : 0.45,
             }"
-            @mouseenter="if (job.status === 'done' || job.status === 'partial_done') ($event.currentTarget as HTMLElement).style.background = 'var(--card-2)'"
+            @mouseenter="($event.currentTarget as HTMLElement).style.background = (job.status === 'done' || job.status === 'partial_done') ? 'var(--card-2)' : 'transparent'"
             @mouseleave="($event.currentTarget as HTMLElement).style.background = 'transparent'"
             @click="onSyncClick"
           >
