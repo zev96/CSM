@@ -1,10 +1,16 @@
 """Template CRUD wrapper.
 
 Templates are stored as ``<id>.json`` files in a directory. We resolve
-that directory in this order:
+that directory from ``AppConfig.default_template`` (falling back to
+``<config_dir>/templates``).
 
-1. The parent directory of ``AppConfig.default_template`` if set.
-2. ``<config_dir>/templates`` as a fallback.
+``default_template`` carries one of two shapes depending on how it was
+set, and both must work:
+
+* A **folder** path — what Settings → 存储路径 → 默认模板目录 writes today
+  (its picker is ``directory: true``). The folder itself is the library.
+* A **.json file** path — the legacy/hand-typed shape, where the file's
+  *parent* directory is the library.
 
 The directory is created on first write so the user doesn't need a
 manual setup step before saving their first template.
@@ -23,7 +29,16 @@ from . import config_service
 def resolve_dir() -> Path:
     cfg = config_service.load()
     if cfg.default_template:
-        return Path(cfg.default_template).parent
+        p = Path(cfg.default_template)
+        # 之前这里无条件 ``.parent``，把用户用文件夹选择器选的目录截成了它
+        # 的上级目录 —— 选了 ``D:\Templates`` 实际扫的是 ``D:\``，里面的模板
+        # 一个都识别不到。现在区分两种形态：指向 .json 文件 → 用父目录；
+        # 否则（目录，含尚未创建的目录路径）→ 目录本身就是模板库。
+        if p.is_dir():
+            return p
+        if p.suffix.lower() == ".json":
+            return p.parent
+        return p
     return config_service.get_path().parent / "templates"
 
 

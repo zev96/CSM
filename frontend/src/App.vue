@@ -43,6 +43,10 @@ const { whenReady } = useSidecarReady();
 const ONBOARDED_KEY = "csm.onboarded.v1";
 const onboardingDismissed = ref(loadDismissed());
 const configReady = ref(false);
+// 是否真的成功读到过 config。onboarding 的判断只能建立在"确认拿到了
+// 配置"之上 —— 拿不到时绝不弹欢迎页（见下方 onMounted 里的冷启动竞态
+// 注释）。
+const configLoadOk = ref(false);
 
 function loadDismissed(): boolean {
   try {
@@ -53,7 +57,7 @@ function loadDismissed(): boolean {
 }
 
 const showOnboarding = computed(
-  () => configReady.value && !onboardingDismissed.value,
+  () => configReady.value && configLoadOk.value && !onboardingDismissed.value,
 );
 
 function onOnboardingDone() {
@@ -75,13 +79,24 @@ onMounted(async () => {
   } catch {
     /* sidecar 起不来 —— 让下面的 cfg.load 自己再 throw 一次到 catch */
   }
-  if (!cfg.data) {
+  // ⚠ sidecar 的 handshake 早于 HTTP 就绪：main.py 在 uvicorn.run() *之前*
+  // 就 emit_handshake（否则 get_sidecar 会等到超时），所以 sidecar.ready=true
+  // 时 /api/config 往往还没开始 accept —— uvicorn 还在跑 lifespan 里的
+  // legacy-config / keyring 迁移。冷启动（尤其重装后第一次）这个窗口有好
+  // 几秒，第一发 cfg.load 经常 connection refused。
+  //
+  // 必须轮询重试到真的拿到 config 再判断 onboarding：否则会拿着空数据走
+  // 下面的 case A —— user_name 其实在磁盘上，但这一刻没读到，于是没能把
+  // 被卸载器清掉的 localStorage flag 补回去，欢迎页就会在每次重装后重复
+  // 弹出（"每次重装都要重新输名字" 的根因）。
+  for (let attempt = 0; attempt < 30 && !cfg.data; attempt++) {
     try {
       await cfg.load();
     } catch {
-      /* 真起不来时静默 —— view 各自的 whenReady + cfg.load 会再试 */
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
+  configLoadOk.value = !!cfg.data;
   // 双向同步 dismissed flag 与 cfg.data.user_name —— 解决两个边角：
   //
   //   A) 老安装升级：user_name 已经在 settings.json 但 localStorage 没

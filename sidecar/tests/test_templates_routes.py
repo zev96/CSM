@@ -33,6 +33,28 @@ def test_list_templates_empty(client: TestClient, tmp_path: Path):
     assert resp.json() == {"count": 0, "templates": []}
 
 
+def test_default_template_directory_is_used_directly(client: TestClient, tmp_path: Path):
+    """Regression: 设置页「默认模板目录」选择器存的是文件夹路径（directory:true），
+    不是 .json 文件。resolve_dir 之前无条件 .parent，把用户选的文件夹截成上级
+    目录，导致选了文件夹却扫不到里面的模板。模板必须落在所选文件夹本身。"""
+    tdir = tmp_path / "my_templates"
+    tdir.mkdir()
+    # default_template 指向目录本身（folder picker 的实际行为）。
+    client.patch("/api/config", json={"default_template": str(tdir)})
+
+    body = _minimal_template_body("in_folder")
+    create_resp = client.post("/api/templates", json=body)
+    assert create_resp.status_code == 201, create_resp.text
+
+    # 模板 .json 落在所选文件夹里，而不是被 .parent 甩到上级目录。
+    assert (tdir / "in_folder.json").exists()
+    assert not (tmp_path / "in_folder.json").exists()
+
+    list_resp = client.get("/api/templates")
+    assert list_resp.json()["count"] == 1
+    assert list_resp.json()["templates"][0]["id"] == "in_folder"
+
+
 def test_create_then_get_then_delete(client: TestClient, tmp_path: Path):
     tdir = tmp_path / "tpls"
     tdir.mkdir()
