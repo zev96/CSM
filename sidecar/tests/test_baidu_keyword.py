@@ -6,6 +6,7 @@ SERP 解析逻辑用真实保存的 fixture 验证。
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -408,6 +409,8 @@ def test_fetch_captcha_raises_RiskControlException(monkeypatch, patch_session):
         page_contents={},
         captcha_url="https://wappass.baidu.com/static/captcha/tuxing.html?x=y",
     )
+    # _try_human_solve 立即返回 False，走原 raise 路径（避免 300s 超时）
+    monkeypatch.setattr(baidu_keyword, "_try_human_solve", lambda **kw: False)
 
     task = MonitorTask(
         id=2,
@@ -548,6 +551,8 @@ class TestRiskDetectionIntegration:
 
         # 注入 fake detect_risk 到 baidu_keyword 模块命名空间
         monkeypatch.setattr(baidu_keyword, "detect_risk", fake_detect_risk)
+        # _try_human_solve 立即返回 False，走原 raise 路径（避免 300s 超时）
+        monkeypatch.setattr(baidu_keyword, "_try_human_solve", lambda **kw: False)
 
         # 用最简 SERP HTML（空解析结果即可，不关心品牌匹配）
         serp = _load("serp_default_only.html")
@@ -878,7 +883,7 @@ def test_fetch_drops_session_on_normal_return(monkeypatch):
     captured: dict[str, Any] = {}
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, resume_from, session):
+                       *, resume_from, session, session_kwargs=None):
         captured["session"] = session
         captured["task_id"] = task.id
         return MonitorResult(
@@ -929,7 +934,7 @@ def test_fetch_drops_session_on_risk_control(monkeypatch):
     adapter.apply_settings(default_excluded_domains=())
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, resume_from, session):
+                       *, resume_from, session, session_kwargs=None):
         raise RiskControlException(
             RiskSignal(layer="url", detail="wappass triggered"), progress=2,
         )
@@ -1179,3 +1184,151 @@ def test_fetch_raises_auth_when_serp_redirects_to_login(monkeypatch):
         assert e.progress == 0  # failed on first keyword
     else:
         raise AssertionError("expected RiskControlException(layer='auth')")
+
+
+def test_fetch_returns_error_when_native_mode_copy_path_missing(monkeypatch):
+    """use_native_chrome=True 但 chrome_profile_copy_path 未导入
+    → 返回 status=error 提示用户先复制 profile。"""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+
+    fake_cfg = MagicMock()
+    fake_cfg.monitor.baidu_keyword.use_native_chrome = True
+    fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/x/chrome.exe"
+    fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = None  # 未导入
+    monkeypatch.setattr("csm_sidecar.services.config_service.load", lambda: fake_cfg)
+
+    task = MonitorTask(
+        id=1, type="baidu_keyword", name="t", target_url="https://baidu.com",
+        config={"search_keywords": ["x"], "target_brand": "y"},
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    result = adapter.fetch(task)
+    assert result.status == "error"
+    assert "未导入 Chrome profile 副本" in (result.error_message or "")
+
+
+def test_fetch_returns_error_when_native_mode_executable_missing(monkeypatch):
+    """use_native_chrome=True + copy_path 存在 但 chrome_executable_path 缺失
+    → 返回 status=error 提示用户配置可执行文件路径。"""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+
+    fake_cfg = MagicMock()
+    fake_cfg.monitor.baidu_keyword.use_native_chrome = True
+    fake_cfg.monitor.baidu_keyword.chrome_executable_path = None  # 缺失
+    fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = "C:/CSM-Data/baidu_chrome_profile_copy"
+    monkeypatch.setattr("csm_sidecar.services.config_service.load", lambda: fake_cfg)
+
+    task = MonitorTask(
+        id=1, type="baidu_keyword", name="t", target_url="https://baidu.com",
+        config={"search_keywords": ["x"], "target_brand": "y"},
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    result = adapter.fetch(task)
+    assert result.status == "error"
+    assert "缺 Chrome 可执行文件路径" in (result.error_message or "")
+
+
+# ── _try_human_solve 软着陆验证码 ──────────────────────────────────────────
+
+def test_try_human_solve_returns_true_when_url_leaves_risk_domain(monkeypatch):
+    """page.url 从 wappass.baidu.com 切回 www.baidu.com/s → 返回 True。"""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    state = {"polls": 0}
+    fake_page = MagicMock()
+    def url_property(self):
+        state["polls"] += 1
+        # 前 3 次还在 wappass，第 4 次跳回 baidu/s
+        if state["polls"] <= 3:
+            return "https://wappass.baidu.com/static/captcha/tuxing.html"
+        return "https://www.baidu.com/s?wd=test"
+    type(fake_page).url = property(url_property)
+    fake_page.query_selector.return_value = None  # 没有 captcha DOM
+
+    monkeypatch.setattr(baidu_keyword, "_notify", lambda **kw: None)
+
+    result = baidu_keyword._try_human_solve(
+        page=fake_page, keyword="test", kw_idx=5, timeout_s=5, poll_interval_s=0.01,
+    )
+    assert result is True
+    assert state["polls"] >= 4
+
+
+def test_try_human_solve_returns_false_on_timeout(monkeypatch):
+    """超时仍在 wappass → 返回 False（caller 走原 raise 路径）。"""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    fake_page = MagicMock()
+    type(fake_page).url = property(lambda self: "https://wappass.baidu.com/captcha")
+    fake_page.query_selector.return_value = MagicMock()  # passmod DOM 还在
+
+    monkeypatch.setattr(baidu_keyword, "_notify", lambda **kw: None)
+
+    result = baidu_keyword._try_human_solve(
+        page=fake_page, keyword="test", kw_idx=5, timeout_s=0.05, poll_interval_s=0.01,
+    )
+    assert result is False
+
+
+def test_try_human_solve_emits_notification_with_keyword(monkeypatch):
+    """触发时发系统通知带关键词。"""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    fake_page = MagicMock()
+    type(fake_page).url = property(lambda self: "https://www.baidu.com/s?wd=already_solved")
+    fake_page.query_selector.return_value = None
+
+    captured: list = []
+    monkeypatch.setattr(baidu_keyword, "_notify", lambda **kw: captured.append(kw))
+
+    baidu_keyword._try_human_solve(
+        page=fake_page, keyword="testkw", kw_idx=3, timeout_s=1, poll_interval_s=0.01,
+    )
+    assert len(captured) == 1
+    assert "testkw" in captured[0].get("body", "")
+
+
+# ── B' pivot: fetch() native mode 用 copy_path ──────────────────────────────
+
+def test_fetch_uses_copy_path_in_native_mode(monkeypatch):
+    """B' pivot: use_native_chrome=True → baidu_browser_session 拿到
+    user_data_dir=copy_path 且 chrome_profile_name='Default'（副本内固定）。"""
+    from csm_core.monitor.platforms import baidu_keyword
+    from csm_core.monitor.base import MonitorTask
+    from pathlib import Path
+
+    copy_path = "C:/CSM-Data/baidu_chrome_profile_copy"
+
+    fake_cfg = MagicMock()
+    fake_cfg.monitor.baidu_keyword.use_native_chrome = True
+    fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/x/chrome.exe"
+    fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = copy_path
+    monkeypatch.setattr("csm_sidecar.services.config_service.load", lambda: fake_cfg)
+
+    session_kwargs_received: dict = {}
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_session(**kw):
+        session_kwargs_received.update(kw)
+        sess = MagicMock()
+        sess.page = MagicMock()
+        sess.context = MagicMock()
+        sess.context.cookies.return_value = [{"name": "BDUSS", "value": "x"}]
+        yield sess
+
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", fake_session)
+
+    task = MonitorTask(
+        id=99, type="baidu_keyword", name="t", target_url="https://baidu.com",
+        config={"search_keywords": ["test"], "target_brand": "y"},
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter.fetch(task)
+
+    assert session_kwargs_received.get("use_native_chrome") is True
+    assert session_kwargs_received.get("user_data_dir") == Path(copy_path)
+    assert session_kwargs_received.get("chrome_profile_name") == "Default"
+    assert session_kwargs_received.get("chrome_executable_path") == "C:/x/chrome.exe"

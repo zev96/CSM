@@ -58,6 +58,8 @@ EventKind = Literal[
     "captcha_required", "captcha_resolved", "captcha_timeout",
     "progress",
     "risk_control",  # Task 4: adapter hit risk control mid-scan; breakpoint saved
+    # Native mode 方案 D：跑前等关 Chrome / Chrome 已关 / 命中风控需人工解
+    "waiting_chrome_close", "chrome_closed", "needs_captcha",
 ]
 
 
@@ -82,6 +84,10 @@ class MonitorEvent:
     # can render "已抓 N / 共 M · 从断点续抓" without digging into result.metric.
     last_resumed_keyword: int | None = None  # 0-indexed; next keyword to try on resume
     total_keywords: int | None = None        # full task keyword count
+    # Native mode 方案 D 专用字段（默认 None，保持向后兼容）
+    remaining_s: int | None = None  # waiting_chrome_close 倒计时
+    keyword: str | None = None      # needs_captcha 的关键词文本
+    kw_idx: int | None = None       # needs_captcha 的关键词索引 (0-based)
 
 
 EventSink = Callable[[MonitorEvent], None]
@@ -124,7 +130,12 @@ class MonitorLoop:
         self._adapters = adapters if adapters is not None else dict(ADAPTERS)
         # Clock is injectable for the same reason: tests fast-forward
         # without sleeping for 60s.
-        self._clock = clock or datetime.now
+        # ⚠ 用 utcnow（不是 datetime.now）：storage 把 timestamp 当 UTC 存（标 Z 后缀），
+        # 而 csm_core/monitor/platforms/*.py 的成功路径都用 datetime.utcnow。如果这里用
+        # datetime.now（local time），失败路径 timestamp 比成功路径晚 8 小时（CST），
+        # ORDER BY checked_at DESC 把 risk_control result 排到 ok 后面 → 前端误展示
+        # 历史 banner。统一 UTC。
+        self._clock = clock or datetime.utcnow
 
         self._scheduler: BackgroundScheduler | None = None
         self._executor: ThreadPoolExecutor | None = None

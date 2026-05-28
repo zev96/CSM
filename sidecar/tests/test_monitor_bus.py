@@ -146,3 +146,52 @@ def test_monitor_event_kind_includes_captcha_states():
     assert "captcha_required" in args
     assert "captcha_resolved" in args
     assert "captcha_timeout" in args
+
+
+def test_event_to_dict_waiting_chrome_close_carries_remaining_s():
+    from datetime import datetime
+    from csm_sidecar.services.monitor_loop import MonitorEvent
+    from csm_sidecar.monitor_bus import event_to_dict
+
+    evt = MonitorEvent(
+        kind="waiting_chrome_close",
+        task_id=42,
+        at=datetime(2026, 1, 1, 12, 0, 0),
+        remaining_s=87,
+    )
+    out = event_to_dict(evt)
+    assert out["kind"] == "waiting_chrome_close"
+    assert out["task_id"] == 42
+    assert out["remaining_s"] == 87
+
+
+def test_event_to_dict_chrome_closed_minimal():
+    from datetime import datetime
+    from csm_sidecar.services.monitor_loop import MonitorEvent
+    from csm_sidecar.monitor_bus import event_to_dict
+
+    evt = MonitorEvent(
+        kind="chrome_closed", task_id=42, at=datetime(2026, 1, 1, 12, 0, 0),
+    )
+    out = event_to_dict(evt)
+    assert out["kind"] == "chrome_closed"
+    assert out["task_id"] == 42
+    # 不带 remaining_s / keyword 等额外字段
+
+
+def test_event_to_dict_needs_captcha_carries_keyword_and_idx():
+    from datetime import datetime
+    from csm_sidecar.services.monitor_loop import MonitorEvent
+    from csm_sidecar.monitor_bus import event_to_dict
+
+    evt = MonitorEvent(
+        kind="needs_captcha",
+        task_id=42,
+        at=datetime(2026, 1, 1, 12, 0, 0),
+        keyword="iphone 15",
+        kw_idx=5,
+    )
+    out = event_to_dict(evt)
+    assert out["kind"] == "needs_captcha"
+    assert out["keyword"] == "iphone 15"
+    assert out["kw_idx"] == 5

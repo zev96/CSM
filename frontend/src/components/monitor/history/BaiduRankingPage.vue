@@ -1219,6 +1219,7 @@ defineExpose({ reload: loadTasks, selectTask });
                 <!--
                   状态：跑动中显示「N / M」+ 进度条；空闲时显示 70% 理想率 pill。
                   进度条 = 当前完成的关键词数 / 总关键词数；居中对齐 column。
+                  waiting_chrome_close: 显示倒计时 banner（native-Chrome 模式）。
                 -->
                 <div class="flex flex-col items-center gap-1">
                   <template v-if="isRunning(t.id)">
@@ -1834,3 +1835,6 @@ defineExpose({ reload: loadTasks, selectTask });
 
   </div>
 </template>
+
+<style scoped>
+</style>

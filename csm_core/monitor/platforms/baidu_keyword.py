@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse, quote
 
@@ -36,7 +38,6 @@ from ..drivers.risk_detector import (
     RiskControlException,
     RiskSignal,
 )
-
 logger = logging.getLogger(__name__)
 
 
@@ -262,6 +263,34 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
 
     content = _extract_readable_text(raw)
     if len(content) < _HTTP_MIN_CONTENT_CHARS:
+        # 方案 A 兜底：SPA / 前端渲染站（如 post.smzdm.com）服务端 HTML
+        # 里没有真实文章正文（正文 JS 渲染），readability 主内容算法
+        # 提不出来。直接拿整个 <body> text_content ── meta / 标题 /
+        # nav / 偶尔在 HTML 里残留的 brand 字符串都能被 match_brand 看到。
+        raw_text = _extract_raw_body_text(raw)
+        if len(raw_text) > len(content):
+            return {
+                "content": raw_text,
+                "source": "http_raw_fallback",
+                "fetch_error": (
+                    f"readable too short ({len(content)} chars), "
+                    f"fallback to raw body text ({len(raw_text)} chars)"
+                ),
+                "needs_browser_fallback": False,
+            }
+        # 方案 C 兜底：JS challenge 反爬站（smzdm 等）── 第一次 HTTP 拿到的
+        # 只是 < 500 字符的 JS 探针壳页（probe.js fingerprint check），body
+        # 完全是空的，连 raw_text 也拿不出来。这种 case 让 caller 用 SERP
+        # title 兜底匹配 brand（标题党概率低于反爬概率，且明确 mark 了
+        # is_js_challenge 让 caller 知道是反爬触发的 fallback）。
+        if len(raw) < 500:
+            return {
+                "content": "",
+                "source": "http_js_challenge_no_body",
+                "fetch_error": f"JS challenge shell ({len(raw)} chars HTML), use SERP title fallback",
+                "needs_browser_fallback": False,
+                "is_js_challenge": True,
+            }
         return {
             "content": content,
             "source": "http",
@@ -275,6 +304,33 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
         "fetch_error": None,
         "needs_browser_fallback": False,
     }
+
+
+def _extract_raw_body_text(raw_html: str) -> str:
+    """lxml fallback ── 不走 readability 主内容识别，直接拿 <body> text。
+
+    用于 SPA / 前端渲染站（smzdm 等）── readability 找不到主内容但 HTML
+    里仍有 brand 字符串（meta、og:title、nav 链接、JSON-LD 等）的场景。
+    准确度低于 readability，但比 content_len=0 漏检强。
+
+    script / style tag 被 lxml 的 text_content() 自动 strip 在文本之外，
+    所以不会拿到 JS 代码 noise。但 SPA 的 inline JSON state（写在 <script
+    type="application/json"> 里）会被 strip ── 那部分需要更专门的 SPA
+    解析器（方案 C），本 fallback 不 cover。
+    """
+    if not raw_html.strip():
+        return ""
+    try:
+        doc = lxml_html.fromstring(raw_html)
+    except Exception as e:
+        logger.info("raw body text extraction failed: %s", e)
+        return ""
+    body = doc.find(".//body") if doc is not None else None
+    target = body if body is not None else doc
+    try:
+        return (target.text_content() or "").strip()
+    except Exception:
+        return ""
 
 
 def _extract_readable_text(raw_html: str) -> str:
@@ -362,6 +418,242 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
     }
 
 
+def _is_captcha_page(raw: str, url: str) -> bool:
+    """检测一段 rendered HTML + URL 是不是验证码 / 反爬页。
+
+    detect_risk_by_* 是百度专用 pattern，这里再补一组跨站通用的验证码
+    关键词（smzdm / 知乎 / 其他站）。
+    """
+    # 正文 body text 已经够长 → 不是验证码页（即使 <head> 残留 captcha SDK
+    # 的 script 引用含 "captcha" 字样也不误判）。验证码页 body 很短（验证 UI
+    # 文字少），正文页 body 几 KB。这条短路避免"进了正文还被判验证码"卡死。
+    if len(_extract_raw_body_text(raw)) >= 800:
+        return False
+    if detect_risk_by_text(raw) or detect_risk_by_url(url):
+        return True
+    head = raw[:5000]
+    return any(
+        kw in head
+        for kw in (
+            "人机验证", "滑动验证", "请完成安全验证", "拖动滑块",
+            "captcha", "verify you are human", "security check",
+        )
+    )
+
+
+def fetch_article_browser_isolated(
+    context: Any,
+    url: str,
+    *,
+    timeout_ms: int = 20000,
+    spa_wait_ms: int = 3000,
+    solve_timeout_s: int = 180,
+    solve_poll_s: float = 2.0,
+) -> dict[str, Any]:
+    """方案 B：用独立 tab 打开文章 URL 让 JS 跑完后提正文。
+
+    跟 ``fetch_article_browser`` 的区别：不用 baidu 主 page，而是
+    ``context.new_page()`` 开一个独立 tab，对反爬站（zhihu / smzdm 等
+    HTTP 拿不到正文）用真正"点击进文章"的方式拿 rendered HTML。
+
+    **article 级软着陆**（2026-05-28，用户要求）：smzdm 等强反爬站对
+    自动化浏览器弹验证码（用户日常 Chrome 不弹，但 Patchright 有自动化
+    指纹）。检测到验证码页时**不立即关 tab**，而是弹通知 + 保持 tab 打开
+    + 轮询等用户手动解。解完后页面进真正文章 → 拿 rendered HTML 提正文
+    match。超时（默认 180s）才放弃。用户明确要"输验证码进页面后筛正文"，
+    而不是退到 SERP title。
+
+    Returns 跟 fetch_article_http 同 shape，额外 is_blocked 字段。
+    """
+    new_page = None
+    try:
+        try:
+            new_page = context.new_page()
+        except Exception as e:
+            return {
+                "content": "",
+                "source": "browser_isolated",
+                "fetch_error": f"new_page raised: {e!r}",
+                "needs_browser_fallback": False,
+            }
+        try:
+            new_page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception as e:
+            return {
+                "content": "",
+                "source": "browser_isolated",
+                "fetch_error": f"new_page.goto raised: {e!r}",
+                "needs_browser_fallback": False,
+            }
+        # SPA 站 domcontentloaded 后正文还没渲染 ── 给 N 毫秒让 JS 跑完
+        try:
+            new_page.wait_for_timeout(spa_wait_ms)
+        except Exception:
+            pass
+        try:
+            raw = new_page.content() or ""
+            cur_url = new_page.url or ""
+        except Exception as e:
+            return {
+                "content": "",
+                "source": "browser_isolated",
+                "fetch_error": f"new_page.content raised: {e!r}",
+                "needs_browser_fallback": False,
+            }
+
+        # article 级软着陆：检测到验证码页 → 弹通知 + 等用户手动解
+        if _is_captcha_page(raw, cur_url):
+            _notify(
+                title="CSM 文章验证",
+                body=f"文章页需要验证（{cur_url[:50]}），请在弹出的浏览器标签页完成验证后等待自动继续",
+            )
+            logger.info("[baidu] article captcha, waiting for human solve: %s", url[:80])
+            deadline = time.monotonic() + solve_timeout_s
+            solved = False
+            while time.monotonic() < deadline:
+                try:
+                    new_page.wait_for_timeout(int(solve_poll_s * 1000))
+                except Exception:
+                    break
+                try:
+                    raw = new_page.content() or ""
+                    cur_url = new_page.url or ""
+                except Exception:
+                    break
+                # 解完判定：用"正文是否出现"（body text 够长）而不是"验证码
+                # 关键词消失"。smzdm 正文页 <head> 残留 captcha SDK 的
+                # script 引用（probe.js 等含 "captcha" 字样），靠关键词消失
+                # 会误判"还在验证码页"卡到超时。验证码页 body text 很短
+                # (< 300)，正文页很长 (> 800) ── 用长度区分稳得多。
+                if len(_extract_raw_body_text(raw)) >= 800:
+                    solved = True
+                    logger.info("[baidu] article captcha solved, resuming: %s", url[:80])
+                    # 解完后页面可能刚跳转，再等一下让正文渲染
+                    try:
+                        new_page.wait_for_timeout(spa_wait_ms)
+                        raw = new_page.content() or ""
+                    except Exception:
+                        pass
+                    break
+            if not solved:
+                logger.warning("[baidu] article captcha solve timeout: %s", url[:80])
+                return {
+                    "content": "",
+                    "source": "browser_isolated",
+                    "fetch_error": f"验证码解题超时（{solve_timeout_s}s）",
+                    "needs_browser_fallback": False,
+                    "is_blocked": True,
+                }
+
+        # readability 提正文，失败 fallback raw body text
+        text = _extract_readable_text(raw)
+        if len(text) < _HTTP_MIN_CONTENT_CHARS:
+            text = _extract_raw_body_text(raw)
+        return {
+            "content": text,
+            "source": "browser_isolated",
+            "fetch_error": None if text else f"browser_isolated empty (raw={len(raw)} chars)",
+            "needs_browser_fallback": False,
+            "is_blocked": False,
+        }
+    finally:
+        if new_page is not None:
+            try:
+                new_page.close()
+            except Exception:
+                pass
+
+
+# ── 软着陆验证码 ────────────────────────────────────────────────
+# 复用 risk_detector 的同一组 pattern，避免两边 drift（detect_risk 看到的就是
+# _try_human_solve 等的，反之亦然）。
+from ..drivers.risk_detector import _URL_PATTERNS as _RISK_URL_PATTERNS
+from ..drivers.risk_detector import _DOM_SELECTORS as _RISK_DOM_SELECTORS
+_notify_impl: Any = None
+
+
+def _notify(*, title: str, body: str) -> None:
+    """通知发送 indirection —— sidecar 注入实现。csm_core 不直接依赖 sidecar。"""
+    if _notify_impl is None:
+        logger.warning("notifier not configured; skip: title=%s body=%s", title, body)
+        return
+    try:
+        _notify_impl(title=title, body=body)
+    except Exception:
+        logger.exception("notifier raised; continue")
+
+
+def set_notifier(fn: Any) -> None:
+    """Sidecar 启动时注入。"""
+    global _notify_impl
+    _notify_impl = fn
+
+
+def _try_human_solve(
+    *,
+    page: Any,
+    keyword: str,
+    kw_idx: int,
+    timeout_s: int = 300,
+    poll_interval_s: float = 1.0,
+    task_id: int | None = None,
+    event_publisher: Any = None,
+) -> bool:
+    """命中风控时弹通知 + 轮询等用户解题。
+
+    Args:
+        page, keyword, kw_idx: 当前 SERP 上下文。
+        timeout_s, poll_interval_s: 超时和轮询。
+        task_id: 关联监控任务 ID（用于 SSE）。
+        event_publisher: 同 chrome_preflight，DI 注入。
+            签名：fn({"kind": str, "task_id": int, "keyword": str, "kw_idx": int}) -> None。
+
+    Returns:
+        True  — 用户解完，URL 离开风控域名 + DOM 验证码元素消失。caller retry 当前 kw。
+        False — 超时仍在风控页。caller 走原 raise RiskControlException 路径。
+    """
+    _notify(
+        title="CSM 百度监控",
+        body=f"需要人工解验证码（关键词：{keyword}），点击浏览器窗口完成",
+    )
+    if event_publisher is not None and task_id is not None:
+        try:
+            event_publisher({
+                "kind": "needs_captcha",
+                "task_id": task_id,
+                "keyword": keyword,
+                "kw_idx": kw_idx,
+            })
+        except Exception:
+            logger.exception("event_publisher raised; continue")
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        time.sleep(poll_interval_s)
+        try:
+            cur_url = page.url or ""
+        except Exception:
+            cur_url = ""
+        in_risk = any(p in cur_url for p in _RISK_URL_PATTERNS)
+        if in_risk:
+            continue
+        # URL 已离开风控域名 → 再检 DOM 验证码元素是否消失
+        any_captcha_dom = False
+        for sel in _RISK_DOM_SELECTORS:
+            try:
+                if page.query_selector(sel) is not None:
+                    any_captcha_dom = True
+                    break
+            except Exception:
+                continue
+        if not any_captcha_dom:
+            logger.info("human solve detected; resuming keyword #%d (%s)", kw_idx, keyword)
+            return True
+
+    logger.warning("human solve timeout for keyword #%d (%s)", kw_idx, keyword)
+    return False
+
+
 def _navigate_to_serp(page: Any, keyword: str) -> Any:
     """直接 goto SERP url。返回 navigation response 给 detect_risk 用。
 
@@ -370,7 +662,10 @@ def _navigate_to_serp(page: Any, keyword: str) -> Any:
     是 baidu organic 流量的主要形态。
     """
     serp_url = "https://www.baidu.com/s?wd=" + quote(keyword)
-    return page.goto(serp_url, wait_until="domcontentloaded", timeout=30000)
+    # timeout 60s ── native mode 副本 Chrome 首次启动 + 加载首个 SERP 慢
+    # （包括 OS profile lock 检查、Chrome extension 初始化、Network 服务起
+    # 等），实测 30s 不够，第一个 keyword 经常 timeout 失败。
+    return page.goto(serp_url, wait_until="domcontentloaded", timeout=60000)
 
 
 class BaiduKeywordAdapter:
@@ -414,6 +709,12 @@ class BaiduKeywordAdapter:
         self._ua_idx = 0
         self._http_sessions: dict[int, Any] = {}
         self._http_sessions_lock = threading.Lock()
+        self._event_publisher: Any = None
+
+    def set_event_publisher(self, fn: Any) -> None:
+        """Sidecar lifespan 启动时注入，给 native mode chrome_preflight +
+        软着陆验证码 发 SSE 事件用。"""
+        self._event_publisher = fn
 
     def _next_ua(self) -> str:
         """Round-robin pick from _UA_POOL. Called only by _get_session
@@ -611,6 +912,8 @@ class BaiduKeywordAdapter:
                 error_message="circuit breaker open for baidu_keyword",
             )
 
+        # ── Fast-fail: validate keyword/brand BEFORE preflight ───────────
+        # 移到 preflight 之前：config 错的任务不要等 120s Chrome 关闭再失败。
         cfg = task.config or {}
         keywords_raw = cfg.get("search_keywords") or []
         keywords = [k.strip() for k in keywords_raw if k and k.strip()]
@@ -625,7 +928,50 @@ class BaiduKeywordAdapter:
                 error_message="config.search_keywords (non-empty list) + target_brand required",
             )
 
+        # ── Native mode config ────────────────────────────────────
+        # B' pivot (2026-05-25): 不再调 chrome_preflight ── 副本路径独立 OS lock，
+        # 跟用户日常 Chrome 可以共存。
+        #
+        # lazy import 避免 csm_core → csm_sidecar 循环；用 config_service.load()
+        # 而非 csm_config.get_config() 是为了拿测试 fixture (sidecar/tests/conftest.py
+        # settings_path) 注入的 config，而不是真实 user disk 上的 settings.json。
+        from csm_sidecar.services import config_service as _cfg_svc
+        app_cfg = _cfg_svc.load()
+        baidu_cfg = app_cfg.monitor.baidu_keyword
+        use_native = bool(baidu_cfg.use_native_chrome)
+
+        # native 模式必须先导入副本（chrome_profile_copy_path）
+        if use_native and not baidu_cfg.chrome_profile_copy_path:
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="error",
+                rank=-1,
+                error_message="native mode 启用但未导入 Chrome profile 副本，请到设置页点'复制 Chrome profile'",
+            )
+        # native mode 还要 executable
+        if use_native and not baidu_cfg.chrome_executable_path:
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=datetime.utcnow(),
+                status="error",
+                rank=-1,
+                error_message="native mode 启用但缺 Chrome 可执行文件路径，请到设置页配置",
+            )
+
+        session_kwargs: dict[str, Any] = {}
+        if use_native:
+            session_kwargs.update(
+                use_native_chrome=True,
+                user_data_dir=Path(baidu_cfg.chrome_profile_copy_path),
+                chrome_executable_path=baidu_cfg.chrome_executable_path,
+                chrome_profile_name="Default",  # 副本内固定叫 Default
+            )
+        # native 强制 headless=False（baidu_browser_session 内部也会忽略）
+        # ─────────────────────────────────────────────────────────
+
         headless = bool(cfg.get("headless", self._headless_default))
+        effective_headless = False if use_native else headless
         rate_limit.get_pacer(self.platform).wait()
 
         # Clamp resume_from to valid range so callers don't need to guard.
@@ -634,9 +980,10 @@ class BaiduKeywordAdapter:
         session = self._get_session(task.id or 0)
         try:
             return self._fetch_with_promotion(
-                task, keywords, brand, headless, progress_cb, cancel_token,
+                task, keywords, brand, effective_headless, progress_cb, cancel_token,
                 resume_from=resume_from,
                 session=session,
+                session_kwargs=session_kwargs,
             )
         finally:
             # Drop on every exit path (normal return / RiskControlException /
@@ -655,6 +1002,7 @@ class BaiduKeywordAdapter:
         *,
         resume_from: int = 0,
         session: Any = None,
+        session_kwargs: "dict[str, Any] | None" = None,
     ) -> MonitorResult:
         """跑一次所有 SERP。命中 RiskControlException 直接传给 runner，
         runner（Task 4）决定 retry 还是 pause + 写断点。此函数不再做 in-task
@@ -666,6 +1014,7 @@ class BaiduKeywordAdapter:
                 task, keywords, brand, headless, progress_cb, cancel_token,
                 resume_from=resume_from,
                 session=session,
+                session_kwargs=session_kwargs,
             )
         except RiskControlException:
             # 4 层风控命中 —— 让 runner (Task 4) 捕获写断点 + 暂停任务；不计入熔断器。
@@ -715,6 +1064,7 @@ class BaiduKeywordAdapter:
         *,
         resume_from: int = 0,
         session: Any = None,
+        session_kwargs: "dict[str, Any] | None" = None,
     ) -> MonitorResult:
         """一次完整 多SERP→解 link→抓正文→打分，返回聚合 MonitorResult。
 
@@ -758,7 +1108,7 @@ class BaiduKeywordAdapter:
         # producing the
         #   'BaiduBrowserSession' object has no attribute 'get'
         # warning storm in production logs.
-        with baidu_browser_session(headless=headless) as bsession:
+        with baidu_browser_session(headless=headless, **(session_kwargs or {})) as bsession:
             page = bsession.page
 
             # Login-state pre-flight: an anonymous fetch will burn quickly
@@ -837,10 +1187,28 @@ class BaiduKeywordAdapter:
                     )
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
-                # 任一层命中 → 抛 RiskControlException，runner (Task 4) 捕获写断点。
+                # 任一层命中 → 软着陆：弹通知给用户解，解完 retry 当前 kw；失败 fallback 到 raise。
                 risk = detect_risk(page, serp_response)
                 if risk is not None:
-                    raise RiskControlException(risk, progress=kw_idx)
+                    solved = _try_human_solve(
+                        page=page, keyword=keyword, kw_idx=kw_idx,
+                        task_id=task.id,
+                        event_publisher=self._event_publisher,
+                    )
+                    if solved:
+                        # 重新 navigate + 重新 detect_risk，本轮 kw 重跑
+                        try:
+                            serp_response = _navigate_to_serp(page, keyword)
+                        except Exception as e:
+                            kw_entry["fetch_error"] = f"serp navigate after solve raised: {e!r}"
+                            keyword_results.append(kw_entry)
+                            continue
+                        risk2 = detect_risk(page, serp_response)
+                        if risk2 is not None:
+                            raise RiskControlException(risk2, progress=kw_idx)
+                        # 解完 + 重导成功 → 继续往下走正常 SERP 解析流程
+                    else:
+                        raise RiskControlException(risk, progress=kw_idx)
 
                 try:
                     serp_html = page.content() or ""
@@ -964,26 +1332,69 @@ class BaiduKeywordAdapter:
 
             rank += 1
             attempt = fetch_article_http(href, session=session)
-            # NOTE: browser fallback (fetch_article_browser) is intentionally
-            # disabled here. It used to upgrade short-content fetches to a
-            # patchright open in the SAME baidu profile, which shares the
-            # logged-in BDUSS cookie. baidu treats 10 rapid baijiahao opens
-            # by a logged-in user as bot behaviour → captcha on the article
-            # page → detect_risk_by_text catches "验证码" → RiskControlException
-            # → entire task aborts at breakpoint 0 even though SERP succeeded.
-            # HTTP-only article fetches with curl_cffi keep article retrieval
-            # decoupled from the baidu session. Short / JS-heavy pages just
-            # get content_preview=""; matches_brand judgement degrades to
-            # title+summary, which is acceptable. Proper fix is the two-phase
-            # design in docs/superpowers/specs/2026-05-19-baidu-two-phase-fetch-design.md.
-            if attempt.get("needs_browser_fallback"):
-                attempt["fetch_error"] = (
-                    attempt.get("fetch_error")
-                    or "HTTP extraction failed; browser fallback disabled to avoid 风控"
-                )
+            # 方案 B 浏览器兜底（2026-05-28）：HTTP fetch 失败时（403 反爬、
+            # JS challenge 壳页、content_len 过短），用副本 Chrome context 的
+            # 独立 tab 打开文章 URL → 让 JS 跑完 → 拿 rendered HTML → 提正文。
+            #
+            # 老注释说"fetch_article_browser disabled to avoid 风控" ── 那是
+            # 旧 incognito profile 时代的事：共用 baidu page 风控会迁怒 baidu
+            # session。B' 副本模式下 context 是用户日常 Chrome 副本，知乎/
+            # smzdm 等站认账（用户日常浏览过），独立 tab 不污染 baidu 主 page，
+            # 没风控扩散风险。
+            needs_browser = (
+                attempt.get("needs_browser_fallback")
+                or attempt.get("is_js_challenge")
+                or len(attempt.get("content") or "") < _HTTP_MIN_CONTENT_CHARS
+            )
+            if needs_browser and page is not None:
+                try:
+                    ctx = getattr(page, "context", None)
+                    if ctx is not None:
+                        browser_attempt = fetch_article_browser_isolated(ctx, href)
+                        if browser_attempt.get("content"):
+                            # 浏览器兜底拿到正文 → 替换 HTTP attempt
+                            logger.info(
+                                "[baidu] browser_isolated fallback: host=%s http_len=%d → browser_len=%d",
+                                host, len(attempt.get("content") or ""),
+                                len(browser_attempt["content"]),
+                            )
+                            attempt = browser_attempt
+                except Exception as e:
+                    logger.warning(
+                        "[baidu] browser_isolated fallback raised (host=%s): %s", host, e,
+                    )
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
+            # SERP title last-resort fallback：HTTP + browser 都拿不到有效
+            # 正文（JS challenge / 验证码反爬 / 内容过短）时，才用 SERP title
+            # 匹配 brand。优先级：HTTP 正文 → browser 正文 → title。
+            # 只在"彻底拿不到正文"时触发 ── 不影响"正文拿到了但没品牌"的判断
+            # （那种是真没命中，不该靠 title 兜）。
+            fetch_failed = (
+                attempt.get("is_js_challenge")
+                or attempt.get("is_blocked")
+                or len(content) < _HTTP_MIN_CONTENT_CHARS
+            )
+            if not matched_brand and fetch_failed:
+                title = link.get("title", "")
+                title_match = match_brand(title, brands)
+                if title_match:
+                    matched_brand = title_match
+                    logger.info(
+                        "[baidu] title fallback matched (正文抓取失败): host=%s brand=%s title=%r",
+                        host, matched_brand, title[:80],
+                    )
+            # 诊断日志（漏检 debug 用）：title / content_len / matched / fetch_error
+            # 用 INFO 级让用户开 default log level 就能看到。漏检的 root cause
+            # 通常是：① content_len=0（SPA 壳页 / fetch fail）② content_len>200
+            # 但 matched=None（正文里没字面品牌词，需要 title fallback）
+            logger.info(
+                "[baidu] article: rank=%d host=%s content_len=%d matched=%s title=%r%s",
+                rank, host, len(content), matched_brand or "-",
+                link.get("title", "")[:80],
+                f" fetch_error={attempt.get('fetch_error')!r}" if attempt.get("fetch_error") else "",
+            )
             out.append({
                 "rank": rank,
                 "title": link.get("title", ""),

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -171,3 +172,68 @@ def test_log_profile_health_fail_soft(fake_pw, tmp_path, caplog):
             pass
 
     assert "profile health log failed" in caplog.text
+
+
+def test_baidu_browser_session_native_mode_uses_chrome_channel(monkeypatch, tmp_path):
+    """use_native_chrome=True 时：launch_persistent_context 拿到 channel='chrome'
+    + executable_path + --profile-directory，且 headless 被强制改成 False。
+    """
+    from csm_core.monitor.drivers import baidu_browser
+
+    captured: dict[str, Any] = {}
+    fake_context = MagicMock()
+    fake_context.pages = [MagicMock()]
+    fake_context.cookies.return_value = []
+    fake_chromium = MagicMock()
+    fake_chromium.launch_persistent_context = lambda **kw: (captured.update(kw), fake_context)[1]
+    fake_pw = MagicMock()
+    fake_pw.chromium = fake_chromium
+
+    monkeypatch.setattr(baidu_browser, "_sync_playwright", lambda: MagicMock(start=lambda: fake_pw))
+    monkeypatch.setattr(baidu_browser, "ensure_browsers_path", lambda: None)
+
+    with baidu_browser.baidu_browser_session(
+        headless=True,  # 应该被强制覆盖为 False
+        user_data_dir=tmp_path,
+        use_native_chrome=True,
+        chrome_executable_path="C:/test/chrome.exe",
+        chrome_profile_name="Profile 1",
+    ):
+        pass
+
+    assert captured.get("channel") == "chrome"
+    assert captured.get("executable_path") == "C:/test/chrome.exe"
+    assert captured.get("headless") is False  # native 强制 False
+    args = captured.get("args") or []
+    assert "--profile-directory=Profile 1" in args
+    # native mode 不加 --blink-settings=imagesEnabled=false
+    assert "--blink-settings=imagesEnabled=false" not in args
+
+
+def test_baidu_browser_session_self_built_mode_unchanged(monkeypatch, tmp_path):
+    """use_native_chrome=False（默认）：保持原行为，不带 channel / executable_path。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    captured: dict[str, Any] = {}
+    fake_context = MagicMock()
+    fake_context.pages = [MagicMock()]
+    fake_context.cookies.return_value = []
+    fake_chromium = MagicMock()
+    fake_chromium.launch_persistent_context = lambda **kw: (captured.update(kw), fake_context)[1]
+    fake_pw = MagicMock()
+    fake_pw.chromium = fake_chromium
+
+    monkeypatch.setattr(baidu_browser, "_sync_playwright", lambda: MagicMock(start=lambda: fake_pw))
+    monkeypatch.setattr(baidu_browser, "ensure_browsers_path", lambda: None)
+
+    with baidu_browser.baidu_browser_session(
+        headless=True,
+        user_data_dir=tmp_path,
+    ):
+        pass
+
+    assert "channel" not in captured
+    assert "executable_path" not in captured
+    assert captured.get("headless") is True
+    args = captured.get("args") or []
+    assert "--blink-settings=imagesEnabled=false" in args  # 自建保留

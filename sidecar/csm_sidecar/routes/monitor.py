@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -424,3 +425,204 @@ async def baidu_login_status() -> dict[str, Any]:
         import logging
         logging.getLogger(__name__).warning("baidu login-status read failed: %s", e)
         return {"logged_in": False, "username": None, "expires_at": None}
+
+
+# ── Baidu native mode (方案 D) ────────────────────────────────────
+from csm_core.monitor.drivers import chrome_detect
+from csm_core.monitor.drivers.baidu_browser import baidu_browser_session
+from pathlib import Path as _Path
+
+# 用 config_service.load() 而不是 csm_core.config.get_config()，跟
+# baidu_keyword.fetch() 保持一致（这样测试 fixture config_service.init(tmp_path)
+# 注入的 config 能生效）。
+from csm_sidecar.services import config_service as _cfg_svc
+
+
+class ListProfilesBody(BaseModel):
+    user_data_dir: str = Field(min_length=1)
+
+
+class CopyProfileBody(BaseModel):
+    source_user_data_dir: str = Field(min_length=1)
+    source_profile_name: str = Field(default="Default")
+
+
+class TestNativeBody(BaseModel):
+    chrome_executable_path: str = Field(min_length=1)
+    chrome_profile_copy_path: str = Field(min_length=1)
+
+
+class NativeConfigBody(BaseModel):
+    use_native_chrome: bool
+    chrome_executable_path: str | None = None
+    chrome_user_data_dir: str | None = None
+    chrome_profile_name: str = "Default"
+
+
+@router.post("/api/monitor/baidu/detect-chrome")
+def baidu_detect_chrome() -> dict[str, Any]:
+    """探测 Chrome 安装路径 + User Data 默认位置。"""
+    return {
+        "executable_path": chrome_detect.find_chrome_executable(),
+        "user_data_dir": chrome_detect.find_user_data_dir(),
+    }
+
+
+@router.post("/api/monitor/baidu/list-profiles")
+def baidu_list_profiles(body: ListProfilesBody) -> dict[str, Any]:
+    """枚举给定 user_data_dir 下所有 profile + 账号 email。"""
+    return {"profiles": chrome_detect.list_profiles(body.user_data_dir)}
+
+
+@router.post("/api/monitor/baidu/copy-profile")
+def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
+    """一键复制 Chrome profile 到 CSM 专用目录（B' 方案）。
+
+    副本路径独立于 Chrome 默认目录，绕过 Chrome 91+ DevTools 安全限制。
+    返回包含 copy_path 给前端展示 + 更新 config。
+    """
+    from csm_core import config as _core_config
+
+    target = _core_config.default_config_dir() / "baidu_chrome_profile_copy"
+    try:
+        meta = chrome_detect.copy_profile_to(
+            source_user_data_dir=body.source_user_data_dir,
+            source_profile_name=body.source_profile_name,
+            target_path=str(target),
+        )
+    except FileNotFoundError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"复制失败: {e}"}
+
+    # 更新 config
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    bk.chrome_profile_copy_path = str(target)
+    bk.chrome_profile_copy_imported_at = meta["imported_at"]
+    # 源信息记下来给 re-import 用
+    bk.chrome_user_data_dir = body.source_user_data_dir
+    bk.chrome_profile_name = body.source_profile_name
+    _cfg_svc.save(cfg)
+
+    return {
+        "ok": True,
+        "copy_path": str(target),
+        "imported_at": meta["imported_at"],
+        "size_mb": meta["size_mb"],
+        "elapsed_s": meta["elapsed_s"],
+    }
+
+
+@router.post("/api/monitor/baidu/test-native")
+def baidu_test_native(body: TestNativeBody) -> dict[str, Any]:
+    """试启动 Chrome 验证副本可用。成功 close 后返回 ok=True。
+
+    Preflight check 已经不需要 ── 副本路径独立于 Chrome 默认目录，
+    可以跟用户日常 Chrome 共存。
+    """
+    try:
+        with baidu_browser_session(
+            headless=False,
+            user_data_dir=_Path(body.chrome_profile_copy_path),
+            use_native_chrome=True,
+            chrome_executable_path=body.chrome_executable_path,
+            chrome_profile_name="Default",  # 副本内固定叫 Default
+        ):
+            pass  # 启动成功立即关
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/api/monitor/baidu/native-config")
+def baidu_get_native_config() -> dict[str, Any]:
+    """读当前 native mode 配置。"""
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    return {
+        "use_native_chrome": bk.use_native_chrome,
+        "chrome_executable_path": bk.chrome_executable_path,
+        "chrome_user_data_dir": bk.chrome_user_data_dir,
+        "chrome_profile_name": bk.chrome_profile_name,
+        "chrome_profile_copy_path": bk.chrome_profile_copy_path,
+        "chrome_profile_copy_imported_at": bk.chrome_profile_copy_imported_at,
+        "chrome_profile_copy_last_logged_in_at": bk.chrome_profile_copy_last_logged_in_at,
+    }
+
+
+@router.post("/api/monitor/baidu/native-config")
+def baidu_set_native_config(body: NativeConfigBody) -> dict[str, Any]:
+    """保存 native mode 配置（merge 到全局 BaiduKeywordConfig）。"""
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    bk.use_native_chrome = body.use_native_chrome
+    bk.chrome_executable_path = body.chrome_executable_path
+    bk.chrome_user_data_dir = body.chrome_user_data_dir
+    bk.chrome_profile_name = body.chrome_profile_name
+    _cfg_svc.save(cfg)
+    return {"ok": True}
+
+
+# 启动副本 Chrome 让用户登录百度（B' 必须 ── DPAPI 复制不了 cookies）
+@router.post("/api/monitor/baidu/launch-login-window")
+def baidu_launch_login_window() -> dict[str, Any]:
+    """Spawn detached headed Chrome 副本 + 打开 baidu.com 让用户登录。
+
+    用户在副本里登录后关闭浏览器 → Chrome 把 BDUSS 写入副本 Cookies（用副本
+    Local State master key 加密）→ 后续 fetch 用副本能正常解密。
+
+    本 API 不等待用户登录完成（subprocess 启动后立即返回）；后台线程监听
+    进程退出，进程退出时更新 chrome_profile_copy_last_logged_in_at config。
+    """
+    import subprocess
+    import threading
+    from datetime import datetime
+
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    if not bk.chrome_profile_copy_path:
+        return {"ok": False, "error": "还未导入 Chrome profile 副本，请先点'复制 Chrome profile'"}
+    if not bk.chrome_executable_path:
+        return {"ok": False, "error": "缺 Chrome 可执行文件路径"}
+
+    # Spawn 副本 Chrome detached（独立进程，CSM sidecar 退出不影响它）
+    try:
+        proc = subprocess.Popen(
+            [
+                bk.chrome_executable_path,
+                f"--user-data-dir={bk.chrome_profile_copy_path}",
+                "--profile-directory=Default",
+                "https://www.baidu.com",
+            ],
+            # detached：sidecar 退出不杀子 process
+            creationflags=subprocess.DETACHED_PROCESS if os.name == "nt" else 0,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"启动 Chrome 副本失败: {e}"}
+
+    # 后台监听进程退出 → 更新 last_logged_in_at
+    def _watch_login_window(pid: int) -> None:
+        try:
+            proc.wait()  # 阻塞直到 Chrome 完全退出
+        except Exception:
+            return
+        # Chrome 退出 = 用户关了登录窗 = BDUSS 已经持久化到副本 Cookies
+        cfg2 = _cfg_svc.load()
+        bk2 = cfg2.monitor.baidu_keyword
+        bk2.chrome_profile_copy_last_logged_in_at = datetime.utcnow().isoformat()
+        _cfg_svc.save(cfg2)
+        # 也通过 monitor_bus publish 一个事件给前端
+        from csm_sidecar.monitor_bus import monitor_bus
+        from csm_sidecar.services.monitor_loop import MonitorEvent
+        monitor_bus.publish(MonitorEvent(
+            kind="needs_captcha",  # reuse 现有 event kind 让前端弹通知
+            task_id=0,
+            at=datetime.utcnow(),
+            keyword="副本登录态已保存",
+            kw_idx=0,
+        ))
+
+    threading.Thread(target=_watch_login_window, args=(proc.pid,), daemon=True).start()
+
+    return {"ok": True, "pid": proc.pid}

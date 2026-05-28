@@ -49,7 +49,7 @@ TaskType = Literal[
     "baidu_keyword",
 ]
 
-MonitorStatus = Literal["ok", "failed", "risk_control", "skipped"]
+MonitorStatus = Literal["ok", "failed", "risk_control", "skipped", "error"]
 
 
 class MonitorTask(BaseModel):

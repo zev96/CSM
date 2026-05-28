@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -251,3 +252,240 @@ def test_create_baidu_keyword_task(client: TestClient, monitor_db: Path):
     assert resp.status_code == 201, resp.text
     assert resp.json()["type"] == "baidu_keyword"
     assert resp.json()["config"]["target_brands"] == ["Claude", "Anthropic"]
+
+
+class TestBaiduNativeModeRoutes:
+    def test_detect_chrome_returns_paths_when_present(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
+            lambda: "C:/Chrome/chrome.exe",
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_user_data_dir",
+            lambda: "C:/User Data",
+        )
+        resp = client.post("/api/monitor/baidu/detect-chrome")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["executable_path"] == "C:/Chrome/chrome.exe"
+        assert data["user_data_dir"] == "C:/User Data"
+
+    def test_detect_chrome_returns_none_when_missing(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
+            lambda: None,
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_user_data_dir",
+            lambda: None,
+        )
+        resp = client.post("/api/monitor/baidu/detect-chrome")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["executable_path"] is None
+        assert data["user_data_dir"] is None
+
+    def test_list_profiles_returns_array(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.list_profiles",
+            lambda path: [
+                {"name": "Default", "account_email": "a@gmail.com"},
+                {"name": "Profile 1", "account_email": None},
+            ],
+        )
+        resp = client.post(
+            "/api/monitor/baidu/list-profiles",
+            json={"user_data_dir": "C:/User Data"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["profiles"][0]["name"] == "Default"
+        assert data["profiles"][0]["account_email"] == "a@gmail.com"
+        assert len(data["profiles"]) == 2
+
+    def test_list_profiles_400_on_empty_path(self, client):
+        resp = client.post("/api/monitor/baidu/list-profiles", json={"user_data_dir": ""})
+        # Pydantic Field(min_length=1) → FastAPI 422 (Unprocessable Entity)
+        assert resp.status_code in (400, 422)
+
+    def test_test_native_success(self, client, monkeypatch):
+        """mock baidu_browser_session 不抛 → 返回 {"ok": True}。
+        B' pivot: 用 chrome_profile_copy_path 而不是 chrome_user_data_dir。
+        """
+        from contextlib import contextmanager
+        @contextmanager
+        def fake_session(**kw):
+            assert kw["use_native_chrome"] is True
+            assert kw["chrome_profile_name"] == "Default"  # 副本内固定 Default
+            yield MagicMock()
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor.baidu_browser_session", fake_session,
+        )
+        resp = client.post(
+            "/api/monitor/baidu/test-native",
+            json={
+                "chrome_executable_path": "C:/Chrome/chrome.exe",
+                "chrome_profile_copy_path": "C:/CSM-Data/baidu_chrome_profile_copy",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+    def test_test_native_failure_returns_error_details(self, client, monkeypatch):
+        from contextlib import contextmanager
+        @contextmanager
+        def fake_session(**kw):
+            raise RuntimeError("chrome.exe not found")
+            yield  # pragma: no cover
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor.baidu_browser_session", fake_session,
+        )
+        resp = client.post(
+            "/api/monitor/baidu/test-native",
+            json={
+                "chrome_executable_path": "C:/bad/chrome.exe",
+                "chrome_profile_copy_path": "C:/CSM-Data/baidu_chrome_profile_copy",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert "chrome.exe not found" in body["error"]
+
+    def test_copy_profile_success(self, client, monkeypatch):
+        """copy_profile_to 成功 → 返回 ok=True + copy_path + metadata，config 更新。"""
+        fake_meta = {
+            "imported_at": "2026-05-25T10:00:00",
+            "size_mb": 180.5,
+            "elapsed_s": 12.3,
+        }
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.copy_profile_to",
+            lambda **kw: fake_meta,
+        )
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={
+                "source_user_data_dir": "C:/User Data",
+                "source_profile_name": "Default",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert "copy_path" in data
+        assert data["imported_at"] == "2026-05-25T10:00:00"
+        assert data["size_mb"] == 180.5
+        assert data["elapsed_s"] == 12.3
+
+    def test_copy_profile_failure_source_not_found(self, client, monkeypatch):
+        """source profile 不存在 → 返回 ok=False + error，不抛 500。"""
+        def _raise(**kw):
+            raise FileNotFoundError("source profile not found: C:/User Data/Default")
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.copy_profile_to",
+            _raise,
+        )
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={
+                "source_user_data_dir": "C:/User Data",
+                "source_profile_name": "Default",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "source profile not found" in data["error"]
+
+    def test_copy_profile_empty_source_422(self, client):
+        """source_user_data_dir 为空 → Pydantic 验证失败 422。"""
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": ""},
+        )
+        assert resp.status_code == 422
+
+    def test_native_config_get_returns_current_settings(self, client):
+        resp = client.get("/api/monitor/baidu/native-config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "use_native_chrome" in data
+        assert "chrome_executable_path" in data
+        assert "chrome_user_data_dir" in data
+        assert "chrome_profile_name" in data
+        # B' new fields
+        assert "chrome_profile_copy_path" in data
+        assert "chrome_profile_copy_imported_at" in data
+
+    def test_native_config_post_persists(self, client):
+        resp = client.post(
+            "/api/monitor/baidu/native-config",
+            json={
+                "use_native_chrome": True,
+                "chrome_executable_path": "C:/x/chrome.exe",
+                "chrome_user_data_dir": "C:/x/User Data",
+                "chrome_profile_name": "Profile 1",
+            },
+        )
+        assert resp.status_code == 200
+        # round-trip
+        resp2 = client.get("/api/monitor/baidu/native-config")
+        data = resp2.json()
+        assert data["use_native_chrome"] is True
+        assert data["chrome_executable_path"] == "C:/x/chrome.exe"
+        assert data["chrome_profile_name"] == "Profile 1"
+
+    def test_launch_login_window_returns_error_when_copy_not_imported(self, client, monkeypatch):
+        # 让 config 返回 copy_path=None
+        fake_cfg = MagicMock()
+        fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = None
+        fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/x/chrome.exe"
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor._cfg_svc.load", lambda: fake_cfg,
+        )
+        resp = client.post("/api/monitor/baidu/launch-login-window")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert "导入" in data["error"]
+
+    def test_launch_login_window_returns_error_when_no_executable(self, client, monkeypatch):
+        fake_cfg = MagicMock()
+        fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = "C:/x/copy"
+        fake_cfg.monitor.baidu_keyword.chrome_executable_path = None
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor._cfg_svc.load", lambda: fake_cfg,
+        )
+        resp = client.post("/api/monitor/baidu/launch-login-window")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+
+    def test_launch_login_window_spawns_subprocess(self, client, monkeypatch):
+        fake_cfg = MagicMock()
+        fake_cfg.monitor.baidu_keyword.chrome_profile_copy_path = "C:/x/copy"
+        fake_cfg.monitor.baidu_keyword.chrome_executable_path = "C:/Chrome/chrome.exe"
+        monkeypatch.setattr(
+            "csm_sidecar.routes.monitor._cfg_svc.load", lambda: fake_cfg,
+        )
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.wait.return_value = 0
+        captured: dict = {}
+        def fake_popen(args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return fake_proc
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        resp = client.post("/api/monitor/baidu/launch-login-window")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["pid"] == 12345
+        # 断言启动命令包含正确的 user-data-dir + URL
+        args = captured["args"]
+        assert args[0] == "C:/Chrome/chrome.exe"
+        assert "--user-data-dir=C:/x/copy" in args
+        assert "--profile-directory=Default" in args
+        assert "https://www.baidu.com" in args

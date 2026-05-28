@@ -105,6 +105,12 @@ def event_to_dict(event: MonitorEvent) -> dict[str, Any]:
     if event.result is not None:
         # MonitorResult is a Pydantic v2 model; mode='json' converts datetimes.
         out["result"] = event.result.model_dump(mode="json")
+    if event.remaining_s is not None:
+        out["remaining_s"] = event.remaining_s
+    if event.keyword is not None:
+        out["keyword"] = event.keyword
+    if event.kw_idx is not None:
+        out["kw_idx"] = event.kw_idx
     return out
 
 
