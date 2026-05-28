@@ -480,15 +480,37 @@ def fetch_article_browser_isolated(
                 "fetch_error": f"new_page.content raised: {e!r}",
                 "needs_browser_fallback": False,
             }
+        # 反爬/验证码页检测 ── smzdm 等强反爬站对自动化浏览器弹验证码（用户
+        # 日常 Chrome 不弹，但 Patchright 启动的有自动化指纹）。渲染出来是
+        # 验证码页时，里面没有真实正文 → 标 is_blocked 让 caller 回退 SERP
+        # title，而不是把验证码文案当正文（白白漏检 + 误导用户手动解）。
+        cur_url = ""
+        try:
+            cur_url = new_page.url or ""
+        except Exception:
+            pass
+        blocked = bool(detect_risk_by_text(raw) or detect_risk_by_url(cur_url))
+        # 通用验证码关键词（detect_risk_by_text 是百度专用 pattern，补一组
+        # 跨站通用的）
+        if not blocked:
+            low = raw[:5000]
+            blocked = any(
+                kw in low for kw in ("人机验证", "滑动验证", "请完成安全验证", "captcha", "verify you are human")
+            )
+
         # readability 提正文，失败 fallback raw body text
         text = _extract_readable_text(raw)
         if len(text) < _HTTP_MIN_CONTENT_CHARS:
             text = _extract_raw_body_text(raw)
         return {
-            "content": text,
+            "content": "" if blocked else text,
             "source": "browser_isolated",
-            "fetch_error": None if text else f"browser_isolated empty (raw={len(raw)} chars)",
+            "fetch_error": (
+                "反爬/验证码页" if blocked
+                else (None if text else f"browser_isolated empty (raw={len(raw)} chars)")
+            ),
             "needs_browser_fallback": False,
+            "is_blocked": blocked,
         }
     finally:
         if new_page is not None:
@@ -1300,14 +1322,23 @@ class BaiduKeywordAdapter:
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
-            # 方案 C SPA 反爬兜底（保留作 last-resort）：浏览器兜底也失败的
-            # 极端 case 才用 SERP title。优先级是 HTTP → browser_isolated → title。
-            if not matched_brand and attempt.get("is_js_challenge"):
+            # SERP title last-resort fallback：HTTP + browser 都拿不到有效
+            # 正文（JS challenge / 验证码反爬 / 内容过短）时，才用 SERP title
+            # 匹配 brand。优先级：HTTP 正文 → browser 正文 → title。
+            # 只在"彻底拿不到正文"时触发 ── 不影响"正文拿到了但没品牌"的判断
+            # （那种是真没命中，不该靠 title 兜）。
+            fetch_failed = (
+                attempt.get("is_js_challenge")
+                or attempt.get("is_blocked")
+                or len(content) < _HTTP_MIN_CONTENT_CHARS
+            )
+            if not matched_brand and fetch_failed:
                 title = link.get("title", "")
-                matched_brand = match_brand(title, brands)
-                if matched_brand:
+                title_match = match_brand(title, brands)
+                if title_match:
+                    matched_brand = title_match
                     logger.info(
-                        "[baidu] js_challenge title fallback matched: host=%s brand=%s title=%r",
+                        "[baidu] title fallback matched (正文抓取失败): host=%s brand=%s title=%r",
                         host, matched_brand, title[:80],
                     )
             # 诊断日志（漏检 debug 用）：title / content_len / matched / fetch_error
