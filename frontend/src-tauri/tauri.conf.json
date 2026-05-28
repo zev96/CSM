@@ -23,7 +23,8 @@
         "transparent": true,
         "shadow": false,
         "useHttpsScheme": false,
-        "devtools": true
+        "devtools": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion"
       }
     ],
     "security": {
