@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -141,6 +141,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     mining_storage.apply_v4_migration(conn)
     # v5: comment template library — see csm_core/mining/storage.py
     mining_storage.apply_v5_migration(conn)
+    # v6: composite index on monitor_tasks(type, target_url) for dedup lookup.
+    mining_storage.apply_v6_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),

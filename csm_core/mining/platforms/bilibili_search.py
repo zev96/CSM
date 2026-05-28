@@ -20,6 +20,7 @@ import threading
 from typing import Any
 
 from csm_core.browser_infra import mining_browser, rate_limit
+from csm_core.mining.config import get_max_attempts
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
@@ -57,7 +58,11 @@ class BilibiliSearchAdapter:
         on_card: OnCard,
         on_progress: OnProgress,
         cancel_event: threading.Event,
+        max_attempts: int | None = None,
     ) -> SearchOutcome:
+        if max_attempts is None:
+            max_attempts = get_max_attempts("bilibili")
+
         if not mining_browser.has_login_cookie("bilibili"):
             on_progress(ProgressUpdate(
                 platform=self.platform, phase="needs_login",
@@ -146,6 +151,15 @@ class BilibiliSearchAdapter:
 
                     if not breaker.allow():
                         logger.warning("bilibili circuit breaker open — pausing")
+                        break
+
+                    if page_num > max_attempts:
+                        logger.info("[bili] hit max_attempts=%d, stopping", max_attempts)
+                        on_progress(ProgressUpdate(
+                            platform=self.platform, phase="done",
+                            got=emitted, target=target_count,
+                            note=f"翻页保护：达到 {max_attempts} 页上限",
+                        ))
                         break
 
                     raw_params: dict[str, Any] = {

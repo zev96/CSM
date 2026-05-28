@@ -14,7 +14,11 @@ from sse_starlette.sse import EventSourceResponse
 
 from csm_core.browser_infra import mining_browser
 from csm_core.mining import storage as mining_storage
+from csm_core.mining import sync_to_monitor
+from csm_core.mining.config import DEFAULT_MONITOR_SCRAPE_TOP_N, DEFAULT_MONITOR_TOP_N
 from csm_core.mining.models import Platform, StartJobRequest
+from csm_core.mining.sync_to_monitor import SyncParams
+from csm_core.monitor import storage as monitor_storage
 
 from ..auth import RequireToken
 from ..event_bus import bus as event_bus
@@ -30,6 +34,20 @@ from ..services.mining_ai_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["mining"], dependencies=[RequireToken])
+
+
+# ── Sync-to-monitor models ─────────────────────────────────────────────
+class SyncToMonitorRequest(BaseModel):
+    task_name_prefix: str = Field(..., min_length=1, max_length=100)
+    top_n: int = Field(DEFAULT_MONITOR_TOP_N, ge=1, le=50)
+    schedule_cron: str | None = None
+
+
+class SyncToMonitorResponse(BaseModel):
+    created: int
+    skipped_dup: int
+    skipped_no_draft: int
+    errors: list[dict]
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────
@@ -779,4 +797,68 @@ def bulk_import_templates(body: BulkImportBody) -> dict[str, int]:
             raise HTTPException(status_code=400, detail="text_too_long")
     return mining_storage.bulk_import_templates(
         texts=body.texts, tags=body.tags, source_platform=body.source_platform,
+    )
+
+
+# ── Sync to monitor (mining → monitor) ───────────────────────────────
+def _get_video_stats_for_job(conn, job_id: int) -> tuple[int, int]:
+    """Return (total_videos, commented_videos) for a mining job.
+    commented_videos = videos with at least one tier=1, non-empty text comment.
+
+    Excludes soft-deleted videos (v.excluded=1): users often scrape a batch
+    then delete some, and the "all commented?" gate must measure the videos
+    that actually remain — the same v.excluded=0 filter list_videos uses.
+    """
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(DISTINCT v.id) AS total,
+            COUNT(DISTINCT CASE
+                WHEN vc.text IS NOT NULL AND TRIM(vc.text) != '' THEN v.id
+            END) AS commented
+        FROM videos v
+        JOIN video_source_keywords vsk ON vsk.video_id = v.id
+        LEFT JOIN video_comments vc
+          ON vc.video_id = v.id AND vc.tier = 1
+        WHERE vsk.job_id = ? AND v.excluded = 0
+        """,
+        (job_id,),
+    ).fetchone()
+    return (row[0] or 0, row[1] or 0)
+
+
+@router.post("/api/mining/jobs/{job_id}/sync_to_monitor")
+def sync_job_to_monitor(
+    job_id: int,
+    body: SyncToMonitorRequest,
+) -> SyncToMonitorResponse:
+    conn = monitor_storage.get_conn()
+    job = mining_storage.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="未找到该采集任务")
+    if job["status"] not in ("done", "partial_done"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"采集任务尚未完成（当前状态：{job['status']}），完成后才能同步",
+        )
+    total, commented = _get_video_stats_for_job(conn, job_id)
+    if total == 0:
+        raise HTTPException(status_code=409, detail="该任务下没有可同步的视频")
+    if commented < total:
+        raise HTTPException(
+            status_code=409,
+            detail=f"还有视频未填写评论（已评论 {commented}/共 {total}），请全部填写后再同步",
+        )
+    params = SyncParams(
+        task_name_prefix=body.task_name_prefix,
+        top_n=body.top_n,
+        scrape_top_n=DEFAULT_MONITOR_SCRAPE_TOP_N,
+        schedule_cron=body.schedule_cron,
+    )
+    result = sync_to_monitor.run(conn, job_id, params)
+    return SyncToMonitorResponse(
+        created=result.created,
+        skipped_dup=result.skipped_dup,
+        skipped_no_draft=result.skipped_no_draft,
+        errors=result.errors,
     )

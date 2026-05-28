@@ -35,7 +35,19 @@ class SearchAdapter(Protocol):
         on_card: OnCard,
         on_progress: OnProgress,
         cancel_event: threading.Event,
-    ) -> SearchOutcome: ...
+        max_attempts: int | None = None,
+    ) -> SearchOutcome:
+        """Search the platform.
+
+        Args:
+          target_count: stop after emitting this many cards. Adapter may emit
+                        more if a single page yields extras; runner is responsible
+                        for cancel_event.
+          max_attempts: max page-fetch attempts before bailing (anti-scrape).
+                        None → adapter uses its own platform default from
+                        csm_core.mining.config.get_max_attempts(self.platform).
+        """
+        ...
 
 
 def parse_int_count(text: str) -> int | None:

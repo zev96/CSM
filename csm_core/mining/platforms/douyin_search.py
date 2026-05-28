@@ -12,12 +12,14 @@ captcha on first load when fingerprint looks fresh. Strategy:
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from typing import Any
 from urllib.parse import quote
 
 from csm_core.browser_infra import mining_browser
+from csm_core.mining.config import PAGE_DELAY_RANGE_SEC, get_max_attempts
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
@@ -37,7 +39,10 @@ class DouyinSearchAdapter:
         on_card: OnCard,
         on_progress: OnProgress,
         cancel_event: threading.Event,
+        max_attempts: int | None = None,
     ) -> SearchOutcome:
+        if max_attempts is None:
+            max_attempts = get_max_attempts("douyin")
         if not mining_browser.has_login_cookie("douyin"):
             on_progress(ProgressUpdate(platform=self.platform, phase="needs_login", got=0, target=target_count))
             return SearchOutcome(
@@ -107,7 +112,7 @@ class DouyinSearchAdapter:
             except Exception as e:
                 logger.info("douyin networkidle wait timed out: %s", e)
 
-            for _ in range(30):
+            for _ in range(max_attempts):
                 if cancel_event.is_set() or emitted >= target_count:
                     break
                 # 4-layer detection (URL / HTTP / DOM / page text) replaces
@@ -133,7 +138,7 @@ class DouyinSearchAdapter:
                     ))
                     continue
                 page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
-                time.sleep(2.0)
+                time.sleep(random.uniform(*PAGE_DELAY_RANGE_SEC))
 
         if risk_detected:
             return SearchOutcome(

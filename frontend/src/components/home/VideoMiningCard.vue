@@ -4,16 +4,21 @@
  *
  *   ┌─────────────────────────────────────────┐
  *   │ 视频抓取                          [→]   │
- *   │ 30   已抓取                              │
+ *   │ 13                                       │  ← 当前实际视频总数
  *   │  (没有 sparkline，hero 直接接列表)        │
- *   │ 宠物家庭吸尘器     124/150     [进行中]  │  ← hover 切换顶部
- *   │ 母婴加湿器          52/52      [完成]   │     30 → row.got/target
- *   │ ...                                     │     已抓取 → row.keyword
+ *   │ 宠物家庭吸尘器                 [进行中]  │  ← hover 切换顶部
+ *   │ 无线吸尘器推荐                 [已完成]  │     13 → row.commented/video
+ *   │ ...                                     │
  *   └─────────────────────────────────────────┘
  *
+ * 数量 / 状态都按「当前实际数据」算（不是抓取时的快照）：
+ *   - 顶部数字 = 各任务 video_count 之和（后端已过滤用户删除的 excluded 视频）
+ *   - 行状态 = 跟引流任务卡同款：抓取中 / 进行中(还有没评论) / 已完成 / 失败
+ *   - 每次进首页 onMounted 重新 loadJobs，所以删/评论后回首页即时反映
+ *
  * 交互：
- *   - 默认顶部：totalScraped + "已抓取"
- *   - hover 某行 → 顶部数字切到 row.got/row.target，副词切到 row.keyword
+ *   - 默认顶部：totalVideos（所有任务实际视频数之和）
+ *   - hover 某行 → 顶部数字切到该任务 commentedCount/videoCount
  *   - 行 hover 高亮 + 阴影凸起；点击行 → router.push 引流中心 + 该 job
  *
  * 原副标 "全部任务已完成 · 共 X 个任务" 删除（用户要求 hero 副位只在
@@ -36,61 +41,52 @@ const { whenReady } = useSidecarReady();
 interface Row {
   id: number;
   keyword: string;
-  got: number;
-  target: number;
-  state: "running" | "queued" | "done" | "failed";
+  videoCount: number;     // 当前实际视频数（后端 video_count，已排除删除的）
+  commentedCount: number; // 已评论视频数
+  state: "running" | "queued" | "in_progress" | "done" | "failed";
 }
 
-function aggregateJob(j: MiningJob): { got: number; target: number } {
-  let got = 0;
-  let target = 0;
-  for (const p of j.platforms) {
-    const pr = j.progress?.[p];
-    if (pr) {
-      got += Number(pr.got ?? 0);
-      target += Number(pr.target ?? 0);
-    } else {
-      target += j.target_per_platform;
-    }
-  }
-  return { got, target };
-}
-
+// 跟引流任务卡（TaskListItem）同款状态语义：抓取层 running/pending/failed
+// 直接映射；done/partial_done 再按「标注进度」细分 —— 全部已评论=已完成，
+// 还有没评论=进行中。这样首页卡片跟引流中心列表显示一致的真实状态。
 function classifyState(j: MiningJob): Row["state"] {
   const s = j.status?.toLowerCase() ?? "";
   if (s === "running") return "running";
   if (s === "pending" || s === "queued") return "queued";
   if (s === "failed" || s === "cancelled") return "failed";
+  const total = j.video_count ?? 0;
+  const commented = j.commented_count ?? 0;
+  if (total > 0 && commented < total) return "in_progress";
   return "done";
 }
 
 const STATE_ORDER: Record<Row["state"], number> = {
   running: 0,
   queued: 1,
-  done: 2,
-  failed: 3,
+  in_progress: 2,
+  done: 3,
+  failed: 4,
 };
 
 // 首页这张卡列表最多 15 条（避免数据多时把列表撑太长 / 拉过多 DOM）；
 // 用户要看完整列表走右上「→」详情按钮跳到引流中心。
 const rows = computed<Row[]>(() =>
   [...store.jobs]
-    .map((j) => {
-      const agg = aggregateJob(j);
-      return {
-        id: j.id,
-        keyword: j.keyword,
-        got: agg.got,
-        target: agg.target,
-        state: classifyState(j),
-      };
-    })
+    .map((j) => ({
+      id: j.id,
+      keyword: j.keyword,
+      videoCount: j.video_count ?? 0,
+      commentedCount: j.commented_count ?? 0,
+      state: classifyState(j),
+    }))
     .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state])
     .slice(0, 15),
 );
 
-const totalScraped = computed(() =>
-  store.jobs.reduce((acc, j) => acc + aggregateJob(j).got, 0),
+// 首页大数字 = 所有任务当前实际视频数之和（用后端已过滤删除的 video_count，
+// 不再用抓取进度 progress.got —— 用户抓取后删了视频要按实际剩余数显示）。
+const totalVideos = computed(() =>
+  store.jobs.reduce((acc, j) => acc + (j.video_count ?? 0), 0),
 );
 
 // hover 状态 —— 切顶部数字 + 副词
@@ -101,8 +97,8 @@ const selectedRow = computed<Row | null>(() =>
 
 const heroNumber = computed(() =>
   selectedRow.value
-    ? `${selectedRow.value.got}/${selectedRow.value.target}`
-    : String(totalScraped.value),
+    ? `${selectedRow.value.commentedCount}/${selectedRow.value.videoCount}`
+    : String(totalVideos.value),
 );
 // heroLabel 已彻底下线（用户要求）—— 顶部只保留大数字 30/30，副位文字
 // "已抓取"删除。下方行 + 状态 pill 已经把语义说清，副词冗余。
@@ -120,6 +116,8 @@ onMounted(async () => {
 // 约定只保留在按钮 + hover 上）。
 function chipStyle(state: Row["state"]) {
   if (state === "running")
+    return { background: "rgba(238,106,42,0.12)", color: "var(--primary-deep)" };
+  if (state === "in_progress")
     return { background: "var(--yellow-soft)", color: "#7a5400" };
   if (state === "queued")
     return {
@@ -132,10 +130,11 @@ function chipStyle(state: Row["state"]) {
 }
 
 function chipLabel(state: Row["state"]) {
-  if (state === "running") return "进行中";
+  if (state === "running") return "抓取中";
+  if (state === "in_progress") return "进行中";
   if (state === "queued") return "排队";
   if (state === "failed") return "失败";
-  return "完成";
+  return "已完成";
 }
 
 // 点击关键词行 → 跳引流中心 + 该 job。MiningView 暂不读 job query，

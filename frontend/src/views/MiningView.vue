@@ -35,6 +35,7 @@ import { ref, computed, onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import Icon from "@/components/ui/Icon.vue";
 import StartJobModal from "@/components/mining/StartJobModal.vue";
+import SyncToMonitorModal from "@/components/mining/SyncToMonitorModal.vue";
 import TaskListPanel from "@/components/mining/TaskListPanel.vue";
 import SubtaskListPanel from "@/components/mining/SubtaskListPanel.vue";
 import VideoDetailPanel from "@/components/mining/VideoDetailPanel.vue";
@@ -47,6 +48,10 @@ const toast = useToast();
 const route = useRoute();
 
 const showNewTask = ref(false);
+
+const syncModalVisible = ref(false);
+const syncModalJobId = ref<number | null>(null);
+const syncModalKeyword = ref('');
 
 // 默认显示「全部」+「全部平台」—— 用户进页面第一眼想看完整的视频清单，
 // 而不是被 unread 过滤掉一半。要看待评论时手动切下拉。
@@ -282,6 +287,12 @@ async function onTaskDelete(jobId: number) {
   }
 }
 
+function openSyncModal(job: { id: number; keyword: string }) {
+  syncModalJobId.value = job.id;
+  syncModalKeyword.value = job.keyword;
+  syncModalVisible.value = true;
+}
+
 onMounted(async () => {
   await Promise.all([
     store.refreshLoginStatus(),
@@ -351,6 +362,7 @@ onMounted(async () => {
         @export="onTaskExport"
         @delete="onTaskDelete"
         @cancel="onTaskCancel"
+        @sync="(id) => { const j = store.jobs.find(x => x.id === id); if (j) openSyncModal(j); }"
       />
 
       <!--
@@ -509,6 +521,11 @@ onMounted(async () => {
       v-model:open="showNewTask"
       :login-status="store.loginStatus"
       @submit="onStartSubmit"
+    />
+    <SyncToMonitorModal
+      v-model:visible="syncModalVisible"
+      :job-id="syncModalJobId"
+      :job-keyword="syncModalKeyword"
     />
   </div>
 </template>

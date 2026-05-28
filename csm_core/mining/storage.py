@@ -428,23 +428,29 @@ def get_job(job_id: int) -> dict[str, Any] | None:
 def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
     conn = get_conn()
     # 在 mining_jobs SELECT 里挂两个相关子查询，给每个 job 算出：
-    #   _video_count     —— 该 job 通过 video_source_keywords 关联的视频数
+    #   _video_count     —— 该 job 关联的、**未被删除（excluded=0）** 的视频数
     #                       （COUNT DISTINCT 因为同一视频可能命中多个关键词）
     #   _commented_count —— 同上但 only videos.already_commented=1
     # 前端 TaskListItem 用 (commented_count >= video_count) 判定「已完成」/
     # 「进行中」（用户要求"全部已评论=已完成，否则=进行中"），跟纯
     # mining_jobs.status（抓取层面的成功/失败）解耦。
+    # ⚠ 必须过滤 v.excluded=0：用户抓取后会删（软删 excluded=1）一批视频，
+    #   两个计数都要按「当前实际剩余」算，否则分母虚高 → 永远 commented<video
+    #   → chip 卡在「进行中」、同步守卫误判未评论完。与 list_videos 的
+    #   `v.excluded=0` 口径保持一致。
     # idx_vsk_job 索引覆盖；少量 jobs 时性能可忽略。
     rows = conn.execute(
         """
         SELECT mj.*,
-               (SELECT COUNT(DISTINCT vsk.video_id)
-                FROM video_source_keywords vsk
-                WHERE vsk.job_id = mj.id) AS _video_count,
+               (SELECT COUNT(DISTINCT v.id)
+                FROM videos v
+                JOIN video_source_keywords vsk ON vsk.video_id = v.id
+                WHERE vsk.job_id = mj.id AND v.excluded = 0) AS _video_count,
                (SELECT COUNT(DISTINCT v.id)
                 FROM videos v
                 JOIN video_source_keywords vsk2 ON vsk2.video_id = v.id
-                WHERE vsk2.job_id = mj.id AND v.already_commented = 1) AS _commented_count
+                WHERE vsk2.job_id = mj.id AND v.already_commented = 1
+                      AND v.excluded = 0) AS _commented_count
         FROM mining_jobs mj
         ORDER BY mj.created_at DESC LIMIT ?
         """,
@@ -1105,3 +1111,72 @@ def list_used_tags() -> list[str]:
         "SELECT DISTINCT value FROM comment_templates, json_each(tags_json) ORDER BY value"
     ).fetchall()
     return [r[0] for r in rows]
+
+
+# ── Dedup helpers (used by mining collection) ─────────────────────────
+def is_video_in_videos_table(
+    conn: sqlite3.Connection,
+    platform: str,
+    platform_video_id: str,
+) -> bool:
+    """videos 表精确 UNIQUE 查询，O(1)。供 mining 采集时跳过已抓视频。"""
+    row = conn.execute(
+        "SELECT 1 FROM videos WHERE platform=? AND platform_video_id=? LIMIT 1",
+        (platform, platform_video_id),
+    ).fetchone()
+    return row is not None
+
+
+def is_video_in_monitor_tasks(
+    conn: sqlite3.Connection,
+    platform: str,
+    platform_video_id: str,
+) -> bool:
+    """monitor_tasks 反查：LIKE + 正则精确匹配。
+
+    monitor_tasks 没有独立的 platform_video_id 列，所以走两步：
+      1. LIKE 加速过滤（idx_monitor_tasks_target_url 索引加速）
+      2. 用 extract_platform_video_id() 正则二次确认，避免 url 子串误判
+    """
+    task_type = _PLATFORM_TO_MONITOR_TYPE.get(platform)
+    if not task_type:
+        return False
+
+    candidates = conn.execute(
+        "SELECT target_url FROM monitor_tasks WHERE type=? AND target_url LIKE ?",
+        (task_type, f"%{platform_video_id}%"),
+    ).fetchall()
+
+    for (target_url,) in candidates:
+        extracted = extract_platform_video_id(platform, target_url)
+        if extracted == platform_video_id:
+            return True
+    return False
+
+
+def is_video_tracked_anywhere(
+    conn: sqlite3.Connection,
+    platform: str,
+    platform_video_id: str,
+) -> bool:
+    """采集时用：videos OR monitor_tasks 任一存在即跳过。"""
+    return (
+        is_video_in_videos_table(conn, platform, platform_video_id)
+        or is_video_in_monitor_tasks(conn, platform, platform_video_id)
+    )
+
+
+# V6 migration: composite index on monitor_tasks for dedup lookup performance.
+_DDL_V6_MINING: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_monitor_tasks_target_url "
+    "ON monitor_tasks(type, target_url)",
+]
+
+
+def apply_v6_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v5 → v6.
+
+    Idempotent: CREATE INDEX IF NOT EXISTS handles re-runs.
+    """
+    for stmt in _DDL_V6_MINING:
+        conn.execute(stmt)
