@@ -418,6 +418,86 @@ def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
     }
 
 
+def fetch_article_browser_isolated(
+    context: Any,
+    url: str,
+    *,
+    timeout_ms: int = 20000,
+    spa_wait_ms: int = 3000,
+) -> dict[str, Any]:
+    """方案 B：用独立 tab 打开文章 URL 让 JS 跑完后提正文。
+
+    跟 ``fetch_article_browser`` 的区别：不用 baidu 主 page，而是
+    ``context.new_page()`` 开一个独立 tab。这样：
+    - 不污染 baidu 主 page 的 navigation/cookies（baidu 风控不会怪罪连续打开 N 个 article）
+    - 对反爬站（zhihu / smzdm 等 HTTP 拿不到正文）能用真正"点击进文章"
+      的方式拿 rendered HTML
+
+    用户 native mode 副本 Chrome 是真实日常 profile ── 知乎/smzdm 都认账，
+    不会撞反爬。
+
+    流程：
+    1. context.new_page() → 独立 tab
+    2. page.goto(url, wait_until="domcontentloaded", timeout=20s)
+    3. wait_for_timeout(spa_wait_ms) ── 给 SPA 跑 JS 渲染时间
+    4. page.content() 拿 rendered HTML
+    5. readability 提正文，失败 fallback 到 body.text_content
+    6. close 独立 tab
+
+    Returns 跟 fetch_article_http 同 shape。
+    """
+    new_page = None
+    try:
+        try:
+            new_page = context.new_page()
+        except Exception as e:
+            return {
+                "content": "",
+                "source": "browser_isolated",
+                "fetch_error": f"new_page raised: {e!r}",
+                "needs_browser_fallback": False,
+            }
+        try:
+            new_page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except Exception as e:
+            return {
+                "content": "",
+                "source": "browser_isolated",
+                "fetch_error": f"new_page.goto raised: {e!r}",
+                "needs_browser_fallback": False,
+            }
+        # SPA 站 domcontentloaded 后正文还没渲染 ── 给 N 毫秒让 JS 跑完
+        try:
+            new_page.wait_for_timeout(spa_wait_ms)
+        except Exception:
+            pass
+        try:
+            raw = new_page.content() or ""
+        except Exception as e:
+            return {
+                "content": "",
+                "source": "browser_isolated",
+                "fetch_error": f"new_page.content raised: {e!r}",
+                "needs_browser_fallback": False,
+            }
+        # readability 提正文，失败 fallback raw body text
+        text = _extract_readable_text(raw)
+        if len(text) < _HTTP_MIN_CONTENT_CHARS:
+            text = _extract_raw_body_text(raw)
+        return {
+            "content": text,
+            "source": "browser_isolated",
+            "fetch_error": None if text else f"browser_isolated empty (raw={len(raw)} chars)",
+            "needs_browser_fallback": False,
+        }
+    finally:
+        if new_page is not None:
+            try:
+                new_page.close()
+            except Exception:
+                pass
+
+
 # ── 软着陆验证码 ────────────────────────────────────────────────
 # 复用 risk_detector 的同一组 pattern，避免两边 drift（detect_risk 看到的就是
 # _try_human_solve 等的，反之亦然）。
@@ -1186,29 +1266,42 @@ class BaiduKeywordAdapter:
 
             rank += 1
             attempt = fetch_article_http(href, session=session)
-            # NOTE: browser fallback (fetch_article_browser) is intentionally
-            # disabled here. It used to upgrade short-content fetches to a
-            # patchright open in the SAME baidu profile, which shares the
-            # logged-in BDUSS cookie. baidu treats 10 rapid baijiahao opens
-            # by a logged-in user as bot behaviour → captcha on the article
-            # page → detect_risk_by_text catches "验证码" → RiskControlException
-            # → entire task aborts at breakpoint 0 even though SERP succeeded.
-            # HTTP-only article fetches with curl_cffi keep article retrieval
-            # decoupled from the baidu session. Short / JS-heavy pages just
-            # get content_preview=""; matches_brand judgement degrades to
-            # title+summary, which is acceptable. Proper fix is the two-phase
-            # design in docs/superpowers/specs/2026-05-19-baidu-two-phase-fetch-design.md.
-            if attempt.get("needs_browser_fallback"):
-                attempt["fetch_error"] = (
-                    attempt.get("fetch_error")
-                    or "HTTP extraction failed; browser fallback disabled to avoid 风控"
-                )
+            # 方案 B 浏览器兜底（2026-05-28）：HTTP fetch 失败时（403 反爬、
+            # JS challenge 壳页、content_len 过短），用副本 Chrome context 的
+            # 独立 tab 打开文章 URL → 让 JS 跑完 → 拿 rendered HTML → 提正文。
+            #
+            # 老注释说"fetch_article_browser disabled to avoid 风控" ── 那是
+            # 旧 incognito profile 时代的事：共用 baidu page 风控会迁怒 baidu
+            # session。B' 副本模式下 context 是用户日常 Chrome 副本，知乎/
+            # smzdm 等站认账（用户日常浏览过），独立 tab 不污染 baidu 主 page，
+            # 没风控扩散风险。
+            needs_browser = (
+                attempt.get("needs_browser_fallback")
+                or attempt.get("is_js_challenge")
+                or len(attempt.get("content") or "") < _HTTP_MIN_CONTENT_CHARS
+            )
+            if needs_browser and page is not None:
+                try:
+                    ctx = getattr(page, "context", None)
+                    if ctx is not None:
+                        browser_attempt = fetch_article_browser_isolated(ctx, href)
+                        if browser_attempt.get("content"):
+                            # 浏览器兜底拿到正文 → 替换 HTTP attempt
+                            logger.info(
+                                "[baidu] browser_isolated fallback: host=%s http_len=%d → browser_len=%d",
+                                host, len(attempt.get("content") or ""),
+                                len(browser_attempt["content"]),
+                            )
+                            attempt = browser_attempt
+                except Exception as e:
+                    logger.warning(
+                        "[baidu] browser_isolated fallback raised (host=%s): %s", host, e,
+                    )
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
-            # 方案 C SPA 反爬兜底：smzdm 等 JS challenge 站 fetch 拿不到任何正文
-            # （< 500 字符的 probe.js 壳页），让 SERP title 参与匹配。只在明确
-            # 反爬触发时启用，不影响 baijiahao/zhihu 等正常抓到正文的 host。
+            # 方案 C SPA 反爬兜底（保留作 last-resort）：浏览器兜底也失败的
+            # 极端 case 才用 SERP title。优先级是 HTTP → browser_isolated → title。
             if not matched_brand and attempt.get("is_js_challenge"):
                 title = link.get("title", "")
                 matched_brand = match_brand(title, brands)
