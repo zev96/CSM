@@ -8,8 +8,11 @@
  *   3. xlsx / xls 文件上传（SheetJS 读取第一个 sheet 转 TSV）
  *   4. 分享文案（B 站 / 抖音「复制链接」整段文字粘贴；URL 内嵌在中文里）
  *
- * 字段顺序按平台分两套：
- *   - 知乎问题（排名监测）：问题名(可选) | 目标 URL | 目标品牌 | Top-N(可选)
+ * 字段顺序按平台分套：
+ *   - 知乎问题（排名监测）：问题名(可选) | 目标 URL     —— 只 2 列
+ *     批次名 / 目标品牌 / Top-N 都来自模态里的批次级输入，不再逐行写。
+ *     最终每行任务名 = `${批次名} - 问题名`，让 ZhihuMonitorModule 按
+ *     parseBatchName 把同批问题分到一组（命名约定批次）。
  *   - 评论留存（B站/抖音/快手）：视频 URL | 评论原文     —— 只 2 列
  *     评论留存场景下任务名 / Top-N 都来自模态里的输入，不再要表里每行写。
  *     最终每行任务名 = `${批次名} - 视频 ID 尾段`，方便在任务列表里区分。
@@ -81,6 +84,11 @@ const isComment = computed(() =>
   platform.value !== "zhihu_question" && platform.value !== "baidu_keyword"
 );
 const isBaidu = computed(() => platform.value === "baidu_keyword");
+const isZhihu = computed(() => platform.value === "zhihu_question");
+// 「批次名 + 共享品牌词 + 共享 Top-N」机制：百度 / 知乎共用。
+// 百度：N 关键词 → 1 任务，batchName 直接作 task.name。
+// 知乎：N 行 → N 任务，task.name = `${batchName} - 问题名`，config 用共享品牌 / Top-N。
+const usesSharedBrand = computed(() => isBaidu.value || isZhihu.value);
 
 watch(
   () => props.open,
@@ -181,8 +189,8 @@ function splitFields(line: string): string[] {
  *      文案场景），把那个字段替换成抽到的纯 URL。剩下的列（评论原文等）
  *      不动。
  *
- * 保持原列顺序非常重要：现有的知乎 3 列格式 `问题名 ⇥ URL ⇥ 品牌` 完全
- * 依赖 fields 的位置语义；如果重排会导致品牌字段被识别成问题名。
+ * 保持原列顺序非常重要：知乎 `问题名 ⇥ URL` 和评论 `URL ⇥ 评论原文` 都
+ * 依赖 fields 的位置语义；如果重排会导致字段错位。
  */
 function normalizeFieldUrls(fields: string[]): string[] {
   const out = [...fields];
@@ -245,7 +253,7 @@ const rows = computed<ParsedRow[]>(() => {
     //   - 已经是 URL 的字段做一次 normalize（剥 B 站追踪参数）
     //   - 整行没有字段以 http 开头时，会扫一遍把内嵌 URL 抽出来，覆盖
     //     掉原字段里的中文壳子（分享文案路径）
-    // 列顺序保持原样 —— 知乎的 `问题名 ⇥ URL ⇥ 品牌` 顺序依赖位置语义。
+    // 列顺序保持原样 —— 知乎 `问题名 ⇥ URL` 顺序依赖位置语义。
     const fields = normalizeFieldUrls(splitFields(line));
     let name = "";
     let url = "";
@@ -274,23 +282,24 @@ const rows = computed<ParsedRow[]>(() => {
       // 同名条目相互覆盖；用户没填批次名时退回纯 URL 尾段。
       name = trimmedBatch ? `${trimmedBatch} - ${tail}` : tail;
     } else {
-      // 知乎排名监测沿用原来的 3-列格式：问题名 | URL | 品牌 | Top-N(可选)
-      if (fields.length === 1) {
-        url = fields[0];
+      // 知乎排名监测 2 列：问题名 ⇥ 问题 URL。品牌词 / Top-N 来自模态共享字段
+      // （targetBrand / topN），任务名最终 = `${批次名} - 问题名`（见 submitAll）。
+      // brandOrComment 不再逐行解析。
+      const first = fields[0] ?? "";
+      if (/^https?:\/\//.test(first)) {
+        // 用户只粘了 URL（没填问题名），从 URL 派生问题名。
+        url = first;
         name = deriveNameFromUrl(url);
-      } else if (fields.length >= 2) {
-        if (/^https?:\/\//.test(fields[0])) {
-          url = fields[0];
-          brandOrComment = fields[1] ?? "";
-          if (fields[2]) n = Number(fields[2]) || topN.value;
-          name = deriveNameFromUrl(url);
-        } else {
-          name = fields[0];
-          url = fields[1] ?? "";
-          brandOrComment = fields[2] ?? "";
-          if (fields[3]) n = Number(fields[3]) || topN.value;
-        }
+      } else if (fields.length >= 2 && /^https?:\/\//.test(fields[1] ?? "")) {
+        name = fields[0];
+        url = fields[1];
+      } else {
+        // 容错：第二列不是 URL —— 仍按 问题名 / URL 拆，交给下面的校验判错。
+        name = fields[0];
+        url = fields[1] ?? "";
       }
+      // 共享 Top-N（百度 / 知乎都从模态取，忽略表里任何数字列）。
+      n = topN.value;
     }
 
     // 评论场景：Top-N 始终来自模态的输入，忽略表里任何第三列数字
@@ -305,11 +314,13 @@ const rows = computed<ParsedRow[]>(() => {
     };
 
     // 校验
+    //   - 评论：URL + 评论原文逐行必填。
+    //   - 知乎：仅 URL + 问题名逐行必填；品牌词 / Top-N 是批次级共享字段，
+    //     非空校验在 submitAll 里做（缺品牌→整批拦下，不逐行标错）。
     if (!row.url) row.error = "缺少 URL";
     else if (!/^https?:\/\//.test(row.url)) row.error = "URL 无效";
-    else if (!row.name) row.error = "缺少任务名";
+    else if (!row.name) row.error = isZhihu.value ? "缺少问题名" : "缺少任务名";
     else if (isComment.value && !row.brandOrComment) row.error = "缺少评论原文";
-    else if (!isComment.value && !row.brandOrComment) row.error = "缺少目标品牌";
 
     out.push(row);
   }
@@ -472,10 +483,11 @@ function loadExample() {
       "https://www.bilibili.com/video/BV1zz411e9EF\t冬天必备，亲测除菌效果...",
     ].join("\n");
   } else {
+    // 知乎 2 列：问题名 + 问题 URL。品牌词 / Top-N / 批次名由模态填一次。
     rawText.value = [
-      "无线吸尘器哪款好用\thttps://www.zhihu.com/question/12345678\t戴森\t5",
-      "宠物家庭吸尘器\thttps://www.zhihu.com/question/23456789\t小米\t5",
-      "母婴加湿器推荐\thttps://www.zhihu.com/question/34567890\t舒乐氏\t10",
+      "无线吸尘器哪款好用\thttps://www.zhihu.com/question/12345678",
+      "宠物家庭吸尘器\thttps://www.zhihu.com/question/23456789",
+      "母婴加湿器推荐\thttps://www.zhihu.com/question/34567890",
     ].join("\n");
   }
 }
@@ -546,6 +558,21 @@ async function submitAll() {
     return;
   }
 
+  // 知乎批次：批次名 + 共享品牌词整批必填（品牌词不再逐行）。校验通过后
+  // 每行 → 1 任务，name = `${批次名} - 问题名`，config 用共享 brand + Top-N。
+  const zhBatchName = batchName.value.trim();
+  const zhBrand = targetBrand.value.trim();
+  if (isZhihu.value) {
+    if (!zhBatchName) {
+      toast.warn("知乎批量导入必须填写「批次名」");
+      return;
+    }
+    if (!zhBrand) {
+      toast.warn("知乎批量导入必须填写「目标品牌词」");
+      return;
+    }
+  }
+
   // 其它平台：保持 N 行 → N 任务原语义。
   submitting.value = true;
   progress.value = { done: 0, total: validRows.value.length };
@@ -556,11 +583,15 @@ async function submitAll() {
     try {
       const body = {
         type: platform.value,
-        name: row.name,
+        // 知乎：任务名加 `${批次名} - ` 前缀让 ZhihuMonitorModule 按
+        // parseBatchName 分组；评论 / 其它沿用 row.name（已含自身前缀逻辑）。
+        name: isZhihu.value ? `${zhBatchName} - ${row.name}` : row.name,
         target_url: row.url,
         config: isComment.value
           ? { my_comment_text: row.brandOrComment, top_n: row.topN }
-          : { target_brand: row.brandOrComment, top_n: row.topN },
+          : isZhihu.value
+            ? { target_brand: zhBrand, top_n: row.topN }
+            : { target_brand: row.brandOrComment, top_n: row.topN },
         schedule_cron:
           scheduleMode.value === "manual" ? "manual" : dailyTime.value,
         enabled: enabled.value,
@@ -618,18 +649,23 @@ async function submitAll() {
           </div>
 
           <!--
-            任务名 —— 评论场景每行任务名 = `${batchName} - <video id>`，
-            百度场景整批就是一个任务，任务名直接用 batchName。
+            任务名 / 批次名 —— 评论场景每行任务名 = `${batchName} - <video id>`，
+            百度场景整批就是一个任务，任务名直接用 batchName；
+            知乎场景每行任务名 = `${batchName} - 问题名`，batchName 即批次名。
           -->
-          <div v-if="isComment || isBaidu" class="flex items-center gap-2">
+          <div v-if="isComment || isBaidu || isZhihu" class="flex items-center gap-2">
             <label
               class="text-[12px] font-medium"
               :style="{ color: 'var(--ink-2)', minWidth: '60px' }"
-            >任务名</label>
+            >{{ isZhihu ? "批次名" : "任务名" }}</label>
             <input
               v-model="batchName"
               type="text"
-              :placeholder="isBaidu ? '如：0515-吸尘器关键词组' : '如：戴森评论监测（每条视频会自动加上视频 ID 后缀）'"
+              :placeholder="isBaidu
+                ? '如：0515-吸尘器关键词组'
+                : isZhihu
+                  ? '如：0515-吸尘器问题组（每个问题任务会加上此前缀）'
+                  : '如：戴森评论监测（每条视频会自动加上视频 ID 后缀）'"
               class="bg-card-2 focus:bg-card-white outline-none transition-colors"
               :style="{
                 flex: 1,
@@ -643,8 +679,8 @@ async function submitAll() {
             >
           </div>
 
-          <!-- 目标品牌（仅百度） —— 整批共用一个品牌词 -->
-          <div v-if="isBaidu" class="flex items-center gap-2">
+          <!-- 目标品牌（百度 / 知乎） —— 整批共用一个品牌词 -->
+          <div v-if="usesSharedBrand" class="flex items-center gap-2">
             <label
               class="text-[12px] font-medium"
               :style="{ color: 'var(--ink-2)', minWidth: '60px' }"
@@ -652,7 +688,9 @@ async function submitAll() {
             <input
               v-model="targetBrand"
               type="text"
-              placeholder="如：CEWEY（一个品牌词，命中该词的搜索结果会标「自家」）"
+              :placeholder="isZhihu
+                ? '如：戴森（批次内所有问题共用此品牌词做排名监测）'
+                : '如：CEWEY（一个品牌词，命中该词的搜索结果会标「自家」）'"
               class="bg-card-2 focus:bg-card-white outline-none transition-colors"
               :style="{
                 flex: 1,
@@ -689,9 +727,8 @@ async function submitAll() {
                 <span class="ml-2" :style="{ color: 'var(--ink-3)' }">（一列多行，每行一个关键词）</span>
               </template>
               <template v-else>
-                问题名字 ⇥ 目标 URL ⇥
-                <span :style="{ color: 'var(--primary-deep)' }">目标品牌</span>
-                ⇥ Top-N(可选)
+                问题名字 ⇥
+                <span :style="{ color: 'var(--primary-deep)' }">目标 URL</span>
               </template>
             </div>
             <div class="mt-1.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
@@ -703,7 +740,8 @@ async function submitAll() {
                 任务名、目标品牌、理想卡位均在上方一次性填写。支持 Excel 复制粘贴 / .xlsx / .csv 上传。
               </template>
               <template v-else>
-                支持从 Excel 复制粘贴（TAB 分隔）、上传 .xlsx / .csv；只粘 URL 也行，任务名会从 URL 自动派生。
+                只两列：问题名字 + 问题 URL。<strong>批次名、目标品牌、Top-N 均在上方一次性填写</strong>，应用到整批每个问题——
+                每个问题任务名会自动加上「批次名 - 」前缀。只粘 URL 也行，问题名会从 URL 自动派生。支持 Excel 复制粘贴 / .xlsx / .csv 上传。
               </template>
             </div>
           </div>
@@ -773,7 +811,7 @@ async function submitAll() {
               ? '家用吸尘器哪款好用\n无线吸尘器推荐\n宠物吸尘器哪个牌子好'
               : isComment
                 ? 'https://www.bilibili.com/video/BV1xx&#9;我家这台投影仪用了半年的真实感受...'
-                : '无线吸尘器哪款好用\t https://www.zhihu.com/question/12345\t 戴森\t 5'"
+                : '无线吸尘器哪款好用\thttps://www.zhihu.com/question/12345'"
             class="bg-card-2 focus:bg-card-white outline-none transition-colors"
             :style="{
               width: '100%',
@@ -802,7 +840,8 @@ async function submitAll() {
               }"
             >
               <!--
-                百度只两列（#/关键词/状态）；其它平台保留原来的 6 列。
+                百度只两列（#/关键词/状态）；知乎也只 #/问题名/URL/状态（品牌 / Top-N
+                是批次级共享字段，不进逐行预览）；评论保留原来的 6 列。
                 把 gridTemplateColumns 绑成 computed 太碎，这里直接用三元。
               -->
               <div
@@ -821,6 +860,22 @@ async function submitAll() {
                 <div>状态</div>
               </div>
               <div
+                v-else-if="isZhihu"
+                class="grid items-center text-[11px] uppercase"
+                :style="{
+                  gridTemplateColumns: '40px 1.6fr 1.4fr 80px',
+                  background: 'var(--card-2)',
+                  padding: '8px 12px',
+                  letterSpacing: '1px',
+                  color: 'var(--ink-3)',
+                }"
+              >
+                <div>#</div>
+                <div>问题名字</div>
+                <div>URL</div>
+                <div>状态</div>
+              </div>
+              <div
                 v-else
                 class="grid items-center text-[11px] uppercase"
                 :style="{
@@ -832,9 +887,9 @@ async function submitAll() {
                 }"
               >
                 <div>#</div>
-                <div>{{ isComment ? "任务名（自动）" : "问题名字" }}</div>
+                <div>任务名（自动）</div>
                 <div>URL</div>
-                <div>{{ isComment ? "评论" : "品牌" }}</div>
+                <div>评论</div>
                 <div>Top-N</div>
                 <div>状态</div>
               </div>
@@ -854,6 +909,38 @@ async function submitAll() {
                   >
                     <div :style="{ color: 'var(--ink-3)' }">{{ r.line }}</div>
                     <div class="truncate">{{ r.name || "—" }}</div>
+                    <div>
+                      <span
+                        v-if="r.error"
+                        class="text-[10.5px]"
+                        :style="{ color: 'var(--red, #d85a48)' }"
+                      >{{ r.error }}</span>
+                      <span
+                        v-else
+                        class="text-[10.5px]"
+                        :style="{ color: 'var(--green, #6c9b5d)' }"
+                      >就绪</span>
+                    </div>
+                  </div>
+                </template>
+                <!-- 知乎预览：#/问题名/URL/状态（品牌 / Top-N 是批次级共享字段，不逐行显示） -->
+                <template v-else-if="isZhihu">
+                  <div
+                    v-for="r in rows"
+                    :key="r.line"
+                    class="grid items-center text-[12px]"
+                    :style="{
+                      gridTemplateColumns: '40px 1.6fr 1.4fr 80px',
+                      padding: '8px 12px',
+                      borderTop: '1px solid var(--line)',
+                      background: r.error ? 'rgba(216,90,72,0.06)' : 'transparent',
+                    }"
+                  >
+                    <div :style="{ color: 'var(--ink-3)' }">{{ r.line }}</div>
+                    <div class="truncate">{{ r.name || "—" }}</div>
+                    <div class="truncate font-mono text-[11px]" :style="{ color: 'var(--ink-2)' }">
+                      {{ r.url || "—" }}
+                    </div>
                     <div>
                       <span
                         v-if="r.error"
@@ -921,7 +1008,7 @@ async function submitAll() {
                     ? '该任务下目标品牌软文的理想卡位总数 ＝ 默认搜索卡位 ＋ 最新资讯卡位（若有）'
                     : isComment
                       ? '希望评论排在前几位（默认 5）。后台始终扫描前 150 条，能看到真实位置。'
-                      : 'Top-N 阈值'"
+                      : '监测每个问题前 N 个回答里目标品牌的排名（批次内所有问题共用）'"
                 >
                   {{ isBaidu ? '理想卡位（数量）' : isComment ? '理想排名（前 N 位）' : '默认 Top-N' }}
                 </span>
