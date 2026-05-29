@@ -120,6 +120,9 @@ def baidu_browser_session(
     context = None
     try:
         pw = _sync_playwright().start()
+        # 自建 profile：headless 用完整 Chromium，避免 chrome-headless-shell 缺失。
+        if not use_native_chrome:
+            launch_kwargs["executable_path"] = pw.chromium.executable_path
         context = pw.chromium.launch_persistent_context(**launch_kwargs)
         page = context.pages[0] if context.pages else context.new_page()
         _log_profile_health(context, target_dir)
