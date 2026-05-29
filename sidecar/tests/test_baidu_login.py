@@ -365,3 +365,49 @@ def test_open_login_window_timeout(monkeypatch, tmp_path):
 
     assert result == {"status": "timeout", "username": None}
     assert not (profile / ".csm_login_meta.json").exists()
+
+
+# ── Task 1: get_login_status passes full Chromium executable_path ───────
+
+
+class _FakeCtxForExe:
+    def __init__(self, cookies): self._c = cookies; self.closed = False
+    def cookies(self, url=None): return list(self._c)
+    def close(self): self.closed = True
+
+class _FakeChromiumForExe:
+    executable_path = r"C:\fake\chromium\chrome.exe"
+    def __init__(self, cookies):
+        self.last_kwargs = {}
+        self._ctx = _FakeCtxForExe(cookies)
+    def launch_persistent_context(self, **kwargs):
+        self.last_kwargs = kwargs
+        return self._ctx
+
+class _FakePWForExe:
+    def __init__(self, cookies): self.chromium = _FakeChromiumForExe(cookies)
+    def stop(self): pass
+
+class _FakeSyncForExe:
+    def __init__(self, pw): self._pw = pw
+    def start(self): return self._pw
+
+
+def test_get_login_status_passes_full_chromium_executable(monkeypatch, tmp_path):
+    """headless 状态读取必须显式传完整 Chromium 的 executable_path，
+    否则 Patchright 去找未随包的 chrome-headless-shell 启动失败。"""
+    bduss = {"name": "BDUSS", "value": "x", "expires": -1}
+    pw = _FakePWForExe([bduss])
+    monkeypatch.setattr(
+        "csm_core.monitor.drivers.baidu_login._sync_playwright",
+        lambda: _FakeSyncForExe(pw),
+    )
+    monkeypatch.setattr(
+        "csm_core.monitor.drivers.baidu_login.ensure_browsers_path", lambda: None,
+    )
+    from csm_core.monitor.drivers import baidu_login
+    status = baidu_login.get_login_status(user_data_dir=tmp_path)
+
+    assert pw.chromium.last_kwargs.get("executable_path") == r"C:\fake\chromium\chrome.exe"
+    assert pw.chromium.last_kwargs.get("headless") is True
+    assert status["logged_in"] is True

@@ -127,9 +127,13 @@ def get_login_status(user_data_dir: Path | None = None) -> dict[str, Any]:
     context = None
     try:
         pw = _sync_playwright().start()
+        # headless 必须用完整 Chromium 的 executable_path —— 否则 Patchright
+        # 走 headless 默认会找 chrome-headless-shell（未随包），启动直接抛
+        # "Executable doesn't exist"，导致登录态读取永远失败 → UI 恒显未登录。
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(target_dir),
             headless=True,
+            executable_path=pw.chromium.executable_path,
         )
         try:
             cookies = context.cookies("https://www.baidu.com/")
