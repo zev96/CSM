@@ -64,8 +64,11 @@ def find_chrome_executable() -> str | None:
 
 
 def _read_registry_chrome_path() -> str | None:
-    """读注册表 HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe
-    的 (Default) 值。Windows-only；其他平台直接返回 None。
+    """读注册表 App Paths\\chrome.exe 的 (Default) 值。Windows-only；其他平台返回 None。
+
+    先查 HKLM（全机器安装），再查 HKCU（仅当前用户安装 —— 公司机无管理员权限时
+    Chrome 常装到 %LOCALAPPDATA% 并只写 HKCU）。任一 hive 的值指向不存在的文件
+    （卸载残留）时跳过，继续查下一个。
     """
     if os.name != "nt":
         return None
@@ -73,26 +76,31 @@ def _read_registry_chrome_path() -> str | None:
         import winreg  # type: ignore[import-not-found]
     except ImportError:
         return None
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
-        ) as key:
-            value, _ = winreg.QueryValueEx(key, "")
-            if value and os.path.exists(value):
-                return value
-    except (OSError, FileNotFoundError) as e:
-        logger.debug("registry chrome path lookup failed: %s", e)
-        return None
+    sub_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, sub_key) as key:
+                value, _ = winreg.QueryValueEx(key, "")
+                if value and os.path.exists(value):
+                    return value
+        except (OSError, FileNotFoundError) as e:
+            logger.debug("registry chrome path lookup failed (hive=%r): %s", hive, e)
+            continue
     return None
 
 
 def _find_default_install_path() -> str | None:
-    """fallback 到默认安装路径。"""
+    """fallback 到默认安装路径。含 per-user 安装位置（%LOCALAPPDATA%）。"""
     candidates = [
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     ]
+    # per-user 安装（无管理员权限时 Chrome 装到这里）
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        candidates.append(
+            str(Path(local_appdata) / "Google" / "Chrome" / "Application" / "chrome.exe")
+        )
     for path in candidates:
         if os.path.exists(path):
             return path

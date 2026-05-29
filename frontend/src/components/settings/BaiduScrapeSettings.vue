@@ -65,6 +65,8 @@ const importResult = ref<{
   elapsed_s?: number;
   error?: string;
 } | null>(null);
+// 副本登录窗的结果独立于复制结果 ── 否则登录失败会被显示成"复制失败"
+const loginResult = ref<{ ok: boolean; error?: string } | null>(null);
 
 function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return "--";
@@ -150,17 +152,18 @@ async function importProfile() {
 
 async function launchLoginWindow() {
   launching.value = true;
+  loginResult.value = null;
   try {
     const resp = await sidecar.client.post<{ ok: boolean; pid?: number; error?: string }>(
       "/api/monitor/baidu/launch-login-window",
     );
     if (!resp.data.ok) {
-      importResult.value = { ok: false, error: resp.data.error };
+      loginResult.value = { ok: false, error: resp.data.error };
     }
     // 成功：不立即 reset launching，让 UI 短暂显示"副本已启动"提示
   } catch (e: any) {
     const detail = e?.response?.data?.detail ?? e?.message ?? String(e);
-    importResult.value = { ok: false, error: detail };
+    loginResult.value = { ok: false, error: detail };
   } finally {
     // 立刻 reset launching ── 用户可以再点（重新启动副本登录窗，无副作用）
     setTimeout(() => { launching.value = false; }, 2000);
@@ -347,6 +350,23 @@ onMounted(loadConfig);
           :style="{ color: 'var(--ink-3)' }"
         >
           副本 Chrome 已弹出，登录百度后请完全关闭浏览器
+        </div>
+
+        <!-- 副本登录失败（独立于复制结果，避免误显示成"复制失败"） -->
+        <div
+          v-if="loginResult && !loginResult.ok"
+          class="flex items-center gap-3 rounded-[10px] px-4 py-3 text-[12.5px]"
+          :style="{
+            background: 'color-mix(in srgb, var(--danger, #ef4444) 12%, transparent)',
+            color: 'var(--danger, #c62828)',
+            border: '1px solid color-mix(in srgb, var(--danger, #ef4444) 30%, transparent)',
+            marginTop: '0.5rem',
+          }"
+        >
+          <Icon name="x" :size="14" />
+          <span class="flex-1 truncate" :title="loginResult.error">
+            登录副本失败：{{ loginResult.error }}
+          </span>
         </div>
 
         <!-- 导入结果 -->

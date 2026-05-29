@@ -503,6 +503,13 @@ def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
     # 源信息记下来给 re-import 用
     bk.chrome_user_data_dir = body.source_user_data_dir
     bk.chrome_profile_name = body.source_profile_name
+    # 顺手探测并持久化 chrome.exe 路径 —— 否则它一直为空（默认 None），用户走完
+    # 复制流程后点"登录副本"/正式跑监控会直接撞"缺 Chrome 可执行文件路径"。
+    # 仅在尚未设置时探测，不覆盖用户手填的路径。
+    if not bk.chrome_executable_path:
+        detected_exe = chrome_detect.find_chrome_executable()
+        if detected_exe:
+            bk.chrome_executable_path = detected_exe
     _cfg_svc.save(cfg)
 
     return {
