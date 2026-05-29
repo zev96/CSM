@@ -168,6 +168,7 @@ class ZhihuQuestionAdapter:
         first_rank, matched_ranks, snapshot = self._rank_brand(
             answers, target_brand, top_n,
         )
+        visit_count = self._fetch_visit_count(qid)
         return MonitorResult(
             task_id=task.id or 0,
             checked_at=datetime.utcnow(),
@@ -183,6 +184,7 @@ class ZhihuQuestionAdapter:
                 "matched_ranks": matched_ranks,
                 "answers": snapshot,
                 "question_id": qid,
+                "question_visit_count": visit_count,
             },
         )
 
@@ -282,6 +284,46 @@ class ZhihuQuestionAdapter:
             except Exception:
                 continue
         return answers, "curl_cffi"
+
+    # ── 问题浏览量（best-effort，无 cookie）────────────────────────────────
+    def _fetch_visit_count(self, qid: str) -> int | None:
+        """拉问题「被浏览」数。走 /api/v4/questions/{qid}?include=visit_count。
+
+        不取 cookie（公开元数据 + 避免动轮换计数器）。任何失败返回 None，
+        UI 端显示 "—"。加 INFO raw 日志便于排查 silent failure。
+        """
+        try:
+            from curl_cffi import requests as cc_requests
+        except ImportError:
+            return None
+        headers = {
+            "User-Agent": self._next_ua(),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": f"https://www.zhihu.com/question/{qid}",
+            "x-requested-with": "fetch",
+        }
+        url = f"https://www.zhihu.com/api/v4/questions/{qid}"
+        try:
+            resp = cc_requests.get(
+                url, headers=headers, params={"include": "visit_count"},
+                impersonate="chrome120", timeout=15,
+            )
+        except Exception as e:
+            logger.info("zhihu visit_count fetch raised: %s", e)
+            return None
+        if resp.status_code != 200:
+            logger.info("zhihu visit_count HTTP %s (qid=%s)", resp.status_code, qid)
+            return None
+        try:
+            payload = resp.json()
+        except Exception:
+            logger.info("zhihu visit_count non-JSON (qid=%s)", qid)
+            return None
+        vc = payload.get("visit_count") if isinstance(payload, dict) else None
+        vc_int = int(vc) if isinstance(vc, (int, float)) else None
+        logger.info("zhihu visit_count qid=%s -> %s", qid, vc_int)
+        return vc_int
 
     # ── Fallback: real browser (Patchright by default, Drission fallback) ────
     def _fetch_browser(
