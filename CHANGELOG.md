@@ -2,6 +2,22 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+- **知乎问题监测「批量化」**：知乎任务列表从扁平改为「总任务（批次）→ 子任务」两层结构（沿用评论平台命名约定，一个批次共享目标品牌词 + 监测前 N 个回答）。批量导入每行填「问题名 + 问题 URL」，批次级一键启动全部 / 编辑 / 删除，点批次名钻入子任务列表。
+- **知乎问题浏览量**：每次监测抓取问题「被浏览」数（知乎问题级 API 返 403，改从渲染后页面 DOM 抓 NumberBoard），存入结果 metric，子任务列表以万 / 亿单位展示。
+
+### Fixed
+- **百度「原生 Chrome 副本」登录失败「缺 Chrome 可执行文件路径」**：① `find_chrome_executable` 补 HKCU 注册表 + `%LOCALAPPDATA%` per-user 安装位置探测（无管理员权限安装的 Chrome 只写 HKCU / 装在 LOCALAPPDATA，原来探不到）；② 复制 profile 成功后顺手探测并持久化 `chrome_executable_path`（否则走完复制流程该字段一直为空，点「登录副本」/ 跑监控直接报缺路径）；③ 登录副本窗口的失败不再被误显示成「复制失败」。
+- **百度登录态「登录成功却显示未登录」**：`get_login_status` 与「默认 headless」抓取的 headless 启动改用完整 Chromium 的 `executable_path`，绕开未随包的 `chrome-headless-shell` 二进制（缺失导致状态读取与 headless 抓取启动失败）。
+- **「重置百度浏览器 profile」按钮在 release 下点击无反应**：原生 `confirm()` 在 Tauri 2 WebView 被拦截抛错，改用应用内 `confirmDialog`。
+- **监测列表布局**：统一所有列表（知乎 / 评论 / 百度）表头与内容列对齐（名称列左对齐，其余居中，表头正对数值）；子任务列表与右侧详情卡滚动区收敛——表头 / 返回条 / KPI / 趋势固定，只有数据行 / 答案列表滚动。
+
+### Changed
+- 百度账号登录入口从 Cookie 管理器迁到「设置 → 百度关键词 · 默认 headless 开关上方」；Cookie 管理器平台下拉移除「百度」（百度不走 cookie 池）。
+- 百度登录轮询 / 状态读取增加 INFO 级原始日志，便于排查 silent failure。
+
 ## [0.5.9] - 2026-05-28
 
 ### Added
