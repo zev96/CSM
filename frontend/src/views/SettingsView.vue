@@ -720,9 +720,10 @@ async function startBaiduLogin() {
 // 「重置百度浏览器 profile」按用户要求放回设置 ——
 // 它是 cookie 烫坏时的修复操作，跟日常登录不同语义，放回设置项更合理。
 async function confirmResetBaiduProfile() {
-  if (!confirm("确认重置百度浏览器 profile？\n下次任务会冷启重建，前几次抓取可能仍触发风控（cookie 需要慢慢累积）。")) {
-    return;
-  }
+  if (!(await confirmDialog(
+    "下次任务会冷启重建，前几次抓取可能仍触发风控（cookie 需要慢慢累积）。",
+    { title: "重置百度浏览器 profile", okLabel: "重置", kind: "danger" },
+  ))) return;
   try {
     await sidecar.client.post("/api/monitor/baidu/reset-profile");
     toast.success("百度浏览器 profile 已重置");
