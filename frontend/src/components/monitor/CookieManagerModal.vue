@@ -20,12 +20,6 @@ import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 import { useStaleGuard } from "@/composables/useStaleGuard";
 
-// ── 百度账号登录 + reset profile state（按用户要求融合进 Cookie 管理器）─────
-// 之前散落在 SettingsView → 监测 section 下，但「登录百度」属于登录态
-// 管理范畴跟 cookie 池语义一致，统一在这里维护更聚合。Endpoint 跟 cookie
-// 不一样（baidu 用 /api/monitor/baidu/login，不是 /api/monitor/cookies/...）
-// ，所以 UI 上单列一块「百度账号」区，不混进 4 平台 tab。
-
 const props = defineProps<{
   open: boolean;
   defaultPlatform?: string;
@@ -38,13 +32,9 @@ const emit = defineEmits<{
 const sidecar = useSidecar();
 const toast = useToast();
 
-// 百度作为第 5 个平台选项 —— 跟知乎/B站/抖音/快手并列在下拉里。
-// 注意它的登录机制完全不同：百度走 /api/monitor/baidu/login 弹浏览器，
-// 不用 cookie 池 (cookies API) 的复制粘贴。所以选中 baidu 时 body 渲染
-// 一段专门的"登录态 + 登录按钮"区，跳过原 cookie list / capture / 手贴
-// 三栏。
+// 百度登录入口已迁到 SettingsView 百度关键词设置区（默认 headless 上方）。
+// Cookie 池只管 4 大社区平台的 cookie 池条目。
 const PLATFORMS = [
-  { value: "baidu", label: "百度" },
   { value: "zhihu_question", label: "知乎" },
   { value: "bilibili_comment", label: "B 站" },
   { value: "douyin_comment", label: "抖音" },
@@ -186,13 +176,6 @@ async function captureViaLogin() {
 const loadGuard = useStaleGuard();
 
 async function loadCookies() {
-  // 百度走独立登录流程（/api/monitor/baidu/login），没有 cookie 池条目；
-  // 直接清空 + 早返回避免 404 噪音。
-  if (platform.value === "baidu") {
-    cookies.value = [];
-    loading.value = false;
-    return;
-  }
   const my = loadGuard.issue();
   loading.value = true;
   try {
@@ -264,7 +247,6 @@ watch(
     if (v) {
       if (props.defaultPlatform) platform.value = props.defaultPlatform;
       loadCookies();
-      refreshBaiduLoginStatus();
       startTick();
     } else {
       stopTick();
@@ -275,77 +257,12 @@ watch(
 onMounted(() => {
   if (props.open) {
     loadCookies();
-    refreshBaiduLoginStatus();
     startTick();
   }
 });
 onUnmounted(() => stopTick());
 
-// ── 百度账号 actions ────────────────────────────────────────────
-const baiduLoginStatus = ref<{
-  logged_in: boolean;
-  username: string | null;
-  expires_at: string | null;
-}>({ logged_in: false, username: null, expires_at: null });
-const baiduLoginBusy = ref(false);
-
-async function refreshBaiduLoginStatus() {
-  try {
-    const r = await sidecar.client.get("/api/monitor/baidu/login-status");
-    baiduLoginStatus.value = {
-      logged_in: !!r.data?.logged_in,
-      username: r.data?.username ?? null,
-      expires_at: r.data?.expires_at ?? null,
-    };
-  } catch (e) {
-    baiduLoginStatus.value = { logged_in: false, username: null, expires_at: null };
-  }
-}
-
-async function startBaiduLogin() {
-  // 不能用 window.confirm —— Tauri 2 WebView 把它转给已退役的
-  // dialog|confirm IPC 命令（plugin-dialog 2.x 用 message 替代），
-  // 会抛 "Command not found"。走 in-app confirmDialog 让弹窗也跟主题
-  // 一致 + 文案分 title/message 两段。
-  const title = baiduLoginStatus.value.logged_in ? "重新登录百度账号" : "登录百度账号";
-  const msg = baiduLoginStatus.value.logged_in
-    ? "会打开一个浏览器窗口，登录新账号后旧登录态会被覆盖。"
-    : "会打开一个浏览器窗口，登录后 CSM 抓取任务自动用登录态访问。建议使用专用账号，避免日常使用的账号被风控。";
-  if (!(await confirmDialog(msg, { title, okLabel: "登录", kind: "info" }))) return;
-  baiduLoginBusy.value = true;
-  try {
-    // sidecar 的 open_login_window 阻塞轮询最多 600s（baidu_login.py 的
-    // timeout_s 默认）等用户在弹出的浏览器里完成登录。axios 默认 60s 会
-    // 在用户慢一点输完账号密码前就 abort → "Network Error"。给这个调用
-    // 单独把 timeout 拔到 11 分钟（sidecar 上限 + 1 分钟缓冲）。
-    const r = await sidecar.client.post("/api/monitor/baidu/login", null, {
-      timeout: 660_000,
-    });
-    const status = r.data?.status;
-    if (status === "success") {
-      toast.success("百度账号登录成功");
-    } else if (status === "cancelled") {
-      toast.info("登录已取消");
-    } else if (status === "timeout") {
-      toast.error("登录超时（窗口已关闭）");
-    } else {
-      toast.error(`登录失败：未知状态 ${status}`);
-    }
-  } catch (e: any) {
-    const detail = e.response?.data?.detail ?? e.message ?? "未知错误";
-    toast.error(`登录失败：${detail}`);
-    // 用户要求：登录失败后自动关掉 cookie 管理弹窗，让 toast 不再被
-    // 弹窗遮压、用户可以重新点入口干净重试。
-    emit("update:open", false);
-  } finally {
-    baiduLoginBusy.value = false;
-    await refreshBaiduLoginStatus();
-  }
-}
-
-// confirmResetBaiduProfile 已搬回 SettingsView —— 按用户要求"重置按钮
-// 放回原来的位置"，避免一个 modal 里塞太多职责。重置场景跟登录不耦合
-// （cookie 烫坏才用），收回设置项更合理。
+// 百度登录入口已迁到 SettingsView 百度关键词设置区；Cookie 池不再持有 baidu 状态。
 </script>
 
 <template>
@@ -364,51 +281,7 @@ async function startBaiduLogin() {
           />
         </FormField>
 
-        <!--
-          百度 platform 分支 —— 用浏览器登录窗口，不走 cookie 池复制粘贴。
-          选中百度时整段下面三栏（cookie list / 内置浏览器登录 / 手动粘贴）
-          隐藏，换成专用的"登录态 + 登录按钮"卡片。
-        -->
-        <div v-if="platform === 'baidu'" class="mt-4">
-          <div
-            class="p-4"
-            :style="{
-              borderRadius: 'var(--radius-inner)',
-              border: '1px solid var(--line)',
-              background: 'var(--card-2)',
-            }"
-          >
-            <div class="text-[12px] text-ink-3 mb-3 leading-relaxed">
-              CSM 抓取任务用登录态访问百度，显著降低风控触发率。
-              建议使用专用账号 —— 万一被风控，不会影响你日常使用的账号。
-            </div>
-            <div class="flex items-center gap-3 flex-wrap">
-              <span
-                v-if="baiduLoginStatus.logged_in"
-                class="text-[12px]"
-                :style="{ color: 'var(--success, #16a34a)' }"
-              >
-                已登录{{ baiduLoginStatus.username ? ` @${baiduLoginStatus.username}` : "" }}
-              </span>
-              <span v-else class="text-[12px]" :style="{ color: 'var(--ink-3)' }">
-                未登录
-              </span>
-              <span class="flex-1" />
-              <Btn
-                variant="solid"
-                small
-                :disabled="baiduLoginBusy"
-                @click="startBaiduLogin"
-              >
-                <Icon name="user" :size="12" />
-                <span>{{ baiduLoginStatus.logged_in ? "重新登录" : "登录百度" }}</span>
-              </Btn>
-            </div>
-          </div>
-        </div>
-
-        <!-- 4 大社区 platform 分支 —— cookie 池 + 内置浏览器登录 + 手贴 -->
-        <template v-else>
+        <!-- cookie 池 + 内置浏览器登录 + 手贴（4 大社区平台；百度登录入口已迁到设置页） -->
         <!-- Existing cookies -->
         <div class="mt-4">
           <div class="font-display text-[13px] font-semibold mb-2">已存 Cookie</div>
@@ -536,6 +409,5 @@ async function startBaiduLogin() {
             </Btn>
           </div>
         </div>
-        </template>
   </Dialog>
 </template>

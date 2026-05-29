@@ -127,15 +127,24 @@ def get_login_status(user_data_dir: Path | None = None) -> dict[str, Any]:
     context = None
     try:
         pw = _sync_playwright().start()
+        # headless 必须用完整 Chromium 的 executable_path —— 否则 Patchright
+        # 走 headless 默认会找 chrome-headless-shell（未随包），启动直接抛
+        # "Executable doesn't exist"，导致登录态读取永远失败 → UI 恒显未登录。
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(target_dir),
             headless=True,
+            executable_path=pw.chromium.executable_path,
         )
         try:
             cookies = context.cookies("https://www.baidu.com/")
         except Exception as e:
             logger.debug("get_login_status cookies() raised: %s", e)
             cookies = []
+        names = [c.get("name") for c in cookies]
+        logger.info(
+            "baidu login-status: read %d cookies (BDUSS=%s) from %s",
+            len(cookies), "yes" if "BDUSS" in names else "no", target_dir,
+        )
     finally:
         if context is not None:
             try:
@@ -258,7 +267,7 @@ def open_login_window(
             logger.debug("context.on('close') not available: %s", e)
 
         try:
-            page.goto("https://www.baidu.com/")
+            page.goto("https://www.baidu.com/", wait_until="domcontentloaded")
             try:
                 page.bring_to_front()
             except Exception:
@@ -296,9 +305,10 @@ def _open_login_poll(context: Any, state: dict[str, bool], timeout_s: int) -> st
         try:
             cookies = context.cookies("https://www.baidu.com/")
         except Exception as e:
-            logger.debug("poll cookies() raised: %s", e)
+            logger.info("baidu login poll cookies() raised: %s", e)  # 原 debug→info
             cookies = []
         if any(c.get("name") == "BDUSS" for c in cookies):
+            logger.info("baidu login poll: BDUSS detected (%d cookies)", len(cookies))
             return "success"
         time.sleep(_POLL_INTERVAL_S)
     return "timeout"

@@ -36,6 +36,42 @@ logger = logging.getLogger(__name__)
 _QUESTION_ID_RE = re.compile(r"/question/(\d+)")
 _API_TEMPLATE = "https://www.zhihu.com/api/v4/questions/{qid}/answers"
 
+# 从问题页 DOM 抓「被浏览」浏览量的 JS（在 _fetch_browser 渲染好的真
+# Chromium 页面里跑）。两段策略：
+#   1. 优先扫问题头部 NumberBoard 各 item，找 label 含「被浏览/浏览」的，
+#      取 value 元素的 title（精确整数，如 2,570,169）或可见文本（可能被
+#      缩写成 257 万）。
+#   2. 兜底：全页找叶子节点文本含「被浏览」的 label，从其父容器里取带
+#      title 的纯数字元素，或正则抓出形如 257 万 / 2,570,169 的数字。
+# 返回原始字符串（title 或文本），交给 _parse_count 归一化；找不到返回 null。
+#
+# 注意 driver.evaluate_js 把传进来的串当**函数体**包（Patchright 包成
+# `(__csmArgs)=>{ const args=__csmArgs; <这里> }`，Drission 用 run_js 同理），
+# 期待一个顶层 `return`。所以这里把核心逻辑写成立即执行箭头函数 (IIFE) 再
+# `return` 出去 —— 直接贴裸箭头函数会变成"定义了不调用"，永远返回 null。
+VISIT_JS = """
+return (() => {
+  const items = document.querySelectorAll('.NumberBoard-item, button.NumberBoard-item');
+  for (const it of items) {
+    const name = (it.querySelector('.NumberBoard-itemName, .NumberBoard-itemLabel')?.textContent || '').trim();
+    if (name.indexOf('被浏览') >= 0 || name.indexOf('浏览') >= 0) {
+      const v = it.querySelector('.NumberBoard-itemValue, strong');
+      if (v) return v.getAttribute('title') || (v.textContent || '').trim();
+    }
+  }
+  const labels = Array.from(document.querySelectorAll('div,span,strong'))
+    .filter(e => e.children.length === 0 && /被浏览/.test(e.textContent || ''));
+  for (const lb of labels) {
+    const box = lb.parentElement; if (!box) continue;
+    const t = box.querySelector('[title]');
+    if (t && /^[\\d,]+$/.test((t.getAttribute('title') || '').trim())) return t.getAttribute('title');
+    const m = (box.textContent || '').match(/([\\d,]+(?:\\.\\d+)?\\s*[万亿]?)/);
+    if (m) return m[1];
+  }
+  return null;
+})();
+"""
+
 
 def _extract_question_id(url: str) -> str | None:
     m = _QUESTION_ID_RE.search(url)
@@ -145,14 +181,19 @@ class ZhihuQuestionAdapter:
 
         # Fast path → fallback chain. On both success and final failure
         # we update the breaker so it can decide whether to open.
-        answers, source = self._fetch_fast(qid)
+        # 第三个返回值 visit_count：fast path 永远 None；browser path 从
+        # 渲染好的页面 DOM 抓「被浏览」。沿返回值回传（不挂 self —— adapter
+        # 是 module-level singleton，并发 fetch 间挂 self 会串台）。
+        answers, source, visit_count = self._fetch_fast(qid)
         if answers is None:
             # Cancel check #3 —— 这是最有价值的取消点：browser fallback 启动
             # Playwright/DrissionPage 要 5-10s，cookies 解析 + 页面渲染都是
             # 阻塞操作，触发后中途没法退。在这里 short-circuit 才有意义。
             maybe_cancel(cancel_token)
             # browser fallback 现在按 top_n 滚动到加载够；早期版本固定切 20。
-            answers, source = self._fetch_browser(task.target_url, qid, top_n=top_n)
+            answers, source, visit_count = self._fetch_browser(
+                task.target_url, qid, top_n=top_n,
+            )
         if answers is None:
             self._breaker.record_failure()
             return MonitorResult(
@@ -183,16 +224,21 @@ class ZhihuQuestionAdapter:
                 "matched_ranks": matched_ranks,
                 "answers": snapshot,
                 "question_id": qid,
+                "question_visit_count": visit_count,
             },
         )
 
     # ── Fast path: curl_cffi ───────────────────────────────────────────────
-    def _fetch_fast(self, qid: str) -> tuple[list[dict[str, Any]] | None, str]:
+    def _fetch_fast(
+        self, qid: str,
+    ) -> tuple[list[dict[str, Any]] | None, str, int | None]:
+        # 第三个返回值是浏览量：fast path（答案 feed API）不带浏览量，
+        # 永远返回 None，留给 _fetch_browser 从页面 DOM 抓。
         try:
             from curl_cffi import requests as cc_requests
         except ImportError:
             logger.warning("curl_cffi not available; skipping fast path")
-            return None, "curl_cffi_missing"
+            return None, "curl_cffi_missing", None
 
         cred = self._cookies.pick()
         ua = cred.user_agent if cred and cred.user_agent else self._next_ua()
@@ -238,13 +284,13 @@ class ZhihuQuestionAdapter:
             logger.info("zhihu fast path raised: %s", e)
             if cred:
                 self._cookies.mark_failed(cred)
-            return None, "curl_cffi_exception"
+            return None, "curl_cffi_exception", None
 
         if resp.status_code != 200:
             logger.info("zhihu fast path HTTP %s", resp.status_code)
             if cred:
                 self._cookies.mark_failed(cred)
-            return None, f"curl_cffi_http_{resp.status_code}"
+            return None, f"curl_cffi_http_{resp.status_code}", None
 
         try:
             payload = resp.json()
@@ -252,11 +298,11 @@ class ZhihuQuestionAdapter:
             logger.info("zhihu fast path returned non-JSON (likely risk-control HTML)")
             if cred:
                 self._cookies.mark_failed(cred)
-            return None, "curl_cffi_non_json"
+            return None, "curl_cffi_non_json", None
 
         data = payload.get("data") if isinstance(payload, dict) else None
         if not data:
-            return None, "curl_cffi_empty_data"
+            return None, "curl_cffi_empty_data", None
 
         if cred:
             self._cookies.mark_ok(cred)
@@ -281,12 +327,12 @@ class ZhihuQuestionAdapter:
                 })
             except Exception:
                 continue
-        return answers, "curl_cffi"
+        return answers, "curl_cffi", None
 
     # ── Fallback: real browser (Patchright by default, Drission fallback) ────
     def _fetch_browser(
         self, url: str, qid: str, top_n: int = 20,
-    ) -> tuple[list[dict[str, Any]] | None, str]:
+    ) -> tuple[list[dict[str, Any]] | None, str, int | None]:
         """Render question page in a real Chromium and scrape AnswerItem cards.
 
         Engine is chosen via ``self._engine`` ("patchright" | "drission")
@@ -309,7 +355,7 @@ class ZhihuQuestionAdapter:
                 "zhihu browser fallback unavailable (engine=%s): %s",
                 self._engine, e,
             )
-            return None, f"browser_unavailable_{self._engine}"
+            return None, f"browser_unavailable_{self._engine}", None
 
         # 注入 cookie —— browser 的 user-data-dir 跨进程持久化，上次跑
         # 留下的 cookie（甚至跑出 /unhuman 时存的"游客"cookie）会干扰
@@ -450,7 +496,7 @@ class ZhihuQuestionAdapter:
             )
         except Exception as e:
             logger.warning("zhihu browser fetch raised: %s", e)
-            return None, "browser_exception"
+            return None, "browser_exception", None
 
         if all_count == 0:
             logger.warning(
@@ -458,7 +504,7 @@ class ZhihuQuestionAdapter:
                 "or anti-bot. Last landed URL: %s",
                 landed[:200] if landed else "?",
             )
-            return None, "browser_no_cards"
+            return None, "browser_no_cards", None
 
         # 用一次 JS 调用批量抽全 cards 的内容 —— 关键是用 `textContent` 而
         # 不是 `innerText`：
@@ -501,11 +547,28 @@ class ZhihuQuestionAdapter:
             except Exception:
                 continue
 
+        # ── 浏览量：从已渲染的问题页 DOM 抓「被浏览」────────────────────
+        # cookie-less API（/api/v4/questions/{qid}?include=visit_count）403
+        # 被反爬封死，所以复用这条已经渲染好的真 Chromium 页面，从问题头部
+        # NumberBoard 抠「被浏览 2,570,169」。整段 best-effort：任何失败
+        # visit_count = None，绝不让浏览量抓取拖垮答案抓取。
+        visit_count: int | None = None
+        try:
+            raw = driver.evaluate_js(VISIT_JS)
+            visit_count = _parse_count(str(raw)) if raw else None
+            logger.info(
+                "zhihu visit_count (dom) qid=%s raw=%r -> %s",
+                qid, raw, visit_count,
+            )
+        except Exception as e:
+            logger.info("zhihu visit_count (dom) scrape failed qid=%s: %s", qid, e)
+            visit_count = None
+
         # 浏览器拿到结果，给当前 cookie 记一次成功（轮换计数器在 pick() 里
         # 已经 +1，这里只更新 last_used_at + 清 fail_count）。
         if answers and cred:
             self._cookies.mark_ok(cred)
-        return (answers if answers else None), f"browser_{self._engine}"
+        return (answers if answers else None), f"browser_{self._engine}", visit_count
 
     # ── Helpers ────────────────────────────────────────────────────────────
     def _next_ua(self) -> str:

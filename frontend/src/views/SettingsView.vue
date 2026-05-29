@@ -33,6 +33,7 @@ import logoUrl from "@/assets/logo.png";
 
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
+import { confirmDialog } from "@/composables/useConfirm";
 import { usePathPicker } from "@/composables/usePathPicker";
 import { useNotifications } from "@/composables/useNotifications";
 import { useSidecar } from "@/stores/sidecar";
@@ -299,8 +300,7 @@ onMounted(async () => {
   if (!cfg.data) await cfg.load();
   syncDraftFromCfg();
   refreshKeyringStatus();
-  // refreshBaiduLoginStatus 已搬到 CookieManagerModal（用户要求融合到
-  // Cookie 管理器），SettingsView 不再持有 baidu 登录态。
+  refreshBaiduLoginStatus();
   applyHash(route.hash);
 });
 
@@ -677,13 +677,53 @@ function saveExcludeDomains() {
   excludeDomainsModalOpen.value = false;
 }
 
-// 百度登录 state 已搬到 CookieManagerModal（融合到 Cookie 池下拉的
-// 「百度」选项里）。但「重置百度浏览器 profile」按用户要求放回设置 ——
+// 百度账号登录态（从 CookieManagerModal 迁回设置页百度区）
+const baiduLoginStatus = ref<{ logged_in: boolean; username: string | null }>({
+  logged_in: false,
+  username: null,
+});
+const baiduLoginBusy = ref(false);
+
+async function refreshBaiduLoginStatus() {
+  try {
+    const r = await sidecar.client.get("/api/monitor/baidu/login-status");
+    baiduLoginStatus.value = {
+      logged_in: !!r.data?.logged_in,
+      username: r.data?.username ?? null,
+    };
+  } catch {
+    baiduLoginStatus.value = { logged_in: false, username: null };
+  }
+}
+
+async function startBaiduLogin() {
+  if (!(await confirmDialog(
+    "会打开一个浏览器窗口，登录后 CSM 抓取任务自动用登录态访问。建议使用专用账号。",
+    { title: baiduLoginStatus.value.logged_in ? "重新登录百度" : "登录百度", okLabel: "登录", kind: "info" },
+  ))) return;
+  baiduLoginBusy.value = true;
+  try {
+    const r = await sidecar.client.post("/api/monitor/baidu/login", null, { timeout: 660_000 });
+    const status = r.data?.status;
+    if (status === "success") toast.success("百度账号登录成功");
+    else if (status === "cancelled") toast.info("登录已取消");
+    else if (status === "timeout") toast.error("登录超时（窗口已关闭）");
+    else toast.error(`登录失败：未知状态 ${status}`);
+  } catch (e: any) {
+    toast.error(`登录失败：${e.response?.data?.detail ?? e.message ?? "未知错误"}`);
+  } finally {
+    baiduLoginBusy.value = false;
+    await refreshBaiduLoginStatus();
+  }
+}
+
+// 「重置百度浏览器 profile」按用户要求放回设置 ——
 // 它是 cookie 烫坏时的修复操作，跟日常登录不同语义，放回设置项更合理。
 async function confirmResetBaiduProfile() {
-  if (!confirm("确认重置百度浏览器 profile？\n下次任务会冷启重建，前几次抓取可能仍触发风控（cookie 需要慢慢累积）。")) {
-    return;
-  }
+  if (!(await confirmDialog(
+    "下次任务会冷启重建，前几次抓取可能仍触发风控（cookie 需要慢慢累积）。",
+    { title: "重置百度浏览器 profile", okLabel: "重置", kind: "danger" },
+  ))) return;
   try {
     await sidecar.client.post("/api/monitor/baidu/reset-profile");
     toast.success("百度浏览器 profile 已重置");
@@ -1499,6 +1539,23 @@ async function saveAccountEdit() {
               <div class="mb-3 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
                 百度关键词
               </div>
+              <SettingsRow
+                label="百度账号登录"
+                hint="抓取任务用登录态访问百度，显著降低风控触发率。建议用专用账号。"
+              >
+                <div class="flex items-center gap-3">
+                  <span
+                    v-if="baiduLoginStatus.logged_in"
+                    class="text-[12px]"
+                    :style="{ color: 'var(--success, #16a34a)' }"
+                  >已登录{{ baiduLoginStatus.username ? ` @${baiduLoginStatus.username}` : "" }}</span>
+                  <span v-else class="text-[12px]" :style="{ color: 'var(--ink-3)' }">未登录</span>
+                  <Btn variant="solid" small :disabled="baiduLoginBusy" @click="startBaiduLogin">
+                    <Icon name="user" :size="12" />
+                    <span>{{ baiduLoginStatus.logged_in ? "重新登录" : "登录百度" }}</span>
+                  </Btn>
+                </div>
+              </SettingsRow>
               <SettingsRow
                 label="默认 headless"
                 hint="勾选则后台跑浏览器；命中验证码会自动升级可见窗口。"

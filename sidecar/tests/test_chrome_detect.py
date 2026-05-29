@@ -1,6 +1,8 @@
 """chrome_detect.py 单元测试 —— mock 注册表 / 文件系统 / Preferences JSON。"""
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from csm_core.monitor.drivers import chrome_detect
@@ -32,6 +34,92 @@ class TestFindChromeExecutable:
         monkeypatch.setattr(chrome_detect, "_read_registry_chrome_path", lambda: None)
         monkeypatch.setattr(chrome_detect, "_find_default_install_path", lambda: None)
         assert chrome_detect.find_chrome_executable() is None
+
+
+# ── _read_registry_chrome_path （HKLM 全机器 + HKCU 仅当前用户安装）──────
+@pytest.mark.skipif(os.name != "nt", reason="winreg is Windows-only")
+class TestReadRegistryChromePath:
+    """per-user 安装（无管理员权限的公司机常见）chrome.exe 注册在 HKCU 而非 HKLM。"""
+
+    def _patch_winreg(self, monkeypatch, *, hklm_value, hkcu_value):
+        """装一个 fake winreg：HKLM/HKCU 各返回给定值；值为 None → OpenKey 抛 FileNotFoundError。"""
+        import winreg
+
+        class _FakeKey:
+            def __init__(self, value):
+                self.value = value
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        values = {
+            winreg.HKEY_LOCAL_MACHINE: hklm_value,
+            winreg.HKEY_CURRENT_USER: hkcu_value,
+        }
+
+        def fake_open(hive, sub):
+            v = values.get(hive)
+            if v is None:
+                raise FileNotFoundError("no such key")
+            return _FakeKey(v)
+
+        def fake_query(key, name):
+            return (key.value, winreg.REG_SZ)
+
+        monkeypatch.setattr(winreg, "OpenKey", fake_open)
+        monkeypatch.setattr(winreg, "QueryValueEx", fake_query)
+
+    def test_falls_back_to_hkcu_when_hklm_missing(self, monkeypatch, tmp_path):
+        """HKLM 无键、HKCU 有 → 返回 HKCU 的路径。"""
+        exe = tmp_path / "chrome.exe"
+        exe.touch()
+        self._patch_winreg(monkeypatch, hklm_value=None, hkcu_value=str(exe))
+        assert chrome_detect._read_registry_chrome_path() == str(exe)
+
+    def test_skips_hive_whose_path_does_not_exist(self, monkeypatch, tmp_path):
+        """HKLM 值指向已卸载的残留路径（文件不存在）→ 跳到 HKCU。"""
+        stale = tmp_path / "uninstalled" / "chrome.exe"  # 不创建
+        exe = tmp_path / "chrome.exe"
+        exe.touch()
+        self._patch_winreg(monkeypatch, hklm_value=str(stale), hkcu_value=str(exe))
+        assert chrome_detect._read_registry_chrome_path() == str(exe)
+
+    def test_prefers_hklm_over_hkcu(self, monkeypatch, tmp_path):
+        """全机器安装优先：HKLM 命中就不查 HKCU。"""
+        hklm_exe = tmp_path / "hklm" / "chrome.exe"
+        hklm_exe.parent.mkdir()
+        hklm_exe.touch()
+        hkcu_exe = tmp_path / "hkcu" / "chrome.exe"
+        hkcu_exe.parent.mkdir()
+        hkcu_exe.touch()
+        self._patch_winreg(monkeypatch, hklm_value=str(hklm_exe), hkcu_value=str(hkcu_exe))
+        assert chrome_detect._read_registry_chrome_path() == str(hklm_exe)
+
+    def test_returns_none_when_neither_hive_has_key(self, monkeypatch):
+        self._patch_winreg(monkeypatch, hklm_value=None, hkcu_value=None)
+        assert chrome_detect._read_registry_chrome_path() is None
+
+
+# ── _find_default_install_path （含 per-user %LOCALAPPDATA% 安装位置）────
+class TestFindDefaultInstallPath:
+    def test_includes_localappdata_per_user_install(self, monkeypatch, tmp_path):
+        """per-user 安装 chrome.exe 落在 %LOCALAPPDATA%\\Google\\Chrome\\Application。"""
+        local = tmp_path / "Local"
+        exe = local / "Google" / "Chrome" / "Application" / "chrome.exe"
+        exe.parent.mkdir(parents=True)
+        exe.touch()
+        monkeypatch.setenv("LOCALAPPDATA", str(local))
+        # 隔离：测试机可能真装了 Program Files Chrome，强制 exists 只认我们造的路径
+        target = str(exe)
+        monkeypatch.setattr(chrome_detect.os.path, "exists", lambda p: p == target)
+        assert chrome_detect._find_default_install_path() == target
+
+    def test_returns_none_when_no_candidate_exists(self, monkeypatch):
+        monkeypatch.setattr(chrome_detect.os.path, "exists", lambda p: False)
+        assert chrome_detect._find_default_install_path() is None
 
 
 # ── find_user_data_dir ───────────────────────────────────────────

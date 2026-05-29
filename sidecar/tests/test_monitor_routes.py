@@ -406,6 +406,52 @@ class TestBaiduNativeModeRoutes:
         )
         assert resp.status_code == 422
 
+    def test_copy_profile_persists_detected_executable(self, client, monkeypatch):
+        """copy-profile 成功后顺手探测并存 chrome.exe 路径，省得用户单独点'自动探测'
+        （否则 chrome_executable_path 一直为空 → 后续'登录副本'/跑监控会失败）。"""
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.copy_profile_to",
+            lambda **kw: {"imported_at": "2026-05-25T10:00:00", "size_mb": 1.0, "elapsed_s": 1.0},
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
+            lambda: "C:/Detected/chrome.exe",
+        )
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": "C:/User Data", "source_profile_name": "Default"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        cfg = client.get("/api/monitor/baidu/native-config").json()
+        assert cfg["chrome_executable_path"] == "C:/Detected/chrome.exe"
+
+    def test_copy_profile_keeps_manually_set_executable(self, client, monkeypatch):
+        """用户已手填 chrome.exe 路径时，copy-profile 不覆盖它。"""
+        client.post(
+            "/api/monitor/baidu/native-config",
+            json={
+                "use_native_chrome": True,
+                "chrome_executable_path": "C:/Manual/chrome.exe",
+                "chrome_user_data_dir": None,
+                "chrome_profile_name": "Default",
+            },
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.copy_profile_to",
+            lambda **kw: {"imported_at": "2026-05-25T10:00:00", "size_mb": 1.0, "elapsed_s": 1.0},
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
+            lambda: "C:/Detected/chrome.exe",  # 不应被采用
+        )
+        client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": "C:/User Data", "source_profile_name": "Default"},
+        )
+        cfg = client.get("/api/monitor/baidu/native-config").json()
+        assert cfg["chrome_executable_path"] == "C:/Manual/chrome.exe"
+
     def test_native_config_get_returns_current_settings(self, client):
         resp = client.get("/api/monitor/baidu/native-config")
         assert resp.status_code == 200

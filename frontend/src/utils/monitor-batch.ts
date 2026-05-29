@@ -81,3 +81,14 @@ export function formatTimelineTime(iso: string): string {
   if (isYesterday) return `昨天 ${hhmm}`;
   return `${d.getMonth() + 1}/${d.getDate()} ${hhmm}`;
 }
+
+/**
+ * 知乎原生「被浏览」数展示：< 1万 原数；1万~1亿 → X.X万；≥ 1亿 → X.X亿。
+ * 空 / NaN → "—"。去掉 ".0" 尾巴（350.0万 → 350万）。
+ */
+export function formatVisitCount(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  if (n < 10000) return String(n);
+  if (n < 1e8) return `${(n / 10000).toFixed(1).replace(/\.0$/, "")}万`;
+  return `${(n / 1e8).toFixed(1).replace(/\.0$/, "")}亿`;
+}

@@ -803,18 +803,19 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 B 站/抖音/快手三套各重复一句太碎，KPI 列已经直观体现"留存"语义。
               -->
             </div>
+            <!-- 列头固定在滚动区**外**（flex-shrink-0 sibling），只让下方数据行滚动；grid-template-columns 必须与行一致 -->
+            <div
+              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+              :style="{
+                gridTemplateColumns: '1.6fr .7fr .7fr 1fr',
+                letterSpacing: '1.2px',
+                color: 'var(--ink-3)',
+                borderBottom: '1px solid var(--line)',
+              }"
+            >
+              <div>任务名字</div><div class="text-center">留存</div><div class="text-center">变化</div><div class="text-center">操作</div>
+            </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-              <div
-                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-                :style="{
-                  gridTemplateColumns: '1.6fr .7fr .7fr 1fr',
-                  letterSpacing: '1.2px',
-                  color: 'var(--ink-3)',
-                  borderBottom: '1px solid var(--line)',
-                }"
-              >
-                <div>任务名字</div><div>留存</div><div>变化</div><div class="text-center">操作</div>
-              </div>
               <div
                 v-for="(t, i) in commentRows"
                 :key="t.id"
@@ -838,7 +839,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     {{ t.lastChecked }} · {{ (videosByBatchId[t.id] ?? []).length }} 条视频
                   </div>
                 </div>
-                <div>
+                <div class="text-center">
                   <div class="font-display text-[13px] font-bold">
                     {{ t.retained }}/{{ t.total }}
                   </div>
@@ -848,6 +849,8 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                       background: 'var(--line)',
                       borderRadius: '999px',
                       marginTop: '4px',
+                      marginLeft: 'auto',
+                      marginRight: 'auto',
                       width: '60px',
                     }"
                   >
@@ -861,7 +864,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     />
                   </div>
                 </div>
-                <div>
+                <div class="text-center">
                   <Pill v-if="t.delta < 0" tone="alert">
                     <Icon name="arrowDown" :size="10" />{{ t.delta }}
                   </Pill>
@@ -972,18 +975,19 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 }"
               >{{ selectedTaskVideos.length }} 条</span>
             </div>
+            <!-- 列头固定在滚动区**外**（flex-shrink-0 sibling），只让下方数据行滚动；grid-template-columns 必须与行一致 -->
+            <div
+              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+              :style="{
+                gridTemplateColumns: '1.8fr .6fr .6fr',
+                letterSpacing: '1.2px',
+                color: 'var(--ink-3)',
+                borderBottom: '1px solid var(--line)',
+              }"
+            >
+              <div>视频名字</div><div class="text-center">评论排名</div><div class="text-center">状态</div>
+            </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-              <div
-                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-                :style="{
-                  gridTemplateColumns: '1.8fr .6fr .6fr',
-                  letterSpacing: '1.2px',
-                  color: 'var(--ink-3)',
-                  borderBottom: '1px solid var(--line)',
-                }"
-              >
-                <div>视频名字</div><div>评论排名</div><div>状态</div>
-              </div>
               <div
                 v-for="(v, i) in selectedTaskVideos"
                 :key="v.id"
@@ -1011,7 +1015,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     {{ v.postedAt }}
                   </div>
                 </div>
-                <div>
+                <div class="text-center">
                   <!-- rank=0 (即 backend rank=-1) = 未在前 scrape_top_n 条命中，显示 "无" 与右侧 "未找到" pill 语义对齐 -->
                   <span
                     v-if="v.rank > 0"
@@ -1024,7 +1028,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     :style="{ color: 'var(--red, #d85a48)' }"
                   >无</span>
                 </div>
-                <div>
+                <div class="text-center">
                   <Pill v-if="v.status === 'ok'" tone="ok">在显</Pill>
                   <Pill v-else-if="v.status === 'folded'" tone="warn">跌出理想</Pill>
                   <Pill v-else tone="alert">未找到</Pill>

@@ -43,6 +43,7 @@ class FakeChromium:
         self.last_user_data_dir: str | None = None
         self.last_kwargs: dict[str, Any] = {}
         self.context = FakeContext()
+        self.executable_path: str | None = None  # overridden per-test
 
     def launch_persistent_context(self, user_data_dir, **kwargs):
         self.last_user_data_dir = user_data_dir
@@ -211,7 +212,8 @@ def test_baidu_browser_session_native_mode_uses_chrome_channel(monkeypatch, tmp_
 
 
 def test_baidu_browser_session_self_built_mode_unchanged(monkeypatch, tmp_path):
-    """use_native_chrome=False（默认）：保持原行为，不带 channel / executable_path。"""
+    """use_native_chrome=False（默认）：不带 channel；自建模式传 executable_path
+    （完整 Chromium，绕开 chrome-headless-shell 缺失）。"""
     from csm_core.monitor.drivers import baidu_browser
 
     captured: dict[str, Any] = {}
@@ -233,7 +235,23 @@ def test_baidu_browser_session_self_built_mode_unchanged(monkeypatch, tmp_path):
         pass
 
     assert "channel" not in captured
-    assert "executable_path" not in captured
+    # 自建模式现在传 executable_path（完整 Chromium，绕开 headless-shell 缺失）
+    assert "executable_path" in captured
     assert captured.get("headless") is True
     args = captured.get("args") or []
     assert "--blink-settings=imagesEnabled=false" in args  # 自建保留
+
+
+def test_self_built_headless_passes_executable_path(monkeypatch, tmp_path):
+    """自建 profile + headless=True 抓取也要传完整 Chromium executable_path，
+    否则同样撞 chrome-headless-shell 缺失（默认 headless 抓取会挂）。"""
+    from csm_core.monitor.drivers import baidu_browser
+    pw = FakePW()
+    pw.chromium.executable_path = r"C:\fake\chromium\chrome.exe"  # 加到 FakeChromium
+    monkeypatch.setattr(baidu_browser, "_sync_playwright", lambda: FakeSyncPW(pw))
+    monkeypatch.setattr(baidu_browser, "ensure_browsers_path", lambda: None)
+
+    with baidu_browser.baidu_browser_session(headless=True, user_data_dir=tmp_path):
+        pass
+    assert pw.chromium.last_kwargs.get("executable_path") == r"C:\fake\chromium\chrome.exe"
+    assert pw.chromium.last_kwargs.get("headless") is True
