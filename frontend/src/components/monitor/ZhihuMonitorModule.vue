@@ -142,6 +142,12 @@ const taskResults = ref<Array<{ checked_at: string; status: string; rank: number
 // selectedTaskId 走（L2 点子任务行时写入）。
 const openBatchName = ref<string | null>(null);
 
+// L1 右侧详情面板选中的批次 —— 点批次「行」（不是批次名链接）选中它，
+// 批次名链接负责钻入 L2（openBatchName）。跟 BaiduRankingPage 的 previewId
+// 同语义：行点击只把右卡详情定位到这条批次，不导航。默认 fallback 第一条
+// 批次（下方 watch 接管），保证 L1 右卡不空。
+const selectedBatchName = ref<string | null>(null);
+
 interface ZhihuBatch {
   name: string;
   tasks: Task[];
@@ -156,6 +162,44 @@ const batches = computed<ZhihuBatch[]>(() => {
   }
   return Array.from(map, ([name, tasks]) => ({ name, tasks }));
 });
+
+// L1 右卡详情：选中的批次（previewId fallback 到第一条）。批次被删/改名
+// 后若选中已不在列表里，自动回落第一条，跟 BaiduRankingPage.previewTask
+// 同套兜底逻辑。
+const selectedBatch = computed<ZhihuBatch | null>(() => {
+  if (batches.value.length === 0) return null;
+  if (selectedBatchName.value != null) {
+    const hit = batches.value.find((b) => b.name === selectedBatchName.value);
+    if (hit) return hit;
+  }
+  return batches.value[0];
+});
+
+// 选中批次共享的目标品牌 —— 取该批次第一条子任务的 config.target_brand
+// （知乎批次内所有子任务共用同一个品牌词，导入时统一写入）。config 即便
+// 没跑过监测也存在，比从 snapshot.target_brand 取更稳。
+const selectedBatchBrand = computed<string>(() => {
+  const first = selectedBatch.value?.tasks[0];
+  const brand = first?.config?.target_brand;
+  return typeof brand === "string" && brand.trim() ? brand : "";
+});
+
+// 批次列表变化时把 selectedBatchName 收敛到一个有效值（默认第一条）——
+// 跟 selectedTaskId 的 fallback watch 同模式，保证 L1 右卡详情面板不空。
+watch(
+  batches,
+  (list) => {
+    if (list.length === 0) {
+      selectedBatchName.value = null;
+    } else if (
+      selectedBatchName.value == null ||
+      !list.find((b) => b.name === selectedBatchName.value)
+    ) {
+      selectedBatchName.value = list[0].name;
+    }
+  },
+  { immediate: true },
+);
 
 // L2 当前批次的子任务；批次被删空（或批次名消失）时回退到 L1。
 const currentBatchTasks = computed<Task[]>(() => {
@@ -189,6 +233,59 @@ function editBatch(b: ZhihuBatch) {
   // 路径（无批次编辑弹窗），先把 L2 打开让用户直接看到可编辑的子任务行。
   openBatchName.value = b.name;
   emit("edit-batch", { name: b.name, tasks: b.tasks });
+}
+
+// ── L1 批次详情面板的「导出数据 / 定时监测」──────────────────────────
+//
+// 复用 BaiduRankingPage 同款能力，无需后端：
+//   导出数据 = 纯前端 CSV blob 下载（列：问题名字 / 卡位数量 / 最高排名）；
+//     数据源是每条子任务最近一次 snapshot（taskSnapshots[id].latest）。
+//   定时监测 = 复用现有 edit-task emit 打开 AddTaskModal，让用户在里面改
+//     schedule_cron（知乎无「批次级定时」后端，退化为编辑批次首条子任务，
+//     跟 baidu openScheduleEditor 走 edit-task 同路径）。
+function exportBatchCsv(b: ZhihuBatch): void {
+  const rows: string[] = ["问题名字,卡位数量,最高排名"];
+  let withData = 0;
+  for (const t of b.tasks) {
+    const snap = props.taskSnapshots[t.id]?.latest;
+    const name = subtaskTitle(t);
+    const safeName = `"${name.replace(/"/g, '""')}"`;
+    if (snap) {
+      const placed = snap.matched_count;
+      const best = snap.rank > 0 ? `第 ${snap.rank} 名` : "未上榜";
+      rows.push(`${safeName},${placed},"${best}"`);
+      withData += 1;
+    } else {
+      rows.push(`${safeName},—,—`);
+    }
+  }
+  if (withData === 0) {
+    toast.warn("该批次还没有可导出的监测结果，请先运行一次监测");
+    return;
+  }
+  // BOM 让 Excel 正确识别 UTF-8
+  const blob = new Blob(["﻿" + rows.join("\n")], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const ts = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `${b.name}-卡位-${ts}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast.success(`已导出 ${b.tasks.length} 个问题`);
+}
+
+function scheduleBatch(b: ZhihuBatch): void {
+  const first = b.tasks[0];
+  if (!first) {
+    toast.warn("该批次没有可设置的子任务");
+    return;
+  }
+  emit("edit-task", first);
 }
 
 async function loadResults(taskId: number) {
@@ -774,7 +871,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               @click="emit('add-task')"
             >
               <Icon name="plus" :size="12" />
-              <span>新增批次</span>
+              <span>新建任务</span>
             </button>
           </div>
         </div>
@@ -811,7 +908,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               class="py-10 text-center text-[12.5px]"
               :style="{ color: 'var(--ink-3)' }"
             >
-              暂无监测任务 · 点击「新增批次」开始监测
+              暂无监测任务 · 点击「新建任务」开始监测
             </div>
           </template>
 
@@ -890,13 +987,28 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             class="grid cursor-pointer items-center transition"
             :style="{
               gridTemplateColumns: '1.7fr .6fr 1.1fr',
+              background: selectedBatchName === b.name ? 'var(--card-2)' : 'transparent',
               borderBottom: i < batches.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
               borderRadius: '10px',
             }"
-            @click="openBatchName = b.name"
+            @click="selectedBatchName = b.name"
+            @mouseenter="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
+            @mouseleave="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
           >
-            <div class="truncate text-[13px] font-medium">{{ b.name }}</div>
+            <!--
+              批次名是「点击进 L2」的彩色热区（跟 CommentMonitorModule 的
+              批次名链接同款 primary-deep 色）；整行点击只把右卡详情定位到
+              这条批次（selectedBatchName），不导航。@click.stop 防止点名字
+              时又触发行的 select。
+            -->
+            <button
+              type="button"
+              class="truncate text-left text-[13px] font-medium"
+              :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
+              title="查看该批次的问题列表"
+              @click.stop="openBatchName = b.name"
+            >{{ b.name }}</button>
             <div class="text-center font-display text-[13px] font-bold">{{ b.tasks.length }}</div>
             <div class="flex items-center justify-center gap-1">
               <button
@@ -938,19 +1050,45 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           question_visit_count）。卡位 / 变化 / 操作 cell 原样保留。
         -->
         <template v-else>
-          <!-- 面包屑：返回 L1 批次列表 -->
-          <button
-            type="button"
-            class="mb-1 inline-flex flex-shrink-0 items-center gap-1.5 self-start py-2 text-[12px]"
-            :style="{ color: 'var(--ink-2)', background: 'transparent' }"
-            title="返回批次列表"
-            @click="openBatchName = null"
-          >
-            <Icon name="arrowLeft" :size="13" />
-            <span>返回批次</span>
-            <span :style="{ color: 'var(--ink-3)' }">·</span>
-            <span class="truncate font-medium" :style="{ maxWidth: '220px' }">{{ openBatchName }}</span>
-          </button>
+          <!--
+            L2 返回条 —— 对齐 CommentMonitorModule 的「← {批次名}」样式：
+            左侧圆形返回箭头 + eyebrow（知乎问题 · 子任务列表）+ 加粗批次名，
+            右侧「N 个问题」徽章。点返回箭头回 L1 批次列表。
+          -->
+          <div class="mb-3 flex flex-shrink-0 items-center gap-3">
+            <button
+              type="button"
+              class="inline-flex flex-shrink-0 items-center justify-center"
+              :style="{
+                width: '28px',
+                height: '28px',
+                borderRadius: '999px',
+                background: 'var(--card-2)',
+                border: '1px solid var(--line)',
+                color: 'var(--ink-2)',
+              }"
+              title="返回批次列表"
+              @click="openBatchName = null"
+            >
+              <Icon name="arrowLeft" :size="13" />
+            </button>
+            <div class="min-w-0">
+              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                知乎问题 · 子任务列表
+              </div>
+              <div class="font-display truncate text-[14px] font-semibold">
+                {{ openBatchName }}
+              </div>
+            </div>
+            <span
+              class="ml-auto flex-shrink-0 rounded-full text-[10.5px]"
+              :style="{
+                background: 'var(--card-2)',
+                color: 'var(--ink-3)',
+                padding: '2px 8px',
+              }"
+            >{{ currentBatchTasks.length }} 个问题</span>
+          </div>
 
           <!-- L2 header —— 「类型」替换为「浏览量」 -->
           <div
@@ -1260,9 +1398,15 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           </div>
         </template>
 
-        <template v-else>
+        <!--
+          ════ 真实数据 · L2：单问题详情（openBatchName != null）════
+          钻入某批次后点子任务行 → 右卡显示该问题的 KPI / 趋势 / 前 N 答案。
+          维持原行为不变；只是把 v-else 收窄成 L2 专属分支，L1 走下面的
+          批次详情面板。
+        -->
+        <template v-else-if="openBatchName != null">
           <div v-if="!selectedTask" class="text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
-            点击左侧任意任务查看详情。
+            点击左侧任意问题查看详情。
           </div>
           <template v-else>
             <!-- 头：问题名 + 链接 + 编辑（删除原来的「知乎问题」副标题 —— tab 已经说明了平台） -->
@@ -1452,6 +1596,82 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
                 暂无快照数据 —— 跑一次「立刻监测」，下方将列出当前榜上的前 N 个答案，命中目标品牌的会高亮。
               </div>
+            </div>
+          </template>
+        </template>
+
+        <!--
+          ════ 真实数据 · L1：批次详情面板（openBatchName == null）════
+          对齐 BaiduRankingPage 右卡 master-detail：批次名标题 + 「任务详情」
+          eyebrow、问题数量、目标品牌，底部 pinned「导出数据 / 定时监测」。
+          按用户明确要求：没有趋势图。selectedBatch 由左侧批次「行」点击选中
+          （fallback 第一条），批次名链接负责钻入 L2。
+        -->
+        <template v-else>
+          <div
+            v-if="!selectedBatch"
+            class="flex flex-1 flex-col items-center justify-center text-center"
+            :style="{ color: 'var(--ink-3)' }"
+          >
+            <div class="mb-1 text-[14px] font-medium">暂无批次</div>
+            <div class="text-[11.5px]">点击「批量导入」或「新建任务」开始监测</div>
+          </div>
+
+          <template v-else>
+            <!-- 标题：批次名 + 「任务详情」eyebrow -->
+            <div class="mb-3 flex-shrink-0">
+              <div class="font-display text-[14px] font-semibold">{{ selectedBatch.name }}</div>
+              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+                任务详情
+              </div>
+            </div>
+
+            <!-- 属性区（滚动）—— 问题数量 / 目标品牌；无趋势图 -->
+            <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+              <div>
+                <div
+                  class="mb-1 text-[10.5px] uppercase"
+                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
+                >问题数量</div>
+                <div class="font-display text-[18px] font-bold">{{ selectedBatch.tasks.length }}</div>
+              </div>
+              <div>
+                <div
+                  class="mb-1 text-[10.5px] uppercase"
+                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
+                >目标品牌</div>
+                <div class="text-[13px] font-medium">{{ selectedBatchBrand || '—' }}</div>
+              </div>
+            </div>
+
+            <!-- 底部 pinned：导出数据 / 定时监测 -->
+            <div class="flex flex-shrink-0 gap-2 pt-4">
+              <button
+                type="button"
+                class="flex-1 text-[12.5px] font-medium"
+                :style="{
+                  padding: '9px 14px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                  borderRadius: '8px',
+                  color: 'var(--ink-2)',
+                  cursor: 'pointer',
+                }"
+                @click="exportBatchCsv(selectedBatch)"
+              >导出数据</button>
+              <button
+                type="button"
+                class="flex-1 text-[12.5px] font-medium"
+                :style="{
+                  padding: '9px 14px',
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                }"
+                @click="scheduleBatch(selectedBatch)"
+              >定时监测</button>
             </div>
           </template>
         </template>
