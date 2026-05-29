@@ -1245,9 +1245,9 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         </div>
       </section>
 
-      <!-- detail card —— min-h-0 + overflow-y-auto 把详情滚动锁在卡内 -->
+      <!-- detail card —— min-h-0 + overflow-hidden；滚动锁在子区块（前N答案 / L1属性区） -->
       <section
-        class="flex h-full min-h-0 flex-col overflow-y-auto"
+        class="flex h-full min-h-0 flex-col overflow-hidden"
         :style="{
           background: 'var(--card)',
           border: '1px solid var(--line)',
@@ -1422,7 +1422,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           </div>
           <template v-else>
             <!-- 头：问题名 + 链接 + 编辑（删除原来的「知乎问题」副标题 —— tab 已经说明了平台） -->
-            <div class="flex items-start justify-between gap-2">
+            <div class="flex flex-shrink-0 items-start justify-between gap-2">
               <div class="min-w-0">
                 <div class="font-display text-[14px] font-semibold">「{{ selectedTask.name }}」</div>
               </div>
@@ -1468,7 +1468,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               - 最高排名 = result.rank（自家最高排到第几名）；命中 0 → 「未上榜」
               - 检查频率已移除 —— 用户通过编辑任务设置定时。
             -->
-            <div class="mt-3 grid grid-cols-2 gap-3">
+            <div class="mt-3 grid flex-shrink-0 grid-cols-2 gap-3">
               <div
                 :style="{
                   padding: '12px',
@@ -1524,7 +1524,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               bucket，没数据的天为 null，chart.js spanGaps=false 画 gap。
               不再用 v-if 拦数据空场景（用户即使没数据也能看到完整时间轴）。
             -->
-            <div class="mt-5">
+            <div class="mt-5 flex-shrink-0">
               <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
               <!--
                 Y 轴上限锁 selectedTopN —— 命中条数的容量上限是 Top-N，
@@ -1550,7 +1550,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               橙色描边高亮，右侧角标"自家"。让用户一眼看出"前 N 条里
               我占了哪几位"——这是用户描述的核心需求。
             -->
-            <div class="mt-4">
+            <div class="mt-4 min-h-0 flex-1 overflow-y-auto">
               <div class="mb-2 flex items-center justify-between">
                 <div class="text-[12px] font-semibold">
                   前
