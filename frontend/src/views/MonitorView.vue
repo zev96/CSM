@@ -425,6 +425,16 @@ function onAlertAction(a: "rescue" | "repost" | "close") {
   }
 }
 
+// 知乎批次编辑 —— 退化路径（MVP）。EditBatchModal 是评论 tab 专用：它只
+// 改批次名 + top_n，并且会主动从 config 里删掉 target_brand（评论批次不维护
+// 品牌词）。知乎批次的核心共享字段恰恰是 target_brand，复用那个 modal 会
+// 把每条知乎任务的品牌词静默清空（数据丢失）。所以这里不复用、也不新建
+// 知乎批次编辑弹窗（计划末尾标为后续增强），改为：模块端已就地钻入该批次
+// L2，父组件只提示用户用子任务的 ✎ 逐个编辑。
+function onEditZhihuBatch(_payload: { name: string; tasks: Task[] }) {
+  toast.info("批次编辑：请用子任务的 ✎ 逐个编辑");
+}
+
 async function deleteTask(taskId: number) {
   if (!(await confirmDialog("确定删除这个监测任务？历史结果会一并删除。", { title: "删除监测任务" }))) return;
   try {
@@ -765,6 +775,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         @import-batch="showBatchImport = true"
         @cookie-mgr="showCookieMgr = true"
         @edit-task="(t) => openEditTask(t)"
+        @edit-batch="onEditZhihuBatch"
         @delete-task="(id) => deleteTask(id)"
         @run-task="(id) => runNow(id)"
         @cancel-task="(id) => cancelTask(id)"
