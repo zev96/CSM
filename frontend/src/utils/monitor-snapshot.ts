@@ -34,6 +34,8 @@ export interface TaskSnapshot {
   matched_ranks: number[];
   /** 知乎专用：用户的目标品牌关键词（详情卡 / 抢占者高亮要用） */
   target_brand: string;
+  /** 知乎专用：问题浏览量（被浏览数）；缺失为 null */
+  question_visit_count: number | null;
 }
 
 export interface TaskSnapshotPair {
@@ -78,5 +80,7 @@ export function resultToSnapshot(r: any): TaskSnapshot | null {
     matched_count: matchedCount,
     matched_ranks: matchedRanks,
     target_brand: typeof m.target_brand === "string" ? m.target_brand : "",
+    question_visit_count:
+      typeof m.question_visit_count === "number" ? m.question_visit_count : null,
   };
 }
