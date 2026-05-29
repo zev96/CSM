@@ -973,7 +973,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           <div>问题名字</div>
           <div class="text-center">浏览量</div>
           <div>卡位</div>
-          <div>变化</div>
+          <div class="text-center">变化</div>
           <div class="text-center">操作</div>
         </div>
 
@@ -1158,7 +1158,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               是"我们家这次有几条上榜、上次有几条"。+1 = 多一条占位，
               -1 = 少一条；持平不显 pill。
             -->
-            <div>
+            <div class="text-center">
               <template v-if="taskSnapshots[t.id]?.latest && taskSnapshots[t.id]?.prev">
                 <template
                   v-if="taskSnapshots[t.id]!.latest!.matched_count - taskSnapshots[t.id]!.prev!.matched_count > 0"
