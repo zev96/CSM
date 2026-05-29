@@ -919,32 +919,70 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           >{{ currentBatchTasks.length }} 个问题</span>
         </div>
 
-        <!-- scrollable table body — fills remaining vertical space -->
+        <!--
+          列头固定在滚动区**外**（flex-shrink-0 sibling），只让下方数据行
+          滚动 —— 三种模式各一份平行列头，gate 条件与下方滚动区里的行
+          v-if 链一一对应（demo / L1 批次 / L2 子任务）。grid-template-columns
+          必须与各自的行保持一致，否则列会错位。
+        -->
+        <!-- DEMO 列头 —— 5 列（与 demo 行同 1.6fr .7fr .7fr .7fr 1fr） -->
+        <div
+          v-if="demoMode"
+          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+          :style="{
+            gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+            letterSpacing: '1.2px',
+            color: 'var(--ink-3)',
+            borderBottom: '1px solid var(--line)',
+          }"
+        >
+          <div>问题名字</div>
+          <div class="text-center">类型</div>
+          <div>卡位</div>
+          <div>变化</div>
+          <div class="text-center">操作</div>
+        </div>
+
+        <!-- L1 批次列头 —— 3 列（与批次行同 1.7fr .6fr 1.1fr） -->
+        <div
+          v-else-if="openBatchName == null"
+          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+          :style="{
+            gridTemplateColumns: '1.7fr .6fr 1.1fr',
+            letterSpacing: '1.2px',
+            color: 'var(--ink-3)',
+            borderBottom: '1px solid var(--line)',
+          }"
+        >
+          <div>批次名</div>
+          <div class="text-center">问题数</div>
+          <div class="text-center">操作</div>
+        </div>
+
+        <!-- L2 子任务列头 —— 5 列（与子任务行同 1.6fr .7fr .7fr .7fr 1fr），「类型」替换为「浏览量」 -->
+        <div
+          v-else
+          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+          :style="{
+            gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+            letterSpacing: '1.2px',
+            color: 'var(--ink-3)',
+            borderBottom: '1px solid var(--line)',
+          }"
+        >
+          <div>问题名字</div>
+          <div class="text-center">浏览量</div>
+          <div>卡位</div>
+          <div>变化</div>
+          <div class="text-center">操作</div>
+        </div>
+
+        <!-- scrollable table body — fills remaining vertical space（只含数据行，列头已上移到滚动区外） -->
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 
         <!-- ════════ DEMO 模式：保留原扁平空态 / 样本行（不做批次 UI）════════ -->
+        <!-- 列头（5 列，删了「状态」）已上移到滚动区外，固定不滚 -->
         <template v-if="demoMode">
-          <!--
-            5-column header row —— 删掉「状态」列（卡位 / 变化 已经覆盖了
-            上榜与否，状态 pill 是冗余信号）。非主名列统一 0.7fr 等宽，
-            类型 / 操作 列文字居中，对齐下方 icon 组。
-          -->
-          <div
-            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-            :style="{
-              gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
-              letterSpacing: '1.2px',
-              color: 'var(--ink-3)',
-              borderBottom: '1px solid var(--line)',
-            }"
-          >
-            <div>问题名字</div>
-            <div class="text-center">类型</div>
-            <div>卡位</div>
-            <div>变化</div>
-            <div class="text-center">操作</div>
-          </div>
-
           <!-- demo empty state — SAMPLE_ZHIHU 发布前已清空，首次启动展示空态 -->
           <template v-if="SAMPLE_ZHIHU.length === 0">
             <div
@@ -1002,20 +1040,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           🗑 删除整个批次（均复用单任务 emit，父对每个 id 走既有流程）。
         -->
         <template v-else-if="openBatchName == null">
-          <div
-            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-            :style="{
-              gridTemplateColumns: '1.7fr .6fr 1.1fr',
-              letterSpacing: '1.2px',
-              color: 'var(--ink-3)',
-              borderBottom: '1px solid var(--line)',
-            }"
-          >
-            <div>批次名</div>
-            <div class="text-center">问题数</div>
-            <div class="text-center">操作</div>
-          </div>
-
+          <!-- 列头（批次名 / 问题数 / 操作）已上移到滚动区外，固定不滚 -->
           <div
             v-if="batches.length === 0"
             class="py-10 text-center text-[12.5px]"
@@ -1093,23 +1118,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           question_visit_count）。卡位 / 变化 / 操作 cell 原样保留。
         -->
         <template v-else>
-          <!-- L2 header —— 「类型」替换为「浏览量」（返回条已上移到滚动区外，只让行滚动）-->
-          <div
-            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-            :style="{
-              gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
-              letterSpacing: '1.2px',
-              color: 'var(--ink-3)',
-              borderBottom: '1px solid var(--line)',
-            }"
-          >
-            <div>问题名字</div>
-            <div class="text-center">浏览量</div>
-            <div>卡位</div>
-            <div>变化</div>
-            <div class="text-center">操作</div>
-          </div>
-
+          <!-- L2 列头（「类型」→「浏览量」）和返回条均已上移到滚动区外，只让行滚动 -->
           <div
             v-for="(t, i) in currentBatchTasks"
             :key="t.id"

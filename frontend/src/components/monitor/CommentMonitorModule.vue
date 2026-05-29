@@ -803,18 +803,19 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 B 站/抖音/快手三套各重复一句太碎，KPI 列已经直观体现"留存"语义。
               -->
             </div>
+            <!-- 列头固定在滚动区**外**（flex-shrink-0 sibling），只让下方数据行滚动；grid-template-columns 必须与行一致 -->
+            <div
+              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+              :style="{
+                gridTemplateColumns: '1.6fr .7fr .7fr 1fr',
+                letterSpacing: '1.2px',
+                color: 'var(--ink-3)',
+                borderBottom: '1px solid var(--line)',
+              }"
+            >
+              <div>任务名字</div><div>留存</div><div>变化</div><div class="text-center">操作</div>
+            </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-              <div
-                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-                :style="{
-                  gridTemplateColumns: '1.6fr .7fr .7fr 1fr',
-                  letterSpacing: '1.2px',
-                  color: 'var(--ink-3)',
-                  borderBottom: '1px solid var(--line)',
-                }"
-              >
-                <div>任务名字</div><div>留存</div><div>变化</div><div class="text-center">操作</div>
-              </div>
               <div
                 v-for="(t, i) in commentRows"
                 :key="t.id"
@@ -972,18 +973,19 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 }"
               >{{ selectedTaskVideos.length }} 条</span>
             </div>
+            <!-- 列头固定在滚动区**外**（flex-shrink-0 sibling），只让下方数据行滚动；grid-template-columns 必须与行一致 -->
+            <div
+              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+              :style="{
+                gridTemplateColumns: '1.8fr .6fr .6fr',
+                letterSpacing: '1.2px',
+                color: 'var(--ink-3)',
+                borderBottom: '1px solid var(--line)',
+              }"
+            >
+              <div>视频名字</div><div>评论排名</div><div>状态</div>
+            </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-              <div
-                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-                :style="{
-                  gridTemplateColumns: '1.8fr .6fr .6fr',
-                  letterSpacing: '1.2px',
-                  color: 'var(--ink-3)',
-                  borderBottom: '1px solid var(--line)',
-                }"
-              >
-                <div>视频名字</div><div>评论排名</div><div>状态</div>
-              </div>
               <div
                 v-for="(v, i) in selectedTaskVideos"
                 :key="v.id"

@@ -1131,28 +1131,30 @@ defineExpose({ reload: loadTasks, selectTask });
             </div>
           </div>
 
-          <!-- Table: fills remaining height -->
-          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <!--
-              Header row —— 4 列均匀分布的视觉权重：任务名最宽（1.6fr），
-              变化/状态/操作各占接近的 ~0.85fr，让 3 个非主列读起来等高
-              均衡；操作列 header 居中以对齐下方按钮组。
-            -->
-            <div
-              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-              :style="{
-                gridTemplateColumns: '1.6fr .85fr .85fr 1fr',
-                letterSpacing: '1.2px',
-                color: 'var(--ink-3)',
-                borderBottom: '1px solid var(--line)',
-              }"
-            >
-              <div>任务名字</div>
-              <div>变化</div>
-              <div class="text-center">状态</div>
-              <div class="text-center">操作</div>
-            </div>
+          <!--
+            Header row —— 固定在滚动区**外**（flex-shrink-0 sibling），只让
+            下方数据行滚动；grid-template-columns 必须与行一致。
+            4 列均匀分布的视觉权重：任务名最宽（1.6fr），变化/状态/操作各占
+            接近的 ~0.85fr，让 3 个非主列读起来等高均衡；操作列 header 居中
+            以对齐下方按钮组。
+          -->
+          <div
+            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+            :style="{
+              gridTemplateColumns: '1.6fr .85fr .85fr 1fr',
+              letterSpacing: '1.2px',
+              color: 'var(--ink-3)',
+              borderBottom: '1px solid var(--line)',
+            }"
+          >
+            <div>任务名字</div>
+            <div>变化</div>
+            <div class="text-center">状态</div>
+            <div class="text-center">操作</div>
+          </div>
 
+          <!-- Table: fills remaining height（只含数据行，列头已上移到滚动区外） -->
+          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <!-- Loading state -->
             <div
               v-if="loadingTasks"
@@ -1506,7 +1508,28 @@ defineExpose({ reload: loadTasks, selectTask });
             </template>
           </div>
 
-          <!-- Table -->
+          <!-- 关键词表：单一渲染源 keywordRows，以 config.search_keywords 为基准的 93 行，
+               按 keyword 名从 latestMetric.keywords 查结果填充；未匹配的渲染「未跑」。 -->
+          <!--
+            Header row —— 固定在滚动区**外**（flex-shrink-0 sibling），只让
+            下方数据行滚动；grid-template-columns 必须与行一致。
+          -->
+          <div
+            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+            :style="{
+              gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
+              letterSpacing: '1.2px',
+              color: 'var(--ink-3)',
+              borderBottom: '1px solid var(--line)',
+            }"
+          >
+            <div>关键词</div>
+            <div>默认卡位</div>
+            <div>资讯卡位</div>
+            <div>状态</div>
+          </div>
+
+          <!-- Table（只含数据行，列头已上移到滚动区外） -->
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <!-- Loading -->
             <div
@@ -1515,24 +1538,6 @@ defineExpose({ reload: loadTasks, selectTask });
               :style="{ color: 'var(--ink-3)' }"
             >
               加载中…
-            </div>
-
-            <!-- 关键词表：单一渲染源 keywordRows，以 config.search_keywords 为基准的 93 行，
-                 按 keyword 名从 latestMetric.keywords 查结果填充；未匹配的渲染「未跑」。 -->
-            <!-- Header row -->
-            <div
-              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-              :style="{
-                gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
-                letterSpacing: '1.2px',
-                color: 'var(--ink-3)',
-                borderBottom: '1px solid var(--line)',
-              }"
-            >
-              <div>关键词</div>
-              <div>默认卡位</div>
-              <div>资讯卡位</div>
-              <div>状态</div>
             </div>
 
             <!-- Empty state -->
