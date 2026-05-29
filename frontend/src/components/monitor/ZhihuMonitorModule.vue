@@ -876,6 +876,49 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           </div>
         </div>
 
+        <!--
+          L2 返回条 —— 固定在滚动区**外**（flex-shrink-0），只让下方子任务
+          列表滚动，对齐评论平台 L2。之前它在 overflow-y-auto 里 → 下拉条
+          范围把返回条也圈进去了。
+        -->
+        <div
+          v-if="!demoMode && openBatchName != null"
+          class="mb-3 flex flex-shrink-0 items-center gap-3"
+        >
+          <button
+            type="button"
+            class="inline-flex flex-shrink-0 items-center justify-center"
+            :style="{
+              width: '28px',
+              height: '28px',
+              borderRadius: '999px',
+              background: 'var(--card-2)',
+              border: '1px solid var(--line)',
+              color: 'var(--ink-2)',
+            }"
+            title="返回批次列表"
+            @click="openBatchName = null"
+          >
+            <Icon name="arrowLeft" :size="13" />
+          </button>
+          <div class="min-w-0">
+            <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
+              知乎问题 · 子任务列表
+            </div>
+            <div class="font-display truncate text-[14px] font-semibold">
+              {{ openBatchName }}
+            </div>
+          </div>
+          <span
+            class="ml-auto flex-shrink-0 rounded-full text-[10.5px]"
+            :style="{
+              background: 'var(--card-2)',
+              color: 'var(--ink-3)',
+              padding: '2px 8px',
+            }"
+          >{{ currentBatchTasks.length }} 个问题</span>
+        </div>
+
         <!-- scrollable table body — fills remaining vertical space -->
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 
@@ -1050,47 +1093,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           question_visit_count）。卡位 / 变化 / 操作 cell 原样保留。
         -->
         <template v-else>
-          <!--
-            L2 返回条 —— 对齐 CommentMonitorModule 的「← {批次名}」样式：
-            左侧圆形返回箭头 + eyebrow（知乎问题 · 子任务列表）+ 加粗批次名，
-            右侧「N 个问题」徽章。点返回箭头回 L1 批次列表。
-          -->
-          <div class="mb-3 flex flex-shrink-0 items-center gap-3">
-            <button
-              type="button"
-              class="inline-flex flex-shrink-0 items-center justify-center"
-              :style="{
-                width: '28px',
-                height: '28px',
-                borderRadius: '999px',
-                background: 'var(--card-2)',
-                border: '1px solid var(--line)',
-                color: 'var(--ink-2)',
-              }"
-              title="返回批次列表"
-              @click="openBatchName = null"
-            >
-              <Icon name="arrowLeft" :size="13" />
-            </button>
-            <div class="min-w-0">
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                知乎问题 · 子任务列表
-              </div>
-              <div class="font-display truncate text-[14px] font-semibold">
-                {{ openBatchName }}
-              </div>
-            </div>
-            <span
-              class="ml-auto flex-shrink-0 rounded-full text-[10.5px]"
-              :style="{
-                background: 'var(--card-2)',
-                color: 'var(--ink-3)',
-                padding: '2px 8px',
-              }"
-            >{{ currentBatchTasks.length }} 个问题</span>
-          </div>
-
-          <!-- L2 header —— 「类型」替换为「浏览量」 -->
+          <!-- L2 header —— 「类型」替换为「浏览量」（返回条已上移到滚动区外，只让行滚动）-->
           <div
             class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
             :style="{
