@@ -20,12 +20,6 @@ import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 import { useStaleGuard } from "@/composables/useStaleGuard";
 
-// ── 百度账号登录 + reset profile state（按用户要求融合进 Cookie 管理器）─────
-// 之前散落在 SettingsView → 监测 section 下，但「登录百度」属于登录态
-// 管理范畴跟 cookie 池语义一致，统一在这里维护更聚合。Endpoint 跟 cookie
-// 不一样（baidu 用 /api/monitor/baidu/login，不是 /api/monitor/cookies/...）
-// ，所以 UI 上单列一块「百度账号」区，不混进 4 平台 tab。
-
 const props = defineProps<{
   open: boolean;
   defaultPlatform?: string;
