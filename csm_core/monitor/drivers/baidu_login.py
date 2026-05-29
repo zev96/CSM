@@ -267,7 +267,7 @@ def open_login_window(
             logger.debug("context.on('close') not available: %s", e)
 
         try:
-            page.goto("https://www.baidu.com/")
+            page.goto("https://www.baidu.com/", wait_until="domcontentloaded")
             try:
                 page.bring_to_front()
             except Exception:

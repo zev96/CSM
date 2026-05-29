@@ -91,6 +91,7 @@ class _FakeCtx:
 
 
 class _FakeChromium:
+    executable_path = r"C:\fake\chromium\chrome.exe"  # needed since Task 1 passes this
     def __init__(self, cookies_to_return: list[dict[str, Any]]):
         self.context = _FakeCtx(cookies_to_return)
     def launch_persistent_context(self, user_data_dir, **kwargs):
