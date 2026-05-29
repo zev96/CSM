@@ -778,6 +778,8 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         @edit-batch="onEditZhihuBatch"
         @delete-task="(id) => deleteTask(id)"
         @run-task="(id) => runNow(id)"
+        @delete-batch="(name) => deleteBatch(name)"
+        @run-batch="(name) => runBatch(name)"
         @cancel-task="(id) => cancelTask(id)"
         @alert-action="(act) => onAlertAction(act as any)"
         @open-alert="openZhihuAlertFromModule"

@@ -114,6 +114,10 @@ const emit = defineEmits<{
   (e: "edit-batch", payload: { name: string; tasks: Task[] }): void;
   (e: "delete-task", taskId: number): void;
   (e: "run-task", taskId: number): void;
+  // 批次级单事件 —— 复用父组件 runBatch/deleteBatch（一次确认 + Promise.all
+  // + 一条聚合 toast），跟 CommentMonitorModule 的 run-batch/delete-batch 同签名。
+  (e: "run-batch", batchName: string): void;
+  (e: "delete-batch", batchName: string): void;
   (e: "cancel-task", taskId: number): void;
   (e: "alert-action", action: string): void;
   (e: "open-alert", payload: { kind: "zhihu_alert"; data: ZhihuAlertData | null }): void;
@@ -168,14 +172,17 @@ function subtaskTitle(t: Task): string {
   return t.name.startsWith(prefix) ? t.name.slice(prefix.length) : t.name;
 }
 
-// 批次操作 —— 复用现有单任务 emit（父对每个 id 走既有 run/delete 流程）；
-// 编辑批次走新 edit-batch 事件由父组件兜底。
+// 批次操作 —— 走批次级单事件，复用父组件 runBatch/deleteBatch（按
+// parseBatchName 拢子任务，一次确认 + Promise.all + 一条聚合 toast），
+// 跟 CommentMonitorModule 完全一致。不再逐个 emit run-task/delete-task：
+// 那会让删除 N 题批次弹 N 次确认 / N 次 toast / N 次 reload。
+// deleteBatch 不在这里清 openBatchName —— 等删除真的生效、currentBatchTasks
+// 空了，下方 watch 自动回退到 L1（跟评论模块靠父回调收敛同理）。
 function startBatch(b: ZhihuBatch) {
-  b.tasks.forEach((t) => emit("run-task", t.id));
+  emit("run-batch", b.name);
 }
 function deleteBatch(b: ZhihuBatch) {
-  b.tasks.forEach((t) => emit("delete-task", t.id));
-  if (openBatchName.value === b.name) openBatchName.value = null;
+  emit("delete-batch", b.name);
 }
 function editBatch(b: ZhihuBatch) {
   // 同时本地钻入该批次 L2 —— 父组件目前走「逐个用子任务 ✎ 编辑」的退化
