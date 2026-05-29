@@ -28,7 +28,12 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
-import { formatTimelineTime, formatRelativeTime } from "@/utils/monitor-batch";
+import {
+  formatTimelineTime,
+  formatRelativeTime,
+  parseBatchName,
+  formatVisitCount,
+} from "@/utils/monitor-batch";
 import {
   type TaskSnapshotPair,
 } from "@/utils/monitor-snapshot";
@@ -106,6 +111,7 @@ const emit = defineEmits<{
   (e: "import-batch"): void;
   (e: "cookie-mgr"): void;
   (e: "edit-task", task: Task): void;
+  (e: "edit-batch", payload: { name: string; tasks: Task[] }): void;
   (e: "delete-task", taskId: number): void;
   (e: "run-task", taskId: number): void;
   (e: "cancel-task", taskId: number): void;
@@ -124,6 +130,59 @@ const router = useRouter();
 // 完成后，若当前选中已不在 tasks 中，自动 fallback 到第一条任务。
 const selectedTaskId = ref<number | null>(null);
 const taskResults = ref<Array<{ checked_at: string; status: string; rank: number; metric: any }>>([]);
+
+// ── 批次两层钻入（L1 批次列表 ↔ L2 子任务）─────────────────────────────
+// 沿用评论平台「命名约定批次」：task.name = "批次名 - 问题标题"，
+// parseBatchName 按最后一个 " - " 分组。openBatchName == null 显示批次
+// 列表(L1)；非 null 显示该批次的子任务(L2)。右侧详情卡不受影响，仍按
+// selectedTaskId 走（L2 点子任务行时写入）。
+const openBatchName = ref<string | null>(null);
+
+interface ZhihuBatch {
+  name: string;
+  tasks: Task[];
+}
+const batches = computed<ZhihuBatch[]>(() => {
+  const map = new Map<string, Task[]>();
+  for (const t of props.tasks) {
+    const b = parseBatchName(t.name);
+    const arr = map.get(b);
+    if (arr) arr.push(t);
+    else map.set(b, [t]);
+  }
+  return Array.from(map, ([name, tasks]) => ({ name, tasks }));
+});
+
+// L2 当前批次的子任务；批次被删空（或批次名消失）时回退到 L1。
+const currentBatchTasks = computed<Task[]>(() => {
+  if (openBatchName.value == null) return [];
+  return batches.value.find((b) => b.name === openBatchName.value)?.tasks ?? [];
+});
+watch(currentBatchTasks, (list) => {
+  if (openBatchName.value != null && list.length === 0) openBatchName.value = null;
+});
+
+// 子任务显示名 = 去掉 "批次名 - " 前缀（单条直接用原名）。
+function subtaskTitle(t: Task): string {
+  const prefix = `${parseBatchName(t.name)} - `;
+  return t.name.startsWith(prefix) ? t.name.slice(prefix.length) : t.name;
+}
+
+// 批次操作 —— 复用现有单任务 emit（父对每个 id 走既有 run/delete 流程）；
+// 编辑批次走新 edit-batch 事件由父组件兜底。
+function startBatch(b: ZhihuBatch) {
+  b.tasks.forEach((t) => emit("run-task", t.id));
+}
+function deleteBatch(b: ZhihuBatch) {
+  b.tasks.forEach((t) => emit("delete-task", t.id));
+  if (openBatchName.value === b.name) openBatchName.value = null;
+}
+function editBatch(b: ZhihuBatch) {
+  // 同时本地钻入该批次 L2 —— 父组件目前走「逐个用子任务 ✎ 编辑」的退化
+  // 路径（无批次编辑弹窗），先把 L2 打开让用户直接看到可编辑的子任务行。
+  openBatchName.value = b.name;
+  emit("edit-batch", { name: b.name, tasks: b.tasks });
+}
 
 async function loadResults(taskId: number) {
   try {
@@ -708,106 +767,219 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               @click="emit('add-task')"
             >
               <Icon name="plus" :size="12" />
-              <span>新增任务</span>
+              <span>新增批次</span>
             </button>
           </div>
         </div>
 
         <!-- scrollable table body — fills remaining vertical space -->
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <!--
-          5-column header row —— 删掉「状态」列（卡位 / 变化 已经覆盖了
-          上榜与否，状态 pill 是冗余信号）。非主名列统一 0.7fr 等宽，
-          类型 / 操作 列文字居中，对齐下方 icon 组。
-        -->
-        <div
-          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
-          :style="{
-            gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
-            letterSpacing: '1.2px',
-            color: 'var(--ink-3)',
-            borderBottom: '1px solid var(--line)',
-          }"
-        >
-          <div>问题名字</div>
-          <div class="text-center">类型</div>
-          <div>卡位</div>
-          <div>变化</div>
-          <div class="text-center">操作</div>
-        </div>
 
-        <!-- demo empty state — SAMPLE_ZHIHU 发布前已清空，首次启动展示空态 -->
-        <template v-if="demoMode && SAMPLE_ZHIHU.length === 0">
+        <!-- ════════ DEMO 模式：保留原扁平空态 / 样本行（不做批次 UI）════════ -->
+        <template v-if="demoMode">
+          <!--
+            5-column header row —— 删掉「状态」列（卡位 / 变化 已经覆盖了
+            上榜与否，状态 pill 是冗余信号）。非主名列统一 0.7fr 等宽，
+            类型 / 操作 列文字居中，对齐下方 icon 组。
+          -->
           <div
+            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+            :style="{
+              gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+              letterSpacing: '1.2px',
+              color: 'var(--ink-3)',
+              borderBottom: '1px solid var(--line)',
+            }"
+          >
+            <div>问题名字</div>
+            <div class="text-center">类型</div>
+            <div>卡位</div>
+            <div>变化</div>
+            <div class="text-center">操作</div>
+          </div>
+
+          <!-- demo empty state — SAMPLE_ZHIHU 发布前已清空，首次启动展示空态 -->
+          <template v-if="SAMPLE_ZHIHU.length === 0">
+            <div
+              class="py-10 text-center text-[12.5px]"
+              :style="{ color: 'var(--ink-3)' }"
+            >
+              暂无监测任务 · 点击「新增批次」开始监测
+            </div>
+          </template>
+
+          <!-- demo rows —— 5 cols (状态列已移除) -->
+          <template v-else>
+            <div
+              v-for="(t, i) in SAMPLE_ZHIHU"
+              :key="t.id"
+              class="grid cursor-pointer items-center transition"
+              :style="{
+                gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+                background: sampleSelectedZhihu?.id === t.id ? 'var(--card-2)' : 'transparent',
+                borderBottom: i < SAMPLE_ZHIHU.length - 1 ? '1px solid var(--line)' : 'none',
+                padding: '14px 8px',
+                borderRadius: '10px',
+              }"
+              @click="pickSampleZhihu(t)"
+            >
+              <div class="truncate text-[13px] font-medium">{{ t.kw }}</div>
+              <div class="text-center text-[12px]" :style="{ color: 'var(--ink-2)' }">问题</div>
+              <div class="font-display text-[13px] font-bold">
+                {{ t.lastRank == null ? "—" : `#${t.lastRank}` }}
+              </div>
+              <div>
+                <Pill v-if="t.delta > 0" tone="ok">
+                  <Icon name="arrowUp" :size="10" />
+                  +{{ t.delta }}
+                </Pill>
+                <Pill v-else-if="t.delta < 0 && t.delta > -10" tone="warn">
+                  <Icon name="arrowDown" :size="10" />
+                  {{ t.delta }}
+                </Pill>
+                <Pill v-else-if="t.delta === 0" tone="info">持平</Pill>
+                <Pill v-else tone="alert">
+                  <Icon name="warn" :size="10" />
+                  掉出
+                </Pill>
+              </div>
+              <div class="flex items-center justify-center" :style="{ color: 'var(--ink-3)', fontSize: '11px' }">—</div>
+            </div>
+          </template>
+        </template>
+
+        <!-- ════════ L1：批次列表（openBatchName == null）════════ -->
+        <!--
+          命名约定批次：parseBatchName 按 task.name 最后一个 " - " 分组。
+          点批次行钻入 L2；▶ 启动批次内全部子任务 / ✎ 编辑批次共享设置 /
+          🗑 删除整个批次（均复用单任务 emit，父对每个 id 走既有流程）。
+        -->
+        <template v-else-if="openBatchName == null">
+          <div
+            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+            :style="{
+              gridTemplateColumns: '1.7fr .6fr 1.1fr',
+              letterSpacing: '1.2px',
+              color: 'var(--ink-3)',
+              borderBottom: '1px solid var(--line)',
+            }"
+          >
+            <div>批次名</div>
+            <div class="text-center">问题数</div>
+            <div class="text-center">操作</div>
+          </div>
+
+          <div
+            v-if="batches.length === 0"
             class="py-10 text-center text-[12.5px]"
             :style="{ color: 'var(--ink-3)' }"
           >
-            暂无监测任务 · 点击「新增任务」开始监测
+            暂无监测任务 · 点「批量导入」开始
           </div>
-        </template>
 
-        <!-- demo rows —— 5 cols (状态列已移除) -->
-        <template v-else-if="demoMode">
           <div
-            v-for="(t, i) in SAMPLE_ZHIHU"
-            :key="t.id"
+            v-for="(b, i) in batches"
+            :key="b.name"
             class="grid cursor-pointer items-center transition"
             :style="{
-              gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
-              background: sampleSelectedZhihu?.id === t.id ? 'var(--card-2)' : 'transparent',
-              borderBottom: i < SAMPLE_ZHIHU.length - 1 ? '1px solid var(--line)' : 'none',
+              gridTemplateColumns: '1.7fr .6fr 1.1fr',
+              borderBottom: i < batches.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
               borderRadius: '10px',
             }"
-            @click="pickSampleZhihu(t)"
+            @click="openBatchName = b.name"
           >
-            <div class="truncate text-[13px] font-medium">{{ t.kw }}</div>
-            <div class="text-center text-[12px]" :style="{ color: 'var(--ink-2)' }">问题</div>
-            <div class="font-display text-[13px] font-bold">
-              {{ t.lastRank == null ? "—" : `#${t.lastRank}` }}
+            <div class="truncate text-[13px] font-medium">{{ b.name }}</div>
+            <div class="text-center font-display text-[13px] font-bold">{{ b.tasks.length }}</div>
+            <div class="flex items-center justify-center gap-1">
+              <button
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center"
+                :style="{ borderRadius: '999px', color: 'var(--primary-deep)', cursor: 'pointer' }"
+                title="启动批次内所有子任务"
+                @click.stop="startBatch(b)"
+              >
+                <Icon name="play" :size="13" />
+              </button>
+              <button
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center"
+                :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                title="编辑批次共享设置"
+                @click.stop="editBatch(b)"
+              >
+                <Icon name="edit" :size="13" />
+              </button>
+              <button
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center"
+                :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                title="删除整个批次"
+                @click.stop="deleteBatch(b)"
+              >
+                <Icon name="trash" :size="13" />
+              </button>
             </div>
-            <div>
-              <Pill v-if="t.delta > 0" tone="ok">
-                <Icon name="arrowUp" :size="10" />
-                +{{ t.delta }}
-              </Pill>
-              <Pill v-else-if="t.delta < 0 && t.delta > -10" tone="warn">
-                <Icon name="arrowDown" :size="10" />
-                {{ t.delta }}
-              </Pill>
-              <Pill v-else-if="t.delta === 0" tone="info">持平</Pill>
-              <Pill v-else tone="alert">
-                <Icon name="warn" :size="10" />
-                掉出
-              </Pill>
-            </div>
-            <div class="flex items-center justify-center" :style="{ color: 'var(--ink-3)', fontSize: '11px' }">—</div>
           </div>
         </template>
 
-        <!-- real rows —— 与 demo 5 列对齐：名字 / 类型 / 上次 / 变化 / 状态+操作 -->
+        <!-- ════════ L2：批次内子任务（openBatchName != null）════════ -->
         <!--
-          状态+操作那一列要容纳 pill + "立刻监测" + 编辑 + 删除 4 个元
-          素，原来 .6fr 太窄会把"立刻监测"压成两行。最后一列改成 1.4fr
-          （是 .6fr 的 2 倍多），其它列等比缩窄，名字仍最宽。
+          在原扁平 real-rows 模板上：(a) 顶部加「‹ 返回批次」面包屑，
+          (b) v-for 源换成 currentBatchTasks，(c) 名字用 subtaskTitle(t)，
+          (d)「类型」列换成「浏览量」（formatVisitCount latest 的
+          question_visit_count）。卡位 / 变化 / 操作 cell 原样保留。
         -->
         <template v-else>
+          <!-- 面包屑：返回 L1 批次列表 -->
+          <button
+            type="button"
+            class="mb-1 inline-flex flex-shrink-0 items-center gap-1.5 self-start py-2 text-[12px]"
+            :style="{ color: 'var(--ink-2)', background: 'transparent' }"
+            title="返回批次列表"
+            @click="openBatchName = null"
+          >
+            <Icon name="arrowLeft" :size="13" />
+            <span>返回批次</span>
+            <span :style="{ color: 'var(--ink-3)' }">·</span>
+            <span class="truncate font-medium" :style="{ maxWidth: '220px' }">{{ openBatchName }}</span>
+          </button>
+
+          <!-- L2 header —— 「类型」替换为「浏览量」 -->
           <div
-            v-for="(t, i) in tasks"
+            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+            :style="{
+              gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+              letterSpacing: '1.2px',
+              color: 'var(--ink-3)',
+              borderBottom: '1px solid var(--line)',
+            }"
+          >
+            <div>问题名字</div>
+            <div class="text-center">浏览量</div>
+            <div>卡位</div>
+            <div>变化</div>
+            <div class="text-center">操作</div>
+          </div>
+
+          <div
+            v-for="(t, i) in currentBatchTasks"
             :key="t.id"
             class="grid cursor-pointer items-center transition"
             :style="{
               gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
               background: selectedTaskId === t.id ? 'var(--card-2)' : 'transparent',
-              borderBottom: i < tasks.length - 1 ? '1px solid var(--line)' : 'none',
+              borderBottom: i < currentBatchTasks.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
               borderRadius: '10px',
             }"
             @click="selectedTaskId = t.id"
           >
-            <div class="truncate text-[13px] font-medium">{{ t.name }}</div>
-            <!-- 类型：知乎问题 → 问题，居中 -->
-            <div class="text-center text-[12px]" :style="{ color: 'var(--ink-2)' }">问题</div>
+            <div class="truncate text-[13px] font-medium">{{ subtaskTitle(t) }}</div>
+            <!-- 浏览量：knowledge 问题「被浏览」数（万 / 亿单位）；缺失 — -->
+            <div class="text-center text-[12px]" :style="{ color: 'var(--ink-2)' }">
+              {{ formatVisitCount(taskSnapshots[t.id]?.latest?.question_visit_count) }}
+            </div>
             <!--
               卡位：matched_count 单值（不再 X/N 分母 + 最高#N 副标）。
               跟右卡「卡位数量」语义保持一致。命中 0 → "前 N 以外"红字。
