@@ -140,6 +140,11 @@ def get_login_status(user_data_dir: Path | None = None) -> dict[str, Any]:
         except Exception as e:
             logger.debug("get_login_status cookies() raised: %s", e)
             cookies = []
+        names = [c.get("name") for c in cookies]
+        logger.info(
+            "baidu login-status: read %d cookies (BDUSS=%s) from %s",
+            len(cookies), "yes" if "BDUSS" in names else "no", target_dir,
+        )
     finally:
         if context is not None:
             try:
@@ -300,9 +305,10 @@ def _open_login_poll(context: Any, state: dict[str, bool], timeout_s: int) -> st
         try:
             cookies = context.cookies("https://www.baidu.com/")
         except Exception as e:
-            logger.debug("poll cookies() raised: %s", e)
+            logger.info("baidu login poll cookies() raised: %s", e)  # 原 debug→info
             cookies = []
         if any(c.get("name") == "BDUSS" for c in cookies):
+            logger.info("baidu login poll: BDUSS detected (%d cookies)", len(cookies))
             return "success"
         time.sleep(_POLL_INTERVAL_S)
     return "timeout"

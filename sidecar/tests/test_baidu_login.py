@@ -393,6 +393,17 @@ class _FakeSyncForExe:
     def start(self): return self._pw
 
 
+def test_get_login_status_logs_cookie_summary(monkeypatch, tmp_path, caplog):
+    import logging
+    pw = _FakePWForExe([{"name": "BDUSS", "value": "x", "expires": -1}])
+    monkeypatch.setattr("csm_core.monitor.drivers.baidu_login._sync_playwright", lambda: _FakeSyncForExe(pw))
+    monkeypatch.setattr("csm_core.monitor.drivers.baidu_login.ensure_browsers_path", lambda: None)
+    from csm_core.monitor.drivers import baidu_login
+    with caplog.at_level(logging.INFO, logger="csm_core.monitor.drivers.baidu_login"):
+        baidu_login.get_login_status(user_data_dir=tmp_path)
+    assert any("login-status" in r.message and "BDUSS" in r.message for r in caplog.records)
+
+
 def test_get_login_status_passes_full_chromium_executable(monkeypatch, tmp_path):
     """headless 状态读取必须显式传完整 Chromium 的 executable_path，
     否则 Patchright 去找未随包的 chrome-headless-shell 启动失败。"""
