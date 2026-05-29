@@ -938,8 +938,8 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         >
           <div>问题名字</div>
           <div class="text-center">类型</div>
-          <div>卡位</div>
-          <div>变化</div>
+          <div class="text-center">卡位</div>
+          <div class="text-center">变化</div>
           <div class="text-center">操作</div>
         </div>
 
@@ -972,7 +972,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         >
           <div>问题名字</div>
           <div class="text-center">浏览量</div>
-          <div>卡位</div>
+          <div class="text-center">卡位</div>
           <div class="text-center">变化</div>
           <div class="text-center">操作</div>
         </div>
@@ -1010,10 +1010,10 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             >
               <div class="truncate text-[13px] font-medium">{{ t.kw }}</div>
               <div class="text-center text-[12px]" :style="{ color: 'var(--ink-2)' }">问题</div>
-              <div class="font-display text-[13px] font-bold">
+              <div class="text-center font-display text-[13px] font-bold">
                 {{ t.lastRank == null ? "—" : `#${t.lastRank}` }}
               </div>
-              <div>
+              <div class="text-center">
                 <Pill v-if="t.delta > 0" tone="ok">
                   <Icon name="arrowUp" :size="10" />
                   +{{ t.delta }}
@@ -1141,7 +1141,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               卡位：matched_count 单值（不再 X/N 分母 + 最高#N 副标）。
               跟右卡「卡位数量」语义保持一致。命中 0 → "前 N 以外"红字。
             -->
-            <div class="font-display text-[13px] font-bold">
+            <div class="text-center font-display text-[13px] font-bold">
               <template v-if="taskSnapshots[t.id]?.latest">
                 <template v-if="taskSnapshots[t.id]!.latest!.matched_count > 0">
                   <span>{{ taskSnapshots[t.id]!.latest!.matched_count }}</span>

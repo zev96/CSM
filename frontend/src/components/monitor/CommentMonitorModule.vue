@@ -813,7 +813,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 borderBottom: '1px solid var(--line)',
               }"
             >
-              <div>任务名字</div><div>留存</div><div>变化</div><div class="text-center">操作</div>
+              <div>任务名字</div><div class="text-center">留存</div><div class="text-center">变化</div><div class="text-center">操作</div>
             </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <div
@@ -839,7 +839,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     {{ t.lastChecked }} · {{ (videosByBatchId[t.id] ?? []).length }} 条视频
                   </div>
                 </div>
-                <div>
+                <div class="text-center">
                   <div class="font-display text-[13px] font-bold">
                     {{ t.retained }}/{{ t.total }}
                   </div>
@@ -849,6 +849,8 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                       background: 'var(--line)',
                       borderRadius: '999px',
                       marginTop: '4px',
+                      marginLeft: 'auto',
+                      marginRight: 'auto',
                       width: '60px',
                     }"
                   >
@@ -862,7 +864,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     />
                   </div>
                 </div>
-                <div>
+                <div class="text-center">
                   <Pill v-if="t.delta < 0" tone="alert">
                     <Icon name="arrowDown" :size="10" />{{ t.delta }}
                   </Pill>
@@ -983,7 +985,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 borderBottom: '1px solid var(--line)',
               }"
             >
-              <div>视频名字</div><div>评论排名</div><div>状态</div>
+              <div>视频名字</div><div class="text-center">评论排名</div><div class="text-center">状态</div>
             </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <div
@@ -1013,7 +1015,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     {{ v.postedAt }}
                   </div>
                 </div>
-                <div>
+                <div class="text-center">
                   <!-- rank=0 (即 backend rank=-1) = 未在前 scrape_top_n 条命中，显示 "无" 与右侧 "未找到" pill 语义对齐 -->
                   <span
                     v-if="v.rank > 0"
@@ -1026,7 +1028,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     :style="{ color: 'var(--red, #d85a48)' }"
                   >无</span>
                 </div>
-                <div>
+                <div class="text-center">
                   <Pill v-if="v.status === 'ok'" tone="ok">在显</Pill>
                   <Pill v-else-if="v.status === 'folded'" tone="warn">跌出理想</Pill>
                   <Pill v-else tone="alert">未找到</Pill>

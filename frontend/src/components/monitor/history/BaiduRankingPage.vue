@@ -1148,7 +1148,7 @@ defineExpose({ reload: loadTasks, selectTask });
             }"
           >
             <div>任务名字</div>
-            <div>变化</div>
+            <div class="text-center">变化</div>
             <div class="text-center">状态</div>
             <div class="text-center">操作</div>
           </div>
@@ -1216,7 +1216,7 @@ defineExpose({ reload: loadTasks, selectTask });
                 </div>
 
                 <!-- 变化：无历史，一律"—" -->
-                <div :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
+                <div class="text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
 
                 <!--
                   状态：跑动中显示「N / M」+ 进度条；空闲时显示 70% 理想率 pill。
@@ -1524,9 +1524,9 @@ defineExpose({ reload: loadTasks, selectTask });
             }"
           >
             <div>关键词</div>
-            <div>默认卡位</div>
-            <div>资讯卡位</div>
-            <div>状态</div>
+            <div class="text-center">默认卡位</div>
+            <div class="text-center">资讯卡位</div>
+            <div class="text-center">状态</div>
           </div>
 
           <!-- Table（只含数据行，列头已上移到滚动区外） -->
@@ -1573,7 +1573,7 @@ defineExpose({ reload: loadTasks, selectTask });
               </div>
 
               <!-- 默认卡位 -->
-              <div>
+              <div class="text-center">
                 <template v-if="row.result">
                   <div
                     class="font-display text-[13px] font-bold"
@@ -1586,7 +1586,7 @@ defineExpose({ reload: loadTasks, selectTask });
               </div>
 
               <!-- 资讯卡位 -->
-              <div>
+              <div class="text-center">
                 <template v-if="row.result && row.result.news_present">
                   <div
                     class="font-display text-[13px] font-bold"
@@ -1604,7 +1604,7 @@ defineExpose({ reload: loadTasks, selectTask });
                 总卡位 ＝ 默认搜索命中 ＋ 最新资讯命中（无资讯块时只算默认）。
                 ≥ idealRank → 理想，否则 → 未理想；抓取失败单独标记；未跑（row.result === null）显示「未跑」。
               -->
-              <div>
+              <div class="text-center">
                 <template v-if="!row.result">
                   <Pill tone="info">未跑</Pill>
                 </template>
