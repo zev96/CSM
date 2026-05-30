@@ -47,6 +47,7 @@ TaskType = Literal[
     "douyin_comment",
     "kuaishou_comment",
     "baidu_keyword",
+    "geo_query",
 ]
 
 MonitorStatus = Literal["ok", "failed", "risk_control", "skipped", "error"]
