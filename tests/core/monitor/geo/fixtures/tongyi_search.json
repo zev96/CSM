@@ -3,8 +3,8 @@
     "choices": [{"message": {"role": "assistant",
       "content": "20万左右的新能源SUV，比较推荐比亚迪宋PLUS、小鹏G6、深蓝S7。其中小鹏G6智驾突出……"}}],
     "search_info": {"search_results": [
-      {"index": 1, "title": "2024新能源SUV推荐 - 知乎", "url": "https://zhuanlan.zhihu.com/p/123456", "site_name": "知乎"},
-      {"index": 2, "title": "小鹏G6实测 - 小红书", "url": "https://www.xiaohongshu.com/explore/abc", "site_name": "小红书"},
+      {"index": 1, "title": "2024新能源SUV推荐", "url": "https://zhuanlan.zhihu.com/p/123456", "site_name": "知乎"},
+      {"index": 2, "title": "小鹏G6实测", "url": "https://www.xiaohongshu.com/explore/abc", "site_name": "小红书"},
       {"index": 3, "title": "比亚迪宋PLUS官网", "url": "https://www.bydauto.com.cn/song-plus", "site_name": "比亚迪"}
     ]}
   },

@@ -18,6 +18,9 @@ templates/.trash/
 
 csm_core/updater_client/_token.py
 
+# GEO API 探针的原始响应转储（可能含 request_id/key，必须人工脱敏后才裁成 *.json fixture）
+tests/core/monitor/geo/fixtures/*.raw.json
+
 # scripts/dev.ps1 写入的运行时状态（sidecar/vite PID + 日志）
 .csm-dev/
 # scripts/dev.ps1 每次运行重新生成 handshake，不进 VCS
