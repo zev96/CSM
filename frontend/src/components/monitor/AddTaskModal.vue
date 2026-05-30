@@ -30,8 +30,9 @@ import FormToggle from "@/components/forms/FormToggle.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
+import { GEO_PLATFORMS } from "@/utils/monitor-types";
 
-type TaskType = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
+type TaskType = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword" | "geo_query";
 
 interface EditingTask {
   id: number;
@@ -65,6 +66,7 @@ const TYPES = [
   { value: "douyin_comment", label: "抖音评论留存" },
   { value: "kuaishou_comment", label: "快手评论留存" },
   { value: "baidu_keyword", label: "百度关键词排名" },
+  { value: "geo_query", label: "AI 卡位监控（GEO）" },
 ] as const;
 
 const type = ref<TaskType>("zhihu_question");
@@ -85,6 +87,13 @@ const baiduIdealRank = ref<number>(5);
 // 用户在这里加自家品牌官网 / 其他不算"软文"的域名即可。
 const baiduExcludeDomainsRaw = ref("");
 const baiduUseDefaultExcludes = ref(true);
+// GEO-specific（AI 卡位监控）
+const geoBrand = ref("");
+const geoAliasesText = ref(""); // comma-separated; split to list on submit
+const geoKeywordsText = ref(""); // newline-separated; split to list on submit
+const geoPlatforms = ref<string[]>(GEO_PLATFORMS.map((p) => p.value));
+const geoWebSearch = ref(true);
+const geoExtractProvider = ref("deepseek");
 
 // Popover that shows the current global default_excluded_domains
 // (read-only, with a button to jump to the Settings section for editing).
@@ -111,8 +120,9 @@ const enabled = ref(true);
 
 const submitting = ref(false);
 
+const isGeo = computed(() => type.value === "geo_query");
 const isComment = computed(() =>
-  type.value !== "zhihu_question" && type.value !== "baidu_keyword"
+  type.value !== "zhihu_question" && type.value !== "baidu_keyword" && type.value !== "geo_query"
 );
 const isBaidu = computed(() => type.value === "baidu_keyword");
 const isEdit = computed(() => !!props.editingTask);
@@ -131,6 +141,12 @@ function close() {
   baiduIdealRank.value = 5;
   baiduExcludeDomainsRaw.value = "";
   baiduUseDefaultExcludes.value = true;
+  geoBrand.value = "";
+  geoAliasesText.value = "";
+  geoKeywordsText.value = "";
+  geoPlatforms.value = GEO_PLATFORMS.map((p) => p.value);
+  geoWebSearch.value = true;
+  geoExtractProvider.value = "deepseek";
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
   enabled.value = true;
@@ -167,6 +183,17 @@ function hydrateFromTask(t: EditingTask) {
   const exDomains: string[] = Array.isArray(cfg.exclude_domains) ? cfg.exclude_domains : [];
   baiduExcludeDomainsRaw.value = exDomains.join("\n");
   baiduUseDefaultExcludes.value = cfg.use_default_excludes !== false;
+  // GEO-specific hydration
+  geoBrand.value = String(cfg.brand ?? "");
+  const aliases: string[] = Array.isArray(cfg.brand_aliases) ? cfg.brand_aliases : [];
+  geoAliasesText.value = aliases.join("，");
+  const geoKeywords: string[] = Array.isArray(cfg.keywords) ? cfg.keywords : [];
+  geoKeywordsText.value = geoKeywords.join("\n");
+  geoPlatforms.value = Array.isArray(cfg.platforms) && cfg.platforms.length
+    ? cfg.platforms
+    : GEO_PLATFORMS.map((p) => p.value);
+  geoWebSearch.value = cfg.web_search !== false; // default true
+  geoExtractProvider.value = String(cfg.extract_provider ?? "deepseek");
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
   } else if (/^\d{1,2}:\d{2}$/.test(t.schedule_cron)) {
@@ -218,9 +245,14 @@ onMounted(async () => {
 
 function validate(): string | null {
   if (!name.value.trim()) return "任务名不能为空";
-  // 百度分支：target_url 由 search_keyword 派生，不需要用户填 URL
-  if (!isBaidu.value && !targetUrl.value.trim()) return "目标 URL 不能为空";
-  if (isBaidu.value) {
+  // 百度 / GEO 分支：target_url 由关键词/品牌派生，不需要用户填 URL
+  if (!isBaidu.value && !isGeo.value && !targetUrl.value.trim()) return "目标 URL 不能为空";
+  if (isGeo.value) {
+    if (!geoBrand.value.trim()) return "品牌名不能为空";
+    const keywords = geoKeywordsText.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (keywords.length === 0) return "关键词至少填一个";
+    if (geoPlatforms.value.length === 0) return "至少选一个 AI 平台";
+  } else if (isBaidu.value) {
     const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
     if (keywords.length === 0) return "搜索关键词至少填一个";
     if (!targetBrand.value.trim()) return "目标品牌词不能为空";
@@ -258,7 +290,26 @@ async function submit() {
     // 跟品牌词无关）。target_brand 仅知乎走，那条命令链路用得上。
     let config: Record<string, any>;
     let computedTargetUrl = targetUrl.value.trim();
-    if (isBaidu.value) {
+    if (isGeo.value) {
+      const brand = geoBrand.value.trim();
+      config = {
+        brand,
+        brand_aliases: geoAliasesText.value
+          .split(/[，,]/)
+          .map((s) => s.trim())
+          .filter(Boolean),
+        keywords: geoKeywordsText.value
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean),
+        platforms: [...geoPlatforms.value],
+        web_search: geoWebSearch.value,
+        extract_provider: geoExtractProvider.value,
+        top_n_citations: 20,
+      };
+      // target_url 由品牌派生 —— 后端要求非空，geo_query adapter 不实际请求它。
+      computedTargetUrl = `geo://${brand}`;
+    } else if (isBaidu.value) {
       const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
       // 排除域名解析：换行 / 逗号 / 空格 / 顿号都拆开；剥掉协议头 +
       // 末尾斜杠。后端 adapter 用 hostsuffix 匹配，所以 "https://www.jd.com/"
@@ -350,19 +401,19 @@ async function submit() {
           </FormField>
 
           <FormField
-            :label="isBaidu ? '任务名' : isComment ? '任务名' : '问题名字'"
-            :hint="isBaidu ? '出现在监测列表里。' : isComment ? '出现在监测列表里。' : '抓取到的知乎问题标题，会显示在监测任务列表的第一列。'"
+            :label="isBaidu || isComment || isGeo ? '任务名' : '问题名字'"
+            :hint="isBaidu || isComment || isGeo ? '出现在监测列表里。' : '抓取到的知乎问题标题，会显示在监测任务列表的第一列。'"
           >
             <FormInput
               v-model="name"
-              :placeholder="isBaidu ? '如：Claude Code 排名监测' : isComment ? '如：客厅投影实测视频留存' : '如：无线吸尘器哪款好用'"
+              :placeholder="isBaidu ? '如：Claude Code 排名监测' : isComment ? '如：客厅投影实测视频留存' : isGeo ? '如：小鹏 AI 卡位监控' : '如：无线吸尘器哪款好用'"
               debounce="live"
             />
           </FormField>
 
-          <!-- 百度分支：target_url 由 search_keyword 派生，不暴露 URL 输入框 -->
+          <!-- 百度 / GEO 分支：target_url 由关键词/品牌派生，不暴露 URL 输入框 -->
           <FormField
-            v-if="!isBaidu"
+            v-if="!isBaidu && !isGeo"
             label="目标 URL"
             :hint="
               isEdit
@@ -493,6 +544,77 @@ async function submit() {
             </details>
           </template>
 
+          <!-- AI 卡位监控（GEO）：品牌 / 别名 / 批量关键词 / 平台多选 / 联网 / 抽取模型 -->
+          <template v-if="isGeo">
+            <FormField label="品牌名" hint="要在 AI 回答里追踪卡位的品牌（如：小鹏）">
+              <FormInput
+                v-model="geoBrand"
+                placeholder="如：小鹏"
+                debounce="live"
+              />
+            </FormField>
+
+            <FormField label="品牌别名" hint="逗号分隔；命中任一别名都算提及（如：小鹏汽车，XPENG）">
+              <FormInput
+                v-model="geoAliasesText"
+                placeholder="如：小鹏汽车，XPENG"
+                debounce="live"
+              />
+            </FormField>
+
+            <FormField label="关键词" hint="一行一个，每个关键词在每个平台各问一次">
+              <textarea
+                v-model="geoKeywordsText"
+                rows="6"
+                placeholder="如：&#10;20万左右的新能源SUV推荐&#10;智驾最好的车"
+                class="bg-card-2 focus:bg-card-white outline-none transition-colors"
+                :style="{
+                  width: '100%',
+                  resize: 'vertical',
+                  padding: '6px 10px',
+                  fontSize: '12.5px',
+                  fontFamily: 'inherit',
+                  border: '1px solid var(--line)',
+                  borderRadius: 'var(--radius-inner)',
+                  color: 'var(--ink)',
+                  boxSizing: 'border-box',
+                }"
+              />
+            </FormField>
+
+            <FormField label="AI 平台" hint="勾选要采集的 AI 平台（需先在设置里配好对应 API key）">
+              <div class="flex flex-col gap-2 text-[12.5px]">
+                <label
+                  v-for="p in GEO_PLATFORMS"
+                  :key="p.value"
+                  class="flex items-center gap-2"
+                >
+                  <input type="checkbox" :value="p.value" v-model="geoPlatforms" />
+                  {{ p.label }}
+                </label>
+              </div>
+            </FormField>
+
+            <FormField
+              label="联网搜索"
+              hint="让 AI 联网检索后再回答（关掉则只用模型内置知识，无信源）。"
+              inline
+            >
+              <FormToggle v-model="geoWebSearch" />
+            </FormField>
+
+            <FormField label="抽取模型" hint="用哪个 LLM 从回答里抽取曝光/排名/情感/信源。">
+              <FormSelect
+                :model-value="geoExtractProvider"
+                :options="[
+                  { label: 'DeepSeek', value: 'deepseek' },
+                  { label: '通义', value: 'qwen' },
+                ]"
+                @update:model-value="(v) => (geoExtractProvider = String(v))"
+              />
+            </FormField>
+          </template>
+
           <FormField
             v-if="isComment"
             label="自己发布的评论文本"
@@ -512,7 +634,7 @@ async function submit() {
             放这里只会让用户多填一个无用字段；评论场景下整段隐藏。
           -->
           <FormField
-            v-if="!isComment && !isBaidu"
+            v-if="!isComment && !isBaidu && !isGeo"
             label="目标品牌关键词"
             hint="在知乎答案排序里要追的品牌关键词"
           >
@@ -524,7 +646,7 @@ async function submit() {
           </FormField>
 
           <FormField
-            v-if="!isBaidu"
+            v-if="!isBaidu && !isGeo"
             :label="isComment ? '理想排名（前 N 位）' : 'Top-N（监测前 N 条答案）'"
             :hint="
               isComment

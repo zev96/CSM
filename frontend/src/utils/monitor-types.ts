@@ -90,6 +90,42 @@ export interface MonitorState {
   schedule: string;
 }
 
+/**
+ * GEO 卡位监控（AI 卡位）—— 阶段 1 只放通义 / Kimi 两个 API 平台。
+ * 阶段 2-3 再加 doubao / deepseek / quark / yuanbao。
+ */
+export const GEO_PLATFORMS = [
+  { value: "tongyi", label: "通义千问" },
+  { value: "kimi", label: "Kimi" },
+] as const;
+
+/**
+ * geo_query 任务的 ``config`` 形状（对齐 csm_core.monitor.platforms.geo_query
+ * adapter 读取的键）：品牌 + 别名 + 批量关键词 + 平台多选 + 联网开关 +
+ * 抽取模型。``top_n_citations`` 给信源榜取数用。
+ */
+export interface GeoTaskConfig {
+  brand: string;
+  brand_aliases: string[];
+  keywords: string[];
+  platforms: string[];
+  web_search: boolean;
+  extract_provider: string;
+  top_n_citations: number;
+}
+
+/**
+ * 信源榜一行（GET /api/monitor/geo/{id}/citations 的 leaderboard 元素）。
+ * 域名频次降序，platforms/keywords 是聚合出现过的平台与关键词。
+ */
+export interface CitationRow {
+  domain: string;
+  source_type: string;
+  count: number;
+  platforms: string[];
+  keywords: string[];
+}
+
 export const SCHEDULE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "manual", label: "手动触发" },
   { value: "hourly-1", label: "每 1 小时" },
