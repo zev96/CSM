@@ -60,3 +60,5 @@ class GeoCell(BaseModel):
     status: AnswerStatus = "ok"   # ok/empty/blocked/error，与 GeoAnswer 同值域
     raw: dict[str, Any] = Field(default_factory=dict)
     citations: list[ClassifiedCitation] = Field(default_factory=list)
+    recommended: list[RecommendedEntity] = Field(default_factory=list)
+    summary: str = ""

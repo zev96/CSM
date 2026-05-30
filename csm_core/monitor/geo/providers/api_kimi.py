@@ -104,6 +104,11 @@ class KimiProvider:
                     msg_obj = choice.get("message") or {}
                     if finish == "tool_calls":
                         # Echo $web_search arguments back as tool result (server-side execution)
+                        # thinking 模型(kimi-k2.6)要求回传的 assistant 工具消息带
+                        # reasoning_content；Moonshot 工具阶段可能不返回，补空串以满足校验
+                        # （盲修，待真实 key 验证）
+                        if "reasoning_content" not in msg_obj:
+                            msg_obj = {**msg_obj, "reasoning_content": ""}
                         messages.append(msg_obj)
                         for tc in msg_obj.get("tool_calls") or []:
                             messages.append({

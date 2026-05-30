@@ -97,8 +97,9 @@ class GeoQueryAdapter:
 
         agg = metrics.aggregate(cells)
         # I2：把"够不到平台"和"曝光低"区分开 —— error_cells 让仪表盘知道
-        # 是采集失败还是真没提及。I3：续抓标记，让 UI 知道这次只跑了断点之后。
-        agg["error_cells"] = sum(1 for c in cells if c.status in ("error", "blocked"))
+        # 是采集失败还是真没提及（现由 metrics._block 算出：total-ok_total，
+        # cell 只会是 ok/error/blocked，无 empty，等价旧的 error+blocked 计数）。
+        # I3：续抓标记，让 UI 知道这次只跑了断点之后。
         agg["partial_resume"] = resume_from > 0
         rank = metrics.representative_rank(cells)
 
@@ -151,7 +152,7 @@ class GeoQueryAdapter:
                 platform=platform, keyword=keyword,
                 mentioned=ext.mentioned, rank=ext.target_rank, sentiment=ext.sentiment,
                 answer_text=answer.answer_text, status="ok", raw=answer.raw,
-                citations=ext.citations)
+                citations=ext.citations, recommended=ext.recommended, summary=ext.summary)
         except Exception as e:                       # cell 级隔离
             # logger.exception 抓 traceback（漏检 debug 用）；raw 存 repr(e)
             # 保留异常类型（不止 message），下钻时能区分 TimeoutError vs ValueError。

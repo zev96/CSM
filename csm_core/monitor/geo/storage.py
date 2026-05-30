@@ -31,7 +31,8 @@ _DDL_V7_GEO: list[str] = [
         sentiment   TEXT NOT NULL DEFAULT 'na',
         answer_text TEXT NOT NULL DEFAULT '',
         status      TEXT NOT NULL DEFAULT 'ok',
-        raw_json    TEXT NOT NULL DEFAULT '{}'
+        raw_json    TEXT NOT NULL DEFAULT '{}',
+        extraction_json TEXT NOT NULL DEFAULT '{}'
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_geo_cells_task_time ON geo_cells(task_id, checked_at DESC)",
@@ -95,11 +96,14 @@ def record_run(task_id: int, checked_at: "datetime | str", cells: list[GeoCell])
         for c in cells:
             cur = conn.execute(
                 """INSERT INTO geo_cells(task_id, checked_at, platform, keyword,
-                       mentioned, rank, sentiment, answer_text, status, raw_json)
-                   VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                       mentioned, rank, sentiment, answer_text, status, raw_json,
+                       extraction_json)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                 (task_id, ts, c.platform, c.keyword,
                  1 if c.mentioned else 0, c.rank, c.sentiment,
-                 c.answer_text, c.status, json.dumps(c.raw, ensure_ascii=False)),
+                 c.answer_text, c.status, json.dumps(c.raw, ensure_ascii=False),
+                 json.dumps({"recommended": [r.model_dump() for r in c.recommended],
+                             "summary": c.summary}, ensure_ascii=False)),
             )
             cell_id = int(cur.fetchone()[0])
             for cit in c.citations:
@@ -156,6 +160,7 @@ def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, 
     ``checked_at`` may be a datetime or ISO string (normalized the same way
     :func:`record_run` does so they match exactly).
     """
+    import json
     conn = monitor_storage.get_conn()
     ts = _norm_checked_at(checked_at)
     rows = conn.execute(
@@ -167,5 +172,16 @@ def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, 
         cits = conn.execute(
             "SELECT url, title, domain, source_type FROM geo_citations WHERE cell_id=?", (r["id"],)
         ).fetchall()
-        out.append({**dict(r), "citations": [dict(c) for c in cits]})
+        # extraction_json 存 cell 抽取的 recommended 列表 + summary（L2 下钻用：
+        # 谁排第 1/第 2、自己在第几、AI 一句话总评）。解析回 dict 列表 + 字符串。
+        try:
+            ext = json.loads(r["extraction_json"] or "{}")
+        except (ValueError, TypeError):
+            ext = {}
+        out.append({
+            **dict(r),
+            "citations": [dict(c) for c in cits],
+            "recommended": ext.get("recommended") or [],
+            "summary": ext.get("summary") or "",
+        })
     return out

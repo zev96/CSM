@@ -8,7 +8,7 @@ import csm_core.monitor.storage as storage_mod
 from csm_core.monitor import storage
 from csm_core.monitor.base import MonitorResult, MonitorTask
 from csm_core.monitor.geo import storage as geo_storage
-from csm_core.monitor.geo.models import GeoCell, ClassifiedCitation
+from csm_core.monitor.geo.models import GeoCell, ClassifiedCitation, RecommendedEntity
 
 
 @pytest.fixture
@@ -51,7 +51,10 @@ def _seed_run(fresh_db) -> tuple[int, datetime.datetime]:
     cells = [
         GeoCell(platform="tongyi", keyword="新能源SUV", mentioned=True, rank=1, sentiment="pos",
                 citations=[ClassifiedCitation(url="https://zhihu.com/a", domain="zhihu.com", source_type="知乎"),
-                           ClassifiedCitation(url="https://xiaohongshu.com/b", domain="xiaohongshu.com", source_type="小红书")]),
+                           ClassifiedCitation(url="https://xiaohongshu.com/b", domain="xiaohongshu.com", source_type="小红书")],
+                recommended=[RecommendedEntity(name="A", position=1, is_target=False),
+                             RecommendedEntity(name="小鹏", position=2, is_target=True)],
+                summary="小鹏在新能源SUV里口碑居前"),
         GeoCell(platform="kimi", keyword="新能源SUV", mentioned=False, rank=-1,
                 citations=[ClassifiedCitation(url="https://zhihu.com/c", domain="zhihu.com", source_type="知乎")]),
     ]
@@ -95,6 +98,24 @@ def test_cells_for_run_hydrates_citations(fresh_db):
     assert len(cells) == 2
     tongyi = [c for c in cells if c["platform"] == "tongyi"][0]
     assert len(tongyi["citations"]) == 2
+
+
+def test_cells_for_run_hydrates_recommended_and_summary(fresh_db):
+    # L2 下钻要展示「谁排第 1/第 2、自己在第几」+ AI 一句话总评，
+    # 所以 cells_for_run 必须把 extraction_json 里的 recommended + summary 解析回来。
+    tid, checked_at = _seed_run(fresh_db)
+    cells = geo_storage.cells_for_run(tid, checked_at)
+    tongyi = [c for c in cells if c["platform"] == "tongyi"][0]
+    assert tongyi["summary"] == "小鹏在新能源SUV里口碑居前"
+    rec = tongyi["recommended"]
+    assert [r["name"] for r in rec] == ["A", "小鹏"]
+    assert [r["position"] for r in rec] == [1, 2]
+    target = [r for r in rec if r["is_target"]]
+    assert len(target) == 1 and target[0]["name"] == "小鹏"
+    # 没抽取数据的 cell（kimi 那行）回空列表 + 空串，不报错。
+    kimi = [c for c in cells if c["platform"] == "kimi"][0]
+    assert kimi["recommended"] == []
+    assert kimi["summary"] == ""
 
 
 def test_cells_for_run_accepts_iso_string(fresh_db):

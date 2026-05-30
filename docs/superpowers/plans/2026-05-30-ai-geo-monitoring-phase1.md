@@ -319,6 +319,8 @@ class GeoCell(BaseModel):
     status: AnswerStatus = "ok"   # ok/empty/blocked/error，与 GeoAnswer 同值域
     raw: dict[str, Any] = Field(default_factory=dict)
     citations: list[ClassifiedCitation] = Field(default_factory=list)
+    recommended: list[RecommendedEntity] = Field(default_factory=list)  # L2 下钻：谁排第几
+    summary: str = ""                                                   # L2 下钻：AI 一句话总评
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -628,17 +630,24 @@ def band(soc: float) -> str:
 
 
 def _block(cells: list[GeoCell]) -> dict[str, Any]:
+    # SoC / 首推率分母用「有效（ok）cell 数」，不是 len(cells)：采集失败
+    # （error/blocked）是「没问到」不是「问了没提及」，不该把曝光/首推率拉低。
+    # ok_total==0 时全部归 0（无有效样本）。sentiment_score 仍按提及 cell 取均值。
     total = len(cells)
-    mentioned = sum(1 for c in cells if c.mentioned)
+    ok_total = sum(1 for c in cells if c.status == "ok")
+    error_cells = total - ok_total
+    mentioned = sum(1 for c in cells if c.mentioned)   # errored cell 的 mentioned 本就是 False
     first = sum(1 for c in cells if c.mentioned and c.rank == 1)
     senti_vals = [_SENTI[c.sentiment] for c in cells if c.mentioned and c.sentiment in _SENTI]
-    soc = (mentioned / total) if total else 0.0
+    soc = (mentioned / ok_total) if ok_total else 0.0
     return {
         "total": total,
+        "ok_total": ok_total,
+        "error_cells": error_cells,
         "mentioned": mentioned,
         "soc": soc,
         "status_band": band(soc),
-        "first_rank_rate": (first / total) if total else 0.0,
+        "first_rank_rate": (first / ok_total) if ok_total else 0.0,
         "first_rank_rate_mentioned": (first / mentioned) if mentioned else 0.0,
         "sentiment_score": (sum(senti_vals) / len(senti_vals)) if senti_vals else 0.0,
     }
@@ -842,7 +851,8 @@ _DDL_V7_GEO: list[str] = [
         sentiment   TEXT NOT NULL DEFAULT 'na',
         answer_text TEXT NOT NULL DEFAULT '',
         status      TEXT NOT NULL DEFAULT 'ok',
-        raw_json    TEXT NOT NULL DEFAULT '{}'
+        raw_json    TEXT NOT NULL DEFAULT '{}',
+        extraction_json TEXT NOT NULL DEFAULT '{}'
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_geo_cells_task_time ON geo_cells(task_id, checked_at DESC)",
@@ -903,11 +913,14 @@ def record_run(task_id: int, checked_at: "datetime | str", cells: list[GeoCell])
         for c in cells:
             cur = conn.execute(
                 """INSERT INTO geo_cells(task_id, checked_at, platform, keyword,
-                       mentioned, rank, sentiment, answer_text, status, raw_json)
-                   VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                       mentioned, rank, sentiment, answer_text, status, raw_json,
+                       extraction_json)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                 (task_id, ts, c.platform, c.keyword,
                  1 if c.mentioned else 0, c.rank, c.sentiment,
-                 c.answer_text, c.status, json.dumps(c.raw, ensure_ascii=False)),
+                 c.answer_text, c.status, json.dumps(c.raw, ensure_ascii=False),
+                 json.dumps({"recommended": [r.model_dump() for r in c.recommended],
+                             "summary": c.summary}, ensure_ascii=False)),
             )
             cell_id = int(cur.fetchone()[0])
             for cit in c.citations:
@@ -962,6 +975,7 @@ def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, 
     运行用 ``(task_id, checked_at)`` 关联 —— 传 adapter 盖在该次运行
     MonitorResult 上的同一个 ``checked_at``（datetime 或 ISO 字符串）。
     """
+    import json
     conn = monitor_storage.get_conn()
     ts = _norm_checked_at(checked_at)
     rows = conn.execute(
@@ -973,7 +987,18 @@ def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, 
         cits = conn.execute(
             "SELECT url, title, domain, source_type FROM geo_citations WHERE cell_id=?", (r["id"],)
         ).fetchall()
-        out.append({**dict(r), "citations": [dict(c) for c in cits]})
+        # extraction_json 存 cell 抽取的 recommended 列表 + summary（L2 下钻用：
+        # 谁排第 1/第 2、自己在第几、AI 一句话总评）。解析回 dict 列表 + 字符串。
+        try:
+            ext = json.loads(r["extraction_json"] or "{}")
+        except (ValueError, TypeError):
+            ext = {}
+        out.append({
+            **dict(r),
+            "citations": [dict(c) for c in cits],
+            "recommended": ext.get("recommended") or [],
+            "summary": ext.get("summary") or "",
+        })
     return out
 ```
 
@@ -1336,6 +1361,11 @@ class KimiProvider:
                     msg = choice.get("message") or {}
                     if finish == "tool_calls":
                         # 把 $web_search 的 arguments 原样回传（server-side 执行）
+                        # thinking 模型(kimi-k2.6)要求回传的 assistant 工具消息带
+                        # reasoning_content；Moonshot 工具阶段可能不返回，补空串以满足校验
+                        # （盲修，待真实 key 验证）
+                        if "reasoning_content" not in msg:
+                            msg = {**msg, "reasoning_content": ""}
                         messages.append(msg)
                         for tc in msg.get("tool_calls") or []:
                             messages.append({
@@ -1877,8 +1907,9 @@ class GeoQueryAdapter:
                     logger.exception("[geo] progress_cb(%s,%s) raised; ignoring", i + 1, total)
 
         agg = metrics.aggregate(cells)
-        # I2/I3：error_cells 区分"够不到平台"vs"曝光低"；partial_resume 标记续抓。
-        agg["error_cells"] = sum(1 for c in cells if c.status in ("error", "blocked"))
+        # I2/I3：error_cells 区分"够不到平台"vs"曝光低"（现由 metrics._block 算出
+        # total-ok_total，cell 只会是 ok/error/blocked，等价旧的 error+blocked 计数）；
+        # partial_resume 标记续抓。
         agg["partial_resume"] = resume_from > 0
         rank = metrics.representative_rank(cells)
 
@@ -1928,7 +1959,7 @@ class GeoQueryAdapter:
                 platform=platform, keyword=keyword,
                 mentioned=ext.mentioned, rank=ext.target_rank, sentiment=ext.sentiment,
                 answer_text=answer.answer_text, status="ok", raw=answer.raw,
-                citations=ext.citations)
+                citations=ext.citations, recommended=ext.recommended, summary=ext.summary)
         except Exception as e:                       # cell 级隔离
             # logger.exception 抓 traceback；raw 存 repr(e) 保留异常类型。
             logger.exception("[geo] cell 失败 kw=%s plat=%s", keyword, platform)

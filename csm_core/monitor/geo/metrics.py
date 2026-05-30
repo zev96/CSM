@@ -25,17 +25,24 @@ def band(soc: float) -> str:
 
 
 def _block(cells: list[GeoCell]) -> dict[str, Any]:
+    # SoC / 首推率分母用「有效（ok）cell 数」，不是 len(cells)：采集失败
+    # （error/blocked）是「没问到」不是「问了没提及」，不该把曝光/首推率拉低。
+    # ok_total==0 时全部归 0（无有效样本）。sentiment_score 仍按提及 cell 取均值。
     total = len(cells)
-    mentioned = sum(1 for c in cells if c.mentioned)
+    ok_total = sum(1 for c in cells if c.status == "ok")
+    error_cells = total - ok_total
+    mentioned = sum(1 for c in cells if c.mentioned)   # errored cell 的 mentioned 本就是 False
     first = sum(1 for c in cells if c.mentioned and c.rank == 1)
     senti_vals = [_SENTI[c.sentiment] for c in cells if c.mentioned and c.sentiment in _SENTI]
-    soc = (mentioned / total) if total else 0.0
+    soc = (mentioned / ok_total) if ok_total else 0.0
     return {
         "total": total,
+        "ok_total": ok_total,
+        "error_cells": error_cells,
         "mentioned": mentioned,
         "soc": soc,
         "status_band": band(soc),
-        "first_rank_rate": (first / total) if total else 0.0,
+        "first_rank_rate": (first / ok_total) if ok_total else 0.0,
         "first_rank_rate_mentioned": (first / mentioned) if mentioned else 0.0,
         "sentiment_score": (sum(senti_vals) / len(senti_vals)) if senti_vals else 0.0,
     }
