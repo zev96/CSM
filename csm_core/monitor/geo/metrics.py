@@ -28,7 +28,7 @@ def _block(cells: list[GeoCell]) -> dict[str, Any]:
     total = len(cells)
     mentioned = sum(1 for c in cells if c.mentioned)
     first = sum(1 for c in cells if c.mentioned and c.rank == 1)
-    senti_vals = [_SENTI.get(c.sentiment, 0.0) for c in cells if c.mentioned]
+    senti_vals = [_SENTI[c.sentiment] for c in cells if c.mentioned and c.sentiment in _SENTI]
     soc = (mentioned / total) if total else 0.0
     return {
         "total": total,
@@ -49,7 +49,9 @@ def aggregate(cells: list[GeoCell]) -> dict[str, Any]:
         if c.mentioned and c.sentiment in dist:
             dist[c.sentiment] += 1
     agg["sentiment_dist"] = dist
-    # Rank distribution
+    # Rank distribution — buckets are NOT a partition; top3/top5 are cumulative
+    # (top3 ⊆ top5 ⊆ mentioned), and mentioned_unranked = mentioned cells with rank<=0.
+    # A mentioned cell at rank 6 appears in soc/mentioned but not in any top-N bucket.
     agg["rank_dist"] = {
         "first": sum(1 for c in cells if c.mentioned and c.rank == 1),
         "top3": sum(1 for c in cells if c.mentioned and 1 <= c.rank <= 3),

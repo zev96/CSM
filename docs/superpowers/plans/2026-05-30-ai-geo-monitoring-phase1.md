@@ -565,6 +565,16 @@ def test_sentiment_score_mean_over_mentioned():
     assert agg["sentiment_dist"] == {"pos": 1, "neu": 1, "neg": 1}
 
 
+def test_sentiment_na_excluded_from_score_and_dist():
+    """A mentioned cell with sentiment='na' (extraction couldn't classify) must NOT
+    be averaged as neutral, and score/dist must agree on the population."""
+    cells = [_cell("t", "k1", True, 1, "pos"), _cell("t", "k2", True, 2, "na")]
+    agg = metrics.aggregate(cells)
+    assert agg["sentiment_score"] == 1.0           # only 'pos' counts; 'na' excluded
+    assert agg["sentiment_dist"] == {"pos": 1, "neu": 0, "neg": 0}
+    assert sum(agg["sentiment_dist"].values()) == 1  # dist population == classified mentions
+
+
 def test_by_platform_breakdown():
     cells = [_cell("tongyi", "k1", True, 1), _cell("kimi", "k1", False, -1)]
     agg = metrics.aggregate(cells)
@@ -621,7 +631,7 @@ def _block(cells: list[GeoCell]) -> dict[str, Any]:
     total = len(cells)
     mentioned = sum(1 for c in cells if c.mentioned)
     first = sum(1 for c in cells if c.mentioned and c.rank == 1)
-    senti_vals = [_SENTI.get(c.sentiment, 0.0) for c in cells if c.mentioned]
+    senti_vals = [_SENTI[c.sentiment] for c in cells if c.mentioned and c.sentiment in _SENTI]
     soc = (mentioned / total) if total else 0.0
     return {
         "total": total,
@@ -642,7 +652,8 @@ def aggregate(cells: list[GeoCell]) -> dict[str, Any]:
         if c.mentioned and c.sentiment in dist:
             dist[c.sentiment] += 1
     agg["sentiment_dist"] = dist
-    # 顺位分布
+    # 顺位分布 — 各桶非互斥分区：top3/top5 为累计（top3 ⊆ top5 ⊆ mentioned），
+    # mentioned_unranked = rank<=0 的提及 cell；rank 6 的 cell 计入 soc/mentioned 但不进任何 top-N 桶
     agg["rank_dist"] = {
         "first": sum(1 for c in cells if c.mentioned and c.rank == 1),
         "top3": sum(1 for c in cells if c.mentioned and 1 <= c.rank <= 3),
@@ -669,7 +680,7 @@ def representative_rank(cells: list[GeoCell]) -> int:
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `pytest tests/core/monitor/geo/test_metrics.py -v`
-Expected: PASS（5 passed）
+Expected: PASS（6 passed）
 
 - [ ] **Step 5: Commit**
 

@@ -48,6 +48,16 @@ def test_by_platform_breakdown():
     assert agg["by_platform"]["kimi"]["soc"] == 0.0
 
 
+def test_sentiment_na_excluded_from_score_and_dist():
+    """A mentioned cell with sentiment='na' (extraction couldn't classify) must NOT
+    be averaged as neutral, and score/dist must agree on the population."""
+    cells = [_cell("t", "k1", True, 1, "pos"), _cell("t", "k2", True, 2, "na")]
+    agg = metrics.aggregate(cells)
+    assert agg["sentiment_score"] == 1.0           # only 'pos' counts; 'na' excluded
+    assert agg["sentiment_dist"] == {"pos": 1, "neu": 0, "neg": 0}
+    assert sum(agg["sentiment_dist"].values()) == 1  # dist population == classified mentions
+
+
 def test_representative_rank_is_median_of_mentioned():
     cells = [_cell("t", "k1", True, 1), _cell("t", "k2", True, 3), _cell("t", "k3", True, 5),
              _cell("t", "k4", False, -1)]
