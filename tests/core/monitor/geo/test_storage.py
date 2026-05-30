@@ -125,3 +125,39 @@ def test_cells_for_run_accepts_iso_string(fresh_db):
     iso = geo_storage._iso(checked_at)
     cells = geo_storage.cells_for_run(tid, iso)
     assert len(cells) == 2
+
+
+def test_cells_for_run_tolerates_missing_trailing_z(fresh_db):
+    # geo_cells 存库串带尾 Z（_iso），但 /api/monitor/results 回传的
+    # checked_at 不带 Z。cells_for_run 现在 rtrim 'Z' 双边归一 —— 少了 Z
+    # 也能命中同一批 cell，而不是精确匹配失败返回 0 条。
+    tid, checked_at = _seed_run(fresh_db)
+    iso = geo_storage._iso(checked_at)
+    assert iso.endswith("Z")
+    cells = geo_storage.cells_for_run(tid, iso[:-1])  # 去掉尾 Z
+    assert len(cells) == 2
+
+
+def test_cells_for_latest_run_returns_most_recent(fresh_db):
+    # cells_for_latest_run 用 max(checked_at) 解析最近一跑，不需要传 checked_at。
+    tid, first_checked = _seed_run(fresh_db)
+    # 再 seed 一跑（更晚的 checked_at），只放一个 cell，确认 latest 取到的是它。
+    later = first_checked + datetime.timedelta(seconds=5)
+    storage.save_result(MonitorResult(task_id=tid, checked_at=later, status="ok", rank=1, metric={}))
+    geo_storage.record_run(tid, later, [GeoCell(
+        platform="tongyi", keyword="最新词", mentioned=True, rank=1, sentiment="pos",
+        citations=[ClassifiedCitation(url="https://example.com/z", domain="example.com", source_type="其他")],
+        recommended=[RecommendedEntity(name="小鹏", position=1, is_target=True)],
+        summary="最新一跑")])
+    cells = geo_storage.cells_for_latest_run(tid)
+    assert len(cells) == 1  # 只有最近这跑的单个 cell，不混入第一跑的两条
+    assert cells[0]["keyword"] == "最新词"
+    assert cells[0]["summary"] == "最新一跑"
+    assert cells[0]["recommended"][0]["name"] == "小鹏"
+    assert [c["domain"] for c in cells[0]["citations"]] == ["example.com"]
+
+
+def test_cells_for_latest_run_empty_when_no_runs(fresh_db):
+    tid = storage.create_task(MonitorTask(type="geo_query", name="无运行", target_url="geo://x",
+                                          config={"brand": "x"}))
+    assert geo_storage.cells_for_latest_run(tid) == []

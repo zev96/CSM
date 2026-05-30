@@ -152,28 +152,20 @@ def citation_leaderboard(
     return out
 
 
-def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, Any]]:
-    """All cells for a single run (drill-down: answer text + citations).
+def _hydrate_cells(conn: sqlite3.Connection, rows: list) -> list[dict[str, Any]]:
+    """Shared cell-row hydration for both drill paths.
 
-    A run is keyed by ``(task_id, checked_at)`` — pass the same
-    ``checked_at`` the adapter stamped on the run's ``MonitorResult``.
-    ``checked_at`` may be a datetime or ISO string (normalized the same way
-    :func:`record_run` does so they match exactly).
+    Each cell dict carries the raw column values plus ``citations`` (joined
+    from geo_citations) and ``recommended`` / ``summary`` (parsed out of
+    extraction_json — the L2 下钻 needs 谁排第 1/第 2、自己在第几、AI 总评)。
     """
     import json
-    conn = monitor_storage.get_conn()
-    ts = _norm_checked_at(checked_at)
-    rows = conn.execute(
-        "SELECT * FROM geo_cells WHERE task_id=? AND checked_at=? ORDER BY platform, keyword",
-        (task_id, ts),
-    ).fetchall()
     out = []
     for r in rows:
         cits = conn.execute(
             "SELECT url, title, domain, source_type FROM geo_citations WHERE cell_id=?", (r["id"],)
         ).fetchall()
-        # extraction_json 存 cell 抽取的 recommended 列表 + summary（L2 下钻用：
-        # 谁排第 1/第 2、自己在第几、AI 一句话总评）。解析回 dict 列表 + 字符串。
+        # extraction_json 存 cell 抽取的 recommended 列表 + summary。解析回 dict 列表 + 字符串。
         try:
             ext = json.loads(r["extraction_json"] or "{}")
         except (ValueError, TypeError):
@@ -185,3 +177,51 @@ def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, 
             "summary": ext.get("summary") or "",
         })
     return out
+
+
+def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, Any]]:
+    """All cells for a single run (drill-down: answer text + citations).
+
+    A run is keyed by ``(task_id, checked_at)`` — pass the same
+    ``checked_at`` the adapter stamped on the run's ``MonitorResult``.
+    ``checked_at`` may be a datetime or ISO string (normalized the same way
+    :func:`record_run` does so they match exactly).
+
+    The comparison is tolerant of a trailing ``Z`` mismatch: geo_cells stores
+    the correlation timestamp WITH a trailing ``Z`` (see :func:`_iso`), but
+    the value the frontend gets back from ``/api/monitor/results`` comes
+    WITHOUT it. ``rtrim(...,'Z')`` on both sides makes either form match the
+    same rows instead of silently returning 0 cells.
+    """
+    conn = monitor_storage.get_conn()
+    ts = _norm_checked_at(checked_at)
+    rows = conn.execute(
+        "SELECT * FROM geo_cells WHERE task_id=? AND rtrim(checked_at,'Z') = rtrim(?,'Z') "
+        "ORDER BY platform, keyword",
+        (task_id, ts),
+    ).fetchall()
+    return _hydrate_cells(conn, rows)
+
+
+def cells_for_latest_run(task_id: int) -> list[dict[str, Any]]:
+    """All cells for the task's most recent run — no ``checked_at`` needed.
+
+    Robust drill path for the L2 卡位仪表盘: rather than make the caller pass
+    a ``checked_at`` (which can fail to match because results expose it
+    without the trailing ``Z`` that geo_cells stores), this resolves the
+    latest run server-side via ``max(checked_at)`` and hydrates that run's
+    cells the same way :func:`cells_for_run` does. Returns ``[]`` if the task
+    has no runs.
+    """
+    conn = monitor_storage.get_conn()
+    row = conn.execute(
+        "SELECT max(checked_at) AS ts FROM geo_cells WHERE task_id=?", (task_id,)
+    ).fetchone()
+    latest = row["ts"] if row is not None else None
+    if not latest:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM geo_cells WHERE task_id=? AND checked_at=? ORDER BY platform, keyword",
+        (task_id, latest),
+    ).fetchall()
+    return _hydrate_cells(conn, rows)

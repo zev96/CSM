@@ -671,3 +671,18 @@ def geo_cells(task_id: int, checked_at: str = Query(...)) -> dict[str, Any]:
     from csm_core.monitor.geo import storage as geo_storage
 
     return {"cells": geo_storage.cells_for_run(task_id, checked_at)}
+
+
+@router.get("/api/monitor/geo/{task_id}/latest-cells")
+def geo_latest_cells(task_id: int) -> dict[str, Any]:
+    """下钻：该任务**最近一次**运行的全部 cell（原文 + 信源 + 推荐顺序）。
+
+    不需要 ``checked_at`` 入参 —— L2 卡位仪表盘直接拿最新一跑。后端用
+    ``max(checked_at)`` 解析最近运行，规避 ``/api/monitor/results`` 回传的
+    checked_at 缺尾 ``Z``、与 geo_cells 存库串（带 ``Z``）不相等导致
+    /cells 精确匹配返回 0 条的坑（geo_cells 不外键 monitor_results.id）。
+    """
+    _require_storage()
+    from csm_core.monitor.geo import storage as geo_storage
+
+    return {"cells": geo_storage.cells_for_latest_run(task_id)}

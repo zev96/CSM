@@ -30,6 +30,7 @@ import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import ProgressBar from "@/components/ui/ProgressBar.vue";
 import AddTaskModal from "@/components/monitor/AddTaskModal.vue";
+import GeoTaskDetailPage from "@/components/monitor/geo/GeoTaskDetailPage.vue";
 
 import { subscribe } from "@/api/client";
 import { useSidecar } from "@/stores/sidecar";
@@ -52,6 +53,12 @@ const failed = ref(false);
 // 当前选中任务（详情卡 + 信源榜跟着它切）。任务列表变化时收敛到第一条
 // （跟 ZhihuMonitorModule 的 selectedTaskId fallback watch 同模式）。
 const selectedTaskId = ref<number | null>(null);
+
+// L1 ↔ L2 钻入：点任务名钻入全宽「卡位仪表盘」详情页（detailTaskId 非 null
+// 时隐藏 L1 列表 + 右侧概览，显示 GeoTaskDetailPage；返回按钮置 null 还原）。
+// 跟 ZhihuMonitorModule 的 openBatchName L1→L2 同手势。
+const detailTaskId = ref<number | null>(null);
+const detailRef = ref<InstanceType<typeof GeoTaskDetailPage> | null>(null);
 
 // 最近一次运行的 metric 块，按 task_id 缓存（GET results?limit=1）。
 // metric 字段来自 geo_query adapter（metrics.aggregate + error_cells）：
@@ -87,6 +94,11 @@ const selectedTask = computed<Task | null>(
 );
 const selectedLatest = computed<LatestResult | null>(() =>
   selectedTaskId.value != null ? latestByTask.value[selectedTaskId.value] ?? null : null,
+);
+
+// L2 当前详情任务（点任务名钻入）。任务被删/列表刷新后若已不在，回 L1。
+const detailTask = computed<Task | null>(
+  () => tasks.value.find((t) => t.id === detailTaskId.value) ?? null,
 );
 
 // 演示态：sidecar 不可用或表为空 —— 展示空态引导建任务。
@@ -127,8 +139,18 @@ function bandLabel(band: string | undefined): string {
   return "—";
 }
 
+// 「部分失败」判定 —— 运行级 status 仍是 "ok"（没全军覆没），但 metric
+// 里有 error_cells>0（部分平台够不到 / 被拦）。这种半成功要跟「正常」
+// （全 ok）和「失败」（运行级 failed）区分开，让用户知道这次数据不全。
+function isPartialFail(t: Task): boolean {
+  const r = latestByTask.value[t.id];
+  if (!r || r.status !== "ok") return false;
+  return (r.metric?.error_cells ?? 0) > 0;
+}
+
 // 任务最近状态 Pill —— 优先用最近一次 result.status，回退 task.last_status。
 function statusTone(t: Task): "ok" | "warn" | "alert" | "info" {
+  if (isPartialFail(t)) return "warn"; // 部分失败 = 琥珀
   const s = latestByTask.value[t.id]?.status ?? t.last_status;
   if (s === "ok") return "ok";
   if (s === "failed") return "alert";
@@ -136,6 +158,7 @@ function statusTone(t: Task): "ok" | "warn" | "alert" | "info" {
   return "info";
 }
 function statusText(t: Task): string {
+  if (isPartialFail(t)) return "部分失败";
   const s = latestByTask.value[t.id]?.status ?? t.last_status;
   if (s === "ok") return "正常";
   if (s === "failed") return "失败";
@@ -212,6 +235,15 @@ function selectTask(taskId: number): void {
   void loadBoard(taskId);
 }
 
+// 钻入 / 退出 L2 卡位仪表盘（点任务名进，返回按钮出）。
+function openDetail(taskId: number): void {
+  detailTaskId.value = taskId;
+  selectedTaskId.value = taskId; // 同步选中态，返回时右侧概览停在同一条
+}
+function closeDetail(): void {
+  detailTaskId.value = null;
+}
+
 async function runNow(taskId: number): Promise<void> {
   // 乐观标记 —— SSE started 可能要等 worker 拿到 slot 才发，先点亮进度。
   monitorStatus.markRunning(taskId);
@@ -261,6 +293,7 @@ async function deleteTask(taskId: number): Promise<void> {
   try {
     await sidecar.client.delete(`/api/monitor/tasks/${taskId}`);
     toast.success("任务已删除");
+    if (detailTaskId.value === taskId) detailTaskId.value = null; // 删的是正看着的 → 退回 L1
     if (selectedTaskId.value === taskId) {
       selectedTaskId.value = null;
       board.value = [];
@@ -319,12 +352,15 @@ onMounted(async () => {
         void loadLatest(d.task_id);
         // 当前正看着这条 → 顺带刷信源榜（这次跑可能带来新域名）。
         if (selectedTaskId.value === d.task_id) void loadBoard(d.task_id);
+        // L2 详情页开着同一条 → 让它全量刷新（KPI + 矩阵 + 信源）。
+        if (detailTaskId.value === d.task_id) void detailRef.value?.refresh();
       },
       failed: (d: any) => {
         if (typeof d.task_id !== "number") return;
         const t = tasks.value.find((x) => x.id === d.task_id);
         if (t) t.last_status = "failed";
         void loadLatest(d.task_id);
+        if (detailTaskId.value === d.task_id) void detailRef.value?.refresh();
       },
     });
   } catch {
@@ -339,8 +375,21 @@ onUnmounted(() => {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col" :style="{ gap: '24px' }">
+    <!-- ════════ L2：全宽卡位仪表盘（点任务名钻入；返回还原 L1）════════ -->
+    <GeoTaskDetailPage
+      v-if="detailTask"
+      ref="detailRef"
+      :task="detailTask"
+      @back="closeDetail"
+      @run="runNow"
+      @cancel="cancelTask"
+      @edit="openEditTask"
+      @delete="deleteTask"
+    />
+
+    <!-- ════════ L1：任务列表 + 右侧概览 ════════ -->
     <!-- table + detail -->
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
+    <div v-else class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
       <!-- ════════ 左：任务列表 ════════ -->
       <section
         class="flex h-full min-h-0 flex-col overflow-hidden"
@@ -413,7 +462,18 @@ onUnmounted(() => {
             @click="selectTask(t.id)"
           >
             <div class="min-w-0">
-              <div class="truncate text-[13px] font-medium">{{ t.name }}</div>
+              <!--
+                任务名是「点击进 L2 卡位仪表盘」的彩色热区（primary-deep，跟
+                ZhihuMonitorModule 的批次名链接同款）；整行点击只把右侧概览
+                定位到这条（selectTask）。@click.stop 防止点名字又触发行 select。
+              -->
+              <button
+                type="button"
+                class="block w-full truncate text-left text-[13px] font-medium"
+                :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
+                title="打开卡位仪表盘（关键词 × 平台矩阵 + 下钻）"
+                @click.stop="openDetail(t.id)"
+              >{{ t.name }}</button>
               <!-- 运行中进度条（store 维护 SSE progress 状态）-->
               <div v-if="isRunning(t.id)" class="mt-1.5 flex items-center gap-2">
                 <ProgressBar :value="progressRatio(t.id)" :height="5" />
