@@ -332,6 +332,8 @@ const PROVIDERS: ProviderMeta[] = [
   { key: "openai", name: "OpenAI", dot: "#7a9b5e", defaultModel: "gpt-4o-mini" },
   { key: "gemini", name: "Gemini", dot: "#5a7fa8", defaultModel: "gemini-2.0-flash" },
   { key: "qwen", name: "Qwen", dot: "#a85a7a", defaultModel: "qwen-max" },
+  { key: "kimi", name: "Kimi", dot: "#1f1f1f", defaultModel: "moonshot-v1-8k" },
+  { key: "doubao", name: "豆包", dot: "#3a6ea5", defaultModel: "doubao-pro-32k" },
   { key: "mock", name: "Mock", dot: "#7a7569", defaultModel: "(本地占位)" },
 ];
 

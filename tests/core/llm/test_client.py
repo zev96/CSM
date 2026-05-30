@@ -63,6 +63,46 @@ def test_anthropic_client_calls_sdk():
         assert call_kwargs["model"] == "claude-opus-4-7"
 
 
+def test_make_client_kimi_uses_moonshot_defaults():
+    from csm_core.llm.providers.kimi import KimiClient
+    client = make_client(provider="kimi", api_key="sk-k")
+    assert isinstance(client, KimiClient)
+    assert client.model == "moonshot-v1-8k"
+    assert client.base_url == "https://api.moonshot.cn/v1"
+
+
+def test_make_client_kimi_overrides():
+    client = make_client(
+        provider="kimi",
+        api_key="sk-k",
+        model="moonshot-v1-32k",
+        base_url="https://proxy.example/v1",
+    )
+    assert client.api_key == "sk-k"
+    assert client.model == "moonshot-v1-32k"
+    assert client.base_url == "https://proxy.example/v1"
+
+
+def test_make_client_doubao_uses_ark_defaults():
+    from csm_core.llm.providers.doubao import DoubaoClient
+    client = make_client(provider="doubao", api_key="sk-d")
+    assert isinstance(client, DoubaoClient)
+    assert client.model == "doubao-pro-32k"
+    assert client.base_url == "https://ark.cn-beijing.volces.com/api/v3"
+
+
+def test_make_client_doubao_overrides():
+    client = make_client(
+        provider="doubao",
+        api_key="sk-d",
+        model="ep-20240101-abcde",
+        base_url="https://ark.cn-shanghai.volces.com/api/v3",
+    )
+    assert client.api_key == "sk-d"
+    assert client.model == "ep-20240101-abcde"
+    assert client.base_url == "https://ark.cn-shanghai.volces.com/api/v3"
+
+
 def test_deepseek_client_calls_http(monkeypatch):
     class FakeResponse:
         status_code = 200

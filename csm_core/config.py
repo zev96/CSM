@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
-Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen"]
+Provider = Literal["mock", "anthropic", "deepseek", "openai", "gemini", "qwen", "kimi", "doubao"]
 CloseAction = Literal["minimize_to_tray", "quit"]
 
 
