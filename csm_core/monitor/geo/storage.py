@@ -59,6 +59,12 @@ def apply_v7_migration(conn: sqlite3.Connection) -> None:
     """Called by monitor.storage._migrate when bumping v6 -> v7. Idempotent."""
     for stmt in _DDL_V7_GEO:
         conn.execute(stmt)
+    # 给「已存在的」旧 geo_cells 表补后加的列 —— 就地改 CREATE TABLE 的语句
+    # 对已建表是 no-op（CREATE IF NOT EXISTS 不改 schema），早期建了 v7 表的
+    # 库会缺这些列，读到就 OperationalError。_ensure_column 幂等：列在则跳过。
+    monitor_storage._ensure_column(
+        conn, "geo_cells", "extraction_json", "TEXT NOT NULL DEFAULT '{}'"
+    )
 
 
 def _iso(dt: datetime) -> str:

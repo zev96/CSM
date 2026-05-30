@@ -161,3 +161,33 @@ def test_cells_for_latest_run_empty_when_no_runs(fresh_db):
     tid = storage.create_task(MonitorTask(type="geo_query", name="无运行", target_url="geo://x",
                                           config={"brand": "x"}))
     assert geo_storage.cells_for_latest_run(tid) == []
+
+
+def test_v7_migration_adds_extraction_json_to_preexisting_table(tmp_path):
+    """老库早先建了不含 extraction_json 的 geo_cells，再次迁移必须 ALTER 补列。
+
+    回归：就地改 CREATE TABLE 的列对已存在表是 no-op，会导致读 extraction_json
+    时 OperationalError（实测 /latest-cells 500）。apply_v7_migration 须幂等补列。
+    """
+    import sqlite3
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        # 模拟「extraction_json 出现之前」建的 geo_cells（缺该列）。
+        conn.execute(
+            """CREATE TABLE geo_cells (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
+                checked_at TEXT NOT NULL, platform TEXT NOT NULL, keyword TEXT NOT NULL,
+                mentioned INTEGER NOT NULL DEFAULT 0, rank INTEGER NOT NULL DEFAULT -1,
+                sentiment TEXT NOT NULL DEFAULT 'na', answer_text TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'ok', raw_json TEXT NOT NULL DEFAULT '{}')"""
+        )
+        cols_before = {r[1] for r in conn.execute("PRAGMA table_info(geo_cells)")}
+        assert "extraction_json" not in cols_before
+        geo_storage.apply_v7_migration(conn)  # 幂等：建 geo_citations + ALTER 补列
+        cols_after = {r[1] for r in conn.execute("PRAGMA table_info(geo_cells)")}
+        assert "extraction_json" in cols_after
+        # 再跑一次不应报错（ALTER 已存在列会被 _ensure_column 跳过）。
+        geo_storage.apply_v7_migration(conn)
+    finally:
+        conn.close()
