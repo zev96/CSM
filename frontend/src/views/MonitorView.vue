@@ -31,6 +31,9 @@ import CookieManagerModal from "@/components/monitor/CookieManagerModal.vue";
 import EditBatchModal from "@/components/monitor/EditBatchModal.vue";
 import CommentMonitorModule from "@/components/monitor/CommentMonitorModule.vue";
 import ZhihuMonitorModule, { type ZhihuAlertData } from "@/components/monitor/ZhihuMonitorModule.vue";
+// AI 卡位（GEO）tab —— 自包含模块（自己拉 geo_query 任务 / 跑 / 信源榜），
+// 不接父组件的 tasks/snapshots props，所以渲染时不传任何属性。
+import GeoTaskModule from "@/components/monitor/geo/GeoTaskModule.vue";
 // RetentionPage / ZhihuRankingPage / BaiduSEOAnalytics 已移到 DataCenterView，
 // 这里只剩 baidu 工作区用的 BaiduRankingPage（顶级 tab，跟 history 同名但不同
 // 组件 —— history 那个是 BaiduSEOAnalytics）。
@@ -64,13 +67,13 @@ const route = useRoute();
 const router = useRouter();
 const { whenReady } = useSidecarReady();
 
-type Tab = "zhihu" | "comment" | "baidu";
+type Tab = "zhihu" | "comment" | "baidu" | "geo";
 
 function tabFromQuery(): Tab {
   const q = route.query.tab;
   // 旧 ?tab=report 链接静默 fallback 到 zhihu —— 数据中心抽出独立 view
   // (/data-center) 后，'report' 不再是 MonitorView 内 tab。
-  if (q === "zhihu" || q === "comment" || q === "baidu") return q;
+  if (q === "zhihu" || q === "comment" || q === "baidu" || q === "geo") return q;
   return "zhihu";
 }
 const activeTab = ref<Tab>(tabFromQuery());
@@ -691,6 +694,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
   { k: "zhihu", l: "知乎问题", ic: "radar" },
   { k: "comment", l: "平台评论", ic: "warn" },
   { k: "baidu", l: "百度排名", ic: "search" },
+  { k: "geo", l: "AI 卡位", ic: "zap" },
 ];
 </script>
 
@@ -717,7 +721,9 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
               ? "知乎问题监控"
               : activeTab === "comment"
                 ? "评论留存率监控"
-                : "百度排名监控"
+                : activeTab === "baidu"
+                  ? "百度排名监控"
+                  : "AI 卡位监控（GEO）"
           }}
         </div>
       </div>
@@ -820,6 +826,11 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
         @batch-import="showBatchImport = true"
         @edit-task="(t) => { editingTask = t as any; showAddTask = true; }"
       />
+    </template>
+
+    <!-- ── AI 卡位（GEO，自包含模块，自管 geo_query 任务 / 信源榜）──── -->
+    <template v-else-if="activeTab === 'geo'">
+      <GeoTaskModule />
     </template>
 
     <!--
