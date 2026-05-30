@@ -633,3 +633,41 @@ def baidu_launch_login_window() -> dict[str, Any]:
     threading.Thread(target=_watch_login_window, args=(proc.pid,), daemon=True).start()
 
     return {"ok": True, "pid": proc.pid}
+
+
+# ── GEO 卡位监控只读聚合端点 ───────────────────────────────────────────
+# auth：router 级 ``dependencies=[RequireToken]`` 已覆盖这两个 GET，跟本文件
+# 其它路由一致（不在 handler 签名里重复声明）。KPI 汇总走现有
+# /api/monitor/results（metric_json 已含 KPI 块），阶段 1 不单列 kpi 端点；
+# 导出 Excel 推迟到阶段 2。geo_storage 懒加载（与其它 handler 同风格）。
+@router.get("/api/monitor/geo/{task_id}/citations")
+def geo_citations(
+    task_id: int,
+    days: int = Query(default=30),
+    platform: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """信源榜：按注册域名频次降序聚合该任务近 ``days`` 天的全部 citation。"""
+    _require_storage()
+    from csm_core.monitor.geo import storage as geo_storage
+
+    return {
+        "leaderboard": geo_storage.citation_leaderboard(
+            task_id, days=days, platform=platform, keyword=keyword
+        )
+    }
+
+
+@router.get("/api/monitor/geo/{task_id}/cells")
+def geo_cells(task_id: int, checked_at: str = Query(...)) -> dict[str, Any]:
+    """下钻：某次运行的全部 cell（原文 + 信源）。
+
+    运行按 ``(task_id, checked_at)`` 关联 —— ``checked_at`` 是该次运行
+    MonitorResult.checked_at 的存库 ISO 串（前端从 /api/monitor/results
+    拿到后回传）。geo 表不外键 monitor_results.id（adapter 不自存 result，
+    避免与 monitor_loop 的 save_result 双写）。
+    """
+    _require_storage()
+    from csm_core.monitor.geo import storage as geo_storage
+
+    return {"cells": geo_storage.cells_for_run(task_id, checked_at)}
