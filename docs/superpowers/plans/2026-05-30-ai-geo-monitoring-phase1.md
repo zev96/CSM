@@ -980,13 +980,14 @@ git commit -m "feat(geo): schema v7 geo_cells/geo_citations + record_run + 信�
 - Create: `csm_core/monitor/geo/providers/api_tongyi.py`
 - Test: `tests/core/monitor/geo/test_providers.py`
 
-- [ ] **Step 1: 写失败测试（通义解析器，喂 fixture）**
+- [ ] **Step 1: 写失败测试（通义解析器 + 错误路径，喂 fixture）**
 
 ```python
 # tests/core/monitor/geo/test_providers.py
 import json
 from pathlib import Path
 from csm_core.monitor.geo.providers.api_tongyi import parse_tongyi_response
+import csm_core.monitor.geo.providers.api_tongyi as tongyi_mod
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -998,6 +999,43 @@ def test_parse_tongyi_extracts_answer_and_citations():
     urls = [c.url for c in citations]
     assert "https://zhuanlan.zhihu.com/p/123456" in urls
     assert citations[0].title.endswith("知乎")
+
+
+class _FakeResp:
+    def __init__(self, status_code, text, json_data=None, raise_json=False):
+        self.status_code = status_code
+        self.text = text
+        self._json = json_data
+        self._raise = raise_json
+
+    def json(self):
+        if self._raise:
+            raise ValueError("not json")
+        return self._json
+
+
+def test_tongyi_non_json_200_is_error(monkeypatch):
+    monkeypatch.setattr(tongyi_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(tongyi_mod.httpx, "post",
+                        lambda *a, **k: _FakeResp(200, "<html>captcha</html>", raise_json=True))
+    ans = tongyi_mod.TongyiProvider().query("k", web_search=True)
+    assert ans.status == "error"
+
+
+def test_tongyi_app_error_code_is_error(monkeypatch):
+    monkeypatch.setattr(tongyi_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(tongyi_mod.httpx, "post",
+                        lambda *a, **k: _FakeResp(200, '{"code":"Arrearage"}',
+                                                  json_data={"code": "Arrearage", "message": "欠费"}))
+    ans = tongyi_mod.TongyiProvider().query("k", web_search=True)
+    assert ans.status == "error"
+    assert "Arrearage" in ans.error
+
+
+def test_tongyi_missing_key_is_error(monkeypatch):
+    monkeypatch.setattr(tongyi_mod, "read_api_key", lambda p: "")
+    ans = tongyi_mod.TongyiProvider().query("k", web_search=True)
+    assert ans.status == "error"
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -1031,12 +1069,18 @@ class GeoProvider(Protocol):
 
 
 def get_provider(platform: str) -> GeoProvider:
-    """按平台名返回 provider 单例。阶段 1 只有 tongyi / kimi。"""
+    """返回 provider 实例（每次新建，provider 无状态）。阶段 1 只有 tongyi / kimi。"""
     if platform == "tongyi":
-        from .api_tongyi import TongyiProvider
+        try:
+            from .api_tongyi import TongyiProvider
+        except ImportError as e:
+            raise GeoProviderError(f"tongyi provider 未就绪: {e}") from e
         return TongyiProvider()
     if platform == "kimi":
-        from .api_kimi import KimiProvider
+        try:
+            from .api_kimi import KimiProvider
+        except ImportError as e:
+            raise GeoProviderError(f"kimi provider 未就绪: {e}") from e
         return KimiProvider()
     raise GeoProviderError(f"未知 GEO 平台: {platform}")
 ```
@@ -1050,9 +1094,11 @@ key 复用现有 LLM provider 的 'qwen' keyring 项（read_api_key("qwen")）�
 """
 from __future__ import annotations
 import logging
+import threading
 import httpx
 
 from csm_core.config import read_api_key
+from csm_core.monitor.base import maybe_cancel
 from ..models import GeoAnswer, Citation
 
 logger = logging.getLogger(__name__)
@@ -1089,7 +1135,9 @@ class TongyiProvider:
         self._model = model
         self._timeout = timeout
 
-    def query(self, keyword, *, web_search=True, cancel_token=None) -> GeoAnswer:
+    def query(self, keyword: str, *, web_search: bool = True,
+              cancel_token: "threading.Event | None" = None) -> GeoAnswer:
+        maybe_cancel(cancel_token)
         key = read_api_key("qwen")
         if not key:
             return GeoAnswer(platform=self.platform, keyword=keyword,
@@ -1102,8 +1150,13 @@ class TongyiProvider:
                            "result_format": "message"},
         }
         try:
-            r = httpx.post(_URL, headers={"Authorization": f"Bearer {key}"},
-                           json=body, timeout=self._timeout)
+            r = httpx.post(
+                _URL,
+                headers={"Authorization": f"Bearer {key}"},
+                json=body,
+                timeout=httpx.Timeout(connect=10.0, read=self._timeout,
+                                      write=self._timeout, pool=10.0),
+            )
         except httpx.HTTPError as e:
             return GeoAnswer(platform=self.platform, keyword=keyword, status="error", error=str(e))
         # raw-logging（silent-failure 防御）
@@ -1112,7 +1165,22 @@ class TongyiProvider:
         if r.status_code >= 400:
             return GeoAnswer(platform=self.platform, keyword=keyword, status="error",
                              error=f"http {r.status_code}: {r.text[:300]}", raw={"status": r.status_code})
-        raw = r.json()
+        # guard against non-JSON 200
+        try:
+            raw = r.json()
+        except Exception:
+            return GeoAnswer(platform=self.platform, keyword=keyword, status="error",
+                             error=f"非 JSON 响应 (http {r.status_code}): {r.text[:200]}")
+        # DashScope app-level errors (HTTP 200 + code != Success)
+        code = raw.get("code") if isinstance(raw, dict) else None
+        if code and code not in ("Success", "200", 200):
+            return GeoAnswer(platform=self.platform, keyword=keyword, status="error",
+                             error=f"dashscope error {code}: {raw.get('message', '')}", raw=raw)
+        # content filter — finish_reason == "sensitive" → blocked
+        fr = (((raw.get("output") or {}).get("choices") or [{}])[0]).get("finish_reason")
+        if fr == "sensitive":
+            return GeoAnswer(platform=self.platform, keyword=keyword, status="blocked",
+                             error="内容被通义安全过滤", raw=raw)
         text, cits = parse_tongyi_response(raw)
         status = "ok" if text else "empty"
         return GeoAnswer(platform=self.platform, keyword=keyword, answer_text=text,
@@ -1122,7 +1190,7 @@ class TongyiProvider:
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `pytest tests/core/monitor/geo/test_providers.py -v`
-Expected: PASS（1 passed）
+Expected: PASS（4 passed：1 parse + 3 error-path）
 
 - [ ] **Step 5: Commit**
 

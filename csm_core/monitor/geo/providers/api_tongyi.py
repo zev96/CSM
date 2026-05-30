@@ -5,9 +5,11 @@ key 复用现有 LLM provider 的 'qwen' keyring 项（read_api_key("qwen")）�
 """
 from __future__ import annotations
 import logging
+import threading
 import httpx
 
 from csm_core.config import read_api_key
+from csm_core.monitor.base import maybe_cancel
 from ..models import GeoAnswer, Citation
 
 logger = logging.getLogger(__name__)
@@ -44,7 +46,9 @@ class TongyiProvider:
         self._model = model
         self._timeout = timeout
 
-    def query(self, keyword, *, web_search=True, cancel_token=None) -> GeoAnswer:
+    def query(self, keyword: str, *, web_search: bool = True,
+              cancel_token: "threading.Event | None" = None) -> GeoAnswer:
+        maybe_cancel(cancel_token)
         key = read_api_key("qwen")
         if not key:
             return GeoAnswer(platform=self.platform, keyword=keyword,
@@ -57,8 +61,13 @@ class TongyiProvider:
                            "result_format": "message"},
         }
         try:
-            r = httpx.post(_URL, headers={"Authorization": f"Bearer {key}"},
-                           json=body, timeout=self._timeout)
+            r = httpx.post(
+                _URL,
+                headers={"Authorization": f"Bearer {key}"},
+                json=body,
+                timeout=httpx.Timeout(connect=10.0, read=self._timeout,
+                                      write=self._timeout, pool=10.0),
+            )
         except httpx.HTTPError as e:
             return GeoAnswer(platform=self.platform, keyword=keyword, status="error", error=str(e))
         # raw-logging（silent-failure 防御）
@@ -67,7 +76,22 @@ class TongyiProvider:
         if r.status_code >= 400:
             return GeoAnswer(platform=self.platform, keyword=keyword, status="error",
                              error=f"http {r.status_code}: {r.text[:300]}", raw={"status": r.status_code})
-        raw = r.json()
+        # FIX 1: guard against non-JSON 200
+        try:
+            raw = r.json()
+        except Exception:
+            return GeoAnswer(platform=self.platform, keyword=keyword, status="error",
+                             error=f"非 JSON 响应 (http {r.status_code}): {r.text[:200]}")
+        # FIX 2: DashScope app-level errors (HTTP 200 + code != Success)
+        code = raw.get("code") if isinstance(raw, dict) else None
+        if code and code not in ("Success", "200", 200):
+            return GeoAnswer(platform=self.platform, keyword=keyword, status="error",
+                             error=f"dashscope error {code}: {raw.get('message', '')}", raw=raw)
+        # FIX 2: content filter — finish_reason == "sensitive" → blocked
+        fr = (((raw.get("output") or {}).get("choices") or [{}])[0]).get("finish_reason")
+        if fr == "sensitive":
+            return GeoAnswer(platform=self.platform, keyword=keyword, status="blocked",
+                             error="内容被通义安全过滤", raw=raw)
         text, cits = parse_tongyi_response(raw)
         status = "ok" if text else "empty"
         return GeoAnswer(platform=self.platform, keyword=keyword, answer_text=text,
