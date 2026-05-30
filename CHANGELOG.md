@@ -11,6 +11,7 @@
 - **V7 数据库迁移**：新增 `geo_cells` / `geo_citations` 两张规范化表（按 `task_id + checked_at` 关联，不与 `monitor_results` 双写），支撑信源榜 `GROUP BY` 聚合与原文钻取；新增只读端点 `GET /api/monitor/geo/{task_id}/citations`、`/cells`。
 - 采集层每个 cell 一开始就记原始响应日志（http / len / first200）+ `raw_json` 落库，便于分辨「0 提及」是 cookie 失效 / 真无结果 / schema 变 / 风控；API provider 覆盖非 JSON 响应、应用层错误码、内容过滤（→ blocked）、取消与分段超时；全部 cell 失败 → 运行标 `failed`（避免误触发「掉出」告警）。
 - **新增 Kimi(Moonshot) / 豆包(Ark) 两个 LLM provider**：设置页可单独配置二者的 API Key / 模型 / Base URL（均为 OpenAI 兼容，也可当抽取/生成模型用）。GEO 的 Kimi 采集由此获得 key 配置入口（原来设置页只有 6 个 provider，没处填 Kimi key）；豆包 key 可提前配好（采集 adapter 阶段 2 落地）。
+- GEO 采集 provider 改为读设置里配置的模型（默认 Kimi=`kimi-k2.6`、通义=`qwen-plus`），不再写死旧模型；OpenAI 兼容 client 在模型拒绝 temperature 时（如 `kimi-k2.6` 只允许 `temperature=1`）自动去掉温度重试一次，修复「测试连接」对推理模型报错。
 - **依赖**：新增 `tldextract>=5.0`（信源域名规整，离线快照模式，已加入 PyInstaller 打包清单）。
 - 新增单测 39 条（`tests/core/monitor/geo/`：models / classify / metrics / storage / providers / extract / adapter / 注册 invariant）+ sidecar 路由测试。
 
