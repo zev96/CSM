@@ -316,7 +316,7 @@ class GeoCell(BaseModel):
     rank: int = -1
     sentiment: Sentiment = "na"
     answer_text: str = ""
-    status: str = "ok"      # 沿用 AnswerStatus 值域；cell 还可记 'error'
+    status: AnswerStatus = "ok"   # ok/empty/blocked/error，与 GeoAnswer 同值域
     raw: dict[str, Any] = Field(default_factory=dict)
     citations: list[ClassifiedCitation] = Field(default_factory=list)
 ```
