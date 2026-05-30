@@ -31,6 +31,8 @@ import Pill from "@/components/ui/Pill.vue";
 import ProgressBar from "@/components/ui/ProgressBar.vue";
 import AddTaskModal from "@/components/monitor/AddTaskModal.vue";
 import GeoTaskDetailPage from "@/components/monitor/geo/GeoTaskDetailPage.vue";
+import GeoKeywordPlatformDetail from "@/components/monitor/geo/GeoKeywordPlatformDetail.vue";
+import type { GeoCellRow } from "@/components/monitor/geo/GeoKeywordPlatformDetail.vue";
 
 import { subscribe } from "@/api/client";
 import { useSidecar } from "@/stores/sidecar";
@@ -54,9 +56,10 @@ const failed = ref(false);
 // （跟 ZhihuMonitorModule 的 selectedTaskId fallback watch 同模式）。
 const selectedTaskId = ref<number | null>(null);
 
-// L1 ↔ L2 钻入：点任务名钻入全宽「卡位仪表盘」详情页（detailTaskId 非 null
-// 时隐藏 L1 列表 + 右侧概览，显示 GeoTaskDetailPage；返回按钮置 null 还原）。
-// 跟 ZhihuMonitorModule 的 openBatchName L1→L2 同手势。
+// L1 ↔ L2 钻入：**仅多关键词任务**点任务名钻入全宽「关键词列表」详情页
+// （detailTaskId 非 null 时隐藏 L1 列表 + 右侧概览，显示 GeoTaskDetailPage；
+// 返回按钮置 null 还原）。单关键词任务不进 L2，详情内联在 L1 右侧。
+// 跟 BaiduRankingPage 的 enterDetail L1→L2 同手势。
 const detailTaskId = ref<number | null>(null);
 const detailRef = ref<InstanceType<typeof GeoTaskDetailPage> | null>(null);
 
@@ -83,6 +86,11 @@ const latestByTask = ref<Record<number, LatestResult | null>>({});
 // 信源榜（当前选中任务，近 30 天）。
 const board = ref<CitationRow[]>([]);
 const boardLoading = ref(false);
+
+// 单关键词任务的内联多平台详情用的 cells（最近一跑）。只在选中任务恰好 1 个
+// 关键词时才拉（多关键词任务走 L2，不需要 L1 内联）。
+const inlineCells = ref<GeoCellRow[]>([]);
+const inlineCellsLoading = ref(false);
 
 // 建任务 modal
 const showAddTask = ref(false);
@@ -114,6 +122,26 @@ function platformCount(t: Task): number {
   const ps = t.config?.platforms;
   return Array.isArray(ps) ? ps.length : 0;
 }
+
+// 单关键词任务 = 不进 L2，详情内联在 L1 右侧（没有可挑选/列表的关键词）。
+// 多关键词任务 = 任务名是钻入 L2 的彩色热区。
+function isSingleKeyword(t: Task): boolean {
+  return keywordCount(t) === 1;
+}
+// 选中任务（恰好 1 关键词时）的那个关键词名。
+const singleKeywordName = computed<string | null>(() => {
+  const t = selectedTask.value;
+  if (!t || !isSingleKeyword(t)) return null;
+  const kws = t.config?.keywords;
+  return Array.isArray(kws) && kws.length ? String(kws[0]) : null;
+});
+// 内联详情喂给 GeoKeywordPlatformDetail 的 cells —— 过滤到该关键词
+// （cells 已是该任务最近一跑的全部平台 cell）。
+const inlineKeywordCells = computed<GeoCellRow[]>(() => {
+  const kw = singleKeywordName.value;
+  if (!kw) return [];
+  return inlineCells.value.filter((c) => c.keyword === kw);
+});
 
 // 百分比展示（soc / first_rank_rate 是 0–1 ratio）。
 function pct(v: number | undefined | null): string {
@@ -229,14 +257,40 @@ async function loadBoard(taskId: number): Promise<void> {
   }
 }
 
+// 拉选中任务最近一跑的全部 cell —— 单关键词任务在 L1 右侧内联多平台详情用。
+// 多关键词任务不调（详情在 L2 自取），避免无谓请求。
+async function loadInlineCells(taskId: number): Promise<void> {
+  const t = tasks.value.find((x) => x.id === taskId);
+  if (!t || !isSingleKeyword(t)) {
+    inlineCells.value = [];
+    return;
+  }
+  inlineCellsLoading.value = true;
+  try {
+    const r = await sidecar.client.get(`/api/monitor/geo/${taskId}/latest-cells`);
+    inlineCells.value = (r.data?.cells ?? []) as GeoCellRow[];
+  } catch {
+    inlineCells.value = [];
+  } finally {
+    inlineCellsLoading.value = false;
+  }
+}
+
 // ── 操作 ───────────────────────────────────────────────────────────────
 function selectTask(taskId: number): void {
   selectedTaskId.value = taskId;
   void loadBoard(taskId);
+  void loadInlineCells(taskId); // 单关键词任务用；多关键词内部会清空
 }
 
-// 钻入 / 退出 L2 卡位仪表盘（点任务名进，返回按钮出）。
+// 钻入 / 退出 L2 卡位仪表盘 —— 仅多关键词任务（任务名点击进，返回按钮出）。
+// 单关键词任务不进 L2，点名字等同选中（详情已内联在右侧）。
 function openDetail(taskId: number): void {
+  const t = tasks.value.find((x) => x.id === taskId);
+  if (t && isSingleKeyword(t)) {
+    selectTask(taskId);
+    return;
+  }
   detailTaskId.value = taskId;
   selectedTaskId.value = taskId; // 同步选中态，返回时右侧概览停在同一条
 }
@@ -317,6 +371,7 @@ watch(
     if (list.length === 0) {
       selectedTaskId.value = null;
       board.value = [];
+      inlineCells.value = [];
       return;
     }
     if (
@@ -325,6 +380,7 @@ watch(
     ) {
       selectedTaskId.value = list[0].id;
       void loadBoard(list[0].id);
+      void loadInlineCells(list[0].id);
     }
   },
   { immediate: false },
@@ -350,9 +406,12 @@ onMounted(async () => {
           t.last_status = d.result?.status ?? t.last_status;
         }
         void loadLatest(d.task_id);
-        // 当前正看着这条 → 顺带刷信源榜（这次跑可能带来新域名）。
-        if (selectedTaskId.value === d.task_id) void loadBoard(d.task_id);
-        // L2 详情页开着同一条 → 让它全量刷新（KPI + 矩阵 + 信源）。
+        // 当前正看着这条 → 顺带刷信源榜 + 内联 cells（这次跑可能带来新数据）。
+        if (selectedTaskId.value === d.task_id) {
+          void loadBoard(d.task_id);
+          void loadInlineCells(d.task_id);
+        }
+        // L2 详情页开着同一条 → 让它全量刷新（KPI + 关键词列表 + 信源）。
         if (detailTaskId.value === d.task_id) void detailRef.value?.refresh();
       },
       failed: (d: any) => {
@@ -375,7 +434,7 @@ onUnmounted(() => {
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col" :style="{ gap: '24px' }">
-    <!-- ════════ L2：全宽卡位仪表盘（点任务名钻入；返回还原 L1）════════ -->
+    <!-- ════════ L2：全宽关键词列表（仅多关键词任务，点任务名钻入；返回还原 L1）════════ -->
     <GeoTaskDetailPage
       v-if="detailTask"
       ref="detailRef"
@@ -463,17 +522,27 @@ onUnmounted(() => {
           >
             <div class="min-w-0">
               <!--
-                任务名是「点击进 L2 卡位仪表盘」的彩色热区（primary-deep，跟
-                ZhihuMonitorModule 的批次名链接同款）；整行点击只把右侧概览
-                定位到这条（selectTask）。@click.stop 防止点名字又触发行 select。
+                多关键词任务：任务名是「点击进 L2 关键词列表」的彩色热区
+                （primary-deep，跟 ZhihuMonitorModule 的批次名链接同款）；
+                整行点击只把右侧概览定位到这条（selectTask）。@click.stop 防止
+                点名字又触发行 select。
+                单关键词任务：没有可挑选的关键词列表，不进 L2 —— 任务名渲染成
+                普通文字（点击只选中，详情已内联在右侧）。
               -->
               <button
+                v-if="!isSingleKeyword(t)"
                 type="button"
                 class="block w-full truncate text-left text-[13px] font-medium"
                 :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
-                title="打开卡位仪表盘（关键词 × 平台矩阵 + 下钻）"
+                title="打开关键词列表（关键词 × 平台 + 多平台详情）"
                 @click.stop="openDetail(t.id)"
               >{{ t.name }}</button>
+              <div
+                v-else
+                class="truncate text-[13px] font-medium"
+                :style="{ color: 'var(--ink)' }"
+                :title="t.name"
+              >{{ t.name }}</div>
               <!-- 运行中进度条（store 维护 SSE progress 状态）-->
               <div v-if="isRunning(t.id)" class="mt-1.5 flex items-center gap-2">
                 <ProgressBar :value="progressRatio(t.id)" :height="5" />
@@ -703,6 +772,45 @@ onUnmounted(() => {
             :style="{ color: 'var(--ink-3)' }"
           >
             该任务还没有运行记录 · 点「运行」采集一次后显示卡位数据。
+          </div>
+
+          <!--
+            ════ 单关键词任务：多平台详情内联（不进 L2）════
+            该任务恰好 1 个关键词 → 没有可挑选的关键词列表，详情直接内联在
+            KPI 下方（复用 GeoKeywordPlatformDetail，与 L2 右侧点关键词同款块）。
+            多关键词任务走 L2 关键词列表，这里不渲染。自带 maxHeight + 滚动，
+            避免详情过长把下方信源榜挤没。
+          -->
+          <div
+            v-if="singleKeywordName"
+            class="mt-4 flex-shrink-0"
+          >
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <div class="text-[12px] font-semibold">
+                多平台详情
+                <span class="ml-1 text-[11px] font-normal" :style="{ color: 'var(--ink-3)' }">
+                  · {{ singleKeywordName }}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 text-[11px]"
+                :style="{ color: 'var(--ink-3)', background: 'transparent', cursor: 'pointer' }"
+                title="刷新多平台详情"
+                @click="loadInlineCells(selectedTask.id)"
+              >
+                <Icon name="refresh" :size="11" />
+                <span>刷新</span>
+              </button>
+            </div>
+            <div
+              v-if="inlineCellsLoading"
+              class="py-6 text-center text-[12px]"
+              :style="{ color: 'var(--ink-3)' }"
+            >加载中…</div>
+            <div v-else :style="{ maxHeight: '420px', overflowY: 'auto' }">
+              <GeoKeywordPlatformDetail :keyword="singleKeywordName" :cells="inlineKeywordCells" />
+            </div>
           </div>
 
           <!-- ════ 信源榜 Top（近 30 天）════ -->
