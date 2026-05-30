@@ -370,6 +370,17 @@ def test_classify_citations_fills_domain_and_type():
     assert out[0].domain == "zhihu.com"
     assert out[0].source_type == "知乎"
     assert out[0].title == "t"
+
+
+def test_registered_domain_fallback_without_tldextract(monkeypatch):
+    """Release bundle may lack tldextract -> _MULTI_SUFFIX fallback must be correct."""
+    import csm_core.monitor.geo.classify as classify
+    monkeypatch.setattr(classify, "_EXTRACT", None)
+    assert classify.registered_domain("https://zhuanlan.zhihu.com/p/123") == "zhihu.com"
+    assert classify.registered_domain("https://news.people.com.cn/n1/abc") == "people.com.cn"
+    assert classify.registered_domain("https://www.beijing.gov.cn/foo") == "beijing.gov.cn"
+    assert classify.registered_domain("http://mp.weixin.qq.com/s/xxx") == "qq.com"
+    assert classify.registered_domain("not a url") == ""
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -383,16 +394,38 @@ Expected: FAIL — `ModuleNotFoundError`/`ImportError`
 # csm_core/monitor/geo/classify.py
 """信源域名规整 + source_type 分类。
 
-domain：取「注册域名」（去子域）。优先用 tldextract（若装了），否则用
-一个覆盖中国常见多段后缀（.com.cn/.gov.cn/.edu.cn…）的轻量回退。
+domain：取「注册域名」（去子域）。优先用 tldextract（声明依赖，随 bundle
+打包，离线配置），否则用一个覆盖中国常见多段后缀（.com.cn/.gov.cn/.edu.cn…）
+的轻量回退（_MULTI_SUFFIX）。
 
 source_type：规则表优先（精确域名 → 类别）。规则未命中返回「其他」；
 LLM 兜底归类在抽取层（Task 8）按需调用，这里只做确定性规则。
+
+# 注：「官网」由抽取层/品牌官网域名判定，规则表不输出（品牌官网是 per-task 配置，
+#      不是全局固定域名）。
 """
 from __future__ import annotations
+import logging
 from urllib.parse import urlparse
 
 from .models import Citation, ClassifiedCitation
+
+logger = logging.getLogger(__name__)
+
+# ── tldextract：模块级实例，离线配置（不联网、不写缓存）──────────────────────
+# suffix_list_urls=() 强制使用 tldextract 自带的 bundled snapshot，
+# cache_dir=None 禁止写文件系统缓存（PyInstaller bundle 里 tmp 路径不可预期）。
+try:
+    import tldextract  # type: ignore
+    _EXTRACT: tldextract.TLDExtract | None = tldextract.TLDExtract(
+        suffix_list_urls=(), cache_dir=None
+    )
+except ImportError:
+    _EXTRACT = None
+    logger.warning(
+        "tldextract 未安装，csm_core.monitor.geo.classify 使用限量 _MULTI_SUFFIX 回退；"
+        "release bundle 应包含 tldextract（见 pyproject.toml + spec hiddenimports）。"
+    )
 
 # 多段后缀：识别 a.b.com.cn 这种注册域名 = b.com.cn
 _MULTI_SUFFIX = (
@@ -401,6 +434,8 @@ _MULTI_SUFFIX = (
 )
 
 # 精确注册域名 → 类别
+# 注：「官网」由抽取层/品牌官网域名判定，规则表不输出（品牌官网是 per-task 配置，
+#      不是全局固定域名）。
 _RULES: dict[str, str] = {
     "zhihu.com": "知乎",
     "xiaohongshu.com": "小红书",
@@ -422,13 +457,11 @@ def registered_domain(url: str) -> str:
         host = ""
     if not host or "." not in host:
         return ""
-    try:
-        import tldextract  # type: ignore
-        ext = tldextract.extract(url)
+    if _EXTRACT is not None:
+        ext = _EXTRACT(url)
         if ext.domain and ext.suffix:
             return f"{ext.domain}.{ext.suffix}"
-    except Exception:
-        pass
+        return ""
     # 回退：处理多段后缀
     for suf in _MULTI_SUFFIX:
         if host.endswith(suf):
@@ -458,7 +491,13 @@ def classify_citations(cits: list[Citation]) -> list[ClassifiedCitation]:
     return out
 ```
 
-> 依赖说明：`tldextract` 非必须（有就用、没有走回退）。若决定固定依赖，在 `pyproject.toml` 的 dependencies 加 `tldextract>=5.0` 并单列一步 commit；阶段 1 不强制。
+> 依赖决定（code-review 修复后）：`tldextract>=5.0` 已声明为 `pyproject.toml` 正式依赖，
+> `sidecar/csm-sidecar.spec` 和 `CSM.spec` 均已加 `collect_data_files("tldextract")`（带入
+> bundled suffix-list snapshot）和 `hiddenimports` 条目。`_EXTRACT` 在模块顶部用离线配置
+> 初始化（`suffix_list_urls=(), cache_dir=None`），不联网、不写缓存。若 import 失败则
+> `_EXTRACT=None` + 一次 `logger.warning`，回退 `_MULTI_SUFFIX` 路径测试覆盖（见
+> `test_registered_domain_fallback_without_tldextract`）。「官网」由抽取层判定、规则表不输出，
+> 已在 `_RULES` 注释和模块 docstring 中说明。
 
 - [ ] **Step 4: 跑测试确认通过**
 

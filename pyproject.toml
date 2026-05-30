@@ -38,6 +38,10 @@ dependencies = [
     # openpyxl powers the monitor module's Excel batch-import flow. Tiny
     # (~300KB) and pure-python, so onedir packaging cost is negligible.
     "openpyxl>=3.1",
+    # GEO 信源域名规整：取注册域名（去子域 + 多段中国后缀）。
+    # 配置为离线模式（suffix_list_urls=()，cache_dir=None），PyInstaller spec
+    # 补 collect_data_files("tldextract") 以带入 bundled suffix-list snapshot。
+    "tldextract>=5.0",
 ]
 
 [project.optional-dependencies]

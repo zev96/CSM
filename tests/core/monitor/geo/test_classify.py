@@ -24,3 +24,14 @@ def test_classify_citations_fills_domain_and_type():
     assert out[0].domain == "zhihu.com"
     assert out[0].source_type == "知乎"
     assert out[0].title == "t"
+
+
+def test_registered_domain_fallback_without_tldextract(monkeypatch):
+    """Release bundle may lack tldextract -> _MULTI_SUFFIX fallback must be correct."""
+    import csm_core.monitor.geo.classify as classify
+    monkeypatch.setattr(classify, "_EXTRACT", None)
+    assert classify.registered_domain("https://zhuanlan.zhihu.com/p/123") == "zhihu.com"
+    assert classify.registered_domain("https://news.people.com.cn/n1/abc") == "people.com.cn"
+    assert classify.registered_domain("https://www.beijing.gov.cn/foo") == "beijing.gov.cn"
+    assert classify.registered_domain("http://mp.weixin.qq.com/s/xxx") == "qq.com"
+    assert classify.registered_domain("not a url") == ""

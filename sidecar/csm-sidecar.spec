@@ -59,6 +59,12 @@ datas += [("../templates", "templates"), ("../examples", "examples")]
 # include_py_files=False 关掉 .py 复制（hiddenimports 已覆盖代码）。
 datas += collect_data_files("csm_core", include_py_files=False)
 datas += collect_data_files("csm_sidecar", include_py_files=False)
+# tldextract ships a bundled suffix-list snapshot (public_suffix_list.dat) that
+# classify.py reads at import time when configured with suffix_list_urls=().
+# Without this, the offline TLDExtract instance falls back to an empty list and
+# all domain extraction returns "". Pure-python package; collect_data_files is
+# sufficient (no native binaries).
+datas += collect_data_files("tldextract")
 
 
 # ── Hidden imports ─────────────────────────────────────────────────────────
@@ -207,6 +213,9 @@ hiddenimports: list[str] = [
     "psutil",
     # openpyxl: monitor module's Excel batch import.
     "openpyxl",
+    # tldextract: GEO 信源域名规整（classify.py）。pure-python，数据文件已
+    # 通过 collect_data_files("tldextract") 补入，hiddenimport 保证模块被收录。
+    "tldextract",
     # beautifulsoup4: HTML parsing fallback for zhihu_question.
     "bs4",
     "fastapi",
