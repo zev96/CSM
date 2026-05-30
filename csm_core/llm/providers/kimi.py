@@ -6,5 +6,5 @@ from .openai_compat import OpenAICompatClient
 
 @dataclass
 class KimiClient(OpenAICompatClient):
-    model: str = "moonshot-v1-8k"
+    model: str = "kimi-k2.6"
     base_url: str = "https://api.moonshot.cn/v1"

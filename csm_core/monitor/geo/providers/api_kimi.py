@@ -12,13 +12,12 @@ import logging
 import threading
 import httpx
 
-from csm_core.config import read_api_key
+from csm_core.config import read_api_key, get_config
 from csm_core.monitor.base import maybe_cancel
 from ..models import GeoAnswer, Citation
 
 logger = logging.getLogger(__name__)
 
-_URL = "https://api.moonshot.cn/v1/chat/completions"
 _SEARCH_TOOL = {"type": "builtin_function", "function": {"name": "$web_search"}}
 
 
@@ -41,9 +40,11 @@ class KimiProvider:
     platform = "kimi"
     mode = "api"
 
-    def __init__(self, *, model: str = "moonshot-v1-8k", timeout: float = 120.0,
-                 max_tool_rounds: int = 3) -> None:
-        self._model = model
+    def __init__(self, *, model: str | None = None, base_url: str | None = None,
+                 timeout: float = 120.0, max_tool_rounds: int = 3) -> None:
+        cfg = get_config()
+        self._model = model or cfg.default_model.get("kimi") or "kimi-k2.6"
+        self._base = base_url or cfg.base_urls.get("kimi") or "https://api.moonshot.cn/v1"
         self._timeout = timeout
         self._max_rounds = max_tool_rounds
 
@@ -57,6 +58,7 @@ class KimiProvider:
                              status="error", error="Kimi(moonshot) API key 未配置")
         messages: list[dict] = [{"role": "user", "content": keyword}]
         tools = [_SEARCH_TOOL] if web_search else None
+        url = f"{self._base.rstrip('/')}/chat/completions"
         try:
             with httpx.Client(
                 timeout=httpx.Timeout(connect=10.0, read=self._timeout,
@@ -69,7 +71,7 @@ class KimiProvider:
                     if tools:
                         body["tools"] = tools
                     r = client.post(
-                        _URL,
+                        url,
                         headers={"Authorization": f"Bearer {key}"},
                         json=body,
                     )

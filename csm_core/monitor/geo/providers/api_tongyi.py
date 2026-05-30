@@ -8,7 +8,7 @@ import logging
 import threading
 import httpx
 
-from csm_core.config import read_api_key
+from csm_core.config import read_api_key, get_config
 from csm_core.monitor.base import maybe_cancel
 from ..models import GeoAnswer, Citation
 
@@ -42,8 +42,11 @@ class TongyiProvider:
     platform = "tongyi"
     mode = "api"
 
-    def __init__(self, *, model: str = "qwen-plus", timeout: float = 120.0) -> None:
-        self._model = model
+    def __init__(self, *, model: str | None = None, timeout: float = 120.0) -> None:
+        # Only the model is configurable. _URL stays on the NATIVE DashScope
+        # generation endpoint (different from the qwen compatible-mode base
+        # URL in base_urls["qwen"]), so we deliberately do NOT read base_urls.
+        self._model = model or get_config().default_model.get("qwen") or "qwen-plus"
         self._timeout = timeout
 
     def query(self, keyword: str, *, web_search: bool = True,

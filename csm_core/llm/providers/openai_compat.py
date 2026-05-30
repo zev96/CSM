@@ -59,16 +59,6 @@ class OpenAICompatClient:
         user: str,
         temperature: float | None = None,
     ) -> str:
-        payload: dict[str, object] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "stream": True,
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
         # Split timeout phases — connect should fail fast (real network
         # issue); read becomes the inter-chunk gap budget for the SSE
         # stream below, which is much more forgiving than a whole-response
@@ -84,40 +74,72 @@ class OpenAICompatClient:
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "text/event-stream",
         }
-        chunks: list[str] = []
-        with httpx.Client(timeout=timeout) as client:
-            with client.stream("POST", url, headers=headers, json=payload) as resp:
-                # On error the body is a normal JSON error envelope, not an
-                # SSE stream. Read it to enrich raise_for_status's message,
-                # otherwise the user sees a bare HTTPStatusError with no
-                # provider-side hint about what went wrong (model not found,
-                # invalid api_key, etc.).
-                if resp.status_code >= 400:
-                    body = resp.read().decode("utf-8", errors="replace")
-                    raise httpx.HTTPStatusError(
-                        f"HTTP {resp.status_code} from {self.base_url}: {body[:500]}",
-                        request=resp.request,
-                        response=resp,
-                    )
-                for line in resp.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data or data == "[DONE]":
-                        if data == "[DONE]":
-                            break
-                        continue
-                    try:
-                        obj = json.loads(data)
-                    except json.JSONDecodeError:
-                        # Some providers send keep-alive comments or
-                        # non-JSON lines — skip rather than abort.
-                        continue
-                    choices = obj.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta") or {}
-                    piece = delta.get("content")
-                    if piece:
-                        chunks.append(piece)
-        return "".join(chunks)
+
+        def _send(body: dict[str, object]) -> str:
+            chunks: list[str] = []
+            with httpx.Client(timeout=timeout) as client:
+                with client.stream("POST", url, headers=headers, json=body) as resp:
+                    # On error the body is a normal JSON error envelope, not an
+                    # SSE stream. Read it to enrich raise_for_status's message,
+                    # otherwise the user sees a bare HTTPStatusError with no
+                    # provider-side hint about what went wrong (model not found,
+                    # invalid api_key, etc.).
+                    if resp.status_code >= 400:
+                        err = resp.read().decode("utf-8", errors="replace")
+                        raise httpx.HTTPStatusError(
+                            f"HTTP {resp.status_code} from {self.base_url}: {err[:500]}",
+                            request=resp.request,
+                            response=resp,
+                        )
+                    for line in resp.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            if data == "[DONE]":
+                                break
+                            continue
+                        try:
+                            obj = json.loads(data)
+                        except json.JSONDecodeError:
+                            # Some providers send keep-alive comments or
+                            # non-JSON lines — skip rather than abort.
+                            continue
+                        choices = obj.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        piece = delta.get("content")
+                        if piece:
+                            chunks.append(piece)
+            return "".join(chunks)
+
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": True,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        try:
+            return _send(payload)
+        except httpx.HTTPStatusError as e:
+            # Reasoning models like kimi-k2.6 reject a custom temperature with
+            # HTTP 400 "invalid temperature: only 1 is allowed for this model".
+            # Retry once without temperature so the model uses its required
+            # default. This handler sits INSIDE complete(), before tenacity —
+            # HTTPStatusError isn't a transient type, so this is the only place
+            # it's caught.
+            body = str(e)
+            if (
+                e.response is not None
+                and e.response.status_code == 400
+                and "temperature" in body
+                and "temperature" in payload
+            ):
+                payload.pop("temperature", None)
+                return _send(payload)
+            raise
