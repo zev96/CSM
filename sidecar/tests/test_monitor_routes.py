@@ -201,9 +201,9 @@ def test_summary_empty(client: TestClient, monitor_db: Path):
     resp = client.get("/api/monitor/summary")
     assert resp.status_code == 200
     data = resp.json()
-    # All four platform types present, each with task_count=0.
+    # All five platform types present (geo_query 在 Task 10 注册进 PLATFORM_TYPES)，each with task_count=0.
     assert set(data["platforms"].keys()) == {
-        "zhihu_question", "bilibili_comment", "douyin_comment", "kuaishou_comment",
+        "zhihu_question", "bilibili_comment", "douyin_comment", "kuaishou_comment", "geo_query",
     }
     for p in data["platforms"].values():
         assert p["task_count"] == 0
