@@ -64,3 +64,27 @@ def test_citation_leaderboard_ranks_by_freq(fresh_db):
     assert board[0]["domain"] == "zhihu.com"
     assert board[0]["count"] == 2
     assert board[0]["source_type"] == "知乎"
+
+
+def test_citation_leaderboard_survives_comma_in_keyword(fresh_db):
+    import datetime
+    tid = storage.create_task(MonitorTask(type="geo_query", name="t", target_url="geo://b",
+                                          config={"brand": "b"}))
+    rid = storage.save_result(MonitorResult(task_id=tid, checked_at=datetime.datetime.utcnow(),
+                                            status="ok", rank=1, metric={}))
+    kw = "20万以内, 新能源SUV"  # 关键词本身含逗号
+    geo_storage.record_run(rid, tid, [GeoCell(platform="tongyi", keyword=kw, mentioned=True, rank=1,
+        citations=[ClassifiedCitation(url="https://zhihu.com/x", domain="zhihu.com", source_type="知乎")])])
+    board = geo_storage.citation_leaderboard(tid, days=3650)
+    assert board[0]["keywords"] == [kw]   # 不被逗号拆碎
+
+
+def test_cells_for_run_hydrates_citations(fresh_db):
+    tid = _seed_run(fresh_db)
+    # latest_result returns a MonitorResult; fetch result_id via geo_cells rows
+    conn = storage.get_conn()
+    result_id = conn.execute("SELECT DISTINCT result_id FROM geo_cells WHERE task_id=?", (tid,)).fetchone()[0]
+    cells = geo_storage.cells_for_run(result_id)
+    assert len(cells) == 2
+    tongyi = [c for c in cells if c["platform"] == "tongyi"][0]
+    assert len(tongyi["citations"]) == 2

@@ -94,11 +94,13 @@ def record_run(result_id: int, task_id: int, cells: list[GeoCell]) -> None:
 def citation_leaderboard(
     task_id: int, days: int = 30, platform: str | None = None, keyword: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Domain frequency descending. Returns [{domain, source_type, count, platforms, keywords}]."""
+    """域名频次降序。返回 [{domain, source_type, count, platforms, keywords}].
+
+    平台/关键词聚合在 Python 侧做（不用 group_concat）—— SQLite 的 group_concat
+    无法在 DISTINCT 下指定分隔符，关键词里若含逗号会被 split 破坏。
+    """
     conn = monitor_storage.get_conn()
-    sql = ["SELECT domain, source_type, count(*) AS cnt,",
-           "  group_concat(DISTINCT platform) AS plats,",
-           "  group_concat(DISTINCT keyword) AS kws",
+    sql = ["SELECT domain, source_type, platform, keyword",
            "FROM geo_citations",
            "WHERE task_id=? AND checked_at >= datetime('now', ?)"]
     args: list[Any] = [task_id, f"-{int(days)} days"]
@@ -106,11 +108,19 @@ def citation_leaderboard(
         sql.append("AND platform=?"); args.append(platform)
     if keyword:
         sql.append("AND keyword=?"); args.append(keyword)
-    sql.append("GROUP BY domain, source_type ORDER BY cnt DESC, domain ASC")
     rows = conn.execute("\n".join(sql), args).fetchall()
-    return [{"domain": r["domain"], "source_type": r["source_type"], "count": r["cnt"],
-             "platforms": (r["plats"] or "").split(","),
-             "keywords": (r["kws"] or "").split(",")} for r in rows]
+    agg: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        k = (r["domain"], r["source_type"])
+        e = agg.setdefault(k, {"domain": r["domain"], "source_type": r["source_type"],
+                               "count": 0, "_plats": set(), "_kws": set()})
+        e["count"] += 1
+        e["_plats"].add(r["platform"])
+        e["_kws"].add(r["keyword"])
+    out = [{"domain": e["domain"], "source_type": e["source_type"], "count": e["count"],
+            "platforms": sorted(e["_plats"]), "keywords": sorted(e["_kws"])} for e in agg.values()]
+    out.sort(key=lambda e: (-e["count"], e["domain"]))
+    return out
 
 
 def cells_for_run(result_id: int) -> list[dict[str, Any]]:
