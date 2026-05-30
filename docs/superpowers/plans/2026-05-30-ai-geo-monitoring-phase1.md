@@ -1427,6 +1427,35 @@ def test_extract_bad_json_falls_back():
     ext = extract(ans, brand="小鹏", aliases=[], client=FakeClient("这不是JSON"))
     assert ext.target_rank == -1
     assert ext.summary.startswith("[抽取失败")
+    assert ext.mentioned is True  # heuristic: 小鹏 appears in text
+
+
+def test_extract_retry_succeeds_on_second_attempt():
+    """First call returns bad JSON, the strict-retry call returns good JSON -> parsed, not degraded."""
+    payloads = ["not json at all",
+                '{"mentioned": true, "target_rank": 1, "sentiment": "pos", "recommended": [], "summary": "ok"}']
+    class TwoShot:
+        def __init__(self): self.calls = 0
+        def complete(self, *, system, user, temperature=None):
+            p = payloads[self.calls]; self.calls += 1; return p
+    c = TwoShot()
+    ans = GeoAnswer(platform="tongyi", keyword="k", answer_text="小鹏不错")
+    ext = extract(ans, brand="小鹏", aliases=[], client=c)
+    assert c.calls == 2
+    assert ext.target_rank == 1
+    assert not ext.summary.startswith("[抽取失败")
+
+
+def test_extract_llm_exception_degrades():
+    """An LLM call that raises (network/timeout) degrades to the heuristic, not a crash."""
+    class Boom:
+        def complete(self, *, system, user, temperature=None):
+            raise RuntimeError("network down")
+    ans = GeoAnswer(platform="tongyi", keyword="k", answer_text="小鹏不错")
+    ext = extract(ans, brand="小鹏", aliases=[], client=Boom())
+    assert ext.target_rank == -1
+    assert ext.mentioned is True            # heuristic: 小鹏 appears in text
+    assert ext.summary.startswith("[抽取失败")
 
 
 def test_extract_empty_answer_short_circuits():
@@ -1527,6 +1556,7 @@ def extract(answer: GeoAnswer, *, brand: str, aliases: list[str], client: LLMCli
         try:
             raw = client.complete(system=sys_prompt, user=user, temperature=0.0)
         except Exception as e:
+            # 网络/超时类失败：换严格 prompt 重试也无济于事，直接跳出走启发式降级。
             logger.warning("[geo.extract] LLM 调用失败 kw=%s: %s", answer.keyword, e)
             break
         obj = _parse_json(raw)
@@ -1535,8 +1565,7 @@ def extract(answer: GeoAnswer, *, brand: str, aliases: list[str], client: LLMCli
 
     if obj is None:
         # 降级：品牌名/别名在文本里出现就算 mentioned
-        mentioned = _is_target(answer.answer_text, brand, aliases) or \
-            any(_norm(brand) in _norm(answer.answer_text) for _ in [0])
+        mentioned = _is_target(answer.answer_text, brand, aliases)
         return GeoExtraction(mentioned=mentioned, target_rank=-1, sentiment="na",
                              recommended=[], citations=citations,
                              summary="[抽取失败，已降级为启发式]")
@@ -1566,7 +1595,7 @@ def extract(answer: GeoAnswer, *, brand: str, aliases: list[str], client: LLMCli
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `pytest tests/core/monitor/geo/test_extract.py -v`
-Expected: PASS（3 passed）
+Expected: PASS（5 passed）
 
 - [ ] **Step 5: Commit**
 

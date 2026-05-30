@@ -34,6 +34,35 @@ def test_extract_bad_json_falls_back():
     ext = extract(ans, brand="小鹏", aliases=[], client=FakeClient("这不是JSON"))
     assert ext.target_rank == -1
     assert ext.summary.startswith("[抽取失败")
+    assert ext.mentioned is True  # heuristic: 小鹏 appears in text
+
+
+def test_extract_retry_succeeds_on_second_attempt():
+    """First call returns bad JSON, the strict-retry call returns good JSON -> parsed, not degraded."""
+    payloads = ["not json at all",
+                '{"mentioned": true, "target_rank": 1, "sentiment": "pos", "recommended": [], "summary": "ok"}']
+    class TwoShot:
+        def __init__(self): self.calls = 0
+        def complete(self, *, system, user, temperature=None):
+            p = payloads[self.calls]; self.calls += 1; return p
+    c = TwoShot()
+    ans = GeoAnswer(platform="tongyi", keyword="k", answer_text="小鹏不错")
+    ext = extract(ans, brand="小鹏", aliases=[], client=c)
+    assert c.calls == 2
+    assert ext.target_rank == 1
+    assert not ext.summary.startswith("[抽取失败")
+
+
+def test_extract_llm_exception_degrades():
+    """An LLM call that raises (network/timeout) degrades to the heuristic, not a crash."""
+    class Boom:
+        def complete(self, *, system, user, temperature=None):
+            raise RuntimeError("network down")
+    ans = GeoAnswer(platform="tongyi", keyword="k", answer_text="小鹏不错")
+    ext = extract(ans, brand="小鹏", aliases=[], client=Boom())
+    assert ext.target_rank == -1
+    assert ext.mentioned is True            # heuristic: 小鹏 appears in text
+    assert ext.summary.startswith("[抽取失败")
 
 
 def test_extract_empty_answer_short_circuits():

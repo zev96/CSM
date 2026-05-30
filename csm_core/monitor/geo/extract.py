@@ -73,6 +73,7 @@ def extract(answer: GeoAnswer, *, brand: str, aliases: list[str], client: LLMCli
         try:
             raw = client.complete(system=sys_prompt, user=user, temperature=0.0)
         except Exception as e:
+            # 网络/超时类失败：换严格 prompt 重试也无济于事，直接跳出走启发式降级。
             logger.warning("[geo.extract] LLM 调用失败 kw=%s: %s", answer.keyword, e)
             break
         obj = _parse_json(raw)
@@ -81,8 +82,7 @@ def extract(answer: GeoAnswer, *, brand: str, aliases: list[str], client: LLMCli
 
     if obj is None:
         # 降级：品牌名/别名在文本里出现就算 mentioned
-        mentioned = _is_target(answer.answer_text, brand, aliases) or \
-            any(_norm(brand) in _norm(answer.answer_text) for _ in [0])
+        mentioned = _is_target(answer.answer_text, brand, aliases)
         return GeoExtraction(mentioned=mentioned, target_rank=-1, sentiment="na",
                              recommended=[], citations=citations,
                              summary="[抽取失败，已降级为启发式]")
