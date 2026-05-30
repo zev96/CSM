@@ -1294,7 +1294,8 @@ class KimiProvider:
                     logger.info("[geo.kimi] kw=%s http=%d len=%d", keyword, r.status_code, len(r.text))
                     if r.status_code >= 400:
                         return GeoAnswer(platform=self.platform, keyword=keyword, status="error",
-                                         error=f"http {r.status_code}: {r.text[:300]}")
+                                         error=f"http {r.status_code}: {r.text[:300]}",
+                                         raw={"status": r.status_code})
                     raw = r.json()
                     choice = (raw.get("choices") or [{}])[0]
                     finish = choice.get("finish_reason")
@@ -1310,6 +1311,10 @@ class KimiProvider:
                                 "content": (tc.get("function") or {}).get("arguments") or "{}",
                             })
                         continue
+                    if finish in ("content_filter", "sensitive"):
+                        return GeoAnswer(platform=self.platform, keyword=keyword,
+                                         status="blocked",
+                                         error="内容被 Kimi 安全过滤", raw=raw)
                     text, cits = parse_kimi_response(raw)
                     return GeoAnswer(platform=self.platform, keyword=keyword, answer_text=text,
                                      citations=cits, raw=raw, status="ok" if text else "empty")
@@ -1319,16 +1324,59 @@ class KimiProvider:
                          error="超过 $web_search 工具轮次上限")
 ```
 
+- [ ] **Step 3b: 加工具循环往返测试 + content_filter 测试**
+
+```python
+# 追加到 tests/core/monitor/geo/test_providers.py
+
+class _FakeKimiClient:
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def post(self, *a, **k):
+        return self._responses.pop(0)
+
+
+def test_kimi_tool_loop_round_trip(monkeypatch):
+    monkeypatch.setattr(kimi_mod, "read_api_key", lambda p: "fake-key")
+    round1 = _FakeResp(200, "toolcall", json_data={"choices": [{"finish_reason": "tool_calls", "message": {
+        "role": "assistant",
+        "tool_calls": [{"id": "tc1", "function": {"name": "$web_search", "arguments": "{\"q\":\"x\"}"}}]}}]})
+    round2 = _FakeResp(200, "answer", json_data={"choices": [{"finish_reason": "stop", "message": {
+        "role": "assistant", "content": "推荐小鹏G6",
+        "annotations": [{"type": "url_citation", "url_citation": {"url": "https://www.zhihu.com/q", "title": "知乎"}}]}}]})
+    monkeypatch.setattr(kimi_mod.httpx, "Client", lambda *a, **k: _FakeKimiClient([round1, round2]))
+    ans = kimi_mod.KimiProvider().query("k", web_search=True)
+    assert ans.status == "ok"
+    assert "小鹏G6" in ans.answer_text
+    assert ans.citations[0].url == "https://www.zhihu.com/q"
+
+
+def test_kimi_content_filter_is_blocked(monkeypatch):
+    monkeypatch.setattr(kimi_mod, "read_api_key", lambda p: "fake-key")
+    resp = _FakeResp(200, "filtered", json_data={"choices": [{"finish_reason": "content_filter",
+                                                              "message": {"role": "assistant", "content": ""}}]})
+    monkeypatch.setattr(kimi_mod.httpx, "Client", lambda *a, **k: _FakeKimiClient([resp]))
+    ans = kimi_mod.KimiProvider().query("k", web_search=True)
+    assert ans.status == "blocked"
+```
+
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `pytest tests/core/monitor/geo/test_providers.py -v`
-Expected: PASS（2 passed）
+Expected: PASS（9 passed）
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add csm_core/monitor/geo/providers/api_kimi.py tests/core/monitor/geo/test_providers.py
-git commit -m "feat(geo): Kimi Moonshot \$web_search provider"
+git add csm_core/monitor/geo/providers/api_kimi.py tests/core/monitor/geo/test_providers.py docs/superpowers/plans/2026-05-30-ai-geo-monitoring-phase1.md
+git commit -m "fix(geo): Kimi content_filter->blocked + 工具循环往返测试 + 400 raw 对齐"
 ```
 
 ---

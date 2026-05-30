@@ -80,7 +80,8 @@ class KimiProvider:
                     if r.status_code >= 400:
                         return GeoAnswer(platform=self.platform, keyword=keyword,
                                          status="error",
-                                         error=f"http {r.status_code}: {r.text[:300]}")
+                                         error=f"http {r.status_code}: {r.text[:300]}",
+                                         raw={"status": r.status_code})
                     # Guard against non-JSON 200 (proxy/captcha could inject HTML)
                     try:
                         raw = r.json()
@@ -110,6 +111,10 @@ class KimiProvider:
                                 "content": (tc.get("function") or {}).get("arguments") or "{}",
                             })
                         continue
+                    if finish in ("content_filter", "sensitive"):
+                        return GeoAnswer(platform=self.platform, keyword=keyword,
+                                         status="blocked",
+                                         error="内容被 Kimi 安全过滤", raw=raw)
                     text, cits = parse_kimi_response(raw)
                     return GeoAnswer(platform=self.platform, keyword=keyword,
                                      answer_text=text, citations=cits, raw=raw,

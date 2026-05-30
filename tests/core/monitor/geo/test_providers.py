@@ -82,3 +82,41 @@ def test_kimi_missing_key_is_error(monkeypatch):
     monkeypatch.setattr(kimi_mod, "read_api_key", lambda p: "")
     ans = kimi_mod.KimiProvider().query("k", web_search=True)
     assert ans.status == "error"
+
+
+class _FakeKimiClient:
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def post(self, *a, **k):
+        return self._responses.pop(0)
+
+
+def test_kimi_tool_loop_round_trip(monkeypatch):
+    monkeypatch.setattr(kimi_mod, "read_api_key", lambda p: "fake-key")
+    round1 = _FakeResp(200, "toolcall", json_data={"choices": [{"finish_reason": "tool_calls", "message": {
+        "role": "assistant",
+        "tool_calls": [{"id": "tc1", "function": {"name": "$web_search", "arguments": "{\"q\":\"x\"}"}}]}}]})
+    round2 = _FakeResp(200, "answer", json_data={"choices": [{"finish_reason": "stop", "message": {
+        "role": "assistant", "content": "推荐小鹏G6",
+        "annotations": [{"type": "url_citation", "url_citation": {"url": "https://www.zhihu.com/q", "title": "知乎"}}]}}]})
+    monkeypatch.setattr(kimi_mod.httpx, "Client", lambda *a, **k: _FakeKimiClient([round1, round2]))
+    ans = kimi_mod.KimiProvider().query("k", web_search=True)
+    assert ans.status == "ok"
+    assert "小鹏G6" in ans.answer_text
+    assert ans.citations[0].url == "https://www.zhihu.com/q"
+
+
+def test_kimi_content_filter_is_blocked(monkeypatch):
+    monkeypatch.setattr(kimi_mod, "read_api_key", lambda p: "fake-key")
+    resp = _FakeResp(200, "filtered", json_data={"choices": [{"finish_reason": "content_filter",
+                                                              "message": {"role": "assistant", "content": ""}}]})
+    monkeypatch.setattr(kimi_mod.httpx, "Client", lambda *a, **k: _FakeKimiClient([resp]))
+    ans = kimi_mod.KimiProvider().query("k", web_search=True)
+    assert ans.status == "blocked"
