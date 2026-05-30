@@ -1,8 +1,14 @@
 """GEO 存储层（schema v7）—— 复用 monitor.storage 的连接与迁移 runner。
 
 两张规范化表让信源榜/趋势能 GROUP BY；运行级 KPI 汇总仍存
-monitor_results.metric_json（adapter 写）。DDL 拆在这里、由
-monitor.storage._migrate 调 apply_v7_migration，仿 mining v3-v6。
+monitor_results.metric_json（loop 写，adapter 不再自存）。DDL 拆在这里、
+由 monitor.storage._migrate 调 apply_v7_migration，仿 mining v3-v6。
+
+**关联模型**：geo_cells/geo_citations 是独立分析存储，不外键
+monitor_results(id)。一次运行的明细按 ``(task_id, checked_at)`` 关联
+—— adapter 同时控制这两个值（用同一个 ``checked_at`` 盖在 MonitorResult
+和这批 cell 上）。这样 adapter 不必先存 result 拿 id，避免与
+monitor_loop 的 save_result 双写。
 """
 from __future__ import annotations
 import sqlite3
@@ -16,7 +22,6 @@ _DDL_V7_GEO: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS geo_cells (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        result_id   INTEGER NOT NULL REFERENCES monitor_results(id) ON DELETE CASCADE,
         task_id     INTEGER NOT NULL,
         checked_at  TEXT NOT NULL,
         platform    TEXT NOT NULL,
@@ -30,7 +35,6 @@ _DDL_V7_GEO: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_geo_cells_task_time ON geo_cells(task_id, checked_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_geo_cells_result ON geo_cells(result_id)",
     """
     CREATE TABLE IF NOT EXISTS geo_citations (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,19 +64,40 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def record_run(result_id: int, task_id: int, cells: list[GeoCell]) -> None:
-    """Write one run's cells + citations in a single transaction. Rolls back on failure."""
+def _norm_checked_at(checked_at: "datetime | str") -> str:
+    """Normalize a run's correlation timestamp to the ISO string we store.
+
+    Accepts either a ``datetime`` (formatted via :func:`_iso`) or an
+    already-ISO string (used as-is). This lets ``record_run`` and
+    ``cells_for_run`` agree on the exact key without the caller having to
+    pre-format — the adapter stamps ``result.checked_at`` (a datetime) and
+    later drill-down passes that same value back.
+    """
+    if isinstance(checked_at, datetime):
+        return _iso(checked_at)
+    return str(checked_at)
+
+
+def record_run(task_id: int, checked_at: "datetime | str", cells: list[GeoCell]) -> None:
+    """Write one run's cells + citations in a single transaction. Rolls back on failure.
+
+    The run is identified by ``(task_id, checked_at)`` — the adapter passes
+    the SAME ``checked_at`` it stamps on the ``MonitorResult`` so drill-down
+    via :func:`cells_for_run` can correlate without an FK to
+    monitor_results(id). ``checked_at`` may be a datetime or ISO string;
+    a single normalized value is used for every cell AND citation row.
+    """
     import json
     conn = monitor_storage.get_conn()
-    now = _iso(datetime.utcnow())
+    ts = _norm_checked_at(checked_at)
     conn.execute("BEGIN")
     try:
         for c in cells:
             cur = conn.execute(
-                """INSERT INTO geo_cells(result_id, task_id, checked_at, platform, keyword,
+                """INSERT INTO geo_cells(task_id, checked_at, platform, keyword,
                        mentioned, rank, sentiment, answer_text, status, raw_json)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
-                (result_id, task_id, now, c.platform, c.keyword,
+                   VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                (task_id, ts, c.platform, c.keyword,
                  1 if c.mentioned else 0, c.rank, c.sentiment,
                  c.answer_text, c.status, json.dumps(c.raw, ensure_ascii=False)),
             )
@@ -82,7 +107,7 @@ def record_run(result_id: int, task_id: int, cells: list[GeoCell]) -> None:
                     """INSERT INTO geo_citations(cell_id, task_id, checked_at, platform, keyword,
                            url, title, domain, source_type)
                        VALUES(?,?,?,?,?,?,?,?,?)""",
-                    (cell_id, task_id, now, c.platform, c.keyword,
+                    (cell_id, task_id, ts, c.platform, c.keyword,
                      cit.url, cit.title, cit.domain, cit.source_type),
                 )
         conn.execute("COMMIT")
@@ -123,11 +148,19 @@ def citation_leaderboard(
     return out
 
 
-def cells_for_run(result_id: int) -> list[dict[str, Any]]:
-    """All cells for a single run (drill-down: answer text + citations)."""
+def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, Any]]:
+    """All cells for a single run (drill-down: answer text + citations).
+
+    A run is keyed by ``(task_id, checked_at)`` — pass the same
+    ``checked_at`` the adapter stamped on the run's ``MonitorResult``.
+    ``checked_at`` may be a datetime or ISO string (normalized the same way
+    :func:`record_run` does so they match exactly).
+    """
     conn = monitor_storage.get_conn()
+    ts = _norm_checked_at(checked_at)
     rows = conn.execute(
-        "SELECT * FROM geo_cells WHERE result_id=? ORDER BY platform, keyword", (result_id,)
+        "SELECT * FROM geo_cells WHERE task_id=? AND checked_at=? ORDER BY platform, keyword",
+        (task_id, ts),
     ).fetchall()
     out = []
     for r in rows:

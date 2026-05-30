@@ -703,6 +703,7 @@ git commit -m "feat(geo): 四大 KPI 聚合（SoC/首推率/情感分/分布/维
 ```python
 # tests/core/monitor/geo/test_storage.py
 from __future__ import annotations
+import datetime
 import threading
 from pathlib import Path
 import pytest
@@ -736,12 +737,19 @@ def test_v7_tables_exist(fresh_db):
     assert "geo_citations" in names
 
 
-def _seed_run(fresh_db) -> int:
+def _seed_run(fresh_db) -> tuple[int, datetime.datetime]:
+    """Create a task + one run's cells. Returns (task_id, checked_at).
+
+    The same ``checked_at`` is stamped on the MonitorResult and passed to
+    record_run — that pair is the run's correlation key now that geo_cells
+    no longer FK monitor_results(id).
+    """
     tid = storage.create_task(MonitorTask(
         type="geo_query", name="小鹏卡位", target_url="geo://小鹏",
         config={"brand": "小鹏"}))
-    rid = storage.save_result(MonitorResult(
-        task_id=tid, checked_at=__import__("datetime").datetime.utcnow(),
+    checked_at = datetime.datetime.utcnow()
+    storage.save_result(MonitorResult(
+        task_id=tid, checked_at=checked_at,
         status="ok", rank=2, metric={}))
     cells = [
         GeoCell(platform="tongyi", keyword="新能源SUV", mentioned=True, rank=1, sentiment="pos",
@@ -750,19 +758,19 @@ def _seed_run(fresh_db) -> int:
         GeoCell(platform="kimi", keyword="新能源SUV", mentioned=False, rank=-1,
                 citations=[ClassifiedCitation(url="https://zhihu.com/c", domain="zhihu.com", source_type="知乎")]),
     ]
-    geo_storage.record_run(rid, tid, cells)
-    return tid
+    geo_storage.record_run(tid, checked_at, cells)
+    return tid, checked_at
 
 
 def test_record_run_persists_cells_and_citations(fresh_db):
-    tid = _seed_run(fresh_db)
+    tid, _ = _seed_run(fresh_db)
     conn = storage.get_conn()
     assert conn.execute("SELECT count(*) FROM geo_cells WHERE task_id=?", (tid,)).fetchone()[0] == 2
     assert conn.execute("SELECT count(*) FROM geo_citations WHERE task_id=?", (tid,)).fetchone()[0] == 3
 
 
 def test_citation_leaderboard_ranks_by_freq(fresh_db):
-    tid = _seed_run(fresh_db)
+    tid, _ = _seed_run(fresh_db)
     board = geo_storage.citation_leaderboard(tid, days=3650)
     # zhihu.com 出现 2 次，xiaohongshu.com 1 次
     assert board[0]["domain"] == "zhihu.com"
@@ -771,24 +779,22 @@ def test_citation_leaderboard_ranks_by_freq(fresh_db):
 
 
 def test_citation_leaderboard_survives_comma_in_keyword(fresh_db):
-    import datetime
     tid = storage.create_task(MonitorTask(type="geo_query", name="t", target_url="geo://b",
                                           config={"brand": "b"}))
-    rid = storage.save_result(MonitorResult(task_id=tid, checked_at=datetime.datetime.utcnow(),
-                                            status="ok", rank=1, metric={}))
+    checked_at = datetime.datetime.utcnow()
+    storage.save_result(MonitorResult(task_id=tid, checked_at=checked_at,
+                                      status="ok", rank=1, metric={}))
     kw = "20万以内, 新能源SUV"  # 关键词本身含逗号
-    geo_storage.record_run(rid, tid, [GeoCell(platform="tongyi", keyword=kw, mentioned=True, rank=1,
+    geo_storage.record_run(tid, checked_at, [GeoCell(platform="tongyi", keyword=kw, mentioned=True, rank=1,
         citations=[ClassifiedCitation(url="https://zhihu.com/x", domain="zhihu.com", source_type="知乎")])])
     board = geo_storage.citation_leaderboard(tid, days=3650)
     assert board[0]["keywords"] == [kw]   # 不被逗号拆碎
 
 
 def test_cells_for_run_hydrates_citations(fresh_db):
-    tid = _seed_run(fresh_db)
-    # latest_result returns a MonitorResult; fetch result_id via geo_cells rows
-    conn = storage.get_conn()
-    result_id = conn.execute("SELECT DISTINCT result_id FROM geo_cells WHERE task_id=?", (tid,)).fetchone()[0]
-    cells = geo_storage.cells_for_run(result_id)
+    tid, checked_at = _seed_run(fresh_db)
+    # Drill-down correlates by (task_id, checked_at) — no result_id FK anymore.
+    cells = geo_storage.cells_for_run(tid, checked_at)
     assert len(cells) == 2
     tongyi = [c for c in cells if c["platform"] == "tongyi"][0]
     assert len(tongyi["citations"]) == 2
@@ -806,8 +812,14 @@ Expected: FAIL — `geo_cells` 表不存在 / `ImportError`
 """GEO 存储层（schema v7）—— 复用 monitor.storage 的连接与迁移 runner。
 
 两张规范化表让信源榜/趋势能 GROUP BY；运行级 KPI 汇总仍存
-monitor_results.metric_json（adapter 写）。DDL 拆在这里、由
-monitor.storage._migrate 调 apply_v7_migration，仿 mining v3-v6。
+monitor_results.metric_json（loop 写，adapter 不再自存）。DDL 拆在这里、
+由 monitor.storage._migrate 调 apply_v7_migration，仿 mining v3-v6。
+
+**关联模型**：geo_cells/geo_citations 是独立分析存储，不外键
+monitor_results(id)。一次运行的明细按 ``(task_id, checked_at)`` 关联
+—— adapter 同时控制这两个值（用同一个 ``checked_at`` 盖在 MonitorResult
+和这批 cell 上）。这样 adapter 不必先存 result 拿 id，避免与
+monitor_loop 的 save_result 双写。
 """
 from __future__ import annotations
 import sqlite3
@@ -821,7 +833,6 @@ _DDL_V7_GEO: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS geo_cells (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        result_id   INTEGER NOT NULL REFERENCES monitor_results(id) ON DELETE CASCADE,
         task_id     INTEGER NOT NULL,
         checked_at  TEXT NOT NULL,
         platform    TEXT NOT NULL,
@@ -835,7 +846,6 @@ _DDL_V7_GEO: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_geo_cells_task_time ON geo_cells(task_id, checked_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_geo_cells_result ON geo_cells(result_id)",
     """
     CREATE TABLE IF NOT EXISTS geo_citations (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -865,19 +875,37 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def record_run(result_id: int, task_id: int, cells: list[GeoCell]) -> None:
-    """批量写一次运行的 cells + citations。一个事务，失败回滚。"""
+def _norm_checked_at(checked_at: "datetime | str") -> str:
+    """Normalize a run's correlation timestamp to the stored ISO string.
+
+    datetime → 走 _iso；已是 str → 原样用。让 record_run / cells_for_run
+    对得上同一个 key（adapter 传 datetime，未来 Task 11 端点把存好的 ISO
+    字符串作为 query param 传回）。
+    """
+    if isinstance(checked_at, datetime):
+        return _iso(checked_at)
+    return str(checked_at)
+
+
+def record_run(task_id: int, checked_at: "datetime | str", cells: list[GeoCell]) -> None:
+    """批量写一次运行的 cells + citations。一个事务，失败回滚。
+
+    运行用 ``(task_id, checked_at)`` 标识 —— adapter 传它盖在 MonitorResult
+    上的同一个 ``checked_at``，下钻（cells_for_run）据此关联，不靠外键
+    monitor_results(id)。``checked_at`` 可为 datetime 或 ISO 字符串，归一后
+    用于这批每一行 cell 和 citation。
+    """
     import json
     conn = monitor_storage.get_conn()
-    now = _iso(datetime.utcnow())
+    ts = _norm_checked_at(checked_at)
     conn.execute("BEGIN")
     try:
         for c in cells:
             cur = conn.execute(
-                """INSERT INTO geo_cells(result_id, task_id, checked_at, platform, keyword,
+                """INSERT INTO geo_cells(task_id, checked_at, platform, keyword,
                        mentioned, rank, sentiment, answer_text, status, raw_json)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
-                (result_id, task_id, now, c.platform, c.keyword,
+                   VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                (task_id, ts, c.platform, c.keyword,
                  1 if c.mentioned else 0, c.rank, c.sentiment,
                  c.answer_text, c.status, json.dumps(c.raw, ensure_ascii=False)),
             )
@@ -887,7 +915,7 @@ def record_run(result_id: int, task_id: int, cells: list[GeoCell]) -> None:
                     """INSERT INTO geo_citations(cell_id, task_id, checked_at, platform, keyword,
                            url, title, domain, source_type)
                        VALUES(?,?,?,?,?,?,?,?,?)""",
-                    (cell_id, task_id, now, c.platform, c.keyword,
+                    (cell_id, task_id, ts, c.platform, c.keyword,
                      cit.url, cit.title, cit.domain, cit.source_type),
                 )
         conn.execute("COMMIT")
@@ -928,11 +956,17 @@ def citation_leaderboard(
     return out
 
 
-def cells_for_run(result_id: int) -> list[dict[str, Any]]:
-    """某次运行的全部 cell（下钻看原文 + 信源）。"""
+def cells_for_run(task_id: int, checked_at: "datetime | str") -> list[dict[str, Any]]:
+    """某次运行的全部 cell（下钻看原文 + 信源）。
+
+    运行用 ``(task_id, checked_at)`` 关联 —— 传 adapter 盖在该次运行
+    MonitorResult 上的同一个 ``checked_at``（datetime 或 ISO 字符串）。
+    """
     conn = monitor_storage.get_conn()
+    ts = _norm_checked_at(checked_at)
     rows = conn.execute(
-        "SELECT * FROM geo_cells WHERE result_id=? ORDER BY platform, keyword", (result_id,)
+        "SELECT * FROM geo_cells WHERE task_id=? AND checked_at=? ORDER BY platform, keyword",
+        (task_id, ts),
     ).fetchall()
     out = []
     for r in rows:
@@ -1677,13 +1711,46 @@ def test_fetch_fans_out_and_records(fresh_db, monkeypatch):
     assert result.rank == 1                      # 全 rank==1 → 中位 1
     assert result.metric["soc"] == 1.0
     assert result.metric["first_rank_rate"] == 1.0
+    assert result.metric["error_cells"] == 0
+    assert result.metric["partial_resume"] is False
+    assert progress[0] == (0, 4)                 # 初始 0/total 事件
     assert progress[-1] == (4, 4)                # 2 关键词 × 2 平台
 
-    # 落库
-    rid = storage.latest_result(tid).task_id  # sanity
+    # ── Simulate monitor_loop._run_one: the LOOP persists the result, the
+    # adapter must NOT (C1 regression guard — double-save → 2 monitor_results rows).
     from csm_core.monitor.geo import storage as geo_storage
+    storage.save_result(result)
     conn = storage.get_conn()
+    assert conn.execute(
+        "SELECT count(*) FROM monitor_results WHERE task_id=?", (tid,)
+    ).fetchone()[0] == 1                          # 单写：loop 存一行，adapter 不自存
     assert conn.execute("SELECT count(*) FROM geo_cells WHERE task_id=?", (tid,)).fetchone()[0] == 4
+    drill = geo_storage.cells_for_run(tid, result.checked_at)  # 下钻按 checked_at 关联
+    assert len(drill) == 4
+
+
+def test_all_cells_failed_marks_run_failed(fresh_db, monkeypatch):
+    # I1: 全平台 raise → status="failed"（非 ok+rank=-1），notify.should_alert
+    # 在 status != "ok" 时 return False，避免误报"排名跌出 Top-N"。
+    class Boom(FakeProvider):
+        def query(self, *a, **k):
+            raise RuntimeError("boom")
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: Boom(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://小鹏",
+        config={"brand": "小鹏", "keywords": ["k1", "k2"], "platforms": ["tongyi", "kimi"],
+                "extract_provider": "mock"}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert result.status == "failed"
+    assert result.rank == -1
+    assert result.metric["error_cells"] == 4     # 2 关键词 × 2 平台，全错
+    assert result.error_message
+    from csm_core.monitor.geo import storage as geo_storage
+    drill = geo_storage.cells_for_run(tid, result.checked_at)  # 仍落库
+    assert len(drill) == 4
+    assert all(c["status"] == "error" for c in drill)
 
 
 def test_one_provider_error_does_not_kill_run(fresh_db, monkeypatch):
@@ -1703,6 +1770,7 @@ def test_one_provider_error_does_not_kill_run(fresh_db, monkeypatch):
                 "extract_provider": "mock"}))
     result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
     assert result.status == "ok"                 # 部分失败不整体失败
+    assert result.metric["error_cells"] == 1     # I2 surface
     conn = storage.get_conn()
     rows = conn.execute("SELECT platform, status FROM geo_cells WHERE task_id=?", (tid,)).fetchall()
     statuses = {r["platform"]: r["status"] for r in rows}
@@ -1726,12 +1794,20 @@ LLM 抽取 → 信源分类 → 累积 GeoCell。cell 级错误隔离（单 cell
 status 继续）。结束后聚合四大 KPI 写 MonitorResult.metric，明细落
 geo_cells/geo_citations。复用 baidu 的 progress_cb / maybe_cancel /
 resume_from 约定。
+
+**持久化约定**：fetch() 像 baidu_keyword 一样**只返回** MonitorResult，
+由 monitor_loop._run_one 调 save_result 持久化一次。adapter 自己**不**调
+save_result —— 否则会与 loop 双写 monitor_results。geo 明细则用 adapter
+盖的同一个 ``checked_at`` 关联（record_run），不靠 monitor_results.id 外键。
+
+全失败保护：若所有 cell 都失败，返回 status="failed"（而非 ok+rank=-1），
+避免 notify 误报"排名跌出 Top-N"。
 """
 from __future__ import annotations
 import logging
 import threading
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable
 
 from ..base import MonitorTask, MonitorResult, maybe_cancel
 from ..geo.models import GeoCell
@@ -1739,7 +1815,6 @@ from ..geo.providers.base import get_provider
 from ..geo.extract import extract, build_extract_client
 from ..geo import metrics
 from ..geo import storage as geo_storage
-from .. import storage
 
 logger = logging.getLogger(__name__)
 
@@ -1750,7 +1825,8 @@ class GeoQueryAdapter:
     def fetch(
         self,
         task: MonitorTask,
-        progress_cb: Callable[[int, int], None] | None = None,
+        *,
+        progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: "threading.Event | None" = None,
         resume_from: int = 0,
     ) -> MonitorResult:
@@ -1777,6 +1853,16 @@ class GeoQueryAdapter:
             return MonitorResult(task_id=task.id or 0, checked_at=datetime.utcnow(),
                                  status="failed", rank=-1, error_message=f"抽取 client: {e}")
 
+        # Clamp resume_from to valid range so callers don't need to guard.
+        resume_from = max(0, min(int(resume_from), total))
+
+        # 初始 progress 事件（mirror baidu）让 UI 立刻显示总数；包 try/except。
+        if progress_cb is not None:
+            try:
+                progress_cb(resume_from, total)
+            except Exception:
+                logger.exception("[geo] progress_cb(resume_from,N) raised; ignoring")
+
         cells: list[GeoCell] = []
         for i, (kw, plat) in enumerate(cells_plan):
             if i < resume_from:
@@ -1784,20 +1870,53 @@ class GeoQueryAdapter:
             maybe_cancel(cancel_token)
             cell = self._run_cell(kw, plat, brand, aliases, web_search, client)
             cells.append(cell)
-            if progress_cb:
-                progress_cb(i + 1, total)
+            if progress_cb is not None:
+                try:
+                    progress_cb(i + 1, total)
+                except Exception:
+                    logger.exception("[geo] progress_cb(%s,%s) raised; ignoring", i + 1, total)
 
         agg = metrics.aggregate(cells)
+        # I2/I3：error_cells 区分"够不到平台"vs"曝光低"；partial_resume 标记续抓。
+        agg["error_cells"] = sum(1 for c in cells if c.status in ("error", "blocked"))
+        agg["partial_resume"] = resume_from > 0
         rank = metrics.representative_rank(cells)
+
+        # checked_at 算一次，同盖 MonitorResult 与这批 cell —— geo 表关联键。
         checked_at = datetime.utcnow()
-        result = MonitorResult(task_id=task.id or 0, checked_at=checked_at,
-                               status="ok", rank=rank, metric=agg)
-        # 落库：先存 result 拿 result_id，再 record_run 明细
-        result_id = storage.save_result(result)
-        geo_storage.record_run(result_id, task.id or 0, cells)
+
+        # I1：全失败 → status=failed，避免误报"排名跌出 Top-N"告警。
+        ok_cells = sum(1 for c in cells if c.status == "ok")
+        if cells and ok_cells == 0:
+            first_err = next(
+                (c.raw.get("error") for c in cells if c.status in ("error", "blocked")),
+                "全部平台采集失败",
+            )
+            result = MonitorResult(
+                task_id=task.id or 0, checked_at=checked_at,
+                status="failed", rank=-1, metric=agg,
+                error_message=f"geo_query 全部 cell 失败：{first_err}",
+            )
+        else:
+            result = MonitorResult(
+                task_id=task.id or 0, checked_at=checked_at,
+                status="ok", rank=rank, metric=agg,
+            )
+
+        # 明细落 geo_cells/geo_citations，用同一 checked_at 关联。adapter 不
+        # save_result —— monitor_loop._run_one 持久化 result（一次）。
+        geo_storage.record_run(task.id or 0, checked_at, cells)
         return result
 
-    def _run_cell(self, keyword, platform, brand, aliases, web_search, client) -> GeoCell:
+    def _run_cell(
+        self,
+        keyword: str,
+        platform: str,
+        brand: str,
+        aliases: list[str],
+        web_search: bool,
+        client: Any,
+    ) -> GeoCell:
         try:
             provider = get_provider(platform)
             answer = provider.query(keyword, web_search=web_search)
@@ -1811,9 +1930,10 @@ class GeoQueryAdapter:
                 answer_text=answer.answer_text, status="ok", raw=answer.raw,
                 citations=ext.citations)
         except Exception as e:                       # cell 级隔离
-            logger.warning("[geo] cell 失败 kw=%s plat=%s: %s", keyword, platform, e)
+            # logger.exception 抓 traceback；raw 存 repr(e) 保留异常类型。
+            logger.exception("[geo] cell 失败 kw=%s plat=%s", keyword, platform)
             return GeoCell(platform=platform, keyword=keyword, status="error",
-                           raw={"error": str(e)})
+                           raw={"error": repr(e)})
 
 
 ADAPTER = GeoQueryAdapter()
@@ -1824,7 +1944,7 @@ ADAPTER = GeoQueryAdapter()
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `pytest tests/core/monitor/geo/test_geo_query_adapter.py -v`
-Expected: PASS（2 passed）
+Expected: PASS（3 passed）
 
 - [ ] **Step 5: Commit**
 
@@ -1955,11 +2075,13 @@ def geo_seeded(tmp_path: Path):
     tid = storage.create_task(MonitorTask(type="geo_query", name="小鹏", target_url="geo://小鹏",
                                           config={"brand": "小鹏"}))
     import datetime
-    rid = storage.save_result(MonitorResult(task_id=tid, checked_at=datetime.datetime.utcnow(),
-                                            status="ok", rank=1, metric={"soc": 1.0}))
-    geo_storage.record_run(rid, tid, [GeoCell(platform="tongyi", keyword="k", mentioned=True, rank=1,
+    checked_at = datetime.datetime.utcnow()
+    storage.save_result(MonitorResult(task_id=tid, checked_at=checked_at,
+                                      status="ok", rank=1, metric={"soc": 1.0}))
+    geo_storage.record_run(tid, checked_at, [GeoCell(platform="tongyi", keyword="k", mentioned=True, rank=1,
         citations=[ClassifiedCitation(url="https://zhihu.com/a", domain="zhihu.com", source_type="知乎")])])
-    yield tid
+    # checked_at 是 cells 下钻端点的关联键（geo_storage._iso 得到存库 ISO 串）。
+    yield tid, geo_storage._iso(checked_at)
     conn = getattr(storage_mod._local, "conn", None)
     if conn is not None:
         conn.close()
@@ -1968,12 +2090,21 @@ def geo_seeded(tmp_path: Path):
 
 
 def test_citation_leaderboard_endpoint(client, geo_seeded):
-    tid = geo_seeded
+    tid, _ = geo_seeded
     r = client.get(f"/api/monitor/geo/{tid}/citations", params={"days": 3650})
     assert r.status_code == 200
     board = r.json()["leaderboard"]
     assert board[0]["domain"] == "zhihu.com"
     assert board[0]["count"] == 1
+
+
+def test_cells_endpoint_correlates_by_checked_at(client, geo_seeded):
+    tid, checked_at = geo_seeded
+    r = client.get(f"/api/monitor/geo/{tid}/cells", params={"checked_at": checked_at})
+    assert r.status_code == 200
+    cells = r.json()["cells"]
+    assert len(cells) == 1
+    assert cells[0]["platform"] == "tongyi"
 ```
 
 > 若 `client` fixture 不在 conftest，参考 `sidecar/tests/test_baidu_keyword.py` 怎么造 `TestClient`（同样的 import + `RequireToken` 覆盖），把它抄到本测试或 sidecar conftest。
@@ -1999,10 +2130,13 @@ def geo_citations(task_id: int, days: int = 30, platform: str | None = None,
 
 
 @router.get("/geo/{task_id}/cells")
-def geo_cells(task_id: int, result_id: int, _t=RequireToken):
+def geo_cells(task_id: int, checked_at: str, _t=RequireToken):
+    # 下钻按 (task_id, checked_at) 关联 —— checked_at 是该次运行
+    # MonitorResult.checked_at 的存库 ISO 串（前端从 /results 拿到后回传）。
+    # geo 表不外键 monitor_results.id（adapter 不自存 result，避免与 loop 双写）。
     _require_storage()
     from csm_core.monitor.geo import storage as geo_storage
-    return {"cells": geo_storage.cells_for_run(result_id)}
+    return {"cells": geo_storage.cells_for_run(task_id, checked_at)}
 ```
 
 > `RequireToken` / `_require_storage` / router 前缀按文件实际写法对齐（端点路径里别重复 `/api/monitor` 前缀——router 已带）。KPI 汇总走现有 `/api/monitor/results`（metric_json 已含 KPI 块），阶段 1 不单列 kpi 端点；导出 Excel 放 Task 14 之后或阶段 2。
