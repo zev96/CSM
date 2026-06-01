@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .patchright_pool import ensure_browsers_path
+from .chrome_detect import prune_profile_caches
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,17 @@ def baidu_browser_session(
                 pw.stop()
             except Exception as e:
                 logger.debug("baidu pw.stop raised: %s", e)
+        # native 副本模式：Chrome 已完全关闭（无文件锁），清理本轮攒下的缓存，
+        # 使副本常态维持 ~0.5GB。best-effort，失败只 log 不影响已完成的 fetch。
+        if use_native_chrome:
+            try:
+                meta = prune_profile_caches(str(target_dir))
+                logger.info(
+                    "[baidu native] pruned profile caches: freed %s MB in %ss",
+                    meta["freed_mb"], meta["elapsed_s"],
+                )
+            except Exception as e:
+                logger.debug("baidu prune_profile_caches raised: %s", e)
 
 
 def _default_user_data_dir() -> Path:
