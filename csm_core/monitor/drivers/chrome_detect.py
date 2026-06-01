@@ -38,6 +38,11 @@ _PROFILE_CACHE_DIRS_TO_SKIP = frozenset({
     "Storage",
     "Crashpad",
     "PnaclTranslationCache",
+    # Cache Storage API 数据（Service Worker\CacheStorage、WebStorage\<bucket>\CacheStorage）
+    # —— 永远是缓存的 HTTP 响应，不含 cookie / 登录态
+    "CacheStorage",
+    # 压缩字典缓存
+    "Shared Dictionary",
     # extension caches，不影响扩展功能
     "Extension State",
     "Extension Cookies-journal",

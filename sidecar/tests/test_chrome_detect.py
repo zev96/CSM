@@ -367,3 +367,38 @@ class TestCopyProfileTo:
         assert not (target / "Default" / "Code Cache").exists()
         assert not (target / "Default" / "Service Worker").exists()
         assert not (target / "Default" / "GPUCache").exists()
+
+    def test_copy_profile_to_skips_cachestorage_and_shared_dictionary(self, tmp_path):
+        """WebStorage 下的 CacheStorage 和 Shared Dictionary 也跳过（纯缓存），
+        同 bucket 的非缓存数据（leveldb）保留。"""
+        src_user_data = tmp_path / "src_user_data"
+        src_default = src_user_data / "Default"
+        src_default.mkdir(parents=True)
+        (src_default / "Cookies").write_text("cookies-data")
+        (src_user_data / "Local State").write_text('{"os_crypt":{}}')
+        # WebStorage/<bucket>/CacheStorage —— 缓存，跳过
+        cs = src_default / "WebStorage" / "1" / "CacheStorage"
+        cs.mkdir(parents=True)
+        (cs / "blob").write_text("cache-blob")
+        # WebStorage/<bucket>/leveldb —— 非缓存，保留
+        other = src_default / "WebStorage" / "1" / "leveldb"
+        other.mkdir(parents=True)
+        (other / "000001.log").write_text("real-data")
+        # Shared Dictionary —— 缓存，跳过
+        sd = src_default / "Shared Dictionary"
+        sd.mkdir()
+        (sd / "db").write_text("dict-cache")
+
+        target = tmp_path / "target"
+        chrome_detect.copy_profile_to(
+            source_user_data_dir=str(src_user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+        assert (target / "Default" / "Cookies").exists()
+        # CacheStorage 任意层级都不复制
+        assert not (target / "Default" / "WebStorage" / "1" / "CacheStorage").exists()
+        # 同 bucket 的非缓存数据保留
+        assert (target / "Default" / "WebStorage" / "1" / "leveldb" / "000001.log").exists()
+        # Shared Dictionary 不复制
+        assert not (target / "Default" / "Shared Dictionary").exists()
