@@ -402,3 +402,64 @@ class TestCopyProfileTo:
         assert (target / "Default" / "WebStorage" / "1" / "leveldb" / "000001.log").exists()
         # Shared Dictionary 不复制
         assert not (target / "Default" / "Shared Dictionary").exists()
+
+
+# ── prune_profile_caches ──────────────────────────────────────────
+class TestPruneProfileCaches:
+    def _make_copy(self, tmp_path):
+        """造一个带缓存 + 登录态的假副本。"""
+        copy = tmp_path / "baidu_chrome_profile_copy"
+        default = copy / "Default"
+        default.mkdir(parents=True)
+        # 缓存（应删）
+        sw = default / "Service Worker" / "CacheStorage"
+        sw.mkdir(parents=True)
+        (sw / "blob").write_bytes(b"x" * 4096)
+        (default / "Cache").mkdir()
+        (default / "Cache" / "data_0").write_bytes(b"y" * 4096)
+        ws_cs = default / "WebStorage" / "1" / "CacheStorage"
+        ws_cs.mkdir(parents=True)
+        (ws_cs / "blob").write_bytes(b"z" * 4096)
+        (default / "Shared Dictionary").mkdir()
+        (default / "Shared Dictionary" / "db").write_bytes(b"w" * 4096)
+        # 登录态 / 用户数据（应留）
+        (default / "Network").mkdir()
+        (default / "Network" / "Cookies").write_bytes(b"login-cookies")
+        (default / "IndexedDB").mkdir()
+        (default / "IndexedDB" / "data").write_bytes(b"idb")
+        (default / "Local Storage").mkdir()
+        (default / "Local Storage" / "leveldb").write_bytes(b"ls")
+        (copy / "Local State").write_text('{"os_crypt":{}}')
+        return copy, default
+
+    def test_removes_caches_keeps_login_state(self, tmp_path):
+        copy, default = self._make_copy(tmp_path)
+        meta = chrome_detect.prune_profile_caches(str(copy))
+        # 缓存删了（含任意层级 CacheStorage）
+        assert not (default / "Service Worker").exists()
+        assert not (default / "Cache").exists()
+        assert not (default / "WebStorage" / "1" / "CacheStorage").exists()
+        assert not (default / "Shared Dictionary").exists()
+        # 登录态 / 用户数据留着
+        assert (default / "Network" / "Cookies").exists()
+        assert (default / "IndexedDB" / "data").exists()
+        assert (default / "Local Storage" / "leveldb").exists()
+        assert (copy / "Local State").exists()
+        # 返回释放量元数据
+        assert meta["freed_mb"] >= 0
+        assert "elapsed_s" in meta
+
+    def test_nonexistent_path_is_noop(self, tmp_path):
+        meta = chrome_detect.prune_profile_caches(str(tmp_path / "nope"))
+        assert meta == {"freed_mb": 0.0, "elapsed_s": 0.0}
+
+    def test_does_not_raise_when_removal_fails(self, tmp_path, monkeypatch):
+        """rmtree 抛错（模拟文件锁）时整体不冒泡。"""
+        copy, _ = self._make_copy(tmp_path)
+
+        def boom(*a, **k):
+            raise OSError("locked")
+
+        monkeypatch.setattr(chrome_detect.shutil, "rmtree", boom)
+        meta = chrome_detect.prune_profile_caches(str(copy))  # 不应抛
+        assert "freed_mb" in meta and "elapsed_s" in meta

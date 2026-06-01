@@ -214,6 +214,67 @@ def copy_profile_to(
     }
 
 
+def _path_size(path: Path) -> int:
+    """递归累加目录下所有文件字节数；读不到的项跳过。"""
+    total = 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def prune_profile_caches(profile_copy_path: str) -> dict[str, Any]:
+    """删除副本里的 Chrome 缓存目录 / 文件，保留登录态与用户数据。
+
+    与 copy_profile_to 的 _copy_ignore_caches 语义对称：删除任意层级下
+    名字在 _PROFILE_CACHE_DIRS_TO_SKIP 里的目录 / 文件。best-effort ——
+    逐项 try/except，被锁的项跳过，整体永不抛异常（调用方在 session
+    finally 里，fetch 已完成，清理失败不能影响结果）。
+
+    Args:
+        profile_copy_path: 副本根目录（<config_dir>/baidu_chrome_profile_copy）。
+
+    Returns:
+        {"freed_mb": float, "elapsed_s": float}。路径不存在 → 全 0。
+    """
+    base = Path(profile_copy_path)
+    if not base.is_dir():
+        return {"freed_mb": 0.0, "elapsed_s": 0.0}
+
+    start = time.monotonic()
+    freed = 0
+    for root, dirs, files in os.walk(base, topdown=True):
+        root_path = Path(root)
+        # 删匹配的文件（如 Extension Cookies-journal）
+        for fname in files:
+            if fname in _PROFILE_CACHE_DIRS_TO_SKIP:
+                fp = root_path / fname
+                try:
+                    freed += fp.stat().st_size
+                    fp.unlink()
+                except OSError as e:
+                    logger.debug("prune unlink failed %s: %s", fp, e)
+        # 删匹配的目录，并从遍历里剔除（不再下探）
+        keep = []
+        for d in dirs:
+            if d in _PROFILE_CACHE_DIRS_TO_SKIP:
+                dp = root_path / d
+                try:
+                    freed += _path_size(dp)
+                    shutil.rmtree(dp, ignore_errors=True)
+                except OSError as e:
+                    logger.debug("prune rmtree failed %s: %s", dp, e)
+            else:
+                keep.append(d)
+        dirs[:] = keep
+
+    elapsed = time.monotonic() - start
+    return {"freed_mb": round(freed / 1024 / 1024, 1), "elapsed_s": round(elapsed, 1)}
+
+
 def _read_account_email(preferences_path: Path) -> str | None:
     """从 Preferences JSON 读第一个 account_info[0].email。失败返回 None。"""
     try:
