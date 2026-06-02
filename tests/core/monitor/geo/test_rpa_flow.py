@@ -163,3 +163,17 @@ def test_wait_stream_done_honors_cancel_token():
     with pytest.raises(_CancelledFetch):
         _flow.wait_stream_done(page, done_predicate=lambda: False,
                                idle_ms=1, timeout_s=5, poll_ms=10, cancel_token=tok)
+
+
+def test_sites_deepseek_present_and_css_selectors_valid():
+    from bs4 import BeautifulSoup
+    from csm_core.monitor.geo.providers.rpa.sites import SITES, SiteSpec
+    spec = SITES["deepseek"]
+    assert isinstance(spec, SiteSpec)
+    assert spec.url.startswith("https://")
+    # 传给 bs4 的选择器必须是合法 CSS（否则 .select 抛 SelectorSyntaxError）
+    soup = BeautifulSoup("<html></html>", "html.parser")
+    for css in [spec.logged_in_sel, spec.answer_sel, spec.citation_sel]:
+        soup.select(css)  # 不抛即合法
+    if spec.logged_out_sel:
+        soup.select(spec.logged_out_sel)
