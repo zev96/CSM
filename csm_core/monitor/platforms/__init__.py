@@ -6,6 +6,7 @@ from .bilibili_comment import ADAPTER as BILIBILI
 from .douyin_comment import ADAPTER as DOUYIN
 from .kuaishou_comment import ADAPTER as KUAISHOU
 from .baidu_keyword import ADAPTER as BAIDU
+from .geo_query import ADAPTER as GEO
 
 ALL = {
     "zhihu_question": ZHIHU,
@@ -13,6 +14,7 @@ ALL = {
     "douyin_comment": DOUYIN,
     "kuaishou_comment": KUAISHOU,
     "baidu_keyword": BAIDU,
+    "geo_query": GEO,
 }
 
-__all__ = ["ZHIHU", "BILIBILI", "DOUYIN", "KUAISHOU", "BAIDU", "ALL"]
+__all__ = ["ZHIHU", "BILIBILI", "DOUYIN", "KUAISHOU", "BAIDU", "GEO", "ALL"]

@@ -11,6 +11,10 @@ datas += collect_data_files('qfluentwidgets')
 datas += collect_data_files('PyQt6')
 datas += collect_data_files('docx')
 datas += collect_data_files('anthropic')
+# tldextract ships a bundled suffix-list snapshot used by geo/classify.py in
+# offline mode (suffix_list_urls=()). Include its data files so the snapshot
+# is present in the bundle.
+datas += collect_data_files('tldextract')
 
 hiddenimports = [
     'csm_gui',
@@ -67,6 +71,8 @@ hiddenimports = [
     'csm_core.updater_client._token',
     # Version
     'csm_gui._version',
+    # tldextract: GEO 信源域名规整（csm_core/monitor/geo/classify.py）。
+    'tldextract',
 ]
 hiddenimports += collect_submodules('docx')
 hiddenimports += collect_submodules('qfluentwidgets')

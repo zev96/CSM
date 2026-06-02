@@ -59,7 +59,7 @@ def build_client(
         # Anthropic dataclass has no `timeout`; openai_compat does. Pass
         # only when the provider accepts it — make_client raises TypeError
         # for unknown kwargs, so we filter by provider.
-        if p in ("openai", "deepseek", "gemini", "qwen", "openai_compat"):
+        if p in ("openai", "deepseek", "gemini", "qwen", "kimi", "doubao", "openai_compat"):
             kwargs["timeout"] = float(cfg.timeout_seconds)
 
     return make_client(provider=p, **kwargs)

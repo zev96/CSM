@@ -43,4 +43,10 @@ def make_client(*, provider: str, **kwargs) -> LLMClient:
     if provider == "qwen":
         from .providers.qwen import QwenClient
         return QwenClient(**kwargs)
+    if provider == "kimi":
+        from .providers.kimi import KimiClient
+        return KimiClient(**kwargs)
+    if provider == "doubao":
+        from .providers.doubao import DoubaoClient
+        return DoubaoClient(**kwargs)
     raise ValueError(f"unknown provider: {provider}")

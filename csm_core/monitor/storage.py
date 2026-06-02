@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -143,6 +143,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     mining_storage.apply_v5_migration(conn)
     # v6: composite index on monitor_tasks(type, target_url) for dedup lookup.
     mining_storage.apply_v6_migration(conn)
+    # v7: GEO 卡位监控两张规范化表（geo_cells / geo_citations）。
+    from csm_core.monitor.geo import storage as geo_storage
+    geo_storage.apply_v7_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),

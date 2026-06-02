@@ -1,0 +1,10 @@
+{
+  "choices": [{"index": 0, "finish_reason": "stop", "message": {
+    "role": "assistant",
+    "content": "推荐小鹏G6、特斯拉Model Y、比亚迪宋PLUS……[1][2]",
+    "annotations": [
+      {"type": "url_citation", "url_citation": {"url": "https://www.zhihu.com/question/600", "title": "新能源SUV怎么选 - 知乎"}},
+      {"type": "url_citation", "url_citation": {"url": "https://www.xiaohongshu.com/explore/def", "title": "小鹏G6车主体验 - 小红书"}}
+    ]}}],
+  "usage": {"total_tokens": 880}
+}
