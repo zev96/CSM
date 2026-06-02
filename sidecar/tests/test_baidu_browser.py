@@ -255,3 +255,55 @@ def test_self_built_headless_passes_executable_path(monkeypatch, tmp_path):
         pass
     assert pw.chromium.last_kwargs.get("executable_path") == r"C:\fake\chromium\chrome.exe"
     assert pw.chromium.last_kwargs.get("headless") is True
+
+
+def test_baidu_browser_session_native_prunes_caches_on_exit(monkeypatch, tmp_path):
+    """native 模式：session 退出（Chrome 已关）后清理副本缓存，保留登录态。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    copy = tmp_path  # 充当副本根
+    default = copy / "Default"
+    default.mkdir()
+    (default / "Service Worker").mkdir()
+    (default / "Service Worker" / "x").write_bytes(b"cache" * 200)
+    (default / "Network").mkdir()
+    (default / "Network" / "Cookies").write_bytes(b"login")
+
+    fake_context = MagicMock()
+    fake_context.pages = [MagicMock()]
+    fake_context.cookies.return_value = []
+    fake_chromium = MagicMock()
+    fake_chromium.launch_persistent_context = lambda **kw: fake_context
+    fake_pw = MagicMock()
+    fake_pw.chromium = fake_chromium
+    monkeypatch.setattr(baidu_browser, "_sync_playwright", lambda: MagicMock(start=lambda: fake_pw))
+    monkeypatch.setattr(baidu_browser, "ensure_browsers_path", lambda: None)
+
+    with baidu_browser.baidu_browser_session(
+        headless=False,
+        user_data_dir=copy,
+        use_native_chrome=True,
+        chrome_executable_path="C:/test/chrome.exe",
+        chrome_profile_name="Default",
+    ):
+        pass
+
+    # 缓存被清，登录态保留
+    assert not (default / "Service Worker").exists()
+    assert (default / "Network" / "Cookies").exists()
+
+
+def test_baidu_browser_session_self_built_does_not_prune(fake_pw, tmp_path):
+    """自建 profile 模式：不清缓存（prune 只针对 native 副本）。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    profile = tmp_path / "p"
+    profile.mkdir()
+    (profile / "Service Worker").mkdir()
+    (profile / "Service Worker" / "x").write_bytes(b"cache")
+
+    with baidu_browser.baidu_browser_session(headless=True, user_data_dir=profile):
+        pass
+
+    # 自建模式缓存原样保留
+    assert (profile / "Service Worker").exists()

@@ -15,6 +15,11 @@
 - **依赖**：新增 `tldextract>=5.0`（信源域名规整，离线快照模式，已加入 PyInstaller 打包清单）。
 - 新增单测 39 条（`tests/core/monitor/geo/`：models / classify / metrics / storage / providers / extract / adapter / 注册 invariant）+ sidecar 路由测试。
 
+## [0.5.11] - 2026-06-01
+
+### Changed
+- **百度「原生 Chrome 副本」缓存自动清理**：每轮百度监控结束、副本 Chrome 完全关闭后，自动删除副本里的 Chrome 缓存目录（`Service Worker` / `Cache` / `Code Cache` / `CacheStorage` / `Shared Dictionary` 等），使副本常态维持 ~0.5GB，不再随监控运行无限增长（实测旧副本曾涨到 14GB，其中 86% 是 `Service Worker\CacheStorage`）。仅清缓存，保留 `Network\Cookies` 登录态、`Local State`、IndexedDB / Local Storage / Extensions，无需重新登录、功能零改动。`copy_profile_to` 导入时同步纳入 `CacheStorage` / `Shared Dictionary` 跳过名单。
+
 ## [0.5.10] - 2026-05-29
 
 ### Added
