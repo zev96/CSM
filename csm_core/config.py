@@ -163,6 +163,7 @@ class AppConfig(BaseModel):
     last_seed: int = 0
     default_model: dict[str, str] = Field(default_factory=dict)
     base_urls: dict[str, str] = Field(default_factory=dict)
+    doubao_bot_id: str = ""
     provider_test_signatures: dict[str, str] = Field(default_factory=dict)
     timeout_seconds: int = 180
     concurrency: int = 3

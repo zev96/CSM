@@ -33,4 +33,10 @@ def get_provider(platform: str) -> GeoProvider:
         except ImportError as e:
             raise GeoProviderError(f"kimi provider 未就绪: {e}") from e
         return KimiProvider()
+    if platform == "doubao":
+        try:
+            from .api_doubao import DoubaoProvider
+        except ImportError as e:
+            raise GeoProviderError(f"doubao provider 未就绪: {e}") from e
+        return DoubaoProvider()
     raise GeoProviderError(f"未知 GEO 平台: {platform}")

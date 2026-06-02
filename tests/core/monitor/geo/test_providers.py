@@ -120,3 +120,29 @@ def test_kimi_content_filter_is_blocked(monkeypatch):
     monkeypatch.setattr(kimi_mod.httpx, "Client", lambda *a, **k: _FakeKimiClient([resp]))
     ans = kimi_mod.KimiProvider().query("k", web_search=True)
     assert ans.status == "blocked"
+
+
+# ── Doubao tests ──────────────────────────────────────────────────────────────
+
+from csm_core.monitor.geo.providers.api_doubao import parse_doubao_response
+import csm_core.monitor.geo.providers.api_doubao as doubao_mod
+
+
+def test_parse_doubao_extracts_answer_and_citations():
+    raw = json.loads((FIX / "doubao_search.json").read_text(encoding="utf-8"))
+    answer_text, citations = parse_doubao_response(raw)
+    assert "小鹏G6" in answer_text
+    urls = [c.url for c in citations]
+    assert "https://zhuanlan.zhihu.com/p/123" in urls
+
+
+def test_doubao_missing_key_is_error(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "")
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "error"
+
+
+def test_doubao_missing_bot_is_error(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake")
+    ans = doubao_mod.DoubaoProvider(bot_id="").query("k", web_search=True)
+    assert ans.status == "error" and "bot" in ans.error.lower()
