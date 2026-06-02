@@ -88,6 +88,14 @@ def test_latest_cells_endpoint_returns_seeded_cells(client, geo_seeded):
     assert [c["domain"] for c in cell["citations"]] == ["zhihu.com"]
 
 
+def test_geo_export_xlsx(client, geo_seeded):
+    tid, _ = geo_seeded
+    r = client.get(f"/api/monitor/geo/{tid}/export?days=3650")
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    assert r.content[:2] == b"PK"   # xlsx = zip, magic bytes PK
+
+
 def test_latest_cells_endpoint_hydrates_recommended_and_summary(client, tmp_path):
     # 单独 seed 一跑带 recommended + summary，确认 latest-cells 把它们解析回来
     # （L2 下钻要展示「谁排第 1/第 2、自己在第几」+ AI 一句话总评）。

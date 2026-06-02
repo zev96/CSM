@@ -91,12 +91,14 @@ export interface MonitorState {
 }
 
 /**
- * GEO 卡位监控（AI 卡位）—— 阶段 1 只放通义 / Kimi 两个 API 平台。
- * 阶段 2-3 再加 doubao / deepseek / quark / yuanbao。
+ * GEO 卡位监控（AI 卡位）·「API 联网采集」平台 —— 通义千问（阶段 1）+ 豆包（阶段 2，
+ * 火山方舟 Ark 联网 bot）。这两家 API 都能回联网信源。
+ * Kimi / DeepSeek / 腾讯元宝 / 夸克AI 的 API 不回信源 URL（Moonshot $web_search 只给
+ * search_id；或干脆没联网 API），统一放阶段 3 走 RPA（开真网页抓回答+来源）。
  */
 export const GEO_PLATFORMS = [
   { value: "tongyi", label: "通义千问" },
-  { value: "kimi", label: "Kimi" },
+  { value: "doubao", label: "豆包" },
 ] as const;
 
 /**
@@ -133,6 +135,9 @@ export const SCHEDULE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "daily-09:00", label: "每天 09:00" },
   { value: "daily-12:00", label: "每天 12:00" },
   { value: "daily-18:00", label: "每天 18:00" },
+  { value: "weekly-0-09:00", label: "每周一 09:00" },
+  { value: "weekly-3-09:00", label: "每周四 09:00" },
+  { value: "weekly-5-09:00", label: "每周六 09:00" },
 ];
 
 export function scheduleLabel(v: string): string {

@@ -64,3 +64,21 @@ class TestShouldAlert:
         second = MonitorResult(task_id=1, checked_at=datetime.utcnow(),
                                status="ok", rank=-1)
         assert should_alert(_task(), second, alert_top_n=5, cooldown_hours=24) is False
+
+
+def test_geo_query_alerts_trigger(fresh_db):
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="g", target_url="geo://b", config={"brand": "b"}))
+    task = storage.get_task(tid)
+    r = MonitorResult(task_id=tid, checked_at=datetime.utcnow(), status="ok", rank=-1,
+                      metric={"alerts": [{"kind": "hidden", "detail": "曝光度 10% 低于 20%"}]})
+    assert should_alert(task, r, alert_top_n=5, cooldown_hours=24) is True
+
+
+def test_geo_query_no_alerts_no_fire(fresh_db):
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="g2", target_url="geo://c", config={"brand": "c"}))
+    task = storage.get_task(tid)
+    r = MonitorResult(task_id=tid, checked_at=datetime.utcnow(), status="ok", rank=-1,
+                      metric={"alerts": []})
+    assert should_alert(task, r, alert_top_n=5, cooldown_hours=24) is False

@@ -1,0 +1,11 @@
+{
+  "choices": [{"index": 0, "finish_reason": "stop", "message": {
+    "role": "assistant",
+    "content": "20万左右新能源SUV，比较推荐比亚迪宋PLUS、小鹏G6、深蓝S7……",
+    "references": [
+      {"url": "https://zhuanlan.zhihu.com/p/123", "title": "2024新能源SUV推荐", "site_name": "知乎"},
+      {"url": "https://www.xiaohongshu.com/explore/abc", "title": "小鹏G6实测", "site_name": "小红书"}
+    ]
+  }}],
+  "usage": {"total_tokens": 640}
+}

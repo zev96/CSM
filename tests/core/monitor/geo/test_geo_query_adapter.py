@@ -129,3 +129,19 @@ def test_one_provider_error_does_not_kill_run(fresh_db, monkeypatch):
     statuses = {r["platform"]: r["status"] for r in rows}
     assert statuses["tongyi"] == "ok"
     assert statuses["kimi"] == "error"
+
+
+class NotMentionedClient:
+    def complete(self, *, system, user, temperature=None):
+        return '{"mentioned":false,"target_rank":-1,"sentiment":"na","recommended":[],"summary":""}'
+
+
+def test_fetch_writes_geo_alerts_into_metric(fresh_db, monkeypatch):
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: FakeProvider(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: NotMentionedClient())
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://b",
+        config={"brand": "小鹏", "keywords": ["k"], "platforms": ["tongyi"], "extract_provider": "mock"}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert result.status == "ok"                       # provider succeeded → cell ok
+    assert any(a["kind"] == "hidden" for a in result.metric.get("alerts", []))

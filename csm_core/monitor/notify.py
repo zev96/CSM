@@ -33,6 +33,16 @@ def should_alert(
     """
     if result.status != "ok":
         return False
+    # geo_query：告警逻辑不同 —— 看 metric["alerts"]（适配器已算好），任一非空 + cooldown。
+    if task.type == "geo_query":
+        if not (result.metric or {}).get("alerts"):
+            return False
+        if task.id is None:
+            return False
+        last = storage.last_alert_at(task.id)
+        if last is None:
+            return True
+        return (datetime.utcnow() - last) >= timedelta(hours=max(1, cooldown_hours))
     if 1 <= result.rank <= alert_top_n:
         return False
     if task.id is None:

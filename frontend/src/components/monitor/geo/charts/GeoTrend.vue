@@ -61,7 +61,7 @@ const areaFill = computed(() =>
       <div class="flex items-baseline gap-2">
         <span class="font-display" :style="{ fontSize: '13px', fontWeight: 700 }">曝光趋势</span>
         <span :style="{ fontSize: '10.5px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }">
-          近 {{ n }} 次运行
+          近 7 天
         </span>
       </div>
       <div class="flex items-center gap-2">
@@ -96,7 +96,7 @@ const areaFill = computed(() =>
           :x="padL + plotW - 3"
           :y="y(b.hi) + 11"
           text-anchor="end"
-          :style="{ fontSize: '8.5px', fontWeight: 600, fill: b.text, opacity: 0.75 }"
+          :style="{ fontSize: '7px', fontWeight: 600, fill: b.text, opacity: 0.6 }"
         >{{ b.label }}</text>
       </g>
       <!-- 分带线 -->

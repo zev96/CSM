@@ -475,16 +475,23 @@ export function useGeoKeywordDetail(
         r.metric?.by_keyword?.[kw] ?? null;
       const metric = results.length ? byKw(results[0]) : null;
       const lastRunIso = results.length ? results[0].checked_at : null;
-      const history: HistoryPoint[] = [...results]
-        .reverse() // DESC → 正序（旧→新）
-        .map((r) => {
-          const m = byKw(r);
-          return {
-            date: fmtShortDate(r.checked_at),
-            soc: m?.soc ?? 0,
-            first: m?.first_rank_rate ?? 0,
-          };
-        });
+      // 趋势横轴 = 最近 7 天（按天聚合，每天取当天最后一次运行的指标），日期标 M/D。
+      // results 是 DESC（新→旧），同一天第一次遇到的即当天最后一跑。
+      const DAY_MS = 86_400_000;
+      const cutoff = Date.now() - 7 * DAY_MS;
+      const seenDay = new Map<string, { iso: string; p: HistoryPoint }>();
+      for (const r of results) {
+        if (!r.checked_at) continue;
+        const t = new Date(r.checked_at).getTime();
+        if (isNaN(t) || t < cutoff) continue;
+        const date = fmtShortDate(r.checked_at);
+        if (seenDay.has(date)) continue; // DESC: first seen = latest run that day
+        const m = byKw(r);
+        seenDay.set(date, { iso: r.checked_at, p: { date, soc: m?.soc ?? 0, first: m?.first_rank_rate ?? 0 } });
+      }
+      const history: HistoryPoint[] = [...seenDay.values()]
+        .sort((a, b) => a.iso.localeCompare(b.iso)) // old → new
+        .map((e) => e.p);
 
       // BOARD：citation leaderboard（已按关键词过滤）→ {domain,type,count,platforms数}。
       const lb = (citRes.data?.leaderboard ?? []) as Array<{

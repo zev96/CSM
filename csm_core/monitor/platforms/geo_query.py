@@ -101,6 +101,12 @@ class GeoQueryAdapter:
         # cell 只会是 ok/error/blocked，无 empty，等价旧的 error+blocked 计数）。
         # I3：续抓标记，让 UI 知道这次只跑了断点之后。
         agg["partial_resume"] = resume_from > 0
+        # 三类告警：与上次运行比较（上次 = 当前还没存，latest_result 即上一跑）。
+        from ..geo.alerts import evaluate_geo_alerts
+        from .. import storage as _storage
+        prev = _storage.latest_result(task.id) if task.id else None
+        prev_metric = prev.metric if prev else None
+        agg["alerts"] = evaluate_geo_alerts(agg, prev_metric)
         rank = metrics.representative_rank(cells)
 
         # checked_at 算一次，同时盖在 MonitorResult 和这批 cell 上 —— 这是

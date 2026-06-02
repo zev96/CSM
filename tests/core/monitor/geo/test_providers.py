@@ -120,3 +120,88 @@ def test_kimi_content_filter_is_blocked(monkeypatch):
     monkeypatch.setattr(kimi_mod.httpx, "Client", lambda *a, **k: _FakeKimiClient([resp]))
     ans = kimi_mod.KimiProvider().query("k", web_search=True)
     assert ans.status == "blocked"
+
+
+# ── Doubao tests ──────────────────────────────────────────────────────────────
+
+from csm_core.monitor.geo.providers.api_doubao import parse_doubao_response
+import csm_core.monitor.geo.providers.api_doubao as doubao_mod
+
+
+def test_parse_doubao_extracts_answer_and_citations():
+    raw = json.loads((FIX / "doubao_search.json").read_text(encoding="utf-8"))
+    answer_text, citations = parse_doubao_response(raw)
+    assert "小鹏G6" in answer_text
+    urls = [c.url for c in citations]
+    assert "https://zhuanlan.zhihu.com/p/123" in urls
+    assert citations[0].title.endswith("知乎")  # site_name 折进 title
+
+
+def test_doubao_missing_key_is_error(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "")
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "error"
+
+
+def test_doubao_missing_bot_is_error(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake")
+    # 隔离全局 config：否则本机若配了真实 doubao_bot_id，bot_id="" 会回退到它，
+    # 就测不到「未配 bot」分支了。单测必须确定性，不读实时 config。
+    monkeypatch.setattr(doubao_mod, "get_config",
+                        lambda: SimpleNamespace(doubao_bot_id="", base_urls={}, default_model={}))
+    ans = doubao_mod.DoubaoProvider(bot_id="").query("k", web_search=True)
+    assert ans.status == "error" and "bot" in ans.error.lower()
+
+
+def test_doubao_content_filter_is_blocked(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(
+            200, "filtered",
+            json_data={"choices": [{"finish_reason": "content_filter",
+                                    "message": {"role": "assistant", "content": ""}}]},
+        ),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "blocked"
+
+
+def test_doubao_sensitive_finish_reason_is_blocked(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(
+            200, "sensitive",
+            json_data={"choices": [{"finish_reason": "sensitive",
+                                    "message": {"role": "assistant", "content": ""}}]},
+        ),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "blocked"
+
+
+def test_doubao_http_error_status_is_error(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(429, "rate limit exceeded"),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "error"
+    assert "429" in ans.error
+
+
+def test_doubao_app_error_envelope_is_error(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(
+            200, '{"error":{"code":"InvalidApiKey","message":"API key 无效"}}',
+            json_data={"error": {"code": "InvalidApiKey", "message": "API key 无效"}},
+        ),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "error"
+    assert "API key 无效" in ans.error

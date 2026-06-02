@@ -7,13 +7,14 @@
 ### Added
 - **AI 卡位监控（GEO）· 阶段 1**：新增 `geo_query` 监测任务类型，批量关键词 × AI 平台（阶段 1 接入通义千问 / Kimi，走各自联网 API）自动采集回答与引用信源，LLM 抽取后产出四大卡位 KPI——**曝光度 Share of Chat**（<20% 判「隐身」）、**首推率**、**净情感得分**、**引用信源聚合榜**（按域名频次降序，自动归类知乎 / 小红书 / 权威媒体 / 电商 / 其他，指导「精准喂饭」铺内容）。一品牌一任务，任务内 `关键词 × 平台` fan-out，复用现有监测调度 / SSE / 凭证 / 批量·续抓·取消基建。
 - **监测中心「AI 卡位」tab**：建任务（品牌 + 别名 + 批量关键词 + 平台多选 + 抽取模型）、一键运行 + SSE 实时进度、最近一次 4 KPI 快照 + 信源榜 Top。
-- **数据中心「AI 卡位」pivot**：跨平台「卡位矩阵」（平台 × {曝光度 / 首推率 / 情感}）+ 信源聚合榜（7/30/90 天筛选）+ 钻取回监测任务。
+- **监测中心任务详情 · 全套卡位分析**：进入任务即见四大 KPI + 卡位矩阵（平台 × {曝光度 / 首推率 / 情感}）+ 趋势 + 信源聚合榜（7/30/90 天筛选）+ 竞争对手 + 原文钻取；多关键词走二级页、单关键词直达。
 - **V7 数据库迁移**：新增 `geo_cells` / `geo_citations` 两张规范化表（按 `task_id + checked_at` 关联，不与 `monitor_results` 双写），支撑信源榜 `GROUP BY` 聚合与原文钻取；新增只读端点 `GET /api/monitor/geo/{task_id}/citations`、`/cells`。
 - 采集层每个 cell 一开始就记原始响应日志（http / len / first200）+ `raw_json` 落库，便于分辨「0 提及」是 cookie 失效 / 真无结果 / schema 变 / 风控；API provider 覆盖非 JSON 响应、应用层错误码、内容过滤（→ blocked）、取消与分段超时；全部 cell 失败 → 运行标 `failed`（避免误触发「掉出」告警）。
 - **新增 Kimi(Moonshot) / 豆包(Ark) 两个 LLM provider**：设置页可单独配置二者的 API Key / 模型 / Base URL（均为 OpenAI 兼容，也可当抽取/生成模型用）。GEO 的 Kimi 采集由此获得 key 配置入口（原来设置页只有 6 个 provider，没处填 Kimi key）；豆包 key 可提前配好（采集 adapter 阶段 2 落地）。
 - GEO 采集 provider 改为读设置里配置的模型（默认 Kimi=`kimi-k2.6`、通义=`qwen-plus`），不再写死旧模型；OpenAI 兼容 client 在模型拒绝 temperature 时（如 `kimi-k2.6` 只允许 `temperature=1`）自动去掉温度重试一次，修复「测试连接」对推理模型报错。
 - **依赖**：新增 `tldextract>=5.0`（信源域名规整，离线快照模式，已加入 PyInstaller 打包清单）。
 - 新增单测 39 条（`tests/core/monitor/geo/`：models / classify / metrics / storage / providers / extract / adapter / 注册 invariant）+ sidecar 路由测试。
+- **AI 卡位监控（GEO）· 阶段 2**：**豆包（火山方舟 Ark 联网 bot）采集接入**（设置页配「联网 Bot ID」+ key）；**Kimi 因 Moonshot `$web_search` 只回 `search_id`、不给信源 URL，从 API 采集移至阶段 3 RPA** —— 当前 API 联网采集平台为**通义千问 + 豆包**（两家 API 都回信源）；**信源榜一键导出 Excel**（Tauri 原生「另存为」对话框，浏览器 dev 回退下载）；GEO 任务支持**每周调度**（`weekly-<周几>-<HH:MM>`）；新增**三类卡位告警**——隐身（曝光度 SoC<20%）/ 首推率显著下滑 / 某平台从「提及」变「未提及」，三者都区分「采集失败（没问到）」与「真没提及」，API 故障 / 软封不误报；信源榜每行**「去引流中心铺这个源」**一键跳转引流中心并预填关键词，打通「卡位洞察 → 内容铺设」闭环；数据中心冗余「AI 卡位」pivot 移除（全套分析统一在监测中心任务详情）。新增告警 / 豆包 provider / weekly 调度 / Excel 导出单测。
 
 ## [0.5.11] - 2026-06-01
 

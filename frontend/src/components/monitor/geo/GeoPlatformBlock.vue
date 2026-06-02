@@ -7,7 +7,6 @@
  */
 import { computed } from "vue";
 
-import Pill from "@/components/ui/Pill.vue";
 import {
   cellStatus,
   isFailed,
@@ -156,7 +155,6 @@ const excerptSegs = computed<Seg[]>(() => {
           class="flex items-center"
           :style="{ gap: '8px', minWidth: 0, textDecoration: 'none' }"
         >
-          <Pill tone="info">{{ c.type }}</Pill>
           <span :style="{ fontSize: '12px', fontWeight: 600, flexShrink: 0, color: 'var(--ink)' }">{{ c.domain }}</span>
           <span
             class="truncate"

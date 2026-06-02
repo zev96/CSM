@@ -116,8 +116,20 @@ function goToSettingsExcludeDomains() {
 }
 
 // Schedule
-const scheduleMode = ref<"manual" | "daily">("manual");
+const scheduleMode = ref<"manual" | "daily" | "weekly">("manual");
 const dailyTime = ref("09:00");
+// Weekly schedule: day-of-week (0=Monday…6=Sunday) + time
+const weeklyDow = ref<number>(0);
+const weeklyTime = ref("09:00");
+const DOW_OPTIONS = [
+  { value: 0, label: "周一" },
+  { value: 1, label: "周二" },
+  { value: 2, label: "周三" },
+  { value: 3, label: "周四" },
+  { value: 4, label: "周五" },
+  { value: 5, label: "周六" },
+  { value: 6, label: "周日" },
+] as const;
 const enabled = ref(true);
 
 const submitting = ref(false);
@@ -151,6 +163,8 @@ function close() {
   geoExtractProvider.value = "qwen";
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
+  weeklyDow.value = 0;
+  weeklyTime.value = "09:00";
   enabled.value = true;
   submitting.value = false;
 }
@@ -196,13 +210,18 @@ function hydrateFromTask(t: EditingTask) {
     : GEO_PLATFORMS.map((p) => p.value);
   geoWebSearch.value = cfg.web_search !== false; // default true
   geoExtractProvider.value = String(cfg.extract_provider ?? "qwen");
+  const weeklyMatch = /^weekly-([0-6])-(\d{1,2}:\d{2})$/.exec(t.schedule_cron);
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
+  } else if (weeklyMatch) {
+    scheduleMode.value = "weekly";
+    weeklyDow.value = Number(weeklyMatch[1]);
+    weeklyTime.value = weeklyMatch[2];
   } else if (/^\d{1,2}:\d{2}$/.test(t.schedule_cron)) {
     scheduleMode.value = "daily";
     dailyTime.value = t.schedule_cron;
   } else {
-    // 其它 cron 形式 —— 后端目前只支持 manual / HH:MM，留作 manual 兜底
+    // 其它 cron 形式 —— 留作 manual 兜底
     scheduleMode.value = "manual";
   }
   enabled.value = Boolean(t.enabled);
@@ -276,6 +295,9 @@ function validate(): string | null {
   if (scheduleMode.value === "daily" && !/^\d{1,2}:\d{2}$/.test(dailyTime.value)) {
     return "时间格式应为 HH:MM";
   }
+  if (scheduleMode.value === "weekly" && !/^\d{1,2}:\d{2}$/.test(weeklyTime.value)) {
+    return "时间格式应为 HH:MM";
+  }
   return null;
 }
 
@@ -344,7 +366,11 @@ async function submit() {
       target_url: computedTargetUrl,
       config,
       schedule_cron:
-        scheduleMode.value === "manual" ? "manual" : dailyTime.value,
+        scheduleMode.value === "weekly"
+          ? `weekly-${weeklyDow.value}-${weeklyTime.value}`
+          : scheduleMode.value === "daily"
+            ? dailyTime.value
+            : "manual",
       enabled: enabled.value,
     };
     if (isEdit.value && props.editingTask) {
@@ -687,6 +713,25 @@ async function submit() {
                   placeholder="HH:MM"
                   debounce="live"
                   :disabled="scheduleMode !== 'daily'"
+                />
+                <span class="text-ink-3">本地时间</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <input v-model="scheduleMode" type="radio" value="weekly" />
+                <span>每周</span>
+                <FormSelect
+                  :model-value="weeklyDow"
+                  :options="DOW_OPTIONS.map((d) => ({ label: d.label, value: d.value }))"
+                  :disabled="scheduleMode !== 'weekly'"
+                  width="80"
+                  @update:model-value="(v) => (weeklyDow = Number(v))"
+                />
+                <FormInput
+                  v-model="weeklyTime"
+                  :width="100"
+                  placeholder="HH:MM"
+                  debounce="live"
+                  :disabled="scheduleMode !== 'weekly'"
                 />
                 <span class="text-ink-3">本地时间</span>
               </div>

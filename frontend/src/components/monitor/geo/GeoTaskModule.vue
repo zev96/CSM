@@ -561,6 +561,7 @@ onUnmounted(() => {
       :keyword="selectedKeyword"
       :platform-count="selectedPlatformCount"
       :running="isRunning(selectedTask.id)"
+      :task-id="selectedTask.id"
       @run="selectedTask && runNow(selectedTask.id)"
       @cancel="selectedTask && cancelTask(selectedTask.id)"
       @edit="selectedTask && openEditTask(selectedTask)"

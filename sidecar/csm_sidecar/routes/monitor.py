@@ -658,6 +658,33 @@ def geo_citations(
     }
 
 
+@router.get("/api/monitor/geo/{task_id}/export")
+def geo_export(task_id: int, days: int = Query(default=30, ge=1, le=3650)):
+    """信源榜 Excel 导出：近 ``days`` 天全部 citation 聚合为 xlsx 文件下载。"""
+    _require_storage()
+    import io
+    from openpyxl import Workbook
+    from fastapi.responses import StreamingResponse
+    from csm_core.monitor.geo import storage as geo_storage
+
+    board = geo_storage.citation_leaderboard(task_id, days=days)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "信源榜"
+    ws.append(["排名", "域名", "类型", "引用次数", "覆盖平台数", "命中关键词"])
+    for i, b in enumerate(board, start=1):
+        ws.append([i, b["domain"], b["source_type"], b["count"],
+                   len(b["platforms"]), " / ".join(b["keywords"])])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="geo_citations_{task_id}.xlsx"'},
+    )
+
+
 @router.get("/api/monitor/geo/{task_id}/cells")
 def geo_cells(task_id: int, checked_at: str = Query(...)) -> dict[str, Any]:
     """下钻：某次运行的全部 cell（原文 + 信源）。

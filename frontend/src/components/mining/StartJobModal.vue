@@ -11,6 +11,8 @@ import type { Platform } from "@/stores/mining";
 const props = defineProps<{
   open: boolean;
   loginStatus: Record<Platform, boolean>;
+  prefillKeyword?: string;
+  prefillSource?: string;
 }>();
 
 const emit = defineEmits<{
@@ -44,6 +46,8 @@ watch(
   () => props.open,
   (v) => {
     if (!v) return;
+    // 先重置表单（包括 kw），再按 prefillKeyword 预填关键词。
+    // 这样：新开弹窗干净 → 若有来自 GEO 信源榜的预填 → 填入。
     kw.value = "";
     picked.value = {
       bilibili: !!props.loginStatus.bilibili,
@@ -53,6 +57,10 @@ watch(
     cap.value = 50;
     sort.value = "综合";
     range.value = "近 1 周";
+    // 预填关键词（来自 GEO 闭环跳转）—— 只在 kw 刚被清空时填，不覆盖用户已输入的内容。
+    if (props.prefillKeyword) {
+      kw.value = props.prefillKeyword;
+    }
   },
 );
 
@@ -119,6 +127,14 @@ function onSubmit() {
               class="inline-flex items-center justify-center"
               style="width: 22px; height: 22px; border-radius: 999px; color: var(--ink-3);"
             ><Icon name="x" :size="12"/></button>
+          </div>
+          <!-- GEO 信源域名提示 —— 仅展示，不过滤，不影响提交载荷 -->
+          <div
+            v-if="props.prefillSource"
+            class="mt-1.5 text-[11px]"
+            style="color: var(--ink-3);"
+          >
+            建议针对来源：{{ props.prefillSource }}
           </div>
         </div>
 
