@@ -117,3 +117,30 @@ def test_kimi_ok_when_answer_present(monkeypatch):
     _patch_km(monkeypatch, _FakePage(html), wait=lambda *a, **k: None)
     ans = km.KimiProvider().query("k", web_search=True)
     assert ans.status == "ok" and ans.citations[0].url.startswith("https://www.autohome")
+
+
+import csm_core.monitor.geo.providers.rpa.yuanbao as yb
+
+
+def _patch_yb(monkeypatch, page, *, wait=None):
+    @contextlib.contextmanager
+    def fake(platform, *, headless=False):
+        yield page
+    monkeypatch.setattr(yb, "rpa_page", fake)
+    if wait is not None:
+        monkeypatch.setattr(yb._flow, "wait_stream_done", wait)
+
+
+def test_yuanbao_blocked_when_not_logged_in(monkeypatch):
+    _patch_yb(monkeypatch, _FakePage("<html><body>扫码登录</body></html>"))
+    ans = yb.YuanbaoProvider().query("k", web_search=True)
+    assert ans.status == "blocked"
+
+
+def test_yuanbao_ok_when_answer_present(monkeypatch):
+    html = ('<div contenteditable="true"></div>'
+            '<div class="markdown-body">小鹏G6 '
+            '<a href="https://zhuanlan.zhihu.com/p/77">知乎</a></div>')
+    _patch_yb(monkeypatch, _FakePage(html), wait=lambda *a, **k: None)
+    ans = yb.YuanbaoProvider().query("k", web_search=True)
+    assert ans.status == "ok" and ans.citations[0].url.endswith("/p/77")

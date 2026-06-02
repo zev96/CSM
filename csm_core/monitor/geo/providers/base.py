@@ -47,4 +47,10 @@ def get_provider(platform: str) -> GeoProvider:
         except ImportError as e:
             raise GeoProviderError(f"deepseek provider 未就绪: {e}") from e
         return DeepSeekProvider()
+    if platform == "yuanbao":
+        try:
+            from .rpa.yuanbao import YuanbaoProvider
+        except ImportError as e:
+            raise GeoProviderError(f"yuanbao provider 未就绪: {e}") from e
+        return YuanbaoProvider()
     raise GeoProviderError(f"未知 GEO 平台: {platform}")

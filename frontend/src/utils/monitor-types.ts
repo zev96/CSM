@@ -101,6 +101,7 @@ export const GEO_PLATFORMS = [
   { value: "doubao", label: "豆包", mode: "api" },
   { value: "deepseek", label: "DeepSeek", mode: "rpa" },
   { value: "kimi", label: "Kimi", mode: "rpa" },
+  { value: "yuanbao", label: "腾讯元宝", mode: "rpa" },
 ] as const;
 
 /**

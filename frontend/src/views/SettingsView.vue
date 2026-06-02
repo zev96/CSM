@@ -40,6 +40,7 @@ import { useSidecar } from "@/stores/sidecar";
 import { getVersion, keyringSet, keyringStatus } from "@/api/client";
 import { useRoute } from "vue-router";
 import { watch } from "vue";
+import { GEO_PLATFORMS } from "@/utils/monitor-types";
 
 // ── 行内子组件（避免拆 3 个单独文件）─────────────────────────
 const SettingsRow = defineComponent({
@@ -727,16 +728,11 @@ async function startBaiduLogin() {
 }
 
 // AI 卡位 RPA 登录态（DeepSeek/Kimi/元宝 真浏览器持久档）
-const RPA_PLATFORMS = [
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "kimi", label: "Kimi" },
-  { value: "yuanbao", label: "腾讯元宝" },
-] as const;
-const rpaLogin = reactive<Record<string, { logged_in: boolean; busy: boolean }>>({
-  deepseek: { logged_in: false, busy: false },
-  kimi: { logged_in: false, busy: false },
-  yuanbao: { logged_in: false, busy: false },
-});
+// 单一事实来源：从 GEO_PLATFORMS 过滤出 RPA 平台，避免与平台列表脱节
+const RPA_PLATFORMS = GEO_PLATFORMS.filter((p) => p.mode === "rpa") as ReadonlyArray<{ value: string; label: string }>;
+const rpaLogin = reactive<Record<string, { logged_in: boolean; busy: boolean }>>(
+  Object.fromEntries(RPA_PLATFORMS.map((p) => [p.value, { logged_in: false, busy: false }])),
+);
 
 async function refreshRpaLoginStatus(platform: string) {
   try {

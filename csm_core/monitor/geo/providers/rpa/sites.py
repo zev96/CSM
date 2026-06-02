@@ -55,5 +55,17 @@ SITES: dict[str, SiteSpec] = {
         logged_out_sel=None,
         exclude_hosts=("kimi.com", "moonshot.cn"),
     ),
-    # yuanbao（Task 10）在各自 Task 加入此 dict。
+    "yuanbao": SiteSpec(
+        platform="yuanbao",
+        url="https://yuanbao.tencent.com/",
+        composer_sel="div[contenteditable='true'], textarea",
+        send_sel="div[role='button'][aria-label*='发送'], button[type='submit']",
+        web_toggle_sel="div[role='button']:has-text('联网')",
+        generating_sel="div[role='button'][aria-label*='停止']",
+        answer_sel="div[class*='markdown'], div[class*='answer']",
+        citation_sel="div[class*='markdown'], div[class*='answer']",
+        logged_in_sel="div[contenteditable='true'], textarea",
+        logged_out_sel=None,
+        exclude_hosts=("yuanbao.tencent.com", "tencent.com"),
+    ),
 }
