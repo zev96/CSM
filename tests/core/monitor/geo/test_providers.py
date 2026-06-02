@@ -144,7 +144,12 @@ def test_doubao_missing_key_is_error(monkeypatch):
 
 
 def test_doubao_missing_bot_is_error(monkeypatch):
+    from types import SimpleNamespace
     monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake")
+    # 隔离全局 config：否则本机若配了真实 doubao_bot_id，bot_id="" 会回退到它，
+    # 就测不到「未配 bot」分支了。单测必须确定性，不读实时 config。
+    monkeypatch.setattr(doubao_mod, "get_config",
+                        lambda: SimpleNamespace(doubao_bot_id="", base_urls={}, default_model={}))
     ans = doubao_mod.DoubaoProvider(bot_id="").query("k", web_search=True)
     assert ans.status == "error" and "bot" in ans.error.lower()
 

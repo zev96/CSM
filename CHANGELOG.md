@@ -14,7 +14,7 @@
 - GEO 采集 provider 改为读设置里配置的模型（默认 Kimi=`kimi-k2.6`、通义=`qwen-plus`），不再写死旧模型；OpenAI 兼容 client 在模型拒绝 temperature 时（如 `kimi-k2.6` 只允许 `temperature=1`）自动去掉温度重试一次，修复「测试连接」对推理模型报错。
 - **依赖**：新增 `tldextract>=5.0`（信源域名规整，离线快照模式，已加入 PyInstaller 打包清单）。
 - 新增单测 39 条（`tests/core/monitor/geo/`：models / classify / metrics / storage / providers / extract / adapter / 注册 invariant）+ sidecar 路由测试。
-- **AI 卡位监控（GEO）· 阶段 2**：豆包（火山方舟 Ark 联网 bot）采集接入，API 采集平台增至三家（通义千问 / Kimi / 豆包）；**信源榜一键导出 Excel**（Tauri 原生「另存为」对话框，浏览器 dev 回退下载）；GEO 任务支持**每周调度**（`weekly-<周几>-<HH:MM>`）；新增**三类卡位告警**——隐身（曝光度 SoC<20%）/ 首推率显著下滑 / 某平台从「提及」变「未提及」，三者都区分「采集失败（没问到）」与「真没提及」，API 故障 / 软封不误报；信源榜每行**「去引流中心铺这个源」**一键跳转引流中心并预填关键词，打通「卡位洞察 → 内容铺设」闭环；数据中心冗余「AI 卡位」pivot 移除（全套分析统一在监测中心任务详情）。新增告警 / 豆包 provider / weekly 调度 / Excel 导出单测。
+- **AI 卡位监控（GEO）· 阶段 2**：**豆包（火山方舟 Ark 联网 bot）采集接入**（设置页配「联网 Bot ID」+ key）；**Kimi 因 Moonshot `$web_search` 只回 `search_id`、不给信源 URL，从 API 采集移至阶段 3 RPA** —— 当前 API 联网采集平台为**通义千问 + 豆包**（两家 API 都回信源）；**信源榜一键导出 Excel**（Tauri 原生「另存为」对话框，浏览器 dev 回退下载）；GEO 任务支持**每周调度**（`weekly-<周几>-<HH:MM>`）；新增**三类卡位告警**——隐身（曝光度 SoC<20%）/ 首推率显著下滑 / 某平台从「提及」变「未提及」，三者都区分「采集失败（没问到）」与「真没提及」，API 故障 / 软封不误报；信源榜每行**「去引流中心铺这个源」**一键跳转引流中心并预填关键词，打通「卡位洞察 → 内容铺设」闭环；数据中心冗余「AI 卡位」pivot 移除（全套分析统一在监测中心任务详情）。新增告警 / 豆包 provider / weekly 调度 / Excel 导出单测。
 
 ## [0.5.11] - 2026-06-01
 
