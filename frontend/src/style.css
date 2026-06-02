@@ -271,6 +271,45 @@ body[data-radius="bold"] {
 }
 
 /*
+ * ── GEO「AI 卡位」详情辅助类 ────────────────────────────────────────
+ *
+ * design_handoff_geo_fullpage 的设计稿里有两个轻量辅助类，落地的 GEO
+ * 详情组件（GeoTaskModule / GeoKeywordDetail + charts）复用它们而不再
+ * 内联：
+ *   - .geo-scroll：6px 细滚动条（比全局 8px 再窄一档），用于左任务列表
+ *     与右详情内容区。全局 ::-webkit-scrollbar 已是细滑道，这里只把宽度
+ *     压到 6px 并保持暖灰拇指，视觉与设计稿一致。
+ *   - .geo-row：列表行 / 可点小卡的背景过渡（过渡时长 .12s，与设计稿统一）。
+ *     **只放 transition，不放 :hover 背景规则** —— 行的当前态背景（含选中关键词
+ *     的橙底）由组件 inline :style 控制；若这里写 .geo-row:hover{background}，
+ *     即便加 !important 也会压死选中态橙底（inline 无 !important 时 CSS !important
+ *     胜出），把选中行 hover 成普通灰。设计稿 geo-row 同样仅含 transition。
+ */
+.geo-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(28, 26, 23, 0.18) transparent;
+}
+.geo-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.geo-scroll::-webkit-scrollbar-thumb {
+  background: rgba(28, 26, 23, 0.18);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.geo-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(28, 26, 23, 0.32);
+}
+.geo-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.geo-row {
+  transition: background 0.12s ease;
+}
+
+/*
  * 磨砂玻璃卡片表面 —— 首页 4 张监测卡 + 最近文档。把背景/边框/阴影集中
  * 在这一个 class 里，方便 B+C 大改时整体替换。视觉目标：贴在 --bg-inner
  * 暖底上呈现一层乳白浮玻，比 --card (#fbf7ec) 更"轻"，但仍能撑出层次。
