@@ -133,6 +133,9 @@ export const SCHEDULE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "daily-09:00", label: "每天 09:00" },
   { value: "daily-12:00", label: "每天 12:00" },
   { value: "daily-18:00", label: "每天 18:00" },
+  { value: "weekly-0-09:00", label: "每周一 09:00" },
+  { value: "weekly-3-09:00", label: "每周四 09:00" },
+  { value: "weekly-5-09:00", label: "每周六 09:00" },
 ];
 
 export function scheduleLabel(v: string): string {
