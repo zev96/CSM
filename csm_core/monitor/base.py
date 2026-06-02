@@ -41,6 +41,20 @@ def maybe_cancel(cancel_token: "threading.Event | None") -> None:
     raise _CancelledFetch("cancelled by user")
 
 
+def is_cancelled(exc: BaseException) -> bool:
+    """exc 是否为 maybe_cancel 抛的取消信号（sidecar 的 _CancelledFetch）。
+
+    standalone（无 sidecar，maybe_cancel 退化抛 RuntimeError）时无从区分 → False。
+    供 adapter / provider 的 except 区分「用户主动 Stop」与「真错误」：取消应上抛，
+    不记 error、不打噪声 traceback。
+    """
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        return False
+    return isinstance(exc, _CancelledFetch)
+
+
 TaskType = Literal[
     "zhihu_question",
     "bilibili_comment",

@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from csm_core.monitor.base import maybe_cancel
+from csm_core.monitor.base import maybe_cancel, is_cancelled
 from csm_core.monitor.geo.models import GeoAnswer
 from csm_core.monitor.geo.providers.rpa import _flow
 from csm_core.monitor.geo.providers.rpa._session import rpa_page
@@ -53,6 +53,8 @@ class DeepSeekProvider:
                              citations=cites, status="ok" if answer else "empty",
                              raw={"html_len": len(html), "cite_n": len(cites)})
         except Exception as e:
+            if is_cancelled(e):   # 用户 Stop 不是采集失败——上抛，让 adapter/loop 干净中止
+                raise
             logger.exception("[geo-rpa][deepseek] query failed kw=%s", keyword)
             return GeoAnswer(platform=self.platform, keyword=keyword,
                              status="error", error=str(e))

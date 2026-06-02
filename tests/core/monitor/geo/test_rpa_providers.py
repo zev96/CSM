@@ -77,3 +77,16 @@ def test_deepseek_query_never_raises(monkeypatch):
     monkeypatch.setattr(ds, "rpa_page", boom_page)
     ans = ds.DeepSeekProvider().query("k", web_search=True)
     assert ans.status == "error"
+
+
+def test_deepseek_reraises_cancellation(monkeypatch):
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        pytest.skip("sidecar 不可用")
+    html = '<textarea id="chat-input"></textarea>'
+    def _cancel(*a, **k):
+        raise _CancelledFetch("cancelled by user")
+    _patch_session(monkeypatch, _FakePage(html), wait=_cancel)
+    with pytest.raises(_CancelledFetch):
+        ds.DeepSeekProvider().query("k", web_search=True)

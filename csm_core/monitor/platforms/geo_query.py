@@ -26,7 +26,7 @@ import threading
 from datetime import datetime
 from typing import Any, Callable
 
-from ..base import MonitorTask, MonitorResult, maybe_cancel
+from ..base import MonitorTask, MonitorResult, maybe_cancel, is_cancelled
 from ..geo.models import GeoCell
 from ..geo.providers.base import get_provider
 from ..geo.extract import extract, build_extract_client
@@ -162,6 +162,8 @@ class GeoQueryAdapter:
                 answer_text=answer.answer_text, status="ok", raw=answer.raw,
                 citations=ext.citations, recommended=ext.recommended, summary=ext.summary)
         except Exception as e:                       # cell 级隔离
+            if is_cancelled(e):                      # 用户 Stop：上抛给 loop 干净处理
+                raise                                # 不记 error cell、不打噪声 traceback
             # logger.exception 抓 traceback（漏检 debug 用）；raw 存 repr(e)
             # 保留异常类型（不止 message），下钻时能区分 TimeoutError vs ValueError。
             logger.exception("[geo] cell 失败 kw=%s plat=%s", keyword, platform)
