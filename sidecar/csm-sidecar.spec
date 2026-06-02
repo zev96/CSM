@@ -140,6 +140,11 @@ hiddenimports: list[str] = [
     "csm_core.monitor.geo.providers.api_tongyi",
     "csm_core.monitor.geo.providers.api_kimi",
     "csm_core.monitor.geo.providers.api_doubao",
+    "csm_core.monitor.geo.providers.rpa",
+    "csm_core.monitor.geo.providers.rpa._flow",
+    "csm_core.monitor.geo.providers.rpa._session",
+    "csm_core.monitor.geo.providers.rpa.sites",
+    "csm_core.monitor.geo.providers.rpa.deepseek",
     # Drivers (cookie store + http session + browser engines)
     "csm_core.monitor.drivers",
     "csm_core.monitor.drivers.cookie_store",
