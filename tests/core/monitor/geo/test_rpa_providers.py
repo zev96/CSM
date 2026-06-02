@@ -90,3 +90,30 @@ def test_deepseek_reraises_cancellation(monkeypatch):
     _patch_session(monkeypatch, _FakePage(html), wait=_cancel)
     with pytest.raises(_CancelledFetch):
         ds.DeepSeekProvider().query("k", web_search=True)
+
+
+import csm_core.monitor.geo.providers.rpa.kimi as km
+
+
+def _patch_km(monkeypatch, page, *, wait=None):
+    @contextlib.contextmanager
+    def fake(platform, *, headless=False):
+        yield page
+    monkeypatch.setattr(km, "rpa_page", fake)
+    if wait is not None:
+        monkeypatch.setattr(km._flow, "wait_stream_done", wait)
+
+
+def test_kimi_blocked_when_not_logged_in(monkeypatch):
+    _patch_km(monkeypatch, _FakePage("<html><body>登录 Kimi</body></html>"))
+    ans = km.KimiProvider().query("k", web_search=True)
+    assert ans.status == "blocked"
+
+
+def test_kimi_ok_when_answer_present(monkeypatch):
+    html = ('<div contenteditable="true"></div>'
+            '<div class="markdown">小鹏G6 不错 '
+            '<a href="https://www.autohome.com.cn/a">汽车之家</a></div>')
+    _patch_km(monkeypatch, _FakePage(html), wait=lambda *a, **k: None)
+    ans = km.KimiProvider().query("k", web_search=True)
+    assert ans.status == "ok" and ans.citations[0].url.startswith("https://www.autohome")

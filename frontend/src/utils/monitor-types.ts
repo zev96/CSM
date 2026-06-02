@@ -100,6 +100,7 @@ export const GEO_PLATFORMS = [
   { value: "tongyi", label: "通义千问", mode: "api" },
   { value: "doubao", label: "豆包", mode: "api" },
   { value: "deepseek", label: "DeepSeek", mode: "rpa" },
+  { value: "kimi", label: "Kimi", mode: "rpa" },
 ] as const;
 
 /**

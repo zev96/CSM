@@ -42,5 +42,18 @@ SITES: dict[str, SiteSpec] = {
         logged_out_sel=None,                                        # 校准时填稳定登录按钮 class
         exclude_hosts=("deepseek.com",),
     ),
-    # kimi（Task 9）/ yuanbao（Task 10）在各自 Task 加入此 dict。
+    "kimi": SiteSpec(
+        platform="kimi",
+        url="https://kimi.com/",
+        composer_sel="div[contenteditable='true'], textarea",
+        send_sel="div[role='button'][aria-label*='发送'], button[type='submit']",
+        web_toggle_sel="div[role='button']:has-text('联网')",
+        generating_sel="div[role='button'][aria-label*='停止']",
+        answer_sel="div.markdown, div[class*='answer']",
+        citation_sel="div.markdown, div[class*='answer']",
+        logged_in_sel="div[contenteditable='true'], textarea",
+        logged_out_sel=None,
+        exclude_hosts=("kimi.com", "moonshot.cn"),
+    ),
+    # yuanbao（Task 10）在各自 Task 加入此 dict。
 }
