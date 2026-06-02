@@ -127,3 +127,33 @@ def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
         else:
             stable_since = None
         time.sleep(poll_ms / 1000.0)
+
+
+def make_done_predicate(page: Any, *, generating_sel: str | None,
+                        send_sel: str | None) -> Callable[[], bool]:
+    """构造「流式是否完成」判定 closure，内置「先开始再结束」守卫。
+
+    刚 submit 后，生成指示器（generating_sel，如停止按钮）还没渲染 / send 还没被
+    禁用，若此刻直接判完成会误判 → 抓到空回答。故必须先观察到「生成已开始」，
+    再以其消失判完成。
+    - generating_sel：出现=开始；曾出现且现已消失=完成。
+    - 无 generating_sel：退化为 send 按钮——禁用=开始；曾禁用且现可点=完成。
+    - 都没有：恒 True（无完成信号，靠 wait_stream_done 的 idle 静默兜底）。
+    """
+    started = {"v": False}
+
+    def _done() -> bool:
+        if generating_sel:
+            present = page.query_selector(generating_sel) is not None
+            if present:
+                started["v"] = True
+            return started["v"] and not present
+        if send_sel:
+            el = page.query_selector(send_sel)
+            enabled = el is not None and el.is_enabled()
+            if not enabled:
+                started["v"] = True
+            return started["v"] and enabled
+        return True
+
+    return _done

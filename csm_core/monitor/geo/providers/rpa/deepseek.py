@@ -39,13 +39,9 @@ class DeepSeekProvider:
                 _flow.submit_query(page, composer_sel=spec.composer_sel,
                                    send_sel=spec.send_sel, text=keyword)
 
-                def _done() -> bool:
-                    if spec.generating_sel:
-                        return page.query_selector(spec.generating_sel) is None
-                    el = page.query_selector(spec.send_sel) if spec.send_sel else None
-                    return el is not None and el.is_enabled()
-
-                _flow.wait_stream_done(page, done_predicate=_done, idle_ms=1500,
+                done_pred = _flow.make_done_predicate(
+                    page, generating_sel=spec.generating_sel, send_sel=spec.send_sel)
+                _flow.wait_stream_done(page, done_predicate=done_pred, idle_ms=1500,
                                        timeout_s=120.0, cancel_token=cancel_token)
                 html = page.content()
             answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)

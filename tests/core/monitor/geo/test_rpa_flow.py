@@ -177,3 +177,28 @@ def test_sites_deepseek_present_and_css_selectors_valid():
         soup.select(css)  # 不抛即合法
     if spec.logged_out_sel:
         soup.select(spec.logged_out_sel)
+
+
+def test_make_done_predicate_generating_requires_started():
+    seq = iter([None, _FakeEl(), _FakeEl(), None])  # 没开始 / 生成中 / 生成中 / 完成
+    page = _FakePage(["x"], {"#gen": lambda: next(seq, None)})
+    done = _flow.make_done_predicate(page, generating_sel="#gen", send_sel=None)
+    assert done() is False  # generating 还没出现 → 不算完成（防提交后误判）
+    assert done() is False  # 出现 → started
+    assert done() is False  # 还在生成
+    assert done() is True   # 曾出现且现已消失 → 完成
+
+
+def test_make_done_predicate_send_fallback_requires_disabled_first():
+    seq = iter([_FakeEl(enabled=True), _FakeEl(enabled=False), _FakeEl(enabled=True)])
+    page = _FakePage(["x"], {"#send": lambda: next(seq, None)})
+    done = _flow.make_done_predicate(page, generating_sel=None, send_sel="#send")
+    assert done() is False  # enabled 但没观察到 disabled（生成没开始）
+    assert done() is False  # disabled → started
+    assert done() is True   # 曾 disabled 且现 enabled → 完成
+
+
+def test_make_done_predicate_no_signals_returns_true():
+    page = _FakePage(["x"], {})
+    done = _flow.make_done_predicate(page, generating_sel=None, send_sel=None)
+    assert done() is True
