@@ -49,6 +49,7 @@ const route = useRoute();
 
 const showNewTask = ref(false);
 const prefillKeyword = ref("");
+const prefillSource = ref("");
 
 const syncModalVisible = ref(false);
 const syncModalJobId = ref<number | null>(null);
@@ -317,9 +318,14 @@ onMounted(async () => {
   }
 
   // GEO 信源榜闭环跳转：若 route 带 geo_keyword，预填关键词并打开新建弹窗。
+  // 同时读 geo_source，作为弹窗内的提示（展示用，不过滤）。
   const kw = route.query.geo_keyword;
   if (typeof kw === "string" && kw) {
     prefillKeyword.value = kw;
+    const src = route.query.geo_source;
+    if (typeof src === "string" && src) {
+      prefillSource.value = src;
+    }
     showNewTask.value = true;
   }
 });
@@ -525,10 +531,16 @@ onMounted(async () => {
     </div>
 
     <!-- Modal -->
+    <!--
+      不用 v-model:open，改用显式 @update:open：关闭时(v=false)清空
+      prefillKeyword/prefillSource，防止手动点「新建任务」时再次预填陈旧值。
+    -->
     <StartJobModal
-      v-model:open="showNewTask"
+      :open="showNewTask"
       :login-status="store.loginStatus"
       :prefill-keyword="prefillKeyword"
+      :prefill-source="prefillSource"
+      @update:open="(v: boolean) => { showNewTask = v; if (!v) { prefillKeyword = ''; prefillSource = ''; } }"
       @submit="onStartSubmit"
     />
     <SyncToMonitorModal

@@ -147,3 +147,56 @@ def test_doubao_missing_bot_is_error(monkeypatch):
     monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake")
     ans = doubao_mod.DoubaoProvider(bot_id="").query("k", web_search=True)
     assert ans.status == "error" and "bot" in ans.error.lower()
+
+
+def test_doubao_content_filter_is_blocked(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(
+            200, "filtered",
+            json_data={"choices": [{"finish_reason": "content_filter",
+                                    "message": {"role": "assistant", "content": ""}}]},
+        ),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "blocked"
+
+
+def test_doubao_sensitive_finish_reason_is_blocked(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(
+            200, "sensitive",
+            json_data={"choices": [{"finish_reason": "sensitive",
+                                    "message": {"role": "assistant", "content": ""}}]},
+        ),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "blocked"
+
+
+def test_doubao_http_error_status_is_error(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(429, "rate limit exceeded"),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "error"
+    assert "429" in ans.error
+
+
+def test_doubao_app_error_envelope_is_error(monkeypatch):
+    monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
+    monkeypatch.setattr(
+        doubao_mod.httpx, "post",
+        lambda *a, **k: _FakeResp(
+            200, '{"error":{"code":"InvalidApiKey","message":"API key 无效"}}',
+            json_data={"error": {"code": "InvalidApiKey", "message": "API key 无效"}},
+        ),
+    )
+    ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
+    assert ans.status == "error"
+    assert "API key 无效" in ans.error

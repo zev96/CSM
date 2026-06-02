@@ -12,6 +12,7 @@ const props = defineProps<{
   open: boolean;
   loginStatus: Record<Platform, boolean>;
   prefillKeyword?: string;
+  prefillSource?: string;
 }>();
 
 const emit = defineEmits<{
@@ -126,6 +127,14 @@ function onSubmit() {
               class="inline-flex items-center justify-center"
               style="width: 22px; height: 22px; border-radius: 999px; color: var(--ink-3);"
             ><Icon name="x" :size="12"/></button>
+          </div>
+          <!-- GEO 信源域名提示 —— 仅展示，不过滤，不影响提交载荷 -->
+          <div
+            v-if="props.prefillSource"
+            class="mt-1.5 text-[11px]"
+            style="color: var(--ink-3);"
+          >
+            建议针对来源：{{ props.prefillSource }}
           </div>
         </div>
 
