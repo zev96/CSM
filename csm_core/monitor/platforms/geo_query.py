@@ -32,6 +32,7 @@ from ..geo.providers.base import get_provider
 from ..geo.extract import extract, build_extract_client
 from ..geo import metrics
 from ..geo import storage as geo_storage
+from ..rate_limit import configure_concurrency
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ class GeoQueryAdapter:
             if i < resume_from:
                 continue
             maybe_cancel(cancel_token)
-            cell = self._run_cell(kw, plat, brand, aliases, web_search, client)
+            cell = self._run_cell(kw, plat, brand, aliases, web_search, client, cancel_token=cancel_token)
             cells.append(cell)
             if progress_cb is not None:
                 try:
@@ -146,10 +147,11 @@ class GeoQueryAdapter:
         aliases: list[str],
         web_search: bool,
         client: Any,
+        cancel_token: "threading.Event | None" = None,
     ) -> GeoCell:
         try:
             provider = get_provider(platform)
-            answer = provider.query(keyword, web_search=web_search)
+            answer = provider.query(keyword, web_search=web_search, cancel_token=cancel_token)
             if answer.status in ("error", "blocked"):
                 return GeoCell(platform=platform, keyword=keyword, status=answer.status,
                                answer_text="", raw={"error": answer.error})
@@ -168,3 +170,9 @@ class GeoQueryAdapter:
 
 
 ADAPTER = GeoQueryAdapter()
+
+
+# geo RPA 会开有头 Chrome：把 geo_query 并发设为 1，避免两次运行抢同一
+# geo_<platform> 持久档 / 同时弹多窗。monitor_loop 用 slot(task.type) 取槽，
+# 故必须在「取槽前」配置好——模块级（导入时）配置最稳，不走 baidu 的 in-fetch 懒配。
+configure_concurrency("geo_query", 1)
