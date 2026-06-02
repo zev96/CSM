@@ -26,8 +26,6 @@ import GeoTrend from "@/components/monitor/geo/charts/GeoTrend.vue";
 import GeoScatter from "@/components/monitor/geo/charts/GeoScatter.vue";
 
 import {
-  bandColor,
-  bandLabel,
   fmtDateTime,
   isFailed,
   targetAppears,
@@ -84,11 +82,6 @@ const board = computed(() => props.detail?.board ?? []);
 const displayBrand = computed(
   () => props.brandTerms.find((t) => t && t.trim()) ?? props.brand ?? "",
 );
-
-// 评级胶囊（详情头）：弱曝光 60。颜色随档位。
-const bandPillLabel = computed(() => bandLabel(metric.value?.status_band));
-const bandPillScore = computed(() => Math.round((metric.value?.soc ?? 0) * 100));
-const bandPillColor = computed(() => bandColor(metric.value?.status_band));
 
 // 副标：N 个 AI 平台 · 最近运行 M/D HH:MM。
 const subline = computed(() => {
@@ -185,10 +178,6 @@ const matrixDenom = denom;
             {{ displayBrand }}
             <span :style="{ color: 'var(--ink-3)', fontWeight: 500 }">· {{ keyword }}</span>
           </div>
-          <span
-            v-if="metric"
-            :style="{ fontSize: '11px', fontWeight: 700, color: bandPillColor, background: 'var(--primary-soft)', borderRadius: '999px', padding: '2px 9px', fontVariantNumeric: 'tabular-nums' }"
-          >{{ bandPillLabel }} {{ bandPillScore }}</span>
         </div>
         <div :style="{ fontSize: '11.5px', color: 'var(--ink-3)', marginTop: '3px' }">{{ subline }}</div>
       </div>
@@ -293,10 +282,6 @@ const matrixDenom = denom;
 
         <!-- ──────── 页签 B · 平台对比 ──────── -->
         <div v-else-if="tab === 'matrix'">
-          <div class="flex items-baseline justify-between" :style="{ marginBottom: '10px' }">
-            <div class="font-display" :style="{ fontSize: '14px', fontWeight: 700 }">平台对比 · 各平台明细</div>
-            <div :style="{ fontSize: '11px', color: 'var(--ink-3)' }">左为关于{{ displayBrand }}的原文，右为 AI 采用的信源</div>
-          </div>
           <div
             v-if="displayPlatforms.length === 0"
             class="py-10 text-center"

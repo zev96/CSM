@@ -77,8 +77,8 @@ function buildTicks(value: number): Tick[] {
       class="font-display"
       :style="{ fontVariantNumeric: 'tabular-nums' }"
     >
-      <tspan :style="{ fontSize: '40px', fontWeight: 700, fill: 'var(--ink)' }">{{ props.score }}</tspan>
-      <tspan dx="3" :style="{ fontSize: '13px', fontWeight: 600, fill: 'var(--ink-3)' }">/100</tspan>
+      <tspan :style="{ fontSize: '33px', fontWeight: 700, fill: 'var(--ink)' }">{{ props.score }}</tspan>
+      <tspan dx="3" :style="{ fontSize: '12px', fontWeight: 600, fill: 'var(--ink-3)' }">/100</tspan>
     </text>
     <text
       :x="cx"
