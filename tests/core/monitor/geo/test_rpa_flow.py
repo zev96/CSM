@@ -54,3 +54,112 @@ def test_is_logged_in_html_false_when_logged_out_marker_present():
 
 def test_is_logged_in_html_false_when_composer_absent():
     assert _flow.is_logged_in_html("<html></html>", logged_in_sel="textarea") is False
+
+
+import threading
+import pytest
+
+
+class _FakePage:
+    """脚本化 page：content() 依次返回 _contents 序列（末值定格），
+    query_selector 按 selector→对象表返回。"""
+    def __init__(self, contents, selectors=None):
+        self._contents = list(contents)
+        self._selectors = selectors or {}
+        self.filled = None
+        self.clicked = []
+        self.pressed = []
+
+    def content(self):
+        return self._contents.pop(0) if len(self._contents) > 1 else self._contents[0]
+
+    def query_selector(self, sel):
+        v = self._selectors.get(sel)
+        return v() if callable(v) else v
+
+    def fill(self, sel, text):
+        self.filled = (sel, text)
+
+    def click(self, sel):
+        self.clicked.append(sel)
+
+    def press(self, sel, key):
+        self.pressed.append((sel, key))
+
+
+class _FakeEl:
+    def __init__(self, *, enabled=True, attrs=None):
+        self._enabled = enabled
+        self._attrs = attrs or {}
+    def is_enabled(self):
+        return self._enabled
+    def get_attribute(self, name):
+        return self._attrs.get(name)
+    def click(self):
+        self._attrs["__clicked"] = True
+
+
+def test_submit_query_fills_and_clicks_send():
+    page = _FakePage(["<html></html>"])
+    _flow.submit_query(page, composer_sel="textarea", send_sel="button.send", text="k")
+    assert page.filled == ("textarea", "k")
+    assert page.clicked == ["button.send"]
+
+
+def test_submit_query_presses_enter_when_no_send_sel():
+    page = _FakePage(["<html></html>"])
+    _flow.submit_query(page, composer_sel="textarea", send_sel=None, text="k")
+    assert page.pressed == [("textarea", "Enter")]
+
+
+def test_ensure_web_toggle_clicks_when_off():
+    el = _FakeEl(attrs={"aria-pressed": "false"})
+    page = _FakePage(["<html></html>"], {"#web": el})
+    _flow.ensure_web_toggle(page, toggle_sel="#web", want_on=True)
+    assert el._attrs.get("__clicked") is True
+
+
+def test_ensure_web_toggle_noop_when_already_on():
+    el = _FakeEl(attrs={"aria-pressed": "true"})
+    page = _FakePage(["<html></html>"], {"#web": el})
+    _flow.ensure_web_toggle(page, toggle_sel="#web", want_on=True)
+    assert el._attrs.get("__clicked") is None
+
+
+def test_ensure_web_toggle_missing_toggle_is_ignored():
+    page = _FakePage(["<html></html>"], {})
+    _flow.ensure_web_toggle(page, toggle_sel="#nope", want_on=True)  # 不抛
+
+
+def test_detect_login_uses_page_content():
+    page = _FakePage(['<textarea id="c"></textarea>'])
+    assert _flow.detect_login(page, logged_in_sel="textarea#c") is True
+
+
+def test_wait_stream_done_returns_when_done_and_quiet():
+    # 前两次 generating 在场→未完成；之后 generating 消失 + content 稳定→完成
+    contents = ["<a>", "<ab>", "<abc>", "<abc>", "<abc>"]
+    gen = iter([_FakeEl(), _FakeEl(), None, None, None, None, None, None])
+    page = _FakePage(contents, {"#gen": lambda: next(gen, None)})
+    _flow.wait_stream_done(
+        page, done_predicate=lambda: page.query_selector("#gen") is None,
+        idle_ms=1, timeout_s=5, poll_ms=1)
+
+
+def test_wait_stream_done_timeout_raises():
+    page = _FakePage(["<a>"], {})
+    with pytest.raises(TimeoutError):
+        _flow.wait_stream_done(page, done_predicate=lambda: False,
+                               idle_ms=1, timeout_s=0.2, poll_ms=10)
+
+
+def test_wait_stream_done_honors_cancel_token():
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        _CancelledFetch = RuntimeError
+    tok = threading.Event(); tok.set()
+    page = _FakePage(["<a>"], {})
+    with pytest.raises(_CancelledFetch):
+        _flow.wait_stream_done(page, done_predicate=lambda: False,
+                               idle_ms=1, timeout_s=5, poll_ms=10, cancel_token=tok)
