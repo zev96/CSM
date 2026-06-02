@@ -458,6 +458,12 @@ function setProviderBaseUrl(p: string, v: string) {
   draft.base_urls = { ...draft.base_urls, [p]: v };
   autosave("base_urls", draft.base_urls).catch(() => {});
 }
+// 豆包专属：AI 卡位采集走火山方舟 Ark「联网 bot」端点，需控制台建的 bot_id。
+// 顶层 config 字段 doubao_bot_id（DoubaoProvider 读它），与 key/model 分开存。
+function setDoubaoBotId(v: string) {
+  draft.doubao_bot_id = v.trim();
+  autosave("doubao_bot_id", draft.doubao_bot_id).catch(() => {});
+}
 
 // 关闭按钮行为下拉
 const closeActionOptions = [
@@ -1122,6 +1128,22 @@ async function saveAccountEdit() {
                       color: 'var(--ink-2)',
                     }"
                     @change="(e) => setProviderBaseUrl(p.key, (e.target as HTMLInputElement).value)"
+                  />
+                  <!-- 豆包专属：AI 卡位采集联网 Bot ID（Ark 控制台建联网 bot 后填） -->
+                  <input
+                    v-if="p.key === 'doubao'"
+                    :value="get('doubao_bot_id') ?? ''"
+                    placeholder="AI 卡位联网 Bot ID（火山方舟建联网 bot 后填，采集用）"
+                    class="font-mono px-2.5 outline-none"
+                    :style="{
+                      height: '30px',
+                      borderRadius: '8px',
+                      background: 'var(--card-white)',
+                      border: '1px solid var(--line)',
+                      fontSize: '11px',
+                      color: 'var(--ink-2)',
+                    }"
+                    @change="(e) => setDoubaoBotId((e.target as HTMLInputElement).value)"
                   />
                 </div>
 

@@ -91,12 +91,13 @@ export interface MonitorState {
 }
 
 /**
- * GEO 卡位监控（AI 卡位）—— 阶段 1 只放通义 / Kimi 两个 API 平台。
- * 阶段 2-3 再加 doubao / deepseek / quark / yuanbao。
+ * GEO 卡位监控（AI 卡位）—— 阶段 1 通义 / Kimi，阶段 2 加豆包（火山方舟 Ark 联网 bot）。
+ * 阶段 3 再加 deepseek / quark / yuanbao（走 RPA）。
  */
 export const GEO_PLATFORMS = [
   { value: "tongyi", label: "通义千问" },
   { value: "kimi", label: "Kimi" },
+  { value: "doubao", label: "豆包" },
 ] as const;
 
 /**
