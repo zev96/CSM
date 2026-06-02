@@ -46,6 +46,7 @@ const props = defineProps<{
   keyword: string;
   platformCount: number;
   running: boolean;
+  taskId: number;
 }>();
 const emit = defineEmits<{
   (e: "run"): void;
@@ -387,7 +388,7 @@ const matrixDenom = denom;
               </div>
               <div>
                 <div :style="{ fontSize: '11px', fontWeight: 700, color: 'var(--ink-2)', marginBottom: '8px' }">权重排行榜</div>
-                <GeoSourceList :board="board" :total="matrixDenom" />
+                <GeoSourceList :board="board" :total="matrixDenom" :task-id="props.taskId" />
               </div>
             </div>
           </div>

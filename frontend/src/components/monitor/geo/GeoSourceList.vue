@@ -4,16 +4,24 @@
  * 每行：序号 + 圆点(信源专属色) + 域名 + 类型 + 引用次数细条 + 右侧「N 次引用」
  * 「平台引用率 X%」。平台引用率 = 该信源覆盖平台数 ÷ 总平台数。配色/字号照稿。
  *
- * 入参：board[]（{domain,type,count,platforms数}）、total（总平台数，作引用率分母）。
+ * 入参：board[]（{domain,type,count,platforms数}）、total（总平台数，作引用率分母）、
+ * taskId（用于构造 Excel 导出 URL）。
  */
 import { computed } from "vue";
 
 import { SRC_COLORS, type BoardRow } from "@/components/monitor/geo/geoDetail";
+import { useSidecar } from "@/stores/sidecar";
 
 const props = defineProps<{
   board: BoardRow[];
   total: number;
+  taskId: number;
 }>();
+
+function exportXlsx() {
+  const url = useSidecar().sseURL(`/api/monitor/geo/${props.taskId}/export?days=30`);
+  window.open(url);
+}
 
 const maxCount = computed(() => Math.max(1, ...props.board.map((b) => b.count)));
 const denom = computed(() => Math.max(1, props.total));
@@ -21,6 +29,13 @@ const denom = computed(() => Math.max(1, props.total));
 
 <template>
   <div class="flex flex-col" :style="{ gap: '6px' }">
+    <!-- 工具栏：导出按钮右对齐 -->
+    <div class="flex items-center justify-end" :style="{ marginBottom: '4px' }">
+      <button
+        :style="{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--ink-2)', cursor: 'pointer', lineHeight: '20px' }"
+        @click="exportXlsx"
+      >导出信源榜</button>
+    </div>
     <div
       v-for="(b, i) in board"
       :key="b.domain"
