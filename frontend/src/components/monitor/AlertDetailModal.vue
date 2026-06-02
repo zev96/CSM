@@ -129,43 +129,31 @@ const eyebrow = computed(() => {
 <template>
   <Dialog :open="open" size="xl" @update:open="close">
     <!--
-      Bleed-out dark themed banner — extends edge-to-edge by cancelling
-      Dialog chrome's p-6 with -mx-6 -mt-6. Relies on Dialog chrome's
-      `overflow-hidden` to clip the banner's rounded top corners and
-      the radial-gradient blur. The mb-5 below restores the gap to body.
+      标题条 —— 去掉了原来的黑色渐变(var(--dark) + 红色 radial-gradient blob)，
+      改用与模态正文一致的浅色主题：底部 1px 分隔线代替整块深色背景，文字用常规
+      ink 色阶。仍保留 -mx-6 -mt-6 让分隔线铺满 Dialog chrome 内边距宽度，mb-5
+      还原与正文的间距。
     -->
     <div
-      class="relative -mx-6 -mt-6 mb-5 flex-shrink-0 overflow-hidden"
+      class="relative -mx-6 -mt-6 mb-5 flex-shrink-0"
       :style="{
-        background: 'var(--dark)',
-        color: '#fbf7ec',
         padding: '22px 26px',
+        borderBottom: '1px solid var(--line)',
       }"
     >
-      <div
-        aria-hidden="true"
-        :style="{
-          position: 'absolute',
-          top: '-40px', right: '-20px',
-          width: '220px', height: '220px',
-          background: 'radial-gradient(circle, rgba(216,90,72,0.5), transparent 65%)',
-          filter: 'blur(12px)',
-          pointerEvents: 'none',
-        }"
-      />
       <div class="relative flex items-start justify-between gap-4">
         <div class="min-w-0">
           <div
             class="text-[10.5px] uppercase"
-            :style="{ letterSpacing: '1.5px', color: 'rgba(255,255,255,0.5)' }"
+            :style="{ letterSpacing: '1.5px', color: 'var(--ink-3)' }"
           >{{ eyebrow }}</div>
           <div
             class="font-display mt-1 font-bold"
-            :style="{ fontSize: '22px', letterSpacing: '-0.5px', lineHeight: 1.25 }"
+            :style="{ fontSize: '22px', letterSpacing: '-0.5px', lineHeight: 1.25, color: 'var(--ink)' }"
           >{{ title }}</div>
           <div
             class="mt-1 text-[12px]"
-            :style="{ color: 'rgba(255,255,255,0.6)' }"
+            :style="{ color: 'var(--ink-3)' }"
           >{{ subtitle }}</div>
         </div>
         <button
@@ -175,9 +163,9 @@ const eyebrow = computed(() => {
             width: '32px',
             height: '32px',
             borderRadius: '999px',
-            background: 'rgba(255,255,255,0.08)',
-            border: '1px solid rgba(255,255,255,0.12)',
-            color: '#fbf7ec',
+            background: 'var(--card-2)',
+            border: '1px solid var(--line)',
+            color: 'var(--ink-2)',
           }"
           @click="close"
         >
