@@ -106,6 +106,8 @@ hiddenimports: list[str] = [
     "csm_core.llm.providers.deepseek",
     "csm_core.llm.providers.gemini",
     "csm_core.llm.providers.qwen",
+    "csm_core.llm.providers.kimi",
+    "csm_core.llm.providers.doubao",
     # Monitor module
     "csm_core.monitor",
     "csm_core.monitor.base",
@@ -121,6 +123,22 @@ hiddenimports: list[str] = [
     "csm_core.monitor.platforms.bilibili_comment",
     "csm_core.monitor.platforms.douyin_comment",
     "csm_core.monitor.platforms.kuaishou_comment",
+    "csm_core.monitor.platforms.baidu_keyword",
+    "csm_core.monitor.platforms.geo_query",
+    # GEO 卡位监控子包。providers.base.get_provider 里 api_tongyi/api_kimi 是
+    # **懒加载**（函数内 import），PyInstaller 静态分析看不到 → 必须显式列，
+    # 否则 release bundle 漏包、运行时 get_provider 报 ImportError。其余模块
+    # 虽被 platforms/__init__ → geo_query 静态链引入，仍一并列出防御。
+    "csm_core.monitor.geo",
+    "csm_core.monitor.geo.models",
+    "csm_core.monitor.geo.classify",
+    "csm_core.monitor.geo.metrics",
+    "csm_core.monitor.geo.storage",
+    "csm_core.monitor.geo.extract",
+    "csm_core.monitor.geo.providers",
+    "csm_core.monitor.geo.providers.base",
+    "csm_core.monitor.geo.providers.api_tongyi",
+    "csm_core.monitor.geo.providers.api_kimi",
     # Drivers (cookie store + http session + browser engines)
     "csm_core.monitor.drivers",
     "csm_core.monitor.drivers.cookie_store",
