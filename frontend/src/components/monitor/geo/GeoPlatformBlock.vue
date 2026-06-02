@@ -11,6 +11,7 @@ import Pill from "@/components/ui/Pill.vue";
 import {
   cellStatus,
   isFailed,
+  isPending,
   sentDotColor,
   sentLabel,
   type PlatformVM,
@@ -25,14 +26,17 @@ const props = defineProps<{
 
 const st = computed(() => cellStatus(props.platform));
 const failed = computed(() => isFailed(props.platform));
+const pending = computed(() => isPending(props.platform));
 
-// 头部色调：首推=绿、提及=橙、未提及/失败=红。
+// 头部色调：首推=绿、提及=橙、未运行=中性灰、未提及/失败=红。
 const tint = computed(() =>
   st.value.kind === "first"
     ? "rgba(122,155,94,.16)"
     : st.value.kind === "hit"
       ? "var(--primary-soft)"
-      : "rgba(216,90,72,.12)",
+      : st.value.kind === "pending"
+        ? "var(--card-2)"
+        : "rgba(216,90,72,.12)",
 );
 const badgeBg = computed(() => (st.value.kind === "first" ? "var(--green)" : "#fff"));
 const badgeColor = computed(() => (st.value.kind === "first" ? "#fff" : st.value.color));
@@ -88,7 +92,7 @@ const excerptSegs = computed<Seg[]>(() => {
           :style="{ padding: '3px 11px', fontSize: '12px', fontWeight: 700, borderRadius: '999px', color: badgeColor, background: badgeBg, border: badgeBorder, fontVariantNumeric: 'tabular-nums' }"
         >{{ st.label }}</span>
       </div>
-      <div v-if="!failed" class="flex items-center" :style="{ gap: '12px', marginTop: '8px' }">
+      <div v-if="!failed && !pending" class="flex items-center" :style="{ gap: '12px', marginTop: '8px' }">
         <span class="inline-flex items-center" :style="{ gap: '5px' }">
           <span :style="{ width: '8px', height: '8px', borderRadius: '999px', background: sentDotColor(platform.sentiment), display: 'inline-block', flexShrink: 0 }" />
           <span :style="{ fontSize: '11.5px', color: 'var(--ink-2)' }">口碑{{ sentLabel(platform.sentiment) }}</span>
@@ -99,7 +103,15 @@ const excerptSegs = computed<Seg[]>(() => {
 
     <!-- 正文 -->
     <div
-      v-if="failed"
+      v-if="pending"
+      class="flex items-center"
+      :style="{ padding: '14px 16px', fontSize: '12px', color: 'var(--ink-3)', gap: '7px' }"
+    >
+      <span :style="{ width: '6px', height: '6px', borderRadius: '999px', background: 'var(--ink-4)' }" />
+      该平台本次未运行 · 运行一次后这里显示原文与信源。
+    </div>
+    <div
+      v-else-if="failed"
       class="flex items-center"
       :style="{ padding: '14px 16px', fontSize: '12px', color: 'var(--ink-3)', gap: '7px' }"
     >

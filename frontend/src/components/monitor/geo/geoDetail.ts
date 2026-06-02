@@ -152,19 +152,73 @@ export function sentLabel(s: string): string {
 export function isFailed(p: { status: string }): boolean {
   return p.status === "error" || p.status === "blocked";
 }
+/**
+ * 占位平台标记 —— 该平台已配置但本次运行没有对应 cell（未跑 / 上次运行缺该
+ * 平台）。占位卡渲染成中性灰「未运行」，不参与 metric / 竞品 / 散点派生。
+ */
+export const PENDING_STATUS = "pending";
+export function isPending(p: { status: string }): boolean {
+  return p.status === PENDING_STATUS;
+}
 
 export interface CellBadge {
-  kind: "first" | "hit" | "miss" | "fail";
+  kind: "first" | "hit" | "miss" | "fail" | "pending";
   label: string;
   short: string;
   color: string;
 }
 /** 平台单格状态徽章（移植 geo-shared.jsx cellStatus）。 */
 export function cellStatus(p: PlatformVM): CellBadge {
+  if (isPending(p)) return { kind: "pending", label: "未运行", short: "未运行", color: "var(--ink-3)" };
   if (isFailed(p)) return { kind: "fail", label: "采集失败", short: "⚠ 失败", color: "var(--red)" };
   if (!p.mentioned) return { kind: "miss", label: "未提及", short: "✗ 未提及", color: "var(--red)" };
   if (p.rank === 1) return { kind: "first", label: "首推 #1", short: "★ #1", color: "var(--green)" };
   return { kind: "hit", label: `提及 #${p.rank}`, short: `#${p.rank}`, color: "var(--primary-deep)" };
+}
+
+/** 已配置但本次无 cell 的平台占位 VM（中性灰「未运行」卡用）。 */
+export function placeholderPlatform(id: string): PlatformVM {
+  return {
+    id,
+    name: platformLabel(id),
+    status: PENDING_STATUS,
+    mentioned: false,
+    rank: -1,
+    sentiment: "na",
+    citations: 0,
+    summary: "",
+    answer: "",
+    excerpt: "",
+    recommended: [],
+    cites: [],
+  };
+}
+
+/**
+ * 合并「已配置平台」与「本次真实采集 cell」：每个配置平台若有 cell 用真卡，
+ * 否则补占位卡。保证概览/平台对比/热力矩阵恒展示全部已配置平台（未跑也占位）。
+ * 真实 cell 命中但不在配置里的平台也保留（追加在尾部），避免漏显。
+ */
+export function mergeConfiguredPlatforms(
+  cells: PlatformVM[],
+  configured: string[],
+): PlatformVM[] {
+  const byId = new Map(cells.map((c) => [c.id, c]));
+  const seen = new Set<string>();
+  const out: PlatformVM[] = [];
+  for (const id of configured) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(byId.get(id) ?? placeholderPlatform(id));
+  }
+  // 配置之外但确有 cell 的平台（理论少见）兜底显示。
+  for (const c of cells) {
+    if (!seen.has(c.id)) {
+      seen.add(c.id);
+      out.push(c);
+    }
+  }
+  return out;
 }
 
 // ── 原始 cell 形状（latest-cells 水合后；见 geo_storage._hydrate_cells）──
@@ -301,7 +355,13 @@ function fmtShortDate(iso: string | null | undefined): string {
 
 // ── 装配结果 ─────────────────────────────────────────────────────────────
 export interface KeywordDetail {
+  /** 本次真实采集到的平台 cell（metric / 竞品 / 散点 / 结论派生只用这个）。 */
   platforms: PlatformVM[];
+  /**
+   * 展示用平台列表 = 已配置平台并入真实 cell，缺 cell 的配置平台补占位。
+   * 概览各平台卡 / 平台对比卡片 / 热力矩阵列恒展示全部已配置平台。
+   */
+  displayPlatforms: PlatformVM[];
   metric: KeywordMetric | null;
   history: HistoryPoint[];
   competitors: CompetitorVM[];
@@ -365,6 +425,8 @@ export function useGeoKeywordDetail(
   taskId: Ref<number | null>,
   keyword: Ref<string | null>,
   brandTerms: Ref<string[]>,
+  /** 该任务已配置的平台（config.platforms）——用来补占位卡。可空。 */
+  configuredPlatforms?: Ref<string[]>,
 ) {
   const sidecar = useSidecar();
 
@@ -443,8 +505,16 @@ export function useGeoKeywordDetail(
       const topSource = board.length ? board[0].domain : "";
       const conclusion = deriveConclusion(metric, platforms);
 
+      // 展示用列表：已配置平台并入真实 cell（缺的补占位）。无配置时退化为真实
+      // cell（保持旧行为）。占位卡不参与上面的 metric / 竞品 / 散点 / 结论派生。
+      const configured = configuredPlatforms?.value ?? [];
+      const displayPlatforms = configured.length
+        ? orderPlatforms(mergeConfiguredPlatforms(platforms, configured))
+        : platforms;
+
       detail.value = {
         platforms,
+        displayPlatforms,
         metric,
         history,
         competitors,
@@ -464,8 +534,12 @@ export function useGeoKeywordDetail(
     }
   }
 
-  // 选中关键词 / 任务变化 → 自动重拉。
-  watch([taskId, keyword], () => void reload(), { immediate: true });
+  // 选中关键词 / 任务 / 配置平台变化 → 自动重拉（配置平台变了占位卡也要变）。
+  watch(
+    [taskId, keyword, () => configuredPlatforms?.value],
+    () => void reload(),
+    { immediate: true },
+  );
 
   // 平台引用率分母 = 该次运行的去重平台数（metric.total 优先；回退 cells 平台数）。
   const platformDenominator = computed<number>(() => {

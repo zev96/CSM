@@ -93,6 +93,10 @@ const selectedTask = computed<Task | null>(
   () => tasks.value.find((t) => t.id === selectedTaskId.value) ?? null,
 );
 const selectedBrandTerms = computed<string[]>(() => brandTermsOf(selectedTask.value));
+const selectedPlatforms = computed<string[]>(() => {
+  const ps = selectedTask.value?.config?.platforms;
+  return Array.isArray(ps) ? ps.filter(Boolean).map(String) : [];
+});
 const selectedPlatformCount = computed<number>(() =>
   selectedTask.value ? platformCountOf(selectedTask.value) : 0,
 );
@@ -168,6 +172,7 @@ const { detail, loading: detailLoading, reload: reloadDetail } = useGeoKeywordDe
   selectedTaskId,
   selectedKeyword,
   selectedBrandTerms,
+  selectedPlatforms,
 );
 
 // ── 数据加载 ───────────────────────────────────────────────────────────
@@ -420,7 +425,12 @@ onUnmounted(() => {
         >没有匹配「{{ search }}」的品牌或关键词。</div>
 
         <div v-for="node in filteredTree" :key="node.task.id" :style="{ marginBottom: '6px' }">
-          <!-- 总任务行（品牌）-->
+          <!--
+            总任务行 —— 对齐百度排名 L1 任务行结构：
+            折叠箭头 + 标题(任务名) + 副标(N 个关键词 · 品牌 X) + 状态药丸 +
+            操作 icons(运行/编辑/删除)。整行点击展开/折叠子任务；操作按钮 .stop
+            不冒泡。运行中 play→x(停止)，复用百度行的图标样式(h-7 w-7 圆形)。
+          -->
           <div
             class="geo-row flex items-center cursor-pointer"
             :style="{ gap: '9px', padding: '11px 10px', borderRadius: '11px', background: expandedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
@@ -440,10 +450,54 @@ onUnmounted(() => {
               <path d="M2 4l4 4 4-4" />
             </svg>
             <div :style="{ flex: 1, minWidth: 0 }">
-              <div class="font-display truncate" :style="{ fontSize: '13.5px', fontWeight: 700 }" :title="node.brand">{{ node.brand }}</div>
-              <div :style="{ fontSize: '10.5px', color: 'var(--ink-3)', marginTop: '1px' }">{{ node.keywords.length }} 关键词</div>
+              <div class="font-display truncate" :style="{ fontSize: '13.5px', fontWeight: 700 }" :title="node.task.name">{{ node.task.name }}</div>
+              <div class="truncate" :style="{ fontSize: '10.5px', color: 'var(--ink-3)', marginTop: '1px' }">
+                {{ node.keywords.length }} 个关键词
+                <template v-if="node.brand">· 品牌 {{ node.brand }}</template>
+              </div>
             </div>
             <Pill :tone="statusTone(node.task)">{{ statusText(node.task) }}</Pill>
+            <!-- 操作 icons（运行/编辑/删除）—— 照搬百度 L1 行图标样式 -->
+            <div class="flex flex-shrink-0 items-center" :style="{ gap: '1px' }">
+              <button
+                v-if="isRunning(node.task.id)"
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center"
+                :style="{ borderRadius: '999px', color: 'var(--red, #d85a48)', background: 'transparent', border: 'none', cursor: 'pointer' }"
+                title="停止监测"
+                @click.stop="cancelTask(node.task.id)"
+              >
+                <Icon name="x" :size="13" />
+              </button>
+              <button
+                v-else
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center"
+                :style="{ borderRadius: '999px', color: 'var(--primary-deep)', background: 'transparent', border: 'none', cursor: 'pointer' }"
+                title="立刻监测"
+                @click.stop="runNow(node.task.id)"
+              >
+                <Icon name="play" :size="13" />
+              </button>
+              <button
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center"
+                :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer' }"
+                title="编辑任务"
+                @click.stop="openEditTask(node.task)"
+              >
+                <Icon name="edit" :size="13" />
+              </button>
+              <button
+                type="button"
+                class="inline-flex h-7 w-7 items-center justify-center"
+                :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer' }"
+                title="删除任务"
+                @click.stop="deleteTask(node.task.id)"
+              >
+                <Icon name="trash" :size="13" />
+              </button>
+            </div>
           </div>
 
           <!-- 运行中进度条（品牌行下）-->

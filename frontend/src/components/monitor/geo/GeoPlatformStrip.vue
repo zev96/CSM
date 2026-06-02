@@ -4,10 +4,15 @@
  * 标题「各平台卡位 · N 个平台」+「查看明细 →」(跳平台对比)。下方 N 列等宽小卡：
  * 顶部 3px 状态色边 + 平台名 + 情感点 + 大字状态(首推#1/提及#2/未提及，色随状态)
  * + 底部小字「引用 N · 情感」。整卡可点跳明细。配色/字号严格照稿。
+ *
+ * platforms 现在恒含全部「已配置」平台（由 geoDetail.mergeConfiguredPlatforms
+ * 装配）：未跑 / 上次缺该平台的平台是 status="pending" 的占位卡 —— 渲染成中性
+ * 灰边「未运行 / 待采集」，让所有配置平台在运行前也可见。
  */
 import {
   cellStatus,
   isFailed,
+  isPending,
   sentDotColor,
   sentLabel,
   type PlatformVM,
@@ -42,16 +47,16 @@ const cols = () => `repeat(${Math.max(props.platforms.length, 1)}, 1fr)`;
         v-for="p in platforms"
         :key="p.id"
         class="geo-row cursor-pointer"
-        :style="{ padding: '10px 11px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)', borderTop: `3px solid ${cellStatus(p).color}` }"
+        :style="{ padding: '10px 11px', borderRadius: '12px', background: isPending(p) ? 'var(--card)' : 'var(--card-2)', border: '1px solid var(--line)', borderTop: `3px solid ${isPending(p) ? 'var(--line)' : cellStatus(p).color}`, opacity: isPending(p) ? 0.85 : 1 }"
         @click="emit('more')"
       >
         <div class="flex items-center justify-between" :style="{ gap: '4px' }">
           <span
             class="font-display truncate"
-            :style="{ fontSize: '12px', fontWeight: 700 }"
+            :style="{ fontSize: '12px', fontWeight: 700, color: isPending(p) ? 'var(--ink-3)' : 'var(--ink)' }"
           >{{ p.name }}</span>
           <span
-            v-if="!isFailed(p)"
+            v-if="!isFailed(p) && !isPending(p)"
             :style="{ width: '8px', height: '8px', borderRadius: '999px', background: sentDotColor(p.sentiment), flexShrink: 0, display: 'inline-block' }"
           />
         </div>
@@ -60,7 +65,7 @@ const cols = () => `repeat(${Math.max(props.platforms.length, 1)}, 1fr)`;
           :style="{ fontSize: '15px', fontWeight: 700, color: cellStatus(p).color, marginTop: '5px' }"
         >{{ cellStatus(p).label }}</div>
         <div :style="{ fontSize: '10px', color: 'var(--ink-3)', marginTop: '3px' }">
-          {{ isFailed(p) ? "够不到平台" : `引用 ${p.citations} · ${sentLabel(p.sentiment)}` }}
+          {{ isPending(p) ? "待采集" : isFailed(p) ? "够不到平台" : `引用 ${p.citations} · ${sentLabel(p.sentiment)}` }}
         </div>
       </div>
     </div>

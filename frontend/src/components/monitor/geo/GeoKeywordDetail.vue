@@ -71,7 +71,13 @@ watch(
 );
 
 const metric = computed(() => props.detail?.metric ?? null);
+// 真实采集到的平台（metric / 竞品 / 散点 / 结论派生用）。
 const platforms = computed(() => props.detail?.platforms ?? []);
+// 展示用平台列表（含未跑占位卡）——各平台卡 / 平台对比卡片 / 热力矩阵列用。
+// detail 不带 displayPlatforms（旧数据/未装配）时回退真实 platforms。
+const displayPlatforms = computed(
+  () => props.detail?.displayPlatforms ?? props.detail?.platforms ?? [],
+);
 const competitors = computed(() => props.detail?.competitors ?? []);
 const board = computed(() => props.detail?.board ?? []);
 const displayBrand = computed(
@@ -273,7 +279,7 @@ const matrixDenom = denom;
           <div :style="{ padding: '16px 18px', borderRadius: '16px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
             <GeoHero :metric="metric" :conclusion="detail?.conclusion ?? ''" />
           </div>
-          <GeoPlatformStrip :platforms="platforms" @more="tab = 'matrix'" />
+          <GeoPlatformStrip :platforms="displayPlatforms" @more="tab = 'matrix'" />
           <div :style="{ padding: '14px 18px', borderRadius: '16px', background: 'var(--card)', border: '1px solid var(--line)' }">
             <GeoTrend :history="detail?.history ?? []" />
           </div>
@@ -291,13 +297,13 @@ const matrixDenom = denom;
             <div :style="{ fontSize: '11px', color: 'var(--ink-3)' }">左为关于{{ displayBrand }}的原文，右为 AI 采用的信源</div>
           </div>
           <div
-            v-if="platforms.length === 0"
+            v-if="displayPlatforms.length === 0"
             class="py-10 text-center"
             :style="{ fontSize: '12px', color: 'var(--ink-3)' }"
           >该关键词暂无平台采集结果 · 运行一次后显示各平台原文与信源。</div>
           <div v-else :style="{ columnCount: 2, columnGap: '14px' }">
             <GeoPlatformBlock
-              v-for="p in platforms"
+              v-for="p in displayPlatforms"
               :key="p.id"
               :platform="p"
               :brand="brand"
@@ -340,7 +346,7 @@ const matrixDenom = denom;
               </div>
               <div>
                 <div :style="{ fontSize: '11px', fontWeight: 700, color: 'var(--ink-2)', marginBottom: '8px' }">各平台具体位次</div>
-                <GeoRankHeatmap :platforms="platforms" :competitors="competitors" :target-name="displayBrand" />
+                <GeoRankHeatmap :platforms="displayPlatforms" :competitors="competitors" :target-name="displayBrand" />
                 <div :style="{ fontSize: '10.5px', color: 'var(--ink-3)', marginTop: '8px', lineHeight: 1.5 }">{{ competeConclusion }}</div>
               </div>
             </div>
