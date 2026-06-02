@@ -11,6 +11,13 @@
 **基线 spec:** `docs/superpowers/specs/2026-06-02-geo-phase3-rpa-design.md`
 **工作树:** `D:/CSM/.claude/worktrees/geo-phase3`（分支 `claude/geo-phase3`，off origin/main d34786c）。以下命令 cwd 默认 = 工作树根（前端命令 cwd = `frontend/`）。
 
+**⚠ 跑测试的命令前缀（必读）**：本 worktree 的 editable 安装指向主仓 `D:/CSM`，**必须用 `python -m pytest`**（cwd=worktree 把 worktree 放 sys.path[0]，覆盖 editable）+ `PYTHONPATH` 带上 sidecar，否则会测成主仓代码 / 找不到 worktree 新模块。各 Task 里写的 `pytest ...` 一律按下式跑（Windows git-bash，已实测 19 passed 基线绿）：
+```bash
+cd D:/CSM/.claude/worktrees/geo-phase3
+PYTHONPATH="D:/CSM/.claude/worktrees/geo-phase3/sidecar" python -m pytest <路径> -v
+```
+csm_core 走 cwd 解析到 worktree；csm_sidecar 走 PYTHONPATH 解析到 worktree。前端命令 cwd=`frontend/`：`npm run test -- <名>`、`npx vue-tsc --noEmit`。**绝不**用裸 `pytest`。
+
 ---
 
 ## 设计契约（所有 Task 共享，签名以此为准，勿漂移）
