@@ -20,7 +20,7 @@ class GeoProvider(Protocol):
 
 
 def get_provider(platform: str) -> GeoProvider:
-    """返回 provider 实例（每次新建，provider 无状态）。阶段 1 只有 tongyi / kimi。"""
+    """返回 provider 实例（每次新建，provider 无状态）。API 平台：tongyi / kimi / doubao。"""
     if platform == "tongyi":
         try:
             from .api_tongyi import TongyiProvider

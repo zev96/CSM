@@ -134,6 +134,7 @@ def test_parse_doubao_extracts_answer_and_citations():
     assert "小鹏G6" in answer_text
     urls = [c.url for c in citations]
     assert "https://zhuanlan.zhihu.com/p/123" in urls
+    assert citations[0].title.endswith("知乎")  # site_name 折进 title
 
 
 def test_doubao_missing_key_is_error(monkeypatch):
