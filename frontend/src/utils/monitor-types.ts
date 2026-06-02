@@ -97,8 +97,9 @@ export interface MonitorState {
  * search_id；或干脆没联网 API），统一放阶段 3 走 RPA（开真网页抓回答+来源）。
  */
 export const GEO_PLATFORMS = [
-  { value: "tongyi", label: "通义千问" },
-  { value: "doubao", label: "豆包" },
+  { value: "tongyi", label: "通义千问", mode: "api" },
+  { value: "doubao", label: "豆包", mode: "api" },
+  { value: "deepseek", label: "DeepSeek", mode: "rpa" },
 ] as const;
 
 /**

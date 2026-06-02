@@ -301,6 +301,7 @@ onMounted(async () => {
   syncDraftFromCfg();
   refreshKeyringStatus();
   refreshBaiduLoginStatus();
+  RPA_PLATFORMS.forEach((p) => refreshRpaLoginStatus(p.value));
   applyHash(route.hash);
 });
 
@@ -722,6 +723,48 @@ async function startBaiduLogin() {
   } finally {
     baiduLoginBusy.value = false;
     await refreshBaiduLoginStatus();
+  }
+}
+
+// AI 卡位 RPA 登录态（DeepSeek/Kimi/元宝 真浏览器持久档）
+const RPA_PLATFORMS = [
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "kimi", label: "Kimi" },
+  { value: "yuanbao", label: "腾讯元宝" },
+] as const;
+const rpaLogin = reactive<Record<string, { logged_in: boolean; busy: boolean }>>({
+  deepseek: { logged_in: false, busy: false },
+  kimi: { logged_in: false, busy: false },
+  yuanbao: { logged_in: false, busy: false },
+});
+
+async function refreshRpaLoginStatus(platform: string) {
+  try {
+    const r = await sidecar.client.get(`/api/monitor/geo/rpa/${platform}/login-status`);
+    rpaLogin[platform].logged_in = !!r.data?.logged_in;
+  } catch {
+    rpaLogin[platform].logged_in = false;
+  }
+}
+
+async function startRpaLogin(platform: string, label: string) {
+  if (!(await confirmDialog(
+    "会打开一个浏览器窗口，登录后 CSM 卡位采集任务自动用登录态访问。建议使用专用账号。",
+    { title: `登录 ${label}`, okLabel: "登录", kind: "info" },
+  ))) return;
+  rpaLogin[platform].busy = true;
+  try {
+    const r = await sidecar.client.post(`/api/monitor/geo/rpa/${platform}/login`, null, { timeout: 360_000 });
+    const status = r.data?.status;
+    if (status === "success") toast.success(`${label} 登录成功`);
+    else if (status === "cancelled") toast.info("登录已取消");
+    else if (status === "timeout") toast.error("登录超时（窗口已关闭）");
+    else toast.error(`登录失败：${r.data?.error ?? status}`);
+  } catch (e: any) {
+    toast.error(`登录失败：${e.response?.data?.detail ?? e.message ?? "未知错误"}`);
+  } finally {
+    rpaLogin[platform].busy = false;
+    await refreshRpaLoginStatus(platform);
   }
 }
 
@@ -1549,6 +1592,31 @@ async function saveAccountEdit() {
                 </button>
               </div>
             </SettingsRow>
+
+            <div class="mt-6 pt-5" :style="{ borderTop: '1px solid var(--line)' }">
+              <div class="mb-3 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
+                AI 卡位 · RPA 登录
+              </div>
+              <SettingsRow
+                v-for="p in RPA_PLATFORMS"
+                :key="p.value"
+                :label="p.label"
+                hint="需登录后才能采集该平台的联网回答与来源。建议用专用账号。"
+              >
+                <div class="flex items-center gap-3">
+                  <span
+                    v-if="rpaLogin[p.value].logged_in"
+                    class="text-[12px]" :style="{ color: 'var(--success, #16a34a)' }"
+                  >已登录</span>
+                  <span v-else class="text-[12px]" :style="{ color: 'var(--ink-3)' }">未登录</span>
+                  <Btn variant="solid" small :disabled="rpaLogin[p.value].busy"
+                       @click="startRpaLogin(p.value, p.label)">
+                    <Icon name="user" :size="12" />
+                    <span>{{ rpaLogin[p.value].logged_in ? "重新登录" : "登录" }}</span>
+                  </Btn>
+                </div>
+              </SettingsRow>
+            </div>
 
             <!--
               ── 百度关键词 子配置 ──
