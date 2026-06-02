@@ -48,6 +48,7 @@ const toast = useToast();
 const route = useRoute();
 
 const showNewTask = ref(false);
+const prefillKeyword = ref("");
 
 const syncModalVisible = ref(false);
 const syncModalJobId = ref<number | null>(null);
@@ -314,6 +315,13 @@ onMounted(async () => {
   } else {
     await store.refreshVideos();
   }
+
+  // GEO 信源榜闭环跳转：若 route 带 geo_keyword，预填关键词并打开新建弹窗。
+  const kw = route.query.geo_keyword;
+  if (typeof kw === "string" && kw) {
+    prefillKeyword.value = kw;
+    showNewTask.value = true;
+  }
 });
 </script>
 
@@ -520,6 +528,7 @@ onMounted(async () => {
     <StartJobModal
       v-model:open="showNewTask"
       :login-status="store.loginStatus"
+      :prefill-keyword="prefillKeyword"
       @submit="onStartSubmit"
     />
     <SyncToMonitorModal

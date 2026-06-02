@@ -388,7 +388,7 @@ const matrixDenom = denom;
               </div>
               <div>
                 <div :style="{ fontSize: '11px', fontWeight: 700, color: 'var(--ink-2)', marginBottom: '8px' }">权重排行榜</div>
-                <GeoSourceList :board="board" :total="matrixDenom" :task-id="props.taskId" />
+                <GeoSourceList :board="board" :total="matrixDenom" :task-id="props.taskId" :keyword="props.keyword" />
               </div>
             </div>
           </div>
