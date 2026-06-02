@@ -59,7 +59,7 @@ def login_status(platform: str) -> dict[str, Any]:
         return {"logged_in": logged_in}
     except Exception as e:
         logger.warning("[geo-rpa][%s] login_status raised: %s", platform, e)
-        return {"logged_in": False}
+        return {"logged_in": False, "error": str(e)}
     finally:
         if context is not None:
             with contextlib.suppress(Exception):
@@ -103,7 +103,8 @@ def open_login(platform: str, *, timeout_s: int = 300) -> dict[str, Any]:
                 return {"status": "cancelled"}
             try:
                 html = page.content()
-            except Exception:
+            except Exception as e:
+                logger.debug("[geo-rpa][%s] page.content() raised (treat as 用户关窗): %s", platform, e)
                 return {"status": "cancelled"}  # context 没了 = 用户关窗
             if is_logged_in_html(html, logged_in_sel=spec.logged_in_sel,
                                  logged_out_sel=spec.logged_out_sel):

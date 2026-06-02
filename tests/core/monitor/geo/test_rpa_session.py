@@ -94,3 +94,48 @@ def test_open_login_success_when_marker_present(monkeypatch):
     _patch_pw(monkeypatch, '<textarea id="chat-input"></textarea>')
     out = sess.open_login("deepseek", timeout_s=2)
     assert out["status"] == "success"
+
+
+def test_open_login_cancelled_when_page_detaches(monkeypatch):
+    # 用户关窗 → page.content() 抛 → open_login 返回 cancelled
+    import sys
+    import types
+
+    class _DeadPage:
+        def goto(self, *a, **k):
+            pass
+        def wait_for_timeout(self, *a, **k):
+            pass
+        def bring_to_front(self):
+            pass
+        def content(self):
+            raise RuntimeError("page closed")
+
+    class _DeadCtx:
+        @property
+        def pages(self):
+            return [_DeadPage()]
+        def new_page(self):
+            return _DeadPage()
+        def on(self, *a, **k):
+            pass
+        def close(self):
+            pass
+
+    class _DeadPW:
+        def __init__(self):
+            self.chromium = self
+            self.executable_path = "/x/chromium"
+        def start(self):
+            return self
+        def launch_persistent_context(self, **k):
+            return _DeadCtx()
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(sess, "ensure_browsers_path", lambda: None)
+    monkeypatch.setattr(sess, "_profile_dir_for", lambda p: __import__("pathlib").Path("/tmp") / p)
+    monkeypatch.setitem(sys.modules, "patchright.sync_api",
+                        types.SimpleNamespace(sync_playwright=lambda: _DeadPW()))
+    out = sess.open_login("deepseek", timeout_s=2)
+    assert out["status"] == "cancelled"
