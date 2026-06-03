@@ -22,7 +22,7 @@
 - 不做「自有内容精确匹配」模式（用户已选「品牌词命中」语义）
 - 不接入文档里另外 3 个兄弟 API（全网搜索 `global_search` / 直答 / 热榜 `hot_list`）—— 留作未来，见 §9
 - 不做分页（API 无分页，`HasMore` 恒 false，`Count` 上限 10）
-- 不抓取结果原文全文（只用 API 直接返回的标题/摘要/作者匹配）
+- **默认**只匹配 API 直接返回的标题/摘要/作者；**全文级匹配是可选 opt-in 增强**（默认关，分阶段交付，见 §5.4 与 §9）—— 用户已确认「先这样做，可行再加全文」
 - 不做持久化配额计数表 / UI 配额条（用户已选「仅优雅处理 30001」）
 - 设置页不加「测试连通」按钮（用户已选）
 - 不与现有 `zhihu_question`（问题维度监控）合并 —— 两者语义不同，各自独立
@@ -32,8 +32,9 @@
 | 维度 | 决策 |
 |---|---|
 | 监控语义 | **品牌词命中排名**：给定关键词，看品牌/产品名是否出现在前 10 结果，记首个命中位置 + 命中条数 |
-| 匹配字段 | `Title` + `ContentText`（摘要）+ `AuthorName`，大小写不敏感子串；记录命中字段 |
-| 数据来源 | 知乎官方 API（结构化 JSON），httpx + Bearer，**无爬虫/cookie/验证码/风控/正文抽取** |
+| 匹配字段（默认）| `Title` + `ContentText`（摘要）+ `AuthorName`，大小写不敏感子串；记录命中字段 |
+| 全文级匹配 | **可选 opt-in**（`config.match_full_text`，默认关）：开后对前 10 逐条去 zhihu.com 抓正文再匹配，best-effort 抓不到回退摘要；复用 `zhihu_question` 的 cookie/抓取设施。见 §5.4 |
+| 数据来源 | **默认路径**走知乎官方 API（结构化 JSON，httpx + Bearer，**无爬虫/cookie/验证码/风控**）；全文匹配开关打开后才引入 zhihu.com 正文抓取（curl_cffi + cookie）|
 | 凭证 | 全局单个 Access Secret，走现有 keyring 基建（`provider="zhihu"`），非按任务配置 |
 | 配额（1000/天）| 仅**优雅处理 30001**（频率/配额超限）：标该关键词「限流」+ 熔断退避，不做持久化计数表 |
 | 设置页测试按钮 | 不加；只做保存 + 已配置/未配置状态 |
@@ -73,20 +74,23 @@ curl -G 'https://developer.zhihu.com/api/v1/content/zhihu_search' \
 
 ## 4. 架构与模块边界
 
-### 4.1 后端（Python）—— 仅 3 处
+### 4.1 后端（Python）—— 默认（摘要匹配）仅 3 处
 
 ```
 csm_core/monitor/
 ├── base.py                       ← TaskType Literal 加 "zhihu_search"
 └── platforms/
     ├── __init__.py               ← import + 注册 ZHIHU_SEARCH 进 ALL
-    └── zhihu_search.py           ← 新增：ZhihuSearchAdapter + zhihu_search_api()
+    ├── zhihu_search.py           ← 新增：ZhihuSearchAdapter + zhihu_search_api()
+    └── zhihu_content.py          ← 仅「全文匹配」阶段新增（§5.4）：共享正文抓取 helper
 
 # 完全不动：
 #   monitor_loop.py / monitor_service.py / storage.py / rate_limit.py
 #   routes/monitor.py（泛型路由已覆盖任意 task type）
 #   monitor_lifecycle.py（本 adapter 无需 apply_settings，pacer/breaker 用默认）
 ```
+
+> 默认范围（PR #1/#2）后端仅 `base.py` + `zhihu_search.py` + `__init__.py` 三处。可选全文匹配（PR #3）再加 `zhihu_content.py` 共享 helper（从 `zhihu_question` 抽取 `_strip_tags` / CookieStore 用法）。
 
 `monitor_loop` 已确认会用渐进降级签名调用 `adapter.fetch(task, progress_cb=…, cancel_token=…, resume_from=…)`，并泛型持久化 `MonitorResult` + 推 SSE。新 adapter 用完整签名即可即插即用。
 
@@ -134,7 +138,7 @@ class ZhihuSearchAdapter:
 5. 逐关键词循环（关键词之间 `_pacer.wait()` + `maybe_cancel`）：
    - `zhihu_search_api(kw, count, secret)`
    - 按 `Code` / `http_status` 分流：
-     - `Code==0` → 解析 `Data.Items[]`，对每条匹配品牌词，算 `first_rank` + `matched_count`，拼 `results[]`；`Data.EmptyReason` 透传
+     - `Code==0` → 解析 `Data.Items[]`，对每条先在标题/摘要/作者匹配品牌词；若 `config.match_full_text` 为真且未命中，再 best-effort 抓正文匹配（§5.4）。算 `first_rank` + `matched_count`，拼 `results[]`；`Data.EmptyReason` 透传
      - `30001` → 该关键词标 `limited`（`api_code=30001`），`self._breaker.record_failure()`；若熔断中途开路，剩余关键词标 `risk_control`
      - `20001` → 整 task `status="error"`，消息含「Access Secret 错误或系统时钟偏差过大」，**立即中止**（再调也会失败）
      - `10001`/`90001`/非 JSON/HTTP≥400 → 该关键词标 `fetch_error`，继续下一个
@@ -166,7 +170,8 @@ TaskType = Literal[
   "search_keywords": ["扫地机器人推荐", "宠物吸尘器"],  // 多关键词，每个跑一次搜索
   "target_brand": "示例品牌",                          // 单品牌词
   "brand_aliases": ["ExampleBrand", "EB"],            // 可选别名，与 target_brand 一起参与匹配
-  "count": 10                                          // 默认/上限 10
+  "count": 10,                                         // 固定 10（不在表单暴露）
+  "match_full_text": false                             // 可选：开后对前 10 抓正文再匹配（§5.4），默认关
 }
 ```
 - **单一真相源是 `config.search_keywords`**。`target_url` 在**前端 `AddTaskModal` 提交时**从 `search_keywords[0]` 派生为可点击的知乎搜索 URL：`https://www.zhihu.com/search?type=content&q=<urlencoded(第一个关键词)>`，仅用于展示/跳转。在前端派生是为了让后端路由保持零改动（§4.1）；写计划时核对 baidu 是否也在前端派生，若 baidu 在路由层派生则二选一统一，不要两处都写。
@@ -203,7 +208,8 @@ TaskType = Literal[
           "edit_time": 1710000000,
           "matches_brand": false,
           "matched_brand": null,
-          "matched_field": null,            // "title" | "excerpt" | "author"
+          "matched_field": null,            // "title" | "excerpt" | "author" | "fulltext"
+          "fulltext_status": "disabled",    // disabled|skipped|matched|fetched_no_match|fetch_failed|no_cookie
           "excerpt": "…前 160 字摘要…"
         }
         // … 最多 10 条
@@ -225,8 +231,28 @@ TaskType = Literal[
 
 边界处理：
 - 单关键词失败（fetch_error / 30001）不拖垮整 task —— 标记后继续其余关键词。
-- 只存 160 字 `excerpt`，不存全文，避免 result 行膨胀。
+- 只存 160 字 `excerpt`，不存全文（即使开全文匹配，正文也只用于即时匹配、不落库），避免 result 行膨胀。
 - 跨平台 `MonitorResult.rank` 语义一致，复用现有告警与历史趋势。
+
+### 5.4 可选：全文级匹配（分阶段增强，默认关闭）
+
+用户反馈：摘要版先上，**可行再加全文级匹配**。因此设计为**按任务 opt-in 开关** `config.match_full_text`（默认 `false`）+ **best-effort**（抓不到全文就回退摘要，绝不让全文抓取拖垮整 task）。
+
+**为什么独立 + 默认关：** 全文匹配要对前 10 逐条去 `zhihu.com` 抓正文，重新引入了官方 API 本来帮我们绕开的 cookie / 反爬 / 延迟成本。默认路径必须保持「纯官方 API、零反爬」；需要更高召回的用户再开。
+
+**实现（复用现有 `zhihu_question` 设施，不重造轮子）：**
+- 抽共享 helper `zhihu_content.fetch_text(content_type, content_id, *, cookie_store) -> str | None`：
+  - `ContentType=="Article"` → curl_cffi GET `https://www.zhihu.com/api/v4/articles/{content_id}?include=content` → 取 `content`(HTML) → `_strip_tags`
+  - `ContentType=="Answer"` → curl_cffi GET `https://www.zhihu.com/api/v4/answers/{content_id}?include=content`
+  - 其它类型（Question 等）→ 返回 `None`（回退摘要）
+  - `impersonate="chrome120"` + 复用 `zhihu_question` 同一知乎 Cookie 池（`CookieStore("zhihu_question")`）+ UA 池
+  - 任意失败（4xx / 反爬 HTML / 非 JSON / 超时）→ `None`，**不重试、不开浏览器**（10 条全开浏览器太重）
+- adapter 在 `match_full_text=True` 时，对每条结果：先 `match_brand(标题/摘要/作者)`；**未命中**再 `fetch_text()` 拿正文匹配；命中则 `matched_field="fulltext"`，`fulltext_status="matched"`。
+- 节流：全文抓取走独立 pacer `zhihu_search:content`，避免对 zhihu.com 秒级连发触发反爬。
+
+**前置条件：** 需在 Cookie 管理里配置知乎 cookie（与 `zhihu_question` 共用同一池）。无 cookie 时全文抓取大概率失败 → 自动回退摘要，并标 `fulltext_status="no_cookie"`，UI 提示「开启全文匹配需配置知乎 Cookie」。
+
+**为什么不影响默认范围的「3 处改动」：** `match_full_text` 默认 false，PR #1/#2 的 adapter 走纯摘要路径；`zhihu_content.py` 只在 PR #3 引入，且 import 是惰性的（开关关闭时不 import、不碰 cookie）。
 
 ## 6. 凭证配置（Access Secret）
 
@@ -245,6 +271,7 @@ TaskType = Literal[
 - 目标品牌词（必填 → `config.target_brand`）
 - 品牌别名（可选，多行/逗号 → `config.brand_aliases[]`）
 - 调度（复用 `SCHEDULE_OPTIONS` 组件）
+- 全文级匹配开关（可选，默认关 → `config.match_full_text`；PR #3 才出现，开关旁注「需配置知乎 Cookie」）
 - 提交时前端派生 `target_url`（见 §5.2）
 
 ### 7.2 ZhihuSearchModule.vue（新）
@@ -287,6 +314,12 @@ export interface ZhihuSearchTaskConfig {
 - `test_best_first_rank_across_keywords` — 多关键词聚合 → best_first_rank = min
 - `test_missing_config` — 缺 search_keywords / target_brand → failed
 - `test_missing_secret` — keyring 无 zhihu → error，提示去设置页
+
+全文匹配（PR #3）：
+- `test_fulltext_match_when_excerpt_misses` — 摘要不含品牌、正文含 → mock fetch_text 命中 → `matched_field="fulltext"`，`fulltext_status="matched"`
+- `test_fulltext_fetch_fail_fallback` — fetch_text 返回 None → 回退摘要结果，`fulltext_status="fetch_failed"`，不崩
+- `test_fulltext_disabled_no_fetch` — `match_full_text=false` → 绝不调 fetch_text（惰性，不碰 cookie）
+- `test_fulltext_unsupported_type_skipped` — `ContentType="Question"` → 跳过全文，`fulltext_status="skipped"`
 
 ### 8.2 sidecar 单测
 
@@ -331,6 +364,14 @@ export interface ZhihuSearchTaskConfig {
 - `frontend/src/views/SettingsView.vue`（provider 项）
 - 验收：release 实跑清单全过
 
+**PR #3 — 可选全文级匹配（用户「可行再加」）**
+- `csm_core/monitor/platforms/zhihu_content.py`（新，共享正文抓取 helper）
+- `csm_core/monitor/platforms/zhihu_search.py`（接入 `match_full_text` 分支 + `zhihu_search:content` pacer）
+- `frontend/src/components/monitor/AddTaskModal.vue`（全文开关）+ `ZhihuSearchModule.vue`（`matched_field="fulltext"` 展示 + `fulltext_status` 提示）+ `monitor-types.ts`（+`match_full_text`）
+- 单测：§8.1 全文匹配 4 项
+- 验收：配置知乎 Cookie + 开开关 → 摘要漏检但正文命中的关键词能标 `fulltext`；无 Cookie → 回退摘要 + 提示
+- **可独立于 PR #1/#2 评估是否真做**：默认路径已完整可用；此 PR 是纯增量增强
+
 **未来（不在本次范围）：** 文档里的 `global_search`（全网搜索）/ 直答 / `hot_list`（热榜）共用同一 Bearer 鉴权；若要做，把 `zhihu_search_api()` 抽到一个 `zhihu/` provider 包（仿 `geo/providers/`），三个兄弟 API 平滑加入。
 
 ## 10. 已识别的风险
@@ -340,7 +381,8 @@ export interface ZhihuSearchTaskConfig {
 | 前 10 上限 → 品牌排名靠后时永远「未命中」| 产品设计已接受（用户明确「限制前十也可以」）；rank=-1 即代表「不在前 10」，本身是有效信号 |
 | 系统时钟偏差 → `20001 鉴权失败` | 错误提示明确点出「时钟偏差」可能；文档记录；必要时后续用响应头校时 |
 | 每日 1000 配额耗尽（多任务 × 多关键词）| 30001 优雅降级 + 熔断退避；UI 标「限流」；如后续需要可再加配额计数（已预留扩展点） |
-| 摘要匹配漏检（品牌只在正文深处、不在标题/摘要/作者）| 设计接受（不抓全文）；「搜索结果可见性」本就看标题/摘要，符合监控语义 |
+| 摘要匹配漏检（品牌只在正文深处、不在标题/摘要/作者）| 默认接受（「搜索可见性」本就看标题/摘要）；需要更高召回时开 `match_full_text`（§5.4）|
+| 全文匹配触发 zhihu.com 反爬 / 需要 cookie / 拖慢任务 | 默认关；opt-in；best-effort（抓不到回退摘要，不开浏览器、不重试）；独立 pacer 节流；复用 `zhihu_question` 成熟的 cookie 池 + 软封冷却 |
 | `ContentText` 被知乎截断 → 匹配不稳定 | matched_field 透出命中位置，详情页可见；漏检概率低且可接受 |
 | Access Secret 误粘进别处（参考豆包把 key 粘进 Base URL 的坑）| 纯 keyring 单字段，无 Base URL 概念，风险低；设置页 label 写清楚 |
 | 官方 API 字段/路径变更 | `zhihu_search_api()` 是唯一对接点 + 单测覆盖解析；变更只需改一处 |
