@@ -64,6 +64,11 @@ const editingTask = ref<Task | null>(null);
 
 const selected = computed(() => tasks.value.find((t) => t.id === selectedId.value) || null);
 const keywordResults = computed<KeywordResult[]>(() => latestMetric.value?.keywords ?? []);
+// 全文匹配开了但没配知乎 Cookie：后端把每条结果标 fulltext_status='no_cookie'
+// 并跳过正文回查（不发请求）。任一条命中即提示用户去 Cookie 管理补登录态。
+const fulltextNoCookie = computed(() =>
+  keywordResults.value.some((kw) => kw.results?.some((r) => r.fulltext_status === "no_cookie")),
+);
 
 // ── 近 7 天趋势 ───────────────────────────────────────────────────────────
 // result 历史（desc，最新在前），喂趋势图。复用 loadLatest 一次拉够，避免再发一次。
@@ -284,6 +289,10 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
         <div v-if="latestStatus === 'risk_control'" class="flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }">
           <Pill tone="warn">频率限制</Pill>
           被知乎频率/配额限制（30001），稍后重试。
+        </div>
+        <div v-if="fulltextNoCookie" class="flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }">
+          <Pill tone="warn">全文匹配未生效</Pill>
+          已开启全文匹配但未配置知乎 Cookie，请到 Cookie 管理添加。
         </div>
         <div v-if="!latestMetric" class="text-[12px] text-[var(--ink-3)]">还没有结果，点「立即执行」。</div>
 
