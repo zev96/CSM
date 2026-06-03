@@ -81,3 +81,72 @@ def zhihu_search_api(
         "http_status": resp.status_code,
         "error": None,
     }
+
+
+def match_brand(text: str, brands: list[str]) -> str | None:
+    """大小写不敏感找首个出现的品牌词（brands 顺序代表优先级）。"""
+    if not text or not brands:
+        return None
+    text_lc = text.lower()
+    for brand in brands:
+        if brand and brand.lower() in text_lc:
+            return brand
+    return None
+
+
+class ZhihuSearchAdapter:
+    """BaseMonitorAdapter 实现。关键词 → 知乎官方搜索 API → 品牌词命中排名。"""
+
+    platform: str = "zhihu_search"
+
+    def __init__(self) -> None:
+        self._pacer = get_pacer(self.platform)
+        self._breaker = get_breaker(self.platform)
+
+    @staticmethod
+    def _match_item(raw: dict[str, Any], brands: list[str]) -> tuple[str | None, str | None]:
+        """Return (matched_brand, matched_field) for one item, or (None, None).
+
+        字段优先级：title > excerpt(ContentText) > author。
+        """
+        for field_name, value in (
+            ("title", raw.get("Title")),
+            ("excerpt", raw.get("ContentText")),
+            ("author", raw.get("AuthorName")),
+        ):
+            hit = match_brand(str(value or ""), brands)
+            if hit:
+                return hit, field_name
+        return None, None
+
+    @classmethod
+    def _rank_results(
+        cls, items: list[dict[str, Any]], brands: list[str], count: int,
+    ) -> tuple[int, int, list[dict[str, Any]]]:
+        """Return (first_rank, matched_count, snapshot[]). rank 1-based，-1=无命中。"""
+        snapshot: list[dict[str, Any]] = []
+        matched_ranks: list[int] = []
+        for i, raw in enumerate(items[:count], start=1):
+            matched_brand, matched_field = cls._match_item(raw, brands)
+            hit = matched_brand is not None
+            if hit:
+                matched_ranks.append(i)
+            snapshot.append({
+                "rank": i,
+                "title": str(raw.get("Title") or ""),
+                "content_type": str(raw.get("ContentType") or ""),
+                "content_id": str(raw.get("ContentID") or ""),
+                "url": str(raw.get("Url") or ""),
+                "voteup_count": int(raw.get("VoteUpCount") or 0),
+                "comment_count": int(raw.get("CommentCount") or 0),
+                "author_name": str(raw.get("AuthorName") or ""),
+                "authority_level": str(raw.get("AuthorityLevel") or ""),
+                "ranking_score": float(raw.get("RankingScore") or 0.0),
+                "edit_time": raw.get("EditTime"),
+                "matches_brand": hit,
+                "matched_brand": matched_brand,
+                "matched_field": matched_field,
+                "excerpt": str(raw.get("ContentText") or "")[:160],
+            })
+        first_rank = matched_ranks[0] if matched_ranks else -1
+        return first_rank, len(matched_ranks), snapshot
