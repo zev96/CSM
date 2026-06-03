@@ -47,6 +47,8 @@ const denom = computed(() => Math.max(1, props.total));
         @click="exportXlsx"
       >导出信源榜</button>
     </div>
+    <!-- 两列 + 固定高度，信源多时内部滚动（不撑高把上方散点图挤变形） -->
+    <div :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: '18px', maxHeight: '280px', overflowY: 'auto', alignContent: 'start' }">
     <div
       v-for="(b, i) in board"
       :key="b.domain"
@@ -79,6 +81,7 @@ const denom = computed(() => Math.max(1, props.total));
           @click="goMining(b.domain)"
         >去引流中心铺 →</button>
       </div>
+    </div>
     </div>
   </div>
 </template>

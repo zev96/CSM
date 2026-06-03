@@ -49,6 +49,9 @@ const expandedTaskId = ref<number | null>(null);
 const selectedTaskId = ref<number | null>(null);
 const selectedKeyword = ref<string | null>(null);
 
+// 左栏两级抽屉：钻入(进入 Level 2 关键词列表)的任务 id；null = 停在 Level 1 任务表。
+const drilledTaskId = ref<number | null>(null);
+
 // 搜索框（搜品牌/关键词）。
 const search = ref("");
 
@@ -91,6 +94,9 @@ function platformCountOf(t: Task): number {
 
 const selectedTask = computed<Task | null>(
   () => tasks.value.find((t) => t.id === selectedTaskId.value) ?? null,
+);
+const drilledTask = computed<Task | null>(
+  () => tasks.value.find((t) => t.id === drilledTaskId.value) ?? null,
 );
 const selectedBrandTerms = computed<string[]>(() => brandTermsOf(selectedTask.value));
 const selectedPlatforms = computed<string[]>(() => {
@@ -212,14 +218,24 @@ async function loadAllLatest(): Promise<void> {
 }
 
 // ── 选择 / 展开 ─────────────────────────────────────────────────────────
-function toggleBrand(taskId: number): void {
-  expandedTaskId.value = expandedTaskId.value === taskId ? null : taskId;
-}
+// 注：扁平表行后不再有「展开/折叠」交互；expandedTaskId 仍由 selectKeyword /
+// 自动选中 / 删除收敛逻辑维护（保留以免破坏 watch / deleteTask 引用）。
 function selectKeyword(taskId: number, keyword: string): void {
   selectedTaskId.value = taskId;
   selectedKeyword.value = keyword;
   // 确保该品牌展开（点关键词时品牌一定是展开的，这里兜底）。
   expandedTaskId.value = taskId;
+}
+// 点任务行 → 钻入 Level 2（该任务的关键词列表）：记钻入态 + 选该任务 + 默认首个关键词。
+function enterTask(t: Task): void {
+  drilledTaskId.value = t.id;
+  selectedTaskId.value = t.id;
+  const kws = keywordsOf(t);
+  selectedKeyword.value = kws.length ? kws[0] : null;
+}
+// 返回 Level 1 任务表（关键词列表收起）。
+function backToTasks(): void {
+  drilledTaskId.value = null;
 }
 
 // 默认选中：第一个品牌 → 展开 → 选其首个关键词。
@@ -289,6 +305,7 @@ async function deleteTask(taskId: number): Promise<void> {
       selectedTaskId.value = null;
       selectedKeyword.value = null;
     }
+    if (drilledTaskId.value === taskId) drilledTaskId.value = null;
     if (expandedTaskId.value === taskId) expandedTaskId.value = null;
     await onTaskMutated();
   } catch (e: any) {
@@ -375,6 +392,8 @@ onUnmounted(() => {
       class="flex h-full min-h-0 flex-col overflow-hidden"
       :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)' }"
     >
+      <!-- ── Level 1：扁平任务表（任务名/变化/状态/操作）；点行钻入 Level 2 ── -->
+      <template v-if="drilledTaskId === null">
       <!-- 头（不滚动）-->
       <div
         class="flex flex-shrink-0 items-center justify-between"
@@ -408,7 +427,28 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 列表区（可滚动，品牌 → 关键词两级）-->
+      <!--
+        Header row —— 固定在滚动区外（flex-shrink-0），对齐百度排名 L1：
+        任务名字 | 变化 | 状态 | 操作；列宽与下方数据行一致。
+      -->
+      <div
+        v-if="!demoMode"
+        class="grid flex-shrink-0 items-center text-[11px] uppercase"
+        :style="{
+          gridTemplateColumns: '1.6fr .85fr .85fr 1fr',
+          letterSpacing: '1.2px',
+          color: 'var(--ink-3)',
+          borderBottom: '1px solid var(--line)',
+          padding: '8px 10px',
+        }"
+      >
+        <div>任务名字</div>
+        <div class="text-center">变化</div>
+        <div class="text-center">状态</div>
+        <div class="text-center">操作</div>
+      </div>
+
+      <!-- 列表区（可滚动，扁平表行）-->
       <div class="geo-scroll min-h-0 flex-1 overflow-y-auto" :style="{ padding: '0 12px 12px' }">
         <!-- 空态 -->
         <div
@@ -426,39 +466,45 @@ onUnmounted(() => {
 
         <div v-for="node in filteredTree" :key="node.task.id" :style="{ marginBottom: '6px' }">
           <!--
-            总任务行 —— 对齐百度排名 L1 任务行结构：
-            折叠箭头 + 标题(任务名) + 副标(N 个关键词 · 品牌 X) + 状态药丸 +
-            操作 icons(运行/编辑/删除)。整行点击展开/折叠子任务；操作按钮 .stop
-            不冒泡。运行中 play→x(停止)，复用百度行的图标样式(h-7 w-7 圆形)。
+            扁平任务行 —— 对齐百度排名 L1：任务名(名+副标) | 变化 | 状态 | 操作。
+            整行点击 = 选中该任务（右栏关键词条据此渲染）；操作按钮 .stop 不冒泡。
+            运行中 play→x(停止)，沿用 h-7 w-7 圆形图标样式。
           -->
           <div
-            class="geo-row flex items-center cursor-pointer"
-            :style="{ gap: '9px', padding: '11px 10px', borderRadius: '11px', background: expandedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
-            @click="toggleBrand(node.task.id)"
+            class="geo-row grid cursor-pointer items-center"
+            :style="{ gridTemplateColumns: '1.6fr .85fr .85fr 1fr', padding: '13px 10px', borderRadius: '10px', background: selectedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
+            @click="enterTask(node.task)"
           >
-            <!-- 折叠箭头 -->
-            <svg
-              width="11"
-              height="11"
-              viewBox="0 0 12 12"
-              fill="none"
-              stroke="var(--ink-3)"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              :style="{ transform: expandedTaskId === node.task.id ? 'none' : 'rotate(-90deg)', transition: 'transform .18s', flexShrink: 0 }"
-            >
-              <path d="M2 4l4 4 4-4" />
-            </svg>
-            <div :style="{ flex: 1, minWidth: 0 }">
-              <div class="font-display truncate" :style="{ fontSize: '13.5px', fontWeight: 700 }" :title="node.task.name">{{ node.task.name }}</div>
-              <div class="truncate" :style="{ fontSize: '10.5px', color: 'var(--ink-3)', marginTop: '1px' }">
-                {{ node.keywords.length }} 个关键词
-                <template v-if="node.brand">· 品牌 {{ node.brand }}</template>
+            <!-- 任务名字 + N关键词·品牌 -->
+            <div :style="{ minWidth: 0 }">
+              <div
+                class="font-display truncate"
+                :style="{ fontSize: '13px', fontWeight: 600, color: selectedTaskId === node.task.id ? 'var(--primary-deep)' : 'var(--ink)' }"
+                :title="node.task.name"
+              >{{ node.task.name }}</div>
+              <div class="truncate" :style="{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '1px' }">
+                {{ node.keywords.length }} 个关键词<template v-if="node.brand"> · 品牌 {{ node.brand }}</template>
               </div>
             </div>
-            <Pill :tone="statusTone(node.task)">{{ statusText(node.task) }}</Pill>
+
+            <!-- 变化：无历史，一律"—" -->
+            <div class="text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
+
+            <!-- 状态：运行中显示 N / M + 细进度条；空闲显示药丸 -->
+            <div class="flex flex-col items-center" :style="{ gap: '4px' }">
+              <template v-if="isRunning(node.task.id)">
+                <span :style="{ fontSize: '11px', color: 'var(--primary-deep)', fontWeight: 600 }">
+                  {{ monitorStatus.progressOf(node.task.id) ? monitorStatus.progressOf(node.task.id)!.current + ' / ' + monitorStatus.progressOf(node.task.id)!.total : '排队中…' }}
+                </span>
+                <div :style="{ width: '80%' }">
+                  <ProgressBar :value="progressRatio(node.task.id)" :height="4" />
+                </div>
+              </template>
+              <Pill v-else :tone="statusTone(node.task)">{{ statusText(node.task) }}</Pill>
+            </div>
+
             <!-- 操作 icons（运行/编辑/删除）—— 照搬百度 L1 行图标样式 -->
-            <div class="flex flex-shrink-0 items-center" :style="{ gap: '1px' }">
+            <div class="flex items-center justify-center" :style="{ gap: '1px' }">
               <button
                 v-if="isRunning(node.task.id)"
                 type="button"
@@ -499,75 +545,103 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
+        </div>
+      </div>
+      </template>
 
-          <!-- 运行中进度条（品牌行下）-->
-          <div v-if="isRunning(node.task.id)" class="flex items-center" :style="{ gap: '8px', padding: '2px 10px 6px 30px' }">
-            <ProgressBar :value="progressRatio(node.task.id)" :height="5" />
-            <span
-              v-if="monitorStatus.progressOf(node.task.id)"
-              class="flex-shrink-0"
-              :style="{ fontSize: '10.5px', color: 'var(--ink-3)' }"
-            >
-              {{ monitorStatus.progressOf(node.task.id)!.current }} /
-              {{ monitorStatus.progressOf(node.task.id)!.total }}
-            </span>
-            <span v-else class="flex-shrink-0" :style="{ fontSize: '10.5px', color: 'var(--ink-3)' }">排队中…</span>
+      <!-- ── Level 2：钻入某任务后的关键词列表（带返回头）── -->
+      <template v-else>
+        <!-- 头（不滚动）：返回 + 任务名 + 关键词数/品牌副标 -->
+        <div
+          class="flex flex-shrink-0 flex-col"
+          :style="{ gap: '8px', padding: '18px 20px 14px' }"
+        >
+          <button
+            type="button"
+            class="inline-flex items-center self-start"
+            :style="{ gap: '4px', padding: '0', fontSize: '12px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }"
+            @click="backToTasks()"
+          >
+            <Icon name="arrowLeft" :size="13" :stroke="1.8" />
+            <span>返回</span>
+          </button>
+          <div v-if="drilledTask" :style="{ minWidth: 0 }">
+            <div
+              class="font-display truncate"
+              :style="{ fontSize: '14px', fontWeight: 700, color: 'var(--ink)' }"
+              :title="drilledTask.name"
+            >{{ drilledTask.name }}</div>
+            <div class="truncate" :style="{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '1px' }">
+              {{ keywordsOf(drilledTask).length }} 个关键词 · 品牌 {{ brandOf(drilledTask) }}
+            </div>
           </div>
+        </div>
 
-          <!-- 子任务行（关键词，仅展开时显示）-->
-          <div v-if="expandedTaskId === node.task.id" :style="{ marginTop: '2px', paddingLeft: '8px' }">
+        <!-- 关键词列表（可滚动）：点选关键词 → 右栏详情 -->
+        <div class="geo-scroll min-h-0 flex-1 overflow-y-auto" :style="{ padding: '0 12px 12px' }">
+          <template v-if="drilledTask && keywordsOf(drilledTask).length">
             <div
-              v-if="node.keywords.length === 0"
-              :style="{ padding: '8px 11px', fontSize: '11.5px', color: 'var(--ink-3)' }"
-            >此任务未配置关键词 · 编辑任务添加。</div>
-            <div
-              v-for="k in node.keywords"
+              v-for="k in keywordsOf(drilledTask)"
               :key="k"
               class="geo-row flex items-center cursor-pointer"
               :style="{
                 gap: '8px',
-                padding: '9px 11px',
+                padding: '10px 12px',
                 margin: '2px 0',
                 borderRadius: '10px',
-                borderLeft: `3px solid ${selectedTaskId === node.task.id && selectedKeyword === k ? 'var(--primary)' : 'transparent'}`,
-                background: selectedTaskId === node.task.id && selectedKeyword === k ? 'var(--primary-soft)' : 'transparent',
+                borderLeft: '3px solid ' + (selectedKeyword === k ? 'var(--primary)' : 'transparent'),
+                background: selectedKeyword === k ? 'var(--primary-soft)' : 'transparent',
               }"
-              @click="selectKeyword(node.task.id, k)"
+              @click="selectKeyword(drilledTaskId!, k)"
             >
               <span
                 class="truncate"
                 :style="{
-                  flex: 1,
-                  minWidth: 0,
                   fontSize: '12.5px',
-                  fontWeight: selectedTaskId === node.task.id && selectedKeyword === k ? 700 : 500,
-                  color: selectedTaskId === node.task.id && selectedKeyword === k ? 'var(--primary-deep)' : 'var(--ink-2)',
+                  fontWeight: selectedKeyword === k ? 700 : 500,
+                  color: selectedKeyword === k ? 'var(--primary-deep)' : 'var(--ink-2)',
                 }"
                 :title="k"
               >{{ k }}</span>
             </div>
-          </div>
+          </template>
+          <div
+            v-else
+            class="text-center"
+            :style="{ padding: '40px 8px', fontSize: '12.5px', color: 'var(--ink-3)' }"
+          >此任务未配置关键词 · 编辑任务添加</div>
         </div>
-      </div>
+      </template>
     </section>
 
-    <!-- ════════ 右：选中关键词三页签详情 ════════ -->
-    <GeoKeywordDetail
-      v-if="selectedTask && selectedKeyword"
-      :detail="detail"
-      :loading="detailLoading"
-      :brand="brandOf(selectedTask)"
-      :brand-terms="selectedBrandTerms"
-      :keyword="selectedKeyword"
-      :platform-count="selectedPlatformCount"
-      :running="isRunning(selectedTask.id)"
-      :task-id="selectedTask.id"
-      @run="selectedTask && runNow(selectedTask.id)"
-      @cancel="selectedTask && cancelTask(selectedTask.id)"
-      @edit="selectedTask && openEditTask(selectedTask)"
-      @delete="selectedTask && deleteTask(selectedTask.id)"
-    />
-    <!-- 无选中关键词（空表 / 选中品牌但无关键词）-->
+    <!-- ════════ 右：选中关键词的三页签详情（点左侧任务进列表 → 选关键词）════════ -->
+    <!--
+      GeoKeywordDetail 根元素无卡片边框/背景/圆角，由此外层 div 统一承载单层卡片，
+      避免双重边框。仅当钻入某任务并选中其关键词时渲染详情；否则显引导空态。
+    -->
+    <div
+      v-if="selectedKeyword && drilledTaskId !== null"
+      class="flex h-full min-h-0 flex-col overflow-hidden"
+      :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)' }"
+    >
+      <!-- 选中关键词三页签详情，填满整张卡片 -->
+      <GeoKeywordDetail
+        class="min-h-0 flex-1"
+        :detail="detail"
+        :loading="detailLoading"
+        :brand="selectedTask ? brandOf(selectedTask) : ''"
+        :brand-terms="selectedBrandTerms"
+        :keyword="selectedKeyword"
+        :platform-count="selectedPlatformCount"
+        :running="selectedTask ? isRunning(selectedTask.id) : false"
+        :task-id="selectedTask?.id ?? 0"
+        @run="selectedTask && runNow(selectedTask.id)"
+        @cancel="selectedTask && cancelTask(selectedTask.id)"
+        @edit="selectedTask && openEditTask(selectedTask)"
+        @delete="selectedTask && deleteTask(selectedTask.id)"
+      />
+    </div>
+    <!-- 引导空态：未钻入任务 / 未选关键词 -->
     <section
       v-else
       class="flex h-full min-h-0 flex-col items-center justify-center overflow-hidden"
@@ -577,7 +651,7 @@ onUnmounted(() => {
         {{
           tasks.length === 0
             ? "新建一个卡位任务后，这里展示品牌在各 AI 平台的卡位详情。"
-            : "展开左侧品牌、点击一个关键词，查看其概览 / 平台对比 / 竞争·信源。"
+            : "点左侧任务进入关键词列表，选择关键词查看其卡位详情。"
         }}
       </div>
     </section>

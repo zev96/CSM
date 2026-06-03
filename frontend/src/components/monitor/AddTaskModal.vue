@@ -94,9 +94,7 @@ const geoAliasesText = ref(""); // comma-separated; split to list on submit
 const geoKeywordsText = ref(""); // newline-separated; split to list on submit
 const geoPlatforms = ref<string[]>(GEO_PLATFORMS.map((p) => p.value));
 const geoWebSearch = ref(true);
-// 默认用 qwen（通义）抽取——阶段 1 平台是通义+Kimi，用户必有 DashScope(qwen) key，
-// 默认它可避免「只配了通义/Kimi 却因默认抽取模型 deepseek 没 key」的首跑失败。
-const geoExtractProvider = ref("qwen");
+// 抽取/分析模型固定用 DeepSeek（不再给选项）——通义免费额度易耗尽会致抽取 403 静默降级。
 // 知乎搜索（zhihu_search）—— 关键词 list + 单品牌词 + 别名
 const zsKeywordsRaw = ref(""); // newline-separated
 const zsTargetBrand = ref("");
@@ -169,7 +167,6 @@ function close() {
   geoKeywordsText.value = "";
   geoPlatforms.value = GEO_PLATFORMS.map((p) => p.value);
   geoWebSearch.value = true;
-  geoExtractProvider.value = "qwen";
   zsKeywordsRaw.value = "";
   zsTargetBrand.value = "";
   zsAliasesText.value = "";
@@ -221,7 +218,6 @@ function hydrateFromTask(t: EditingTask) {
     ? cfg.platforms
     : GEO_PLATFORMS.map((p) => p.value);
   geoWebSearch.value = cfg.web_search !== false; // default true
-  geoExtractProvider.value = String(cfg.extract_provider ?? "qwen");
   // 知乎搜索 hydration
   const zsKeywords: string[] = Array.isArray(cfg.search_keywords) ? cfg.search_keywords : [];
   // 注意：baidu 也用 search_keywords，这里只在 type==zhihu_search 时用到，互不干扰
@@ -351,11 +347,17 @@ async function submit() {
           .filter(Boolean),
         platforms: [...geoPlatforms.value],
         web_search: geoWebSearch.value,
-        extract_provider: geoExtractProvider.value,
+        extract_provider: "deepseek",   // 固定 DeepSeek 抽取（不再给选项）
         top_n_citations: 20,
       };
-      // target_url 由品牌派生 —— 后端要求非空，geo_query adapter 不实际请求它。
-      computedTargetUrl = `geo://${brand}`;
+      // target_url 对 geo_query 只是 UNIQUE 键（adapter 不实际请求它）。必须每个任务
+      // 唯一，否则同品牌任务会撞 UNIQUE(type,target_url) → create_task 的 ON CONFLICT
+      // DO UPDATE 把原任务覆盖掉（数据丢失！）。编辑时沿用原 target_url（update 按 id、
+      // 键不变）；新建时（targetUrl 为空）生成唯一值。
+      const geoUniq =
+        globalThis.crypto?.randomUUID?.() ??
+        `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      computedTargetUrl = targetUrl.value.trim() || `geo://${brand}/${geoUniq}`;
     } else if (isZhihuSearch.value) {
       const keywords = zsKeywordsRaw.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       config = {
@@ -662,17 +664,6 @@ async function submit() {
               inline
             >
               <FormToggle v-model="geoWebSearch" />
-            </FormField>
-
-            <FormField label="抽取模型" hint="用哪个 LLM 从回答里抽取曝光/排名/情感/信源（默认通义，复用你已配的 DashScope key）。">
-              <FormSelect
-                :model-value="geoExtractProvider"
-                :options="[
-                  { label: '通义', value: 'qwen' },
-                  { label: 'DeepSeek', value: 'deepseek' },
-                ]"
-                @update:model-value="(v) => (geoExtractProvider = String(v))"
-              />
             </FormField>
           </template>
 

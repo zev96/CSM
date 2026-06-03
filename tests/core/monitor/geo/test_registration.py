@@ -13,3 +13,21 @@ def test_geo_query_in_adapter_registry():
 def test_geo_adapter_has_fetch():
     from csm_core.monitor.platforms import ALL
     assert hasattr(ALL["geo_query"], "fetch")
+
+
+def test_get_provider_deepseek_is_rpa():
+    from csm_core.monitor.geo.providers.base import get_provider
+    p = get_provider("deepseek")
+    assert p.platform == "deepseek" and p.mode == "rpa"
+
+
+def test_get_provider_kimi_is_rpa_now():
+    from csm_core.monitor.geo.providers.base import get_provider
+    p = get_provider("kimi")
+    assert p.platform == "kimi" and p.mode == "rpa"  # 阶段3：API 版改指 RPA
+
+
+def test_get_provider_yuanbao_is_rpa():
+    from csm_core.monitor.geo.providers.base import get_provider
+    p = get_provider("yuanbao")
+    assert p.platform == "yuanbao" and p.mode == "rpa"

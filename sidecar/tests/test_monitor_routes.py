@@ -535,3 +535,37 @@ class TestBaiduNativeModeRoutes:
         assert "--user-data-dir=C:/x/copy" in args
         assert "--profile-directory=Default" in args
         assert "https://www.baidu.com" in args
+
+
+def test_geo_rpa_login_status_ok(client: TestClient, monkeypatch):
+    import csm_core.monitor.geo.providers.rpa._session as sess
+    monkeypatch.setattr(sess, "login_status", lambda p: {"logged_in": True})
+    r = client.get("/api/monitor/geo/rpa/deepseek/login-status")
+    assert r.status_code == 200
+    assert r.json()["logged_in"] is True
+
+
+def test_geo_rpa_login_status_unknown_platform_404(client: TestClient):
+    r = client.get("/api/monitor/geo/rpa/nope/login-status")
+    assert r.status_code == 404
+
+
+def test_geo_rpa_login_status_soft_fallback(client: TestClient, monkeypatch):
+    import csm_core.monitor.geo.providers.rpa._session as sess
+    def _boom(p):
+        raise RuntimeError("profile corrupt")
+    monkeypatch.setattr(sess, "login_status", _boom)
+    r = client.get("/api/monitor/geo/rpa/deepseek/login-status")
+    assert r.status_code == 200 and r.json()["logged_in"] is False
+
+
+def test_geo_rpa_login_open(client: TestClient, monkeypatch):
+    import csm_core.monitor.geo.providers.rpa._session as sess
+    monkeypatch.setattr(sess, "open_login", lambda p, **k: {"status": "success"})
+    r = client.post("/api/monitor/geo/rpa/deepseek/login")
+    assert r.status_code == 200 and r.json()["status"] == "success"
+
+
+def test_geo_rpa_login_open_unknown_platform_404(client: TestClient):
+    r = client.post("/api/monitor/geo/rpa/nope/login")
+    assert r.status_code == 404

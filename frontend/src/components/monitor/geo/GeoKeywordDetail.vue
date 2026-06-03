@@ -163,10 +163,9 @@ const matrixDenom = denom;
 </script>
 
 <template>
-  <div
-    class="flex h-full min-h-0 flex-col overflow-hidden"
-    :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)' }"
-  >
+  <!-- 卡片边框/背景/圆角由父容器（GeoTaskModule 右栏）统一承载——关键词条 + 详情同处
+       一张卡，避免与关键词条出现双重边框。 -->
+  <div class="flex h-full min-h-0 flex-col overflow-hidden">
     <!-- ════ 详情头 ════ -->
     <div
       class="flex flex-shrink-0 items-start justify-between"
@@ -350,9 +349,10 @@ const matrixDenom = denom;
             >暂无信源数据 · 运行后 AI 引用的来源域名会汇总到这里。</div>
             <div
               v-else
-              :style="{ display: 'grid', gridTemplateColumns: '1fr 1.05fr', gap: '18px', alignItems: 'center' }"
+              :style="{ display: 'flex', flexDirection: 'column', gap: '14px' }"
             >
-              <div>
+              <!-- 散点（上）：居中限宽，不随排行榜长度变形 -->
+              <div :style="{ width: '100%', maxWidth: '480px', margin: '0 auto' }">
                 <GeoScatter
                   :points="srcPoints"
                   :show-labels="false"

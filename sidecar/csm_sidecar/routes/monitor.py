@@ -427,6 +427,38 @@ async def baidu_login_status() -> dict[str, Any]:
         return {"logged_in": False, "username": None, "expires_at": None}
 
 
+# ── GEO RPA 登录（DeepSeek/Kimi/元宝 真浏览器持久档登录态）─────────────
+_GEO_RPA_PLATFORMS = {"deepseek", "kimi", "yuanbao"}
+
+
+@router.post("/api/monitor/geo/rpa/{platform}/login")
+async def geo_rpa_login_open(platform: str) -> dict[str, Any]:
+    """开有头窗让用户登录某 RPA 平台。持久档落 browser_profiles/geo_<platform>/。
+    sync patchright 不能在 asyncio loop 里跑 → to_thread。"""
+    import asyncio
+    if platform not in _GEO_RPA_PLATFORMS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"未知 RPA 平台: {platform}")
+    from csm_core.monitor.geo.providers.rpa import _session
+    return await asyncio.to_thread(_session.open_login, platform)
+
+
+@router.get("/api/monitor/geo/rpa/{platform}/login-status")
+async def geo_rpa_login_status(platform: str) -> dict[str, Any]:
+    """无头快查登录态。失败降级 {logged_in: False}，不 5xx。"""
+    import asyncio
+    if platform not in _GEO_RPA_PLATFORMS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"未知 RPA 平台: {platform}")
+    from csm_core.monitor.geo.providers.rpa import _session
+    try:
+        return await asyncio.to_thread(_session.login_status, platform)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("geo rpa login-status[%s] failed: %s", platform, e)
+        return {"logged_in": False}
+
+
 # ── Baidu native mode (方案 D) ────────────────────────────────────
 from csm_core.monitor.drivers import chrome_detect
 from csm_core.monitor.drivers.baidu_browser import baidu_browser_session

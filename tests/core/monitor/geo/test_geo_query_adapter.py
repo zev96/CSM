@@ -145,3 +145,74 @@ def test_fetch_writes_geo_alerts_into_metric(fresh_db, monkeypatch):
     result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
     assert result.status == "ok"                       # provider succeeded → cell ok
     assert any(a["kind"] == "hidden" for a in result.metric.get("alerts", []))
+
+
+def test_run_cell_passes_cancel_token_to_provider(monkeypatch):
+    import threading
+    from csm_core.monitor.platforms import geo_query as gq
+
+    seen = {}
+
+    class _Prov:
+        platform = "deepseek"; mode = "rpa"
+        def query(self, kw, *, web_search, cancel_token=None):
+            seen["cancel_token"] = cancel_token
+            from csm_core.monitor.geo.models import GeoAnswer
+            return GeoAnswer(platform="deepseek", keyword=kw, answer_text="x", status="ok")
+
+    monkeypatch.setattr(gq, "get_provider", lambda p: _Prov())
+    monkeypatch.setattr(gq, "extract",
+                        lambda ans, **k: __import__("csm_core.monitor.geo.models", fromlist=["GeoExtraction"]).GeoExtraction())
+    tok = threading.Event()
+    adapter = gq.GeoQueryAdapter()
+    adapter._run_cell("kw", "deepseek", "Brand", [], True, object(), cancel_token=tok)
+    assert seen["cancel_token"] is tok
+
+
+def test_geo_query_configures_serial_concurrency():
+    # 模块导入即把 geo_query 并发设为 1（slot 在 loop 里先于 fetch 获取）
+    from csm_core.browser_infra import rate_limit
+    from csm_core.monitor.platforms import geo_query  # noqa: F401  确保已导入
+    assert rate_limit._max_concurrent.get("geo_query") == 1
+
+
+def test_is_cancelled_helper():
+    import pytest
+    from csm_core.monitor.base import is_cancelled
+    assert is_cancelled(ValueError("x")) is False
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        pytest.skip("sidecar 不可用")
+    assert is_cancelled(_CancelledFetch("c")) is True
+
+
+def test_run_cell_reraises_cancellation(monkeypatch):
+    import pytest
+    from csm_core.monitor.platforms import geo_query as gq
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        pytest.skip("sidecar 不可用")
+
+    class _CancelProv:
+        platform = "deepseek"; mode = "rpa"
+        def query(self, kw, *, web_search, cancel_token=None):
+            raise _CancelledFetch("cancelled by user")
+
+    monkeypatch.setattr(gq, "get_provider", lambda p: _CancelProv())
+    with pytest.raises(_CancelledFetch):
+        gq.GeoQueryAdapter()._run_cell("kw", "deepseek", "B", [], True, object())
+
+
+def test_run_cell_normal_exception_still_becomes_error_cell(monkeypatch):
+    from csm_core.monitor.platforms import geo_query as gq
+
+    class _BoomProv:
+        platform = "deepseek"; mode = "rpa"
+        def query(self, kw, *, web_search, cancel_token=None):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(gq, "get_provider", lambda p: _BoomProv())
+    cell = gq.GeoQueryAdapter()._run_cell("kw", "deepseek", "B", [], True, object())
+    assert cell.status == "error"
