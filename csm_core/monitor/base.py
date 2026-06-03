@@ -43,6 +43,7 @@ def maybe_cancel(cancel_token: "threading.Event | None") -> None:
 
 TaskType = Literal[
     "zhihu_question",
+    "zhihu_search",
     "bilibili_comment",
     "douyin_comment",
     "kuaishou_comment",
