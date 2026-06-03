@@ -97,6 +97,18 @@ def match_brand(text: str, brands: list[str]) -> str | None:
     return None
 
 
+def _fulltext_fetch(content_type: str, content_id: str) -> str | None:
+    """惰性调用 zhihu_content（仅 match_full_text=True 时走到）。
+
+    import 在函数体内：开关关闭时永不 import zhihu_content / 不构造
+    CookieStore / 不碰知乎 Cookie 池——默认路径保持「纯官方 API、零反爬」。
+    复用 zhihu_question 同一 Cookie 池（CookieStore("zhihu_question")）。
+    """
+    from .zhihu_content import fetch_text
+    from ..drivers.cookie_store import CookieStore
+    return fetch_text(content_type, content_id, cookie_store=CookieStore("zhihu_question"))
+
+
 class ZhihuSearchAdapter:
     """BaseMonitorAdapter 实现。关键词 → 知乎官方搜索 API → 品牌词命中排名。"""
 
@@ -125,12 +137,37 @@ class ZhihuSearchAdapter:
     @classmethod
     def _rank_results(
         cls, items: list[dict[str, Any]], brands: list[str], count: int,
+        *, match_full_text: bool = False,
     ) -> tuple[int, int, list[dict[str, Any]]]:
-        """Return (first_rank, matched_count, snapshot[]). rank 1-based，-1=无命中。"""
+        """Return (first_rank, matched_count, snapshot[]). rank 1-based，-1=无命中。
+
+        ``match_full_text`` 默认 False → 行为与摘要版完全一致（每条
+        ``fulltext_status="disabled"``，绝不 import zhihu_content / 不碰 cookie）。
+        开启后，对标题/摘要/作者均未命中的条目 best-effort 回查正文：
+        ``_fulltext_fetch`` 抓不到（None / 不支持类型 / 异常）即回退摘要结果，
+        ``fulltext_status`` 透出原因（disabled|skipped|matched|fetched_no_match|fetch_failed）。
+        """
         snapshot: list[dict[str, Any]] = []
         matched_ranks: list[int] = []
         for i, raw in enumerate(items[:count], start=1):
             matched_brand, matched_field = cls._match_item(raw, brands)
+            fulltext_status = "disabled" if not match_full_text else "skipped"
+            if matched_brand is None and match_full_text:
+                ctype = str(raw.get("ContentType") or "")
+                cid = str(raw.get("ContentID") or "")
+                try:
+                    text = _fulltext_fetch(ctype, cid)
+                except Exception:
+                    text = None
+                if text is None:
+                    fulltext_status = "fetch_failed"
+                else:
+                    hit_brand = match_brand(text, brands)
+                    if hit_brand:
+                        matched_brand, matched_field = hit_brand, "fulltext"
+                        fulltext_status = "matched"
+                    else:
+                        fulltext_status = "fetched_no_match"
             hit = matched_brand is not None
             if hit:
                 matched_ranks.append(i)
@@ -149,6 +186,7 @@ class ZhihuSearchAdapter:
                 "matches_brand": hit,
                 "matched_brand": matched_brand,
                 "matched_field": matched_field,
+                "fulltext_status": fulltext_status,
                 "excerpt": str(raw.get("ContentText") or "")[:_EXCERPT_CHARS],
             })
         first_rank = matched_ranks[0] if matched_ranks else -1
@@ -180,6 +218,7 @@ class ZhihuSearchAdapter:
         brand = (cfg.get("target_brand") or "").strip()
         aliases = [a.strip() for a in (cfg.get("brand_aliases") or []) if a and a.strip()]
         count = max(1, min(_MAX_COUNT, int(cfg.get("count") or _MAX_COUNT)))
+        match_full_text = bool(cfg.get("match_full_text"))
 
         if not keywords or not brand:
             return MonitorResult(
@@ -226,7 +265,7 @@ class ZhihuSearchAdapter:
             }
             if resp["ok"]:
                 first_rank, matched_count, snapshot = self._rank_results(
-                    resp["items"], brands, count,
+                    resp["items"], brands, count, match_full_text=match_full_text,
                 )
                 entry.update(results=snapshot, matched_count=matched_count,
                              first_rank=first_rank, result_count=len(snapshot))

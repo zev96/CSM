@@ -314,3 +314,29 @@ def test_adapter_registered():
     from csm_core.monitor.platforms import ALL
     assert "zhihu_search" in ALL
     assert ALL["zhihu_search"].platform == "zhihu_search"
+
+
+def test_fulltext_match_when_excerpt_misses(monkeypatch):
+    _patch_secret(monkeypatch)
+    # 标题/摘要/作者都不含品牌，但正文含
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
+        "ok": True, "code": 0, "items": [_item(title="无关标题", text="无关摘要", author="路人")],
+        "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None})
+    monkeypatch.setattr(zs, "_fulltext_fetch", lambda ct, cid: "正文里有 戴森 V12")
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", match_full_text=True))
+    res0 = r.metric["keywords"][0]["results"][0]
+    assert res0["matches_brand"] is True
+    assert res0["matched_field"] == "fulltext"
+    assert res0["fulltext_status"] == "matched"
+
+
+def test_fulltext_disabled_never_fetches(monkeypatch):
+    _patch_secret(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
+        "ok": True, "code": 0, "items": [_item(title="无关")],
+        "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None})
+    def boom(ct, cid):
+        raise AssertionError("must not fetch when disabled")
+    monkeypatch.setattr(zs, "_fulltext_fetch", boom)
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", match_full_text=False))
+    assert r.metric["keywords"][0]["results"][0]["fulltext_status"] == "disabled"
