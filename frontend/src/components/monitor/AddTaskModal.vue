@@ -32,7 +32,7 @@ import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { GEO_PLATFORMS } from "@/utils/monitor-types";
 
-type TaskType = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword" | "geo_query";
+type TaskType = "zhihu_question" | "zhihu_search" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword" | "geo_query";
 
 interface EditingTask {
   id: number;
@@ -62,6 +62,7 @@ const toast = useToast();
 
 const TYPES = [
   { value: "zhihu_question", label: "知乎问题（排名监测）" },
+  { value: "zhihu_search", label: "知乎搜索排名" },
   { value: "bilibili_comment", label: "B 站评论留存" },
   { value: "douyin_comment", label: "抖音评论留存" },
   { value: "kuaishou_comment", label: "快手评论留存" },
@@ -94,6 +95,10 @@ const geoKeywordsText = ref(""); // newline-separated; split to list on submit
 const geoPlatforms = ref<string[]>(GEO_PLATFORMS.map((p) => p.value));
 const geoWebSearch = ref(true);
 // 抽取/分析模型固定用 DeepSeek（不再给选项）——通义免费额度易耗尽会致抽取 403 静默降级。
+// 知乎搜索（zhihu_search）—— 关键词 list + 单品牌词 + 别名
+const zsKeywordsRaw = ref(""); // newline-separated
+const zsTargetBrand = ref("");
+const zsAliasesText = ref(""); // comma-separated
 
 // Popover that shows the current global default_excluded_domains
 // (read-only, with a button to jump to the Settings section for editing).
@@ -133,8 +138,12 @@ const enabled = ref(true);
 const submitting = ref(false);
 
 const isGeo = computed(() => type.value === "geo_query");
+const isZhihuSearch = computed(() => type.value === "zhihu_search");
 const isComment = computed(() =>
-  type.value !== "zhihu_question" && type.value !== "baidu_keyword" && type.value !== "geo_query"
+  type.value !== "zhihu_question" &&
+  type.value !== "zhihu_search" &&
+  type.value !== "baidu_keyword" &&
+  type.value !== "geo_query"
 );
 const isBaidu = computed(() => type.value === "baidu_keyword");
 const isEdit = computed(() => !!props.editingTask);
@@ -158,6 +167,9 @@ function close() {
   geoKeywordsText.value = "";
   geoPlatforms.value = GEO_PLATFORMS.map((p) => p.value);
   geoWebSearch.value = true;
+  zsKeywordsRaw.value = "";
+  zsTargetBrand.value = "";
+  zsAliasesText.value = "";
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
   weeklyDow.value = 0;
@@ -206,6 +218,13 @@ function hydrateFromTask(t: EditingTask) {
     ? cfg.platforms
     : GEO_PLATFORMS.map((p) => p.value);
   geoWebSearch.value = cfg.web_search !== false; // default true
+  // 知乎搜索 hydration
+  const zsKeywords: string[] = Array.isArray(cfg.search_keywords) ? cfg.search_keywords : [];
+  // 注意：baidu 也用 search_keywords，这里只在 type==zhihu_search 时用到，互不干扰
+  zsKeywordsRaw.value = zsKeywords.join("\n");
+  zsTargetBrand.value = String(cfg.target_brand ?? "");
+  const zsAliases: string[] = Array.isArray(cfg.brand_aliases) ? cfg.brand_aliases : [];
+  zsAliasesText.value = zsAliases.join("，");
   const weeklyMatch = /^weekly-([0-6])-(\d{1,2}:\d{2})$/.exec(t.schedule_cron);
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
@@ -262,13 +281,17 @@ onMounted(async () => {
 
 function validate(): string | null {
   if (!name.value.trim()) return "任务名不能为空";
-  // 百度 / GEO 分支：target_url 由关键词/品牌派生，不需要用户填 URL
-  if (!isBaidu.value && !isGeo.value && !targetUrl.value.trim()) return "目标 URL 不能为空";
+  // 百度 / GEO / 知乎搜索 分支：target_url 由关键词/品牌派生，不需要用户填 URL
+  if (!isBaidu.value && !isGeo.value && !isZhihuSearch.value && !targetUrl.value.trim()) return "目标 URL 不能为空";
   if (isGeo.value) {
     if (!geoBrand.value.trim()) return "品牌名不能为空";
     const keywords = geoKeywordsText.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     if (keywords.length === 0) return "关键词至少填一个";
     if (geoPlatforms.value.length === 0) return "至少选一个 AI 平台";
+  } else if (isZhihuSearch.value) {
+    const keywords = zsKeywordsRaw.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (keywords.length === 0) return "搜索关键词至少填一个";
+    if (!zsTargetBrand.value.trim()) return "目标品牌词不能为空";
   } else if (isBaidu.value) {
     const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
     if (keywords.length === 0) return "搜索关键词至少填一个";
@@ -335,6 +358,16 @@ async function submit() {
         globalThis.crypto?.randomUUID?.() ??
         `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       computedTargetUrl = targetUrl.value.trim() || `geo://${brand}/${geoUniq}`;
+    } else if (isZhihuSearch.value) {
+      const keywords = zsKeywordsRaw.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      config = {
+        search_keywords: keywords,
+        target_brand: zsTargetBrand.value.trim(),
+        brand_aliases: zsAliasesText.value.split(/[，,]/).map((s) => s.trim()).filter(Boolean),
+        count: 10,
+      };
+      // target_url 由第一个关键词派生 —— 后端要求非空；点开是真实知乎搜索页
+      computedTargetUrl = "https://www.zhihu.com/search?type=content&q=" + encodeURIComponent(keywords[0]);
     } else if (isBaidu.value) {
       const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
       // 排除域名解析：换行 / 逗号 / 空格 / 顿号都拆开；剥掉协议头 +
@@ -431,19 +464,19 @@ async function submit() {
           </FormField>
 
           <FormField
-            :label="isBaidu || isComment || isGeo ? '任务名' : '问题名字'"
-            :hint="isBaidu || isComment || isGeo ? '出现在监测列表里。' : '抓取到的知乎问题标题，会显示在监测任务列表的第一列。'"
+            :label="isBaidu || isComment || isGeo || isZhihuSearch ? '任务名' : '问题名字'"
+            :hint="isBaidu || isComment || isGeo || isZhihuSearch ? '出现在监测列表里。' : '抓取到的知乎问题标题，会显示在监测任务列表的第一列。'"
           >
             <FormInput
               v-model="name"
-              :placeholder="isBaidu ? '如：Claude Code 排名监测' : isComment ? '如：客厅投影实测视频留存' : isGeo ? '如：小鹏 AI 卡位监控' : '如：无线吸尘器哪款好用'"
+              :placeholder="isBaidu ? '如：Claude Code 排名监测' : isComment ? '如：客厅投影实测视频留存' : isGeo ? '如：小鹏 AI 卡位监控' : isZhihuSearch ? '如：扫地机器人知乎搜索卡位' : '如：无线吸尘器哪款好用'"
               debounce="live"
             />
           </FormField>
 
-          <!-- 百度 / GEO 分支：target_url 由关键词/品牌派生，不暴露 URL 输入框 -->
+          <!-- 百度 / GEO / 知乎搜索 分支：target_url 由关键词/品牌派生，不暴露 URL 输入框 -->
           <FormField
-            v-if="!isBaidu && !isGeo"
+            v-if="!isBaidu && !isGeo && !isZhihuSearch"
             label="目标 URL"
             :hint="
               isEdit
@@ -634,6 +667,29 @@ async function submit() {
             </FormField>
           </template>
 
+          <!-- 知乎搜索排名：关键词 / 品牌词 / 别名 -->
+          <template v-if="isZhihuSearch">
+            <FormField label="搜索关键词" hint="一行一个，每个关键词单独搜一次（每次消耗 1 次知乎 API 配额，每天 1000）">
+              <textarea
+                v-model="zsKeywordsRaw"
+                rows="4"
+                placeholder="如：&#10;扫地机器人推荐&#10;宠物吸尘器"
+                class="bg-card-2 focus:bg-card-white outline-none transition-colors"
+                :style="{
+                  width: '100%', resize: 'vertical', padding: '6px 10px',
+                  fontSize: '12.5px', fontFamily: 'inherit', border: '1px solid var(--line)',
+                  borderRadius: 'var(--radius-inner)', color: 'var(--ink)', boxSizing: 'border-box',
+                }"
+              />
+            </FormField>
+            <FormField label="目标品牌词" hint="命中前 10 结果的标题/摘要/作者就算「我」">
+              <FormInput v-model="zsTargetBrand" placeholder="如：示例品牌" debounce="live" />
+            </FormField>
+            <FormField label="品牌别名" hint="逗号分隔；命中任一别名都算命中（可留空）">
+              <FormInput v-model="zsAliasesText" placeholder="如：ExampleBrand，EB" debounce="live" />
+            </FormField>
+          </template>
+
           <FormField
             v-if="isComment"
             label="自己发布的评论文本"
@@ -653,7 +709,7 @@ async function submit() {
             放这里只会让用户多填一个无用字段；评论场景下整段隐藏。
           -->
           <FormField
-            v-if="!isComment && !isBaidu && !isGeo"
+            v-if="!isComment && !isBaidu && !isGeo && !isZhihuSearch"
             label="目标品牌关键词"
             hint="在知乎答案排序里要追的品牌关键词"
           >
@@ -665,7 +721,7 @@ async function submit() {
           </FormField>
 
           <FormField
-            v-if="!isBaidu && !isGeo"
+            v-if="!isBaidu && !isGeo && !isZhihuSearch"
             :label="isComment ? '理想排名（前 N 位）' : 'Top-N（监测前 N 条答案）'"
             :hint="
               isComment

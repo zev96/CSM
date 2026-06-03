@@ -120,6 +120,19 @@ export interface GeoTaskConfig {
 }
 
 /**
+ * zhihu_search 任务的 ``config`` 形状（对齐 csm_core.monitor.platforms.zhihu_search
+ * adapter 读取的键）：多关键词 + 单品牌词 + 可选别名 + 固定 count。
+ * ``match_full_text`` 为 PR #3 的可选全文匹配开关（默认 false）。
+ */
+export interface ZhihuSearchTaskConfig {
+  search_keywords: string[];
+  target_brand: string;
+  brand_aliases: string[];
+  count: number;
+  match_full_text?: boolean;
+}
+
+/**
  * 信源榜一行（GET /api/monitor/geo/{id}/citations 的 leaderboard 元素）。
  * 域名频次降序，platforms/keywords 是聚合出现过的平台与关键词。
  */

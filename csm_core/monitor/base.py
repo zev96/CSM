@@ -57,6 +57,7 @@ def is_cancelled(exc: BaseException) -> bool:
 
 TaskType = Literal[
     "zhihu_question",
+    "zhihu_search",
     "bilibili_comment",
     "douyin_comment",
     "kuaishou_comment",

@@ -301,6 +301,7 @@ onMounted(async () => {
   if (!cfg.data) await cfg.load();
   syncDraftFromCfg();
   refreshKeyringStatus();
+  refreshZhihuKey();
   refreshBaiduLoginStatus();
   RPA_PLATFORMS.forEach((p) => refreshRpaLoginStatus(p.value));
   applyHash(route.hash);
@@ -416,6 +417,36 @@ async function saveProviderKey(p: ProviderMeta) {
     // 保存成功 → input 切回掩码显示，让用户视觉确认 "key 已存"
     providerKeyDraft[p.key] = API_KEY_MASK;
     toast.success(`${p.name} 密钥已保存`);
+  } catch (e: any) {
+    toast.error(`保存失败：${e?.message ?? e}`);
+  }
+}
+
+// ── 知乎开放平台 Access Secret（非 LLM，独立于 PROVIDERS）─────────
+// 监测中心「知乎搜索排名」用的官方 API 凭证。走泛型 keyring（provider="zhihu"），
+// 后端 read_api_key("zhihu") 取用；不带 model/baseURL/测试按钮。
+const zhihuSecretDraft = ref("");
+const zhihuHasKey = ref(false);
+
+async function refreshZhihuKey() {
+  try {
+    const s = await keyringStatus("zhihu");
+    zhihuHasKey.value = Boolean(s.has_key);
+    zhihuSecretDraft.value = zhihuHasKey.value ? API_KEY_MASK : "";
+  } catch {
+    zhihuHasKey.value = false;
+  }
+}
+function onZhihuFocus() { if (zhihuSecretDraft.value === API_KEY_MASK) zhihuSecretDraft.value = ""; }
+function onZhihuBlur() { if (!zhihuSecretDraft.value.trim() && zhihuHasKey.value) zhihuSecretDraft.value = API_KEY_MASK; }
+async function saveZhihuSecret() {
+  const raw = zhihuSecretDraft.value.trim();
+  if (!raw || raw === API_KEY_MASK) { toast.warn("请先粘贴知乎 Access Secret"); return; }
+  try {
+    await keyringSet("zhihu", raw);
+    zhihuHasKey.value = true;
+    zhihuSecretDraft.value = API_KEY_MASK;
+    toast.success("知乎 Access Secret 已保存");
   } catch (e: any) {
     toast.error(`保存失败：${e?.message ?? e}`);
   }
@@ -1451,6 +1482,39 @@ async function saveAccountEdit() {
                 <Icon name="key" :size="13" />
                 <span>打开管理器</span>
               </Btn>
+            </SettingsRow>
+            <!--
+              知乎开放平台 Access Secret —— 监测中心「知乎搜索排名」用的官方
+              API 凭证。走泛型 keyring（provider="zhihu"），后端
+              read_api_key("zhihu") 取用。无测试按钮：保存即写 keyring，连通性
+              留待首次跑任务时暴露。掩码 / 聚焦清空 / 已配置状态复用模型卡同款逻辑。
+            -->
+            <SettingsRow
+              label="知乎 Access Secret"
+              hint="监测中心「知乎搜索排名」用的官方 API 凭证。到 developer.zhihu.com 个人中心获取。系统时钟偏差过大会导致鉴权失败。"
+            >
+              <div class="flex items-center gap-2">
+                <input
+                  v-model="zhihuSecretDraft"
+                  type="password"
+                  :placeholder="zhihuHasKey ? '已保存 — 点击输入新值可覆盖' : '粘贴 Access Secret'"
+                  class="font-mono bg-card-white px-3 outline-none"
+                  :style="{
+                    width: '260px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                    fontSize: '11.5px',
+                  }"
+                  @focus="onZhihuFocus"
+                  @blur="onZhihuBlur"
+                />
+                <span
+                  class="text-[11.5px]"
+                  :style="{ color: zhihuHasKey ? 'var(--success, #16a34a)' : 'var(--ink-3)' }"
+                >{{ zhihuHasKey ? "已配置" : "未配置" }}</span>
+                <Btn variant="solid" small @click="saveZhihuSecret">保存</Btn>
+              </div>
             </SettingsRow>
             <!--
               「常规设置」/「百度关键词」两块用同级 section header（粗体小标）
