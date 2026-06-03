@@ -5,8 +5,11 @@
  */
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useSidecar } from "@/stores/sidecar";
+import { useMonitorStatus } from "@/stores/monitorStatus";
 import { subscribe } from "@/api/client";
 import { useToast } from "@/composables/useToast";
+import { confirmDialog } from "@/composables/useConfirm";
+import Pill from "@/components/ui/Pill.vue";
 import AddTaskModal from "./AddTaskModal.vue";
 
 interface ResultItem {
@@ -44,13 +47,16 @@ interface Task {
 }
 
 const sidecar = useSidecar();
+const monitorStatus = useMonitorStatus();
 const toast = useToast();
 
 const tasks = ref<Task[]>([]);
 const selectedId = ref<number | null>(null);
 const latestMetric = ref<Record<string, any> | null>(null);
 const latestStatus = ref<string | null>(null);
-const running = ref<Set<number>>(new Set());
+// 任务列表加载失败标记 —— SSE 回调 / onMounted 拉表撞 sidecar 503/重启时
+// 置 true，模板上给一个「加载失败」可重试入口（对齐 GeoTaskModule.failed）。
+const loadFailed = ref(false);
 const showModal = ref(false);
 const editingTask = ref<Task | null>(null);
 
@@ -59,22 +65,40 @@ const keywordResults = computed<KeywordResult[]>(() => latestMetric.value?.keywo
 
 async function loadTasks() {
   // GET /api/monitor/tasks → { count, tasks: [...] }（已核对 routes/monitor.py:41-48）
-  const r = await sidecar.client.get("/api/monitor/tasks", { params: { type: "zhihu_search" } });
-  tasks.value = r.data.tasks ?? [];
-  if (selectedId.value === null && tasks.value.length) {
-    selectTask(tasks.value[0].id);
+  // try/catch 对齐 GeoTaskModule.loadTasks：从 SSE finished/failed 回调 + onMounted
+  // 调起，sidecar 503/重启时不能让 unhandled rejection 静默吞掉 —— 置 loadFailed
+  // 让模板出「加载失败」可重试入口；503（sidecar 还没起来）不弹 toast 免打扰。
+  try {
+    const r = await sidecar.client.get("/api/monitor/tasks", { params: { type: "zhihu_search" } });
+    tasks.value = r.data.tasks ?? [];
+    loadFailed.value = false;
+    if (selectedId.value === null && tasks.value.length) {
+      selectTask(tasks.value[0].id);
+    }
+  } catch (e: any) {
+    loadFailed.value = true;
+    if (e?.response?.status !== 503) {
+      toast.error(`加载失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
+    }
   }
 }
 
 async function loadLatest(taskId: number) {
   // GET /api/monitor/results → { task_id, count, results: [...] }，行含 .metric / .status
   // （已核对 routes/monitor.py:175-183 + services/monitor_service.py:result_to_dict）
-  const r = await sidecar.client.get("/api/monitor/results", { params: { task_id: taskId, limit: 1 } });
-  const rows = r.data.results ?? [];
-  if (rows.length) {
-    latestMetric.value = rows[0].metric ?? null;
-    latestStatus.value = rows[0].status ?? null;
-  } else {
+  // 静默兜底：拿不到 latest 不弹 toast（详情区已有「还没有结果」空态），只防
+  // unhandled rejection；对齐 GeoTaskModule.loadLatest。
+  try {
+    const r = await sidecar.client.get("/api/monitor/results", { params: { task_id: taskId, limit: 1 } });
+    const rows = r.data.results ?? [];
+    if (rows.length) {
+      latestMetric.value = rows[0].metric ?? null;
+      latestStatus.value = rows[0].status ?? null;
+    } else {
+      latestMetric.value = null;
+      latestStatus.value = null;
+    }
+  } catch {
     latestMetric.value = null;
     latestStatus.value = null;
   }
@@ -86,20 +110,38 @@ async function selectTask(id: number) {
 }
 
 async function runNow(id: number) {
-  running.value = new Set(running.value).add(id);
+  // run-state 走共享 useMonitorStatus store（不再用本地 Set）：乐观 markRunning，
+  // POST 失败回滚 clearRunning，成功后由 SSE finished/failed 清。这样切 tab /
+  // 重挂载丢了 SSE 事件时，store 的 hydrate() + 30s 轮询仍能恢复在跑状态，
+  // 「立即执行」按钮不会永远卡「运行中…」。对齐 GeoTaskModule.runNow。
+  monitorStatus.markRunning(id);
   try {
     await sidecar.client.post(`/api/monitor/tasks/${id}/run-now`, {});
   } catch (e: any) {
+    monitorStatus.clearRunning(id);
     toast.error(`触发失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
-    const s = new Set(running.value); s.delete(id); running.value = s;
   }
 }
 
 async function removeTask(id: number) {
-  if (!confirm("确认删除这个知乎搜索监控任务？")) return;
-  await sidecar.client.delete(`/api/monitor/tasks/${id}`);
-  if (selectedId.value === id) { selectedId.value = null; latestMetric.value = null; }
-  await loadTasks();
+  // 不要用浏览器原生 confirm()：Tauri 2 WebView2 会把 window.confirm 路由到已
+  // 退役的 dialog|confirm IPC 命令 → 抛「Command not found」→ 删除静默 no-op。
+  // 用项目通用 confirmDialog（纯 Vue 模态，无 Tauri 依赖），对齐 GeoTaskModule /
+  // BaiduRankingPage。
+  if (
+    !(await confirmDialog("确认删除这个知乎搜索监控任务？", {
+      title: "删除监测任务",
+    }))
+  )
+    return;
+  try {
+    await sidecar.client.delete(`/api/monitor/tasks/${id}`);
+    toast.success("已删除");
+    if (selectedId.value === id) { selectedId.value = null; latestMetric.value = null; }
+    await loadTasks();
+  } catch (e: any) {
+    toast.error(`删除失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
+  }
 }
 
 function openAdd() { editingTask.value = null; showModal.value = true; }
@@ -114,15 +156,18 @@ async function onTaskSaved() {
 let stopSSE: (() => void) | null = null;
 onMounted(async () => {
   await loadTasks();
+  // 从 /api/monitor/running 同步在跑任务（重挂载恢复 in-flight 状态），
+  // 对齐 GeoTaskModule。store 自身也每 30s 轮询兜底。
+  void monitorStatus.hydrate();
   stopSSE = subscribe("/api/monitor/events", {
     finished: async (d: any) => {
-      const s = new Set(running.value); s.delete(d?.task_id); running.value = s;
+      if (typeof d?.task_id === "number") monitorStatus.clearRunning(d.task_id);
       await loadTasks();
       const sel = selectedId.value;
       if (sel !== null && d?.task_id === sel) await loadLatest(sel);
     },
     failed: async (d: any) => {
-      const s = new Set(running.value); s.delete(d?.task_id); running.value = s;
+      if (typeof d?.task_id === "number") monitorStatus.clearRunning(d.task_id);
       await loadTasks();
     },
   });
@@ -134,9 +179,18 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
   <div class="flex gap-4">
     <!-- 左：任务列表 -->
     <div class="w-[240px] shrink-0 flex flex-col gap-2">
-      <button class="text-[12.5px] px-3 py-2 rounded bg-[var(--ink)] text-white" @click="openAdd">
+      <button type="button" class="text-[12.5px] px-3 py-2 rounded bg-[var(--ink)] text-white" @click="openAdd">
         + 新增知乎搜索监控
       </button>
+      <!-- 加载失败可重试入口（sidecar 503/重启时 loadTasks 置 loadFailed）。 -->
+      <div
+        v-if="loadFailed"
+        class="text-[12px] px-3 py-2 rounded border"
+        :style="{ color: 'var(--red, #d85a48)', borderColor: 'var(--red, #d85a48)' }"
+      >
+        任务列表加载失败。
+        <button type="button" class="underline" @click="loadTasks()">重试</button>
+      </div>
       <div
         v-for="t in tasks" :key="t.id"
         class="px-3 py-2 rounded cursor-pointer text-[12.5px] border"
@@ -151,7 +205,7 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
           {{ t.last_status ?? "未运行" }} · {{ t.schedule_cron }}
         </div>
       </div>
-      <div v-if="!tasks.length" class="text-[12px] text-[var(--ink-3)] px-1">
+      <div v-if="!tasks.length && !loadFailed" class="text-[12px] text-[var(--ink-3)] px-1">
         还没有知乎搜索监控任务。
       </div>
     </div>
@@ -166,18 +220,20 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
           <div class="text-[14px] font-medium">{{ selected.name }}</div>
           <a :href="selected.target_url" target="_blank" class="text-[11.5px] text-[var(--primary-deep)] hover:underline">知乎搜索页 ↗</a>
           <div class="ml-auto flex gap-2">
-            <button class="text-[12px] px-2 py-1 rounded bg-[var(--card-2)]" :disabled="running.has(selected.id)" @click="runNow(selected.id)">
-              {{ running.has(selected.id) ? "运行中…" : "立即执行" }}
+            <button type="button" class="text-[12px] px-2 py-1 rounded bg-[var(--card-2)]" :disabled="monitorStatus.isRunning(selected.id)" @click="runNow(selected.id)">
+              {{ monitorStatus.isRunning(selected.id) ? "运行中…" : "立即执行" }}
             </button>
-            <button class="text-[12px] px-2 py-1 rounded bg-[var(--card-2)]" @click="openEdit(selected)">编辑</button>
-            <button class="text-[12px] px-2 py-1 rounded bg-[var(--card-2)]" @click="removeTask(selected.id)">删除</button>
+            <button type="button" class="text-[12px] px-2 py-1 rounded bg-[var(--card-2)]" @click="openEdit(selected)">编辑</button>
+            <button type="button" class="text-[12px] px-2 py-1 rounded bg-[var(--card-2)]" @click="removeTask(selected.id)">删除</button>
           </div>
         </div>
 
-        <div v-if="latestStatus === 'error'" class="text-[12px] text-red-600">
-          鉴权失败：检查设置页的知乎 Access Secret，或系统时钟是否准确。
+        <div v-if="latestStatus === 'error'" class="flex items-center gap-2 text-[12px]" :style="{ color: 'var(--red, #d85a48)' }">
+          <Pill tone="alert">鉴权失败</Pill>
+          检查设置页的知乎 Access Secret，或系统时钟是否准确。
         </div>
-        <div v-if="latestStatus === 'risk_control'" class="text-[12px] text-amber-600">
+        <div v-if="latestStatus === 'risk_control'" class="flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }">
+          <Pill tone="warn">频率限制</Pill>
           被知乎频率/配额限制（30001），稍后重试。
         </div>
         <div v-if="!latestMetric" class="text-[12px] text-[var(--ink-3)]">还没有结果，点「立即执行」。</div>
@@ -186,11 +242,11 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
         <div v-for="kw in keywordResults" :key="kw.keyword" class="border rounded p-3" :style="{ borderColor: 'var(--line)' }">
           <div class="flex items-center gap-2 mb-2">
             <span class="text-[13px] font-medium">{{ kw.keyword }}</span>
-            <span v-if="kw.first_rank > 0" class="text-[11px] px-1.5 py-0.5 rounded bg-green-100 text-green-700">
+            <Pill v-if="kw.first_rank > 0" tone="ok">
               首位命中 #{{ kw.first_rank }} · 共 {{ kw.matched_count }} 条
-            </span>
-            <span v-else class="text-[11px] px-1.5 py-0.5 rounded bg-[var(--card-2)] text-[var(--ink-3)]">前 10 无命中</span>
-            <span v-if="kw.fetch_error" class="text-[11px] text-red-600">{{ kw.fetch_error }}</span>
+            </Pill>
+            <Pill v-else tone="info">前 10 无命中</Pill>
+            <span v-if="kw.fetch_error" class="text-[11px]" :style="{ color: 'var(--red, #d85a48)' }">{{ kw.fetch_error }}</span>
             <span v-else-if="kw.empty_reason" class="text-[11px] text-[var(--ink-3)]">知乎无结果：{{ kw.empty_reason }}</span>
           </div>
           <table class="w-full text-[12px]">
@@ -200,12 +256,16 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
             <tbody>
               <tr
                 v-for="r in kw.results" :key="r.rank"
-                :style="{ background: r.matches_brand ? 'rgba(34,197,94,0.08)' : 'transparent' }"
+                :style="{ background: r.matches_brand ? 'var(--primary-soft)' : 'transparent' }"
               >
                 <td>{{ r.rank }}</td>
                 <td class="truncate max-w-[320px]">
                   <a :href="r.url" target="_blank" class="hover:underline">{{ r.title }}</a>
-                  <span v-if="r.matches_brand" class="ml-1 text-[10px] px-1 rounded bg-green-200 text-green-800">命中:{{ r.matched_brand }}({{ r.matched_field }})</span>
+                  <span
+                    v-if="r.matches_brand"
+                    class="ml-1 text-[10px] px-1 rounded font-medium"
+                    :style="{ background: 'var(--primary-deep)', color: '#fff' }"
+                  >命中:{{ r.matched_brand }}({{ r.matched_field }})</span>
                 </td>
                 <td>{{ r.content_type }}</td>
                 <td class="truncate max-w-[80px]">{{ r.author_name }}</td>
