@@ -22,35 +22,40 @@ logger = logging.getLogger(__name__)
 def extract_citations(html: str, *, container_sel: str | None = None,
                       exclude_hosts: tuple[str, ...] = ()) -> list[Citation]:
     """抽外链引用：容器内所有 http(s) <a>，title=锚文本，按 url 去重，
-    排除 exclude_hosts（自家域名/导航）。container_sel=None 时扫整页。"""
+    排除 exclude_hosts（自家域名/导航）。container_sel=None 时扫整页。
+    container_sel 命中多个容器时**全取**（回答常拆成多块：前言/表格/小结）。"""
     soup = BeautifulSoup(html or "", "html.parser")
-    root = soup.select_one(container_sel) if container_sel else soup
-    if root is None:
-        return []
+    roots = soup.select(container_sel) if container_sel else [soup]
     seen: set[str] = set()
     out: list[Citation] = []
-    for a in root.select("a[href]"):
-        href = (a.get("href") or "").strip()
-        if not href.lower().startswith(("http://", "https://")):
-            continue
-        host = (urlparse(href).hostname or "").lower()
-        if any(host == h or host.endswith("." + h) for h in exclude_hosts):
-            continue
-        if href in seen:
-            continue
-        seen.add(href)
-        title = " ".join(a.get_text(" ", strip=True).split())
-        out.append(Citation(url=href, title=title))
+    for root in roots:
+        for a in root.select("a[href]"):
+            href = (a.get("href") or "").strip()
+            if not href.lower().startswith(("http://", "https://")):
+                continue
+            host = (urlparse(href).hostname or "").lower()
+            if any(host == h or host.endswith("." + h) for h in exclude_hosts):
+                continue
+            if href in seen:
+                continue
+            seen.add(href)
+            title = " ".join(a.get_text(" ", strip=True).split())
+            out.append(Citation(url=href, title=title))
     return out
 
 
 def extract_answer_text(html: str, *, container_sel: str | None = None) -> str:
-    """容器内全部后代文本（含链接锚文本），空白折叠；容器缺失返回 ""。"""
+    """容器内全部后代文本（含链接锚文本），空白折叠；容器缺失返回 ""。
+    container_sel 命中多个容器时**全部拼接**——回答常拆成多块（前言/表格/小结），
+    只取首块会漏掉品牌所在的表格行 → 误判「未提及」。"""
     soup = BeautifulSoup(html or "", "html.parser")
-    root = soup.select_one(container_sel) if container_sel else soup
-    if root is None:
+    if not container_sel:
+        return " ".join(soup.get_text(" ", strip=True).split())
+    roots = soup.select(container_sel)
+    if not roots:
         return ""
-    return " ".join(root.get_text(" ", strip=True).split())
+    joined = " ".join(r.get_text(" ", strip=True) for r in roots)
+    return " ".join(joined.split())
 
 
 def is_logged_in_html(html: str, *, logged_in_sel: str,
