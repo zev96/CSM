@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 ZHIHU_SEARCH_URL = "https://developer.zhihu.com/api/v1/content/zhihu_search"
 
+_MAX_COUNT = 10        # 知乎搜索 API 上限：Count 最大 10、无分页
+_EXCERPT_CHARS = 160   # UI 预览摘要截断长度
+
 
 def _api_error(msg: str, *, http_status: int | None = None) -> dict[str, Any]:
     return {
@@ -146,7 +149,7 @@ class ZhihuSearchAdapter:
                 "matches_brand": hit,
                 "matched_brand": matched_brand,
                 "matched_field": matched_field,
-                "excerpt": str(raw.get("ContentText") or "")[:160],
+                "excerpt": str(raw.get("ContentText") or "")[:_EXCERPT_CHARS],
             })
         first_rank = matched_ranks[0] if matched_ranks else -1
         return first_rank, len(matched_ranks), snapshot
@@ -176,7 +179,7 @@ class ZhihuSearchAdapter:
         keywords = [k.strip() for k in (cfg.get("search_keywords") or []) if k and k.strip()]
         brand = (cfg.get("target_brand") or "").strip()
         aliases = [a.strip() for a in (cfg.get("brand_aliases") or []) if a and a.strip()]
-        count = max(1, min(10, int(cfg.get("count") or 10)))
+        count = max(1, min(_MAX_COUNT, int(cfg.get("count") or _MAX_COUNT)))
 
         if not keywords or not brand:
             return MonitorResult(
@@ -265,6 +268,15 @@ class ZhihuSearchAdapter:
         }
 
         # 熔断 + 状态：一次 fetch 记一次（对齐 baidu_keyword）。
+        #
+        # 设计取舍（刻意为之，勿改行为）：30001 频率/配额限制 *计入* 熔断器。
+        # 这与 baidu_keyword 的风控处理相反 —— baidu 的 RiskControlException
+        # 是用户可操作的验证码/登录墙（见 baidu_keyword.py「不计入熔断器」），
+        # 让 runner 写断点 + 暂停任务，故意排除在熔断器之外，因为自动退避帮不上
+        # 忙；而知乎是官方 API 的限流，自动退避恰好对症：一旦每天 1000 配额或
+        # 每秒速率耗尽，后续每次调用都返回 30001，让连续全 30001 的轮次触发熔断
+        # 即可停止在冷却期内继续锤一个已被限流的端点。任一关键词成功（any_ok）
+        # 即重置失败窗口，因为它证明凭证 / API 本身是健康的。
         any_ok = any(e.get("api_code") == 0 for e in keyword_results)
         if any_ok and not auth_failed:
             self._breaker.record_success()

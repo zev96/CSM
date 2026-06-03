@@ -5,6 +5,20 @@ from csm_core.monitor.base import MonitorTask
 from csm_core.monitor.platforms import zhihu_search as zs
 
 
+def _ok_resp(items, **over):
+    d = {"ok": True, "code": 0, "items": items, "empty_reason": None,
+         "search_hash_id": "h", "message": "", "http_status": 200, "error": None}
+    d.update(over)
+    return d
+
+
+def _err_resp(code, **over):
+    d = {"ok": False, "code": code, "items": [], "empty_reason": None,
+         "search_hash_id": None, "message": "", "http_status": 200, "error": None}
+    d.update(over)
+    return d
+
+
 def test_zhihu_search_is_valid_task_type():
     """MonitorTask 接受 type='zhihu_search'（Literal 已扩展）。"""
     t = MonitorTask(type="zhihu_search", name="测试", target_url="https://x")
@@ -186,10 +200,8 @@ def test_fetch_ok_aggregates_best_rank(monkeypatch):
     def fake_api(query, count, secret, **k):
         # kw "a" → 命中在 rank 2；kw "b" → 命中在 rank 1
         if query == "a":
-            return {"ok": True, "code": 0, "items": [_item(title="无"), _item(title="戴森")],
-                    "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None}
-        return {"ok": True, "code": 0, "items": [_item(title="戴森王")],
-                "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None}
+            return _ok_resp([_item(title="无"), _item(title="戴森")])
+        return _ok_resp([_item(title="戴森王")])
 
     monkeypatch.setattr(zs, "zhihu_search_api", fake_api)
     r = zs.ADAPTER.fetch(_task(search_keywords=["a", "b"], target_brand="戴森"))
@@ -206,8 +218,7 @@ def test_fetch_20001_aborts_with_error(monkeypatch):
 
     def fake_api(query, count, secret, **k):
         calls["n"] += 1
-        return {"ok": False, "code": 20001, "items": [], "empty_reason": None,
-                "search_hash_id": None, "message": "", "http_status": 200, "error": None}
+        return _err_resp(20001)
 
     monkeypatch.setattr(zs, "zhihu_search_api", fake_api)
     r = zs.ADAPTER.fetch(_task(search_keywords=["a", "b", "c"], target_brand="戴森"))
@@ -218,11 +229,85 @@ def test_fetch_20001_aborts_with_error(monkeypatch):
 
 def test_fetch_all_30001_is_risk_control(monkeypatch):
     _patch_secret(monkeypatch)
-    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
-        "ok": False, "code": 30001, "items": [], "empty_reason": None,
-        "search_hash_id": None, "message": "", "http_status": 200, "error": None})
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: _err_resp(30001))
     r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森"))
     assert r.status == "risk_control"
+
+
+def _spy_breaker(monkeypatch):
+    """Isolate the module-singleton breaker: force allow()=True so a
+    previously-opened breaker can't short-circuit fetch(), and replace
+    record_success/record_failure with counting spies. Returns the dict.
+    """
+    calls = {"ok": 0, "fail": 0}
+    monkeypatch.setattr(zs.ADAPTER._breaker, "allow", lambda: True)
+    monkeypatch.setattr(zs.ADAPTER._breaker, "record_success",
+                        lambda: calls.__setitem__("ok", calls["ok"] + 1))
+    monkeypatch.setattr(zs.ADAPTER._breaker, "record_failure",
+                        lambda: calls.__setitem__("fail", calls["fail"] + 1))
+    return calls
+
+
+def test_fetch_ok_records_breaker_success(monkeypatch):
+    """≥1 关键词 code==0 → 一次 record_success，零 record_failure。"""
+    _patch_secret(monkeypatch)
+    calls = _spy_breaker(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api",
+                        lambda *a, **k: _ok_resp([_item(title="戴森")]))
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森"))
+    assert r.status == "ok"
+    assert calls == {"ok": 1, "fail": 0}
+
+
+def test_fetch_all_30001_records_breaker_failure(monkeypatch):
+    """全 30001 → 一次 record_failure，零 record_success（限流计入熔断器）。"""
+    _patch_secret(monkeypatch)
+    calls = _spy_breaker(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: _err_resp(30001))
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a", "b"], target_brand="戴森"))
+    assert r.status == "risk_control"
+    assert calls == {"ok": 0, "fail": 1}
+
+
+def test_fetch_alias_match(monkeypatch):
+    """brand_aliases 命中：标题含 'Dyson' 不含 '戴森' → 命中别名。"""
+    _patch_secret(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api",
+                        lambda *a, **k: _ok_resp([_item(title="Dyson V15 评测")]))
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森",
+                               brand_aliases=["Dyson"]))
+    assert r.status == "ok"
+    snap = r.metric["keywords"][0]["results"][0]
+    assert snap["matches_brand"] is True
+    assert snap["matched_brand"] == "Dyson"
+
+
+def test_fetch_count_clamped_above_max(monkeypatch):
+    """count=50 → 传给 API 的 count 被钳到 10（_MAX_COUNT）。"""
+    _patch_secret(monkeypatch)
+    seen = {}
+
+    def fake_api(query, count, secret, **k):
+        seen["count"] = count
+        return _ok_resp([])
+
+    monkeypatch.setattr(zs, "zhihu_search_api", fake_api)
+    zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", count=50))
+    assert seen["count"] == 10
+
+
+def test_fetch_count_valid_passthrough(monkeypatch):
+    """count=5（合法值）→ 原样传给 API。"""
+    _patch_secret(monkeypatch)
+    seen = {}
+
+    def fake_api(query, count, secret, **k):
+        seen["count"] = count
+        return _ok_resp([])
+
+    monkeypatch.setattr(zs, "zhihu_search_api", fake_api)
+    zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", count=5))
+    assert seen["count"] == 5
 
 
 def test_adapter_registered():
