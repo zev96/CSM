@@ -322,6 +322,8 @@ def test_fulltext_match_when_excerpt_misses(monkeypatch):
     monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
         "ok": True, "code": 0, "items": [_item(title="无关标题", text="无关摘要", author="路人")],
         "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None})
+    # no_cookie 闸门：必须有 cookie 才会真去回查正文，否则标 no_cookie 不发请求。
+    monkeypatch.setattr(zs, "_fulltext_has_cookie", lambda: True)
     monkeypatch.setattr(zs, "_fulltext_fetch", lambda ct, cid: "正文里有 戴森 V12")
     r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", match_full_text=True))
     res0 = r.metric["keywords"][0]["results"][0]
@@ -340,3 +342,52 @@ def test_fulltext_disabled_never_fetches(monkeypatch):
     monkeypatch.setattr(zs, "_fulltext_fetch", boom)
     r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", match_full_text=False))
     assert r.metric["keywords"][0]["results"][0]["fulltext_status"] == "disabled"
+
+
+def test_fulltext_no_cookie(monkeypatch):
+    """开关开但知乎 Cookie 池为空 → 每条 no_cookie，绝不发请求（不崩）。"""
+    _patch_secret(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
+        "ok": True, "code": 0,
+        "items": [_item(title="无关一"), _item(title="无关二")],
+        "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None})
+    monkeypatch.setattr(zs, "_fulltext_has_cookie", lambda: False)
+    def boom(ct, cid):
+        raise AssertionError("must not fetch when no cookie")
+    monkeypatch.setattr(zs, "_fulltext_fetch", boom)
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", match_full_text=True))
+    results = r.metric["keywords"][0]["results"]
+    assert results  # task didn't crash, results present
+    assert all(res["fulltext_status"] == "no_cookie" for res in results)
+    assert all(res["matches_brand"] is False for res in results)
+
+
+def test_fulltext_fetch_fail_fallback(monkeypatch):
+    """有 cookie 但正文抓取失败（None）→ fetch_failed，回退摘要不崩，excerpt 仍在。"""
+    _patch_secret(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
+        "ok": True, "code": 0,
+        "items": [_item(title="无关标题", text="某段摘要文本", author="路人")],
+        "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None})
+    monkeypatch.setattr(zs, "_fulltext_has_cookie", lambda: True)
+    monkeypatch.setattr(zs, "_fulltext_fetch", lambda ct, cid: None)
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", match_full_text=True))
+    res0 = r.metric["keywords"][0]["results"][0]
+    assert res0["fulltext_status"] == "fetch_failed"
+    assert res0["matches_brand"] is False
+    assert res0["excerpt"] == "某段摘要文本"  # graceful fallback 仍带摘要
+
+
+def test_fulltext_fetched_no_match(monkeypatch):
+    """有 cookie 且抓到正文但不含品牌 → fetched_no_match，不命中。"""
+    _patch_secret(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
+        "ok": True, "code": 0,
+        "items": [_item(title="无关标题", text="无关摘要", author="路人")],
+        "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None})
+    monkeypatch.setattr(zs, "_fulltext_has_cookie", lambda: True)
+    monkeypatch.setattr(zs, "_fulltext_fetch", lambda ct, cid: "正文里只有别的内容，没有那个品牌")
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森", match_full_text=True))
+    res0 = r.metric["keywords"][0]["results"][0]
+    assert res0["fulltext_status"] == "fetched_no_match"
+    assert res0["matches_brand"] is False

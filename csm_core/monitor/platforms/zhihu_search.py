@@ -97,13 +97,34 @@ def match_brand(text: str, brands: list[str]) -> str | None:
     return None
 
 
+def _fulltext_has_cookie() -> bool:
+    """知乎 Cookie 池是否有可用凭证（仅 match_full_text=True 时调）。
+
+    单列成 module-level seam：测试里 monkeypatch 一行即可，且沿用惰性
+    import 纪律（开关关闭时永不构造 CookieStore / 不碰知乎 Cookie 池）。
+    """
+    from ..drivers.cookie_store import CookieStore
+    return CookieStore("zhihu_question").pick() is not None
+
+
 def _fulltext_fetch(content_type: str, content_id: str) -> str | None:
     """惰性调用 zhihu_content（仅 match_full_text=True 时走到）。
 
     import 在函数体内：开关关闭时永不 import zhihu_content / 不构造
     CookieStore / 不碰知乎 Cookie 池——默认路径保持「纯官方 API、零反爬」。
     复用 zhihu_question 同一 Cookie 池（CookieStore("zhihu_question")）。
+
+    反爬节流（C1，刻意为之，勿删）：开启全文匹配后每个关键词最多 ~10 条
+    miss 会逐条对 zhihu.com 发 curl_cffi 请求，且复用 zhihu_question 共享的
+    Cookie 池——裸 for 循环秒级连发会触发软封，进而拖垮依赖同一 Cookie 的
+    zhihu_question 排名监控（对齐 baidu_keyword 的 article-level pacer：见
+    baidu_keyword.py「关键反爬节流」注释）。这里用一个独立、name-keyed 的
+    pacer 单例 ``zhihu_search:content``：它跨所有 item、跨关键词、跨整轮
+    run 自动节流；RequestPacer 的首调分支让第 1 条不阻塞（_last_request_at=0
+    → elapsed 视作 delay_max → sleep_for=0），延迟只从第 2 条起累积——与
+    baidu 完全一致。
     """
+    get_pacer("zhihu_search:content").wait()
     from .zhihu_content import fetch_text
     from ..drivers.cookie_store import CookieStore
     return fetch_text(content_type, content_id, cookie_store=CookieStore("zhihu_question"))
@@ -137,7 +158,7 @@ class ZhihuSearchAdapter:
     @classmethod
     def _rank_results(
         cls, items: list[dict[str, Any]], brands: list[str], count: int,
-        *, match_full_text: bool = False,
+        *, match_full_text: bool = False, fulltext_has_cookie: bool = False,
     ) -> tuple[int, int, list[dict[str, Any]]]:
         """Return (first_rank, matched_count, snapshot[]). rank 1-based，-1=无命中。
 
@@ -145,14 +166,25 @@ class ZhihuSearchAdapter:
         ``fulltext_status="disabled"``，绝不 import zhihu_content / 不碰 cookie）。
         开启后，对标题/摘要/作者均未命中的条目 best-effort 回查正文：
         ``_fulltext_fetch`` 抓不到（None / 不支持类型 / 异常）即回退摘要结果，
-        ``fulltext_status`` 透出原因（disabled|skipped|matched|fetched_no_match|fetch_failed）。
+        ``fulltext_status`` 透出原因
+        （disabled|no_cookie|skipped|matched|fetched_no_match|fetch_failed）。
+        ``fulltext_has_cookie=False``（开了开关但知乎 Cookie 池为空）→ 每条
+        标记 ``no_cookie`` 且**绝不**发请求，省掉 10×N 注定 403 的无效爆发。
         """
         snapshot: list[dict[str, Any]] = []
         matched_ranks: list[int] = []
         for i, raw in enumerate(items[:count], start=1):
             matched_brand, matched_field = cls._match_item(raw, brands)
-            fulltext_status = "disabled" if not match_full_text else "skipped"
-            if matched_brand is None and match_full_text:
+            # 状态判定顺序（勿乱序）：先 disabled（开关关）→ no_cookie（开关开但
+            # 无 cookie，不发请求）→ skipped（标题/摘要/作者已命中，无需回查正文）
+            # → 才走 best-effort 正文回查。
+            if not match_full_text:
+                fulltext_status = "disabled"
+            elif not fulltext_has_cookie:
+                fulltext_status = "no_cookie"
+            elif matched_brand is not None:
+                fulltext_status = "skipped"
+            else:
                 ctype = str(raw.get("ContentType") or "")
                 cid = str(raw.get("ContentID") or "")
                 try:
@@ -168,6 +200,8 @@ class ZhihuSearchAdapter:
                         fulltext_status = "matched"
                     else:
                         fulltext_status = "fetched_no_match"
+            # 刻意不调 cookie_store.mark_failed/mark_ok：全文匹配是 best-effort，
+            # 它的 403/超时绝不能拉黑 zhihu_question 依赖的共享 Cookie。
             hit = matched_brand is not None
             if hit:
                 matched_ranks.append(i)
@@ -219,6 +253,9 @@ class ZhihuSearchAdapter:
         aliases = [a.strip() for a in (cfg.get("brand_aliases") or []) if a and a.strip()]
         count = max(1, min(_MAX_COUNT, int(cfg.get("count") or _MAX_COUNT)))
         match_full_text = bool(cfg.get("match_full_text"))
+        # 开关开 + 知乎 Cookie 池有凭证 才真去回查正文；否则 _rank_results 标
+        # no_cookie 不发请求（短路调用，开关关时根本不调 _fulltext_has_cookie）。
+        fulltext_has_cookie = match_full_text and _fulltext_has_cookie()
 
         if not keywords or not brand:
             return MonitorResult(
@@ -265,7 +302,9 @@ class ZhihuSearchAdapter:
             }
             if resp["ok"]:
                 first_rank, matched_count, snapshot = self._rank_results(
-                    resp["items"], brands, count, match_full_text=match_full_text,
+                    resp["items"], brands, count,
+                    match_full_text=match_full_text,
+                    fulltext_has_cookie=fulltext_has_cookie,
                 )
                 entry.update(results=snapshot, matched_count=matched_count,
                              first_rank=first_rank, result_count=len(snapshot))
