@@ -29,43 +29,44 @@ class SiteSpec:
 
 
 SITES: dict[str, SiteSpec] = {
+    # ✅ 真站校准过（_calib 探针实测：登录态 send 出 1587 字 + 7 来源）
     "deepseek": SiteSpec(
         platform="deepseek",
         url="https://chat.deepseek.com/",
-        composer_sel="textarea#chat-input, textarea",
-        send_sel="div[role='button'][aria-label*='发送'], button[type='submit']",
-        web_toggle_sel="div[role='button']:has-text('联网搜索')",  # page 端，允许 :has-text
-        generating_sel="div[role='button'][aria-label*='停止']",    # page 端
-        answer_sel="div.ds-markdown",                               # CSS，校准
-        citation_sel="div.ds-markdown",                             # CSS，校准
-        logged_in_sel="textarea",                                   # CSS
-        logged_out_sel=None,                                        # 校准时填稳定登录按钮 class
+        composer_sel="textarea",          # 纯 textarea，page.fill 可用
+        send_sel=None,                    # textarea 走 Enter 提交（无发送按钮元素）
+        web_toggle_sel=None,              # 「智能搜索」状态随 profile 持久；探针默认即带来源
+        generating_sel=None,              # 无停止键 aria → make_done_predicate 走内容增长兜底
+        answer_sel="div.ds-markdown",     # 探针抓到 1587 字
+        citation_sel="div.ds-markdown",   # 探针抓到 7 个真实来源
+        logged_in_sel="textarea",         # 探针 send 无 login wall = 真登录
+        logged_out_sel=None,
         exclude_hosts=("deepseek.com",),
     ),
     "kimi": SiteSpec(
         platform="kimi",
         url="https://kimi.com/",
-        composer_sel="div[contenteditable='true'], textarea",
-        send_sel="div[role='button'][aria-label*='发送'], button[type='submit']",
-        web_toggle_sel="div[role='button']:has-text('联网')",
-        generating_sel="div[role='button'][aria-label*='停止']",
-        answer_sel="div.markdown, div[class*='answer']",
-        citation_sel="div.markdown, div[class*='answer']",
-        logged_in_sel="div[contenteditable='true'], textarea",
-        logged_out_sel=None,
+        composer_sel="div[contenteditable='true']",  # Lexical 富文本编辑器，keyboard.type 输入
+        send_sel=".send-button-container",   # 真站校准：图标 div 发送键（打字后点它，非 Enter）
+        web_toggle_sel=None,                 # 默认联网（探针带「搜索网页…50 个结果」+ 来源）
+        generating_sel=None,                 # 无停止键 aria → 内容增长兜底
+        answer_sel="div.markdown",           # 真站校准：抓到回答 prose
+        citation_sel="div.markdown",         # Kimi 仅 markdown 内 <a> 来源（搜索结果非 <a>，暂取此）
+        logged_in_sel="div[contenteditable='true']",
+        logged_out_sel="span.user-name:-soup-contains('登录')",  # 真站校准：账号区显示「登录」=未登录
         exclude_hosts=("kimi.com", "moonshot.cn"),
     ),
     "yuanbao": SiteSpec(
         platform="yuanbao",
         url="https://yuanbao.tencent.com/",
-        composer_sel="div[contenteditable='true'], textarea",
-        send_sel="div[role='button'][aria-label*='发送'], button[type='submit']",
-        web_toggle_sel="div[role='button']:has-text('联网')",
-        generating_sel="div[role='button'][aria-label*='停止']",
-        answer_sel="div[class*='markdown'], div[class*='answer']",
-        citation_sel="div[class*='markdown'], div[class*='answer']",
-        logged_in_sel="div[contenteditable='true'], textarea",
-        logged_out_sel=None,
+        composer_sel="div.ql-editor",   # Quill 富文本编辑器，keyboard.type 输入
+        send_sel=None,                   # 真站校准：enterkeyhint=send → Enter 提交（无发送按钮元素）
+        web_toggle_sel=None,             # 默认联网（探针实测答案带搜索结果）
+        generating_sel=None,             # 无停止键 aria → 内容增长兜底
+        answer_sel="div[class*='markdown']",   # 真站校准：抓到 973 字回答
+        citation_sel="div[class*='markdown']", # 元宝来源非 <a>（探针 0 链接），暂取此，后续再挖
+        logged_in_sel="div[contenteditable='true']",
+        logged_out_sel="[data-placeholder*='请登录']",  # 真站校准：composer 占位「请登录后输入内容」=未登录
         exclude_hosts=("yuanbao.tencent.com", "tencent.com"),
     ),
 }

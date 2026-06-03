@@ -76,11 +76,17 @@ def detect_login(page: Any, *, logged_in_sel: str,
 
 
 def submit_query(page: Any, *, composer_sel: str, send_sel: str | None, text: str) -> None:
-    page.fill(composer_sel, text)
+    """聚焦 composer + 真键盘逐字打字，再点 send_sel（无则按 Enter）。
+
+    用 page.keyboard.type 而非 page.fill —— Lexical/Quill 等受控富文本编辑器
+    不处理 fill 注入的值（其 onChange 不触发），会导致发送键不激活 / 提交空。
+    """
+    page.click(composer_sel)
+    page.keyboard.type(text)
     if send_sel:
         page.click(send_sel)
     else:
-        page.press(composer_sel, "Enter")
+        page.keyboard.press("Enter")
 
 
 def ensure_web_toggle(page: Any, *, toggle_sel: str, want_on: bool = True,
@@ -130,17 +136,18 @@ def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
 
 
 def make_done_predicate(page: Any, *, generating_sel: str | None,
-                        send_sel: str | None) -> Callable[[], bool]:
+                        answer_sel: str) -> Callable[[], bool]:
     """构造「流式是否完成」判定 closure，内置「先开始再结束」守卫。
 
-    刚 submit 后，生成指示器（generating_sel，如停止按钮）还没渲染 / send 还没被
-    禁用，若此刻直接判完成会误判 → 抓到空回答。故必须先观察到「生成已开始」，
-    再以其消失判完成。
-    - generating_sel：出现=开始；曾出现且现已消失=完成。
-    - 无 generating_sel：退化为 send 按钮——禁用=开始；曾禁用且现可点=完成。
-    - 都没有：恒 True（无完成信号，靠 wait_stream_done 的 idle 静默兜底）。
+    刚 submit 后回答还没流出来，若直接判完成会误判 → 抓空。故必须先观察到
+    「回答已开始」，再判完成。
+    - generating_sel（停止按钮等）：出现=开始；曾出现且现已消失=完成。
+    - 无 generating_sel：测**回答容器**文本增长判「已开始」（不用整页长度——
+      用户消息/UI 渲染会误触发），再由 wait_stream_done 的 idle 静默判完成。
+      （Kimi 发送键完成后仍 disabled、DeepSeek/元宝 无停止键 aria，都走这条。）
     """
     started = {"v": False}
+    base_len: "dict[str, int | None]" = {"v": None}
 
     def _done() -> bool:
         if generating_sel:
@@ -148,12 +155,14 @@ def make_done_predicate(page: Any, *, generating_sel: str | None,
             if present:
                 started["v"] = True
             return started["v"] and not present
-        if send_sel:
-            el = page.query_selector(send_sel)
-            enabled = el is not None and el.is_enabled()
-            if not enabled:
-                started["v"] = True
-            return started["v"] and enabled
-        return True
+        try:
+            cur = len(extract_answer_text(page.content(), container_sel=answer_sel))
+        except Exception:
+            return False
+        if base_len["v"] is None:
+            base_len["v"] = cur
+        if cur > (base_len["v"] or 0) + 30:
+            started["v"] = True
+        return started["v"]
 
     return _done

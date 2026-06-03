@@ -4,10 +4,18 @@ import pytest
 import csm_core.monitor.geo.providers.rpa.deepseek as ds
 
 
+class _FakeKeyboard:
+    def type(self, *a, **k):
+        pass
+    def press(self, *a, **k):
+        pass
+
+
 class _FakePage:
     def __init__(self, html, *, raise_on_wait=None):
         self._html = html
         self._raise_on_wait = raise_on_wait
+        self.keyboard = _FakeKeyboard()
     def goto(self, *a, **k):
         pass
     def wait_for_timeout(self, *a, **k):

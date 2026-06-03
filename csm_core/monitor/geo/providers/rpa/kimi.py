@@ -39,7 +39,7 @@ class KimiProvider:
                 _flow.submit_query(page, composer_sel=spec.composer_sel,
                                    send_sel=spec.send_sel, text=keyword)
                 done_pred = _flow.make_done_predicate(
-                    page, generating_sel=spec.generating_sel, send_sel=spec.send_sel)
+                    page, generating_sel=spec.generating_sel, answer_sel=spec.answer_sel)
                 _flow.wait_stream_done(page, done_predicate=done_pred, idle_ms=1500,
                                        timeout_s=120.0, cancel_token=cancel_token)
                 html = page.content()

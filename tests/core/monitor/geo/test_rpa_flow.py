@@ -60,6 +60,15 @@ import threading
 import pytest
 
 
+class _FakeKeyboard:
+    def __init__(self, page):
+        self._page = page
+    def type(self, text, **kwargs):
+        self._page.typed.append(text)
+    def press(self, key):
+        self._page.pressed.append(("<kbd>", key))
+
+
 class _FakePage:
     """脚本化 page：content() 依次返回 _contents 序列（末值定格），
     query_selector 按 selector→对象表返回。"""
@@ -69,6 +78,8 @@ class _FakePage:
         self.filled = None
         self.clicked = []
         self.pressed = []
+        self.typed = []
+        self.keyboard = _FakeKeyboard(self)
 
     def content(self):
         return self._contents.pop(0) if len(self._contents) > 1 else self._contents[0]
@@ -99,17 +110,18 @@ class _FakeEl:
         self._attrs["__clicked"] = True
 
 
-def test_submit_query_fills_and_clicks_send():
+def test_submit_query_types_and_clicks_send():
     page = _FakePage(["<html></html>"])
     _flow.submit_query(page, composer_sel="textarea", send_sel="button.send", text="k")
-    assert page.filled == ("textarea", "k")
-    assert page.clicked == ["button.send"]
+    assert page.clicked == ["textarea", "button.send"]   # 聚焦 composer + 点发送
+    assert page.typed == ["k"]
 
 
-def test_submit_query_presses_enter_when_no_send_sel():
+def test_submit_query_types_and_enters_when_no_send_sel():
     page = _FakePage(["<html></html>"])
     _flow.submit_query(page, composer_sel="textarea", send_sel=None, text="k")
-    assert page.pressed == [("textarea", "Enter")]
+    assert page.typed == ["k"]
+    assert page.pressed == [("<kbd>", "Enter")]
 
 
 def test_ensure_web_toggle_clicks_when_off():
@@ -182,23 +194,19 @@ def test_sites_deepseek_present_and_css_selectors_valid():
 def test_make_done_predicate_generating_requires_started():
     seq = iter([None, _FakeEl(), _FakeEl(), None])  # 没开始 / 生成中 / 生成中 / 完成
     page = _FakePage(["x"], {"#gen": lambda: next(seq, None)})
-    done = _flow.make_done_predicate(page, generating_sel="#gen", send_sel=None)
+    done = _flow.make_done_predicate(page, generating_sel="#gen", answer_sel="div.a")
     assert done() is False  # generating 还没出现 → 不算完成（防提交后误判）
     assert done() is False  # 出现 → started
     assert done() is False  # 还在生成
     assert done() is True   # 曾出现且现已消失 → 完成
 
 
-def test_make_done_predicate_send_fallback_requires_disabled_first():
-    seq = iter([_FakeEl(enabled=True), _FakeEl(enabled=False), _FakeEl(enabled=True)])
-    page = _FakePage(["x"], {"#send": lambda: next(seq, None)})
-    done = _flow.make_done_predicate(page, generating_sel=None, send_sel="#send")
-    assert done() is False  # enabled 但没观察到 disabled（生成没开始）
-    assert done() is False  # disabled → started
-    assert done() is True   # 曾 disabled 且现 enabled → 完成
-
-
-def test_make_done_predicate_no_signals_returns_true():
-    page = _FakePage(["x"], {})
-    done = _flow.make_done_predicate(page, generating_sel=None, send_sel=None)
-    assert done() is True
+def test_make_done_predicate_answer_growth_requires_started():
+    # 无 generating：测「回答容器」文本增长判「已开始」（空 → 仍空 → 出文）
+    seq = ['<div class="a"></div>', '<div class="a"></div>',
+           '<div class="a">' + "字" * 100 + '</div>']
+    page = _FakePage(seq)
+    done = _flow.make_done_predicate(page, generating_sel=None, answer_sel="div.a")
+    assert done() is False   # 回答容器空 → 记基线
+    assert done() is False   # 仍空 → 还没开始
+    assert done() is True    # 回答容器出文 >30 → 已开始
