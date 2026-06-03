@@ -156,3 +156,76 @@ def test_rank_results_respects_count_cap():
     first, count, snap = zs.ZhihuSearchAdapter._rank_results(items, ["戴森"], 5)
     assert first == -1  # 只看前 5
     assert len(snap) == 5
+
+
+def _task(**cfg):
+    return MonitorTask(type="zhihu_search", name="t", target_url="https://z",
+                       id=1, config=cfg)
+
+
+def _patch_secret(monkeypatch, value="secret"):
+    monkeypatch.setattr(zs, "read_api_key", lambda provider: value)
+
+
+def test_fetch_missing_config_fails(monkeypatch):
+    _patch_secret(monkeypatch)
+    r = zs.ADAPTER.fetch(_task(search_keywords=[], target_brand=""))
+    assert r.status == "failed"
+
+
+def test_fetch_missing_secret_errors(monkeypatch):
+    _patch_secret(monkeypatch, value="")
+    r = zs.ADAPTER.fetch(_task(search_keywords=["rag"], target_brand="戴森"))
+    assert r.status == "error"
+    assert "Access Secret" in r.error_message
+
+
+def test_fetch_ok_aggregates_best_rank(monkeypatch):
+    _patch_secret(monkeypatch)
+
+    def fake_api(query, count, secret, **k):
+        # kw "a" → 命中在 rank 2；kw "b" → 命中在 rank 1
+        if query == "a":
+            return {"ok": True, "code": 0, "items": [_item(title="无"), _item(title="戴森")],
+                    "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None}
+        return {"ok": True, "code": 0, "items": [_item(title="戴森王")],
+                "empty_reason": None, "search_hash_id": "h", "message": "", "http_status": 200, "error": None}
+
+    monkeypatch.setattr(zs, "zhihu_search_api", fake_api)
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a", "b"], target_brand="戴森"))
+    assert r.status == "ok"
+    assert r.rank == 1  # best across keywords
+    assert r.metric["matched_keywords"] == 2
+    assert r.metric["total_keywords"] == 2
+    assert len(r.metric["keywords"]) == 2
+
+
+def test_fetch_20001_aborts_with_error(monkeypatch):
+    _patch_secret(monkeypatch)
+    calls = {"n": 0}
+
+    def fake_api(query, count, secret, **k):
+        calls["n"] += 1
+        return {"ok": False, "code": 20001, "items": [], "empty_reason": None,
+                "search_hash_id": None, "message": "", "http_status": 200, "error": None}
+
+    monkeypatch.setattr(zs, "zhihu_search_api", fake_api)
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a", "b", "c"], target_brand="戴森"))
+    assert r.status == "error"
+    assert "20001" in r.error_message
+    assert calls["n"] == 1  # 第一次 20001 即中止，不再打后两个关键词
+
+
+def test_fetch_all_30001_is_risk_control(monkeypatch):
+    _patch_secret(monkeypatch)
+    monkeypatch.setattr(zs, "zhihu_search_api", lambda *a, **k: {
+        "ok": False, "code": 30001, "items": [], "empty_reason": None,
+        "search_hash_id": None, "message": "", "http_status": 200, "error": None})
+    r = zs.ADAPTER.fetch(_task(search_keywords=["a"], target_brand="戴森"))
+    assert r.status == "risk_control"
+
+
+def test_adapter_registered():
+    from csm_core.monitor.platforms import ALL
+    assert "zhihu_search" in ALL
+    assert ALL["zhihu_search"].platform == "zhihu_search"

@@ -150,3 +150,144 @@ class ZhihuSearchAdapter:
             })
         first_rank = matched_ranks[0] if matched_ranks else -1
         return first_rank, len(matched_ranks), snapshot
+
+    def fetch(
+        self,
+        task: MonitorTask,
+        *,
+        progress_cb=None,
+        cancel_token=None,
+        resume_from: int = 0,
+    ) -> MonitorResult:
+        """一次检查：逐关键词调官方 API，匹配品牌词，聚合 MonitorResult。
+
+        永不 raise —— 异常包成 status='failed'。``progress_cb(i, N)`` 驱动
+        UI 进度条；``cancel_token`` 在关键词之间检查；``resume_from`` 接受
+        但本 adapter 不需要（API 快、无断点续传），保留以兼容调度签名。
+        """
+        if not self._breaker.allow():
+            return MonitorResult(
+                task_id=task.id or 0, checked_at=datetime.utcnow(),
+                status="risk_control", rank=-1,
+                error_message="circuit breaker open for zhihu_search",
+            )
+
+        cfg = task.config or {}
+        keywords = [k.strip() for k in (cfg.get("search_keywords") or []) if k and k.strip()]
+        brand = (cfg.get("target_brand") or "").strip()
+        aliases = [a.strip() for a in (cfg.get("brand_aliases") or []) if a and a.strip()]
+        count = max(1, min(10, int(cfg.get("count") or 10)))
+
+        if not keywords or not brand:
+            return MonitorResult(
+                task_id=task.id or 0, checked_at=datetime.utcnow(),
+                status="failed", rank=-1,
+                error_message="config.search_keywords (non-empty) + target_brand required",
+            )
+
+        secret = read_api_key("zhihu")
+        if not secret:
+            return MonitorResult(
+                task_id=task.id or 0, checked_at=datetime.utcnow(),
+                status="error", rank=-1,
+                error_message="未配置知乎 Access Secret，请到设置页填写",
+            )
+
+        brands = [brand, *aliases]
+        now = datetime.utcnow()
+        maybe_cancel(cancel_token)
+        if progress_cb is not None:
+            try:
+                progress_cb(0, len(keywords))
+            except Exception:
+                logger.exception("progress_cb(0,N) raised; ignoring")
+
+        keyword_results: list[dict[str, Any]] = []
+        auth_failed = False
+
+        for idx, kw in enumerate(keywords):
+            maybe_cancel(cancel_token)
+            if idx > 0:
+                self._pacer.wait()
+            resp = zhihu_search_api(kw, count, secret)
+            entry: dict[str, Any] = {
+                "keyword": kw,
+                "search_hash_id": resp.get("search_hash_id"),
+                "results": [],
+                "matched_count": 0,
+                "first_rank": -1,
+                "result_count": 0,
+                "empty_reason": resp.get("empty_reason"),
+                "api_code": resp.get("code"),
+                "fetch_error": None,
+            }
+            if resp["ok"]:
+                first_rank, matched_count, snapshot = self._rank_results(
+                    resp["items"], brands, count,
+                )
+                entry.update(results=snapshot, matched_count=matched_count,
+                             first_rank=first_rank, result_count=len(snapshot))
+            elif resp.get("code") == 20001:
+                auth_failed = True
+                entry["fetch_error"] = "鉴权失败（20001）：Access Secret 错误或系统时钟偏差过大"
+                keyword_results.append(entry)
+                break
+            elif resp.get("code") == 30001:
+                entry["fetch_error"] = "频率/配额限制（30001）"
+            else:
+                entry["fetch_error"] = resp.get("error") or f"api code={resp.get('code')}"
+            keyword_results.append(entry)
+            logger.info(
+                "[zhihu_search] kw=%r code=%s results=%d matched=%d first_rank=%d%s",
+                kw, resp.get("code"), entry["result_count"], entry["matched_count"],
+                entry["first_rank"],
+                f" err={entry['fetch_error']!r}" if entry["fetch_error"] else "",
+            )
+            if progress_cb is not None:
+                try:
+                    progress_cb(idx + 1, len(keywords))
+                except Exception:
+                    logger.exception("progress_cb(%s,N) raised; ignoring", idx + 1)
+
+        first_ranks = [e["first_rank"] for e in keyword_results if e["first_rank"] > 0]
+        best_first_rank = min(first_ranks) if first_ranks else -1
+        metric: dict[str, Any] = {
+            "source": "zhihu_openapi",
+            "target_brand": brand,
+            "brand_aliases": aliases,
+            "search_keywords": keywords,
+            "count": count,
+            "keywords": keyword_results,
+            "total_keywords": len(keywords),
+            "matched_keywords": sum(1 for e in keyword_results if e["matched_count"] > 0),
+            "total_matches": sum(e["matched_count"] for e in keyword_results),
+            "best_first_rank": best_first_rank,
+        }
+
+        # 熔断 + 状态：一次 fetch 记一次（对齐 baidu_keyword）。
+        any_ok = any(e.get("api_code") == 0 for e in keyword_results)
+        if any_ok and not auth_failed:
+            self._breaker.record_success()
+        else:
+            self._breaker.record_failure()
+
+        if auth_failed:
+            status = "error"
+            err = "鉴权失败（20001）：检查 Access Secret 或系统时钟"
+        elif keyword_results and all(e.get("api_code") == 30001 for e in keyword_results):
+            status = "risk_control"
+            err = "全部关键词被频率/配额限制（30001）"
+        elif not any_ok:
+            status = "failed"
+            err = "所有关键词请求失败"
+        else:
+            status = "ok"
+            err = ""
+
+        return MonitorResult(
+            task_id=task.id or 0, checked_at=now, status=status,
+            rank=best_first_rank, metric=metric, error_message=err,
+        )
+
+
+ADAPTER = ZhihuSearchAdapter()
