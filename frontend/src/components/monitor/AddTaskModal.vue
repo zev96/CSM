@@ -31,6 +31,7 @@ import { useSidecar } from "@/stores/sidecar";
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { GEO_PLATFORMS } from "@/utils/monitor-types";
+import { uniqueSearchTargetUrl, uniqueGeoTargetUrl } from "@/utils/taskTargetUrl";
 
 type TaskType = "zhihu_question" | "zhihu_search" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword" | "geo_query";
 
@@ -353,11 +354,8 @@ async function submit() {
       // target_url 对 geo_query 只是 UNIQUE 键（adapter 不实际请求它）。必须每个任务
       // 唯一，否则同品牌任务会撞 UNIQUE(type,target_url) → create_task 的 ON CONFLICT
       // DO UPDATE 把原任务覆盖掉（数据丢失！）。编辑时沿用原 target_url（update 按 id、
-      // 键不变）；新建时（targetUrl 为空）生成唯一值。
-      const geoUniq =
-        globalThis.crypto?.randomUUID?.() ??
-        `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      computedTargetUrl = targetUrl.value.trim() || `geo://${brand}/${geoUniq}`;
+      // 键不变）；新建时（targetUrl 为空）生成唯一值。详见 utils/taskTargetUrl.ts。
+      computedTargetUrl = uniqueGeoTargetUrl(brand, targetUrl.value);
     } else if (isZhihuSearch.value) {
       const keywords = zsKeywordsRaw.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       config = {
@@ -366,8 +364,13 @@ async function submit() {
         brand_aliases: zsAliasesText.value.split(/[，,]/).map((s) => s.trim()).filter(Boolean),
         count: 10,
       };
-      // target_url 由第一个关键词派生 —— 后端要求非空；点开是真实知乎搜索页
-      computedTargetUrl = "https://www.zhihu.com/search?type=content&q=" + encodeURIComponent(keywords[0]);
+      // target_url 由第一个关键词派生 —— 后端要求非空；点开是真实知乎搜索页。
+      // 追加唯一参数避免同首词任务撞 UNIQUE 键被 create_task 覆盖；编辑沿用原键。
+      computedTargetUrl = uniqueSearchTargetUrl(
+        "https://www.zhihu.com/search?type=content&q=",
+        keywords[0],
+        targetUrl.value,
+      );
     } else if (isBaidu.value) {
       const keywords = searchKeywordsRaw.value.split("\n").map(s => s.trim()).filter(Boolean);
       // 排除域名解析：换行 / 逗号 / 空格 / 顿号都拆开；剥掉协议头 +
@@ -385,8 +388,13 @@ async function submit() {
         exclude_domains: excludeDomains,
         use_default_excludes: baiduUseDefaultExcludes.value,
       };
-      // target_url 由第一个 search_keyword 派生 —— 后端要求非空
-      computedTargetUrl = "https://www.baidu.com/s?wd=" + encodeURIComponent(keywords[0]);
+      // target_url 由第一个 search_keyword 派生 —— 后端要求非空。
+      // 追加唯一参数避免同首词任务撞 UNIQUE 键被 create_task 覆盖；编辑沿用原键。
+      computedTargetUrl = uniqueSearchTargetUrl(
+        "https://www.baidu.com/s?wd=",
+        keywords[0],
+        targetUrl.value,
+      );
     } else if (isComment.value) {
       config = {
         my_comment_text: myCommentText.value.trim(),

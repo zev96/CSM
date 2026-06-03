@@ -39,6 +39,7 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
+import { uniqueSearchTargetUrl } from "@/utils/taskTargetUrl";
 
 type Platform = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
 
@@ -531,7 +532,8 @@ async function submitAll() {
         type: "baidu_keyword" as Platform,
         name: taskName,
         // baidu adapter 不需要逐行 URL —— 由第一个关键词派生 SERP URL。
-        target_url: `https://www.baidu.com/s?wd=${encodeURIComponent(keywords[0])}`,
+        // 追加唯一参数：批量导入多行同首词时，避免撞 UNIQUE(type,target_url) 互相覆盖。
+        target_url: uniqueSearchTargetUrl("https://www.baidu.com/s?wd=", keywords[0]),
         config: {
           search_keywords: keywords,
           target_brand: brand,
