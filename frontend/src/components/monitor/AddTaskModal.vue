@@ -100,6 +100,7 @@ const geoWebSearch = ref(true);
 const zsKeywordsRaw = ref(""); // newline-separated
 const zsTargetBrand = ref("");
 const zsAliasesText = ref(""); // comma-separated
+const zsMatchFullText = ref(false); // 可选全文级匹配（默认关，需配置知乎 Cookie）
 
 // Popover that shows the current global default_excluded_domains
 // (read-only, with a button to jump to the Settings section for editing).
@@ -171,6 +172,7 @@ function close() {
   zsKeywordsRaw.value = "";
   zsTargetBrand.value = "";
   zsAliasesText.value = "";
+  zsMatchFullText.value = false;
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
   weeklyDow.value = 0;
@@ -226,6 +228,7 @@ function hydrateFromTask(t: EditingTask) {
   zsTargetBrand.value = String(cfg.target_brand ?? "");
   const zsAliases: string[] = Array.isArray(cfg.brand_aliases) ? cfg.brand_aliases : [];
   zsAliasesText.value = zsAliases.join("，");
+  zsMatchFullText.value = Boolean(cfg.match_full_text);
   const weeklyMatch = /^weekly-([0-6])-(\d{1,2}:\d{2})$/.exec(t.schedule_cron);
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
@@ -363,6 +366,7 @@ async function submit() {
         target_brand: zsTargetBrand.value.trim(),
         brand_aliases: zsAliasesText.value.split(/[，,]/).map((s) => s.trim()).filter(Boolean),
         count: 10,
+        match_full_text: zsMatchFullText.value,
       };
       // target_url 由第一个关键词派生 —— 后端要求非空；点开是真实知乎搜索页。
       // 追加唯一参数避免同首词任务撞 UNIQUE 键被 create_task 覆盖；编辑沿用原键。
@@ -695,6 +699,13 @@ async function submit() {
             </FormField>
             <FormField label="品牌别名" hint="逗号分隔；命中任一别名都算命中（可留空）">
               <FormInput v-model="zsAliasesText" placeholder="如：ExampleBrand，EB" debounce="live" />
+            </FormField>
+            <FormField
+              label="全文级匹配"
+              hint="开启后对前 10 结果逐条抓正文再匹配（更全但更慢，需在 Cookie 管理配置知乎 Cookie）"
+              inline
+            >
+              <FormToggle v-model="zsMatchFullText" />
             </FormField>
           </template>
 
