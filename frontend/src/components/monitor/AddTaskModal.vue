@@ -93,9 +93,7 @@ const geoAliasesText = ref(""); // comma-separated; split to list on submit
 const geoKeywordsText = ref(""); // newline-separated; split to list on submit
 const geoPlatforms = ref<string[]>(GEO_PLATFORMS.map((p) => p.value));
 const geoWebSearch = ref(true);
-// 默认用 qwen（通义）抽取——阶段 1 平台是通义+Kimi，用户必有 DashScope(qwen) key，
-// 默认它可避免「只配了通义/Kimi 却因默认抽取模型 deepseek 没 key」的首跑失败。
-const geoExtractProvider = ref("qwen");
+// 抽取/分析模型固定用 DeepSeek（不再给选项）——通义免费额度易耗尽会致抽取 403 静默降级。
 
 // Popover that shows the current global default_excluded_domains
 // (read-only, with a button to jump to the Settings section for editing).
@@ -160,7 +158,6 @@ function close() {
   geoKeywordsText.value = "";
   geoPlatforms.value = GEO_PLATFORMS.map((p) => p.value);
   geoWebSearch.value = true;
-  geoExtractProvider.value = "qwen";
   scheduleMode.value = "manual";
   dailyTime.value = "09:00";
   weeklyDow.value = 0;
@@ -209,7 +206,6 @@ function hydrateFromTask(t: EditingTask) {
     ? cfg.platforms
     : GEO_PLATFORMS.map((p) => p.value);
   geoWebSearch.value = cfg.web_search !== false; // default true
-  geoExtractProvider.value = String(cfg.extract_provider ?? "qwen");
   const weeklyMatch = /^weekly-([0-6])-(\d{1,2}:\d{2})$/.exec(t.schedule_cron);
   if (t.schedule_cron === "manual" || !t.schedule_cron) {
     scheduleMode.value = "manual";
@@ -328,7 +324,7 @@ async function submit() {
           .filter(Boolean),
         platforms: [...geoPlatforms.value],
         web_search: geoWebSearch.value,
-        extract_provider: geoExtractProvider.value,
+        extract_provider: "deepseek",   // 固定 DeepSeek 抽取（不再给选项）
         top_n_citations: 20,
       };
       // target_url 由品牌派生 —— 后端要求非空，geo_query adapter 不实际请求它。
@@ -629,17 +625,6 @@ async function submit() {
               inline
             >
               <FormToggle v-model="geoWebSearch" />
-            </FormField>
-
-            <FormField label="抽取模型" hint="用哪个 LLM 从回答里抽取曝光/排名/情感/信源（默认通义，复用你已配的 DashScope key）。">
-              <FormSelect
-                :model-value="geoExtractProvider"
-                :options="[
-                  { label: '通义', value: 'qwen' },
-                  { label: 'DeepSeek', value: 'deepseek' },
-                ]"
-                @update:model-value="(v) => (geoExtractProvider = String(v))"
-              />
             </FormField>
           </template>
 

@@ -54,7 +54,8 @@ class GeoQueryAdapter:
         keywords = [k for k in (cfg.get("keywords") or []) if str(k).strip()]
         platforms = list(cfg.get("platforms") or [])
         web_search = bool(cfg.get("web_search", True))
-        extract_provider = str(cfg.get("extract_provider") or "mock")
+        # 抽取/分析模型固定默认 DeepSeek（前端不再给选项）；测试可在 config 显式传 mock。
+        extract_provider = str(cfg.get("extract_provider") or "deepseek")
 
         if not brand or not keywords or not platforms:
             return MonitorResult(task_id=task.id or 0, checked_at=datetime.utcnow(),
