@@ -41,6 +41,25 @@ def test_extract_answer_text_missing_container_returns_empty():
     assert _flow.extract_answer_text("<html></html>", container_sel="div.nope") == ""
 
 
+def test_parse_source_items_dedups_and_url_empty():
+    # 元宝「源」抽屉条目：抓文本作 title、url 留空、按 title 去重。
+    html = """
+    <div class="agent-dialogue-references__list">
+      <div class="agent-dialogue-references__item">北京商报: 20款扫地机测评</div>
+      <div class="agent-dialogue-references__item">北京市市场监督管理局</div>
+      <div class="agent-dialogue-references__item">北京商报: 20款扫地机测评</div>
+    </div>
+    """
+    cits = _flow.parse_source_items(
+        html, item_sel="div[class*='agent-dialogue-references__item']")
+    assert [c.title for c in cits] == ["北京商报: 20款扫地机测评", "北京市市场监督管理局"]
+    assert all(c.url == "" for c in cits)
+
+
+def test_parse_source_items_empty_when_no_match():
+    assert _flow.parse_source_items("<div></div>", item_sel="div.nope") == []
+
+
 def test_is_logged_in_html_true_when_composer_present():
     html = '<html><body><textarea id="chat-input"></textarea></body></html>'
     assert _flow.is_logged_in_html(html, logged_in_sel="textarea#chat-input") is True
@@ -79,10 +98,20 @@ class _FakePage:
         self.clicked = []
         self.pressed = []
         self.typed = []
+        self.evaluated = []
+        self._eval_return = None       # start_new_chat 的 JS 点击返回（True=点到/False=icon 不在）
         self.keyboard = _FakeKeyboard(self)
 
     def content(self):
         return self._contents.pop(0) if len(self._contents) > 1 else self._contents[0]
+
+    def evaluate(self, expression, arg=None):
+        self.evaluated.append((expression, arg))
+        return self._eval_return
+
+    def wait_for_timeout(self, ms):
+        self.waited = getattr(self, "waited", [])
+        self.waited.append(ms)
 
     def query_selector(self, sel):
         v = self._selectors.get(sel)
@@ -146,6 +175,52 @@ def test_ensure_web_toggle_missing_toggle_is_ignored():
 def test_detect_login_uses_page_content():
     page = _FakePage(['<textarea id="c"></textarea>'])
     assert _flow.detect_login(page, logged_in_sel="textarea#c") is True
+
+
+def test_wait_login_ready_true_when_composer_appears_late():
+    # 加载中（composer 没出现）→ 第三帧 composer 渲染出来 → True（防 2s 误判）
+    seq = ["<html></html>", "<html></html>", '<textarea id="c"></textarea>']
+    page = _FakePage(seq)
+    assert _flow.wait_login_ready(page, logged_in_sel="textarea#c",
+                                  timeout_s=5, poll_ms=1) is True
+
+
+def test_wait_login_ready_false_when_logged_out_marker():
+    page = _FakePage(['<textarea></textarea><button class="lo">登录</button>'])
+    assert _flow.wait_login_ready(page, logged_in_sel="textarea",
+                                  logged_out_sel="button.lo", timeout_s=5, poll_ms=1) is False
+
+
+def test_wait_login_ready_false_on_timeout_no_composer():
+    page = _FakePage(["<html></html>"])
+    assert _flow.wait_login_ready(page, logged_in_sel="textarea",
+                                  timeout_s=0.05, poll_ms=10) is False
+
+
+def test_start_new_chat_returns_false_when_icon_absent():
+    # icon 不在场（JS 返回 False）→ 跳过，不轮询 content
+    page = _FakePage(["<html></html>"])
+    page._eval_return = False
+    assert _flow.start_new_chat(page, new_chat_sel="span.nc", answer_sel="div.a") is False
+    assert page.evaluated and page.evaluated[0][1] == "span.nc"  # 把 selector 传进 JS
+
+
+def test_start_new_chat_clicked_and_already_clear():
+    # 点到（JS 返回 True）+ 视图已清空（回答容器空）→ 立即返回 True
+    page = _FakePage(['<div class="a"></div>'])
+    page._eval_return = True
+    assert _flow.start_new_chat(page, new_chat_sel="span.nc", answer_sel="div.a",
+                                timeout_s=5, poll_ms=1) is True
+
+
+def test_start_new_chat_waits_until_view_cleared():
+    # 点完旧答案还在 → 轮询到清空再返回（防新会话未渲染完就 submit 读到旧答案）
+    old = '<div class="a">' + "旧" * 100 + "</div>"
+    fresh = '<div class="a"></div>'
+    page = _FakePage([old, old, fresh, fresh])
+    page._eval_return = True
+    assert _flow.start_new_chat(page, new_chat_sel="span.nc", answer_sel="div.a",
+                                timeout_s=5, poll_ms=1) is True
 
 
 def test_wait_stream_done_returns_when_done_and_quiet():

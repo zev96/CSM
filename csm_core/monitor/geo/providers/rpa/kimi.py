@@ -29,9 +29,8 @@ class KimiProvider:
         try:
             with rpa_page(self.platform, headless=False) as page:
                 page.goto(spec.url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(2000)
-                if not _flow.detect_login(page, logged_in_sel=spec.logged_in_sel,
-                                          logged_out_sel=spec.logged_out_sel):
+                if not _flow.wait_login_ready(page, logged_in_sel=spec.logged_in_sel,
+                                              logged_out_sel=spec.logged_out_sel):
                     return GeoAnswer(platform=self.platform, keyword=keyword,
                                      status="blocked", error="Kimi 未登录，请在设置中登录")
                 if web_search and spec.web_toggle_sel:
@@ -43,9 +42,17 @@ class KimiProvider:
                 _flow.wait_stream_done(page, done_predicate=done_pred, idle_ms=1500,
                                        timeout_s=120.0, cancel_token=cancel_token)
                 html = page.content()
-            answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
-            cites = _flow.extract_citations(html, container_sel=spec.citation_sel,
-                                            exclude_hosts=spec.exclude_hosts)
+                answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
+                # Kimi 信源：内联 <a> 不稳（常为空）→ 点开「搜索网页」toolcall 露出搜到的
+                # 网页链接，再全页抓 <a>（过滤 bing 跳转壳 + 自家域名）。需在 page 开着时做。
+                if spec.toolcall_sel:
+                    _flow.expand_search_toolcalls(page, toolcall_sel=spec.toolcall_sel)
+                    html = page.content()
+                    cites = _flow.extract_citations(html, container_sel=None,
+                                                    exclude_hosts=spec.exclude_hosts)
+                else:
+                    cites = _flow.extract_citations(html, container_sel=spec.citation_sel,
+                                                    exclude_hosts=spec.exclude_hosts)
             logger.info("[geo-rpa][kimi] kw=%s answer_len=%d cite_n=%d",
                         keyword, len(answer), len(cites))
             return GeoAnswer(platform=self.platform, keyword=keyword, answer_text=answer,

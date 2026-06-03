@@ -28,23 +28,41 @@ class YuanbaoProvider:
         try:
             with rpa_page(self.platform, headless=False) as page:
                 page.goto(spec.url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(2000)
-                if not _flow.detect_login(page, logged_in_sel=spec.logged_in_sel,
-                                          logged_out_sel=spec.logged_out_sel):
+                if not _flow.wait_login_ready(page, logged_in_sel=spec.logged_in_sel,
+                                              logged_out_sel=spec.logged_out_sel):
                     return GeoAnswer(platform=self.platform, keyword=keyword,
                                      status="blocked", error="腾讯元宝 未登录，请在设置中扫码登录")
-                if web_search and spec.web_toggle_sel:
-                    _flow.ensure_web_toggle(page, toggle_sel=spec.web_toggle_sel, want_on=True)
+                # 元宝打开即恢复上次会话 → 先开干净会话，否则会读到上一轮答案。
+                if spec.new_chat_sel:
+                    _flow.start_new_chat(page, new_chat_sel=spec.new_chat_sel,
+                                         answer_sel=spec.answer_sel)
+                    page.wait_for_timeout(600)   # 等新会话 composer 渲染就绪再提交
+                    maybe_cancel(cancel_token)
+                # 用户实测：元宝须开 深度思考 + 联网搜索（工具菜单内）才出参考资料。
+                if spec.deep_think:
+                    _flow.enable_toggle_by_text(page, text="深度思考")
+                if web_search and spec.tool_web_search:
+                    _flow.enable_tool_web_search(
+                        page, tool_sel=spec.tool_web_search[0],
+                        item_text=spec.tool_web_search[1])
+                maybe_cancel(cancel_token)
                 _flow.submit_query(page, composer_sel=spec.composer_sel,
                                    send_sel=spec.send_sel, text=keyword)
                 done_pred = _flow.make_done_predicate(
                     page, generating_sel=spec.generating_sel, answer_sel=spec.answer_sel)
+                # 深度思考+联网搜索更慢 → 放宽超时到 180s。
                 _flow.wait_stream_done(page, done_predicate=done_pred, idle_ms=1500,
-                                       timeout_s=120.0, cancel_token=cancel_token)
+                                       timeout_s=180.0, cancel_token=cancel_token)
                 html = page.content()
-            answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
-            cites = _flow.extract_citations(html, container_sel=spec.citation_sel,
-                                            exclude_hosts=spec.exclude_hosts)
+                answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
+                # 元宝信源无 URL（DOM 里全程没有真实来源链接，只有名字/标题）。深度思考 COT
+                # 里「搜到的 N 篇资料」是 in-page 的（无需点击/hover），比 hover-gated 的「源」
+                # 抽屉稳得多 → 直接抓 COT 文档标题作 name-only 信源（domain="", 不进域名榜）。
+                if spec.source_text_sel:
+                    cites = _flow.parse_source_items(html, item_sel=spec.source_text_sel)
+                else:
+                    cites = _flow.extract_citations(html, container_sel=spec.citation_sel,
+                                                    exclude_hosts=spec.exclude_hosts)
             logger.info("[geo-rpa][yuanbao] kw=%s answer_len=%d cite_n=%d",
                         keyword, len(answer), len(cites))
             return GeoAnswer(platform=self.platform, keyword=keyword, answer_text=answer,

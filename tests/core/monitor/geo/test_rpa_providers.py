@@ -24,6 +24,10 @@ class _FakePage:
         return self._html
     def query_selector(self, sel):
         return None
+    def query_selector_all(self, sel):
+        return []                       # 无 toggle/源 元素 → enable_*/scrape_* 优雅跳过
+    def evaluate(self, *a, **k):
+        return False                    # start_new_chat 的 JS 点击：icon 不在 → 跳过
     def fill(self, *a, **k):
         pass
     def click(self, *a, **k):
@@ -49,8 +53,9 @@ def test_deepseek_blocked_when_not_logged_in(monkeypatch):
 
 
 def test_deepseek_ok_when_logged_in_and_answer_present(monkeypatch):
+    # 答案在 ds-assistant-message-main-content（深度思考推理在 ds-think-content 里，已排除）
     html = ('<textarea id="chat-input"></textarea>'
-            '<div class="ds-markdown">推荐小鹏G6 '
+            '<div class="ds-markdown ds-assistant-message-main-content">推荐小鹏G6 '
             '<a href="https://zhuanlan.zhihu.com/p/9">知乎</a></div>')
     _patch_session(monkeypatch, _FakePage(html), wait=lambda *a, **k: None)
     ans = ds.DeepSeekProvider().query("k", web_search=True)
@@ -60,7 +65,8 @@ def test_deepseek_ok_when_logged_in_and_answer_present(monkeypatch):
 
 
 def test_deepseek_empty_when_logged_in_but_no_answer(monkeypatch):
-    html = '<textarea id="chat-input"></textarea><div class="ds-markdown"></div>'
+    html = ('<textarea id="chat-input"></textarea>'
+            '<div class="ds-markdown ds-assistant-message-main-content"></div>')
     _patch_session(monkeypatch, _FakePage(html), wait=lambda *a, **k: None)
     ans = ds.DeepSeekProvider().query("k", web_search=True)
     assert ans.status == "empty"
@@ -113,7 +119,8 @@ def _patch_km(monkeypatch, page, *, wait=None):
 
 
 def test_kimi_blocked_when_not_logged_in(monkeypatch):
-    _patch_km(monkeypatch, _FakePage("<html><body>登录 Kimi</body></html>"))
+    # 命中 logged_out_sel（user-name=登录）→ wait_login_ready 快速判未登录
+    _patch_km(monkeypatch, _FakePage('<span class="user-name">登录</span>'))
     ans = km.KimiProvider().query("k", web_search=True)
     assert ans.status == "blocked"
 
@@ -140,15 +147,18 @@ def _patch_yb(monkeypatch, page, *, wait=None):
 
 
 def test_yuanbao_blocked_when_not_logged_in(monkeypatch):
-    _patch_yb(monkeypatch, _FakePage("<html><body>扫码登录</body></html>"))
+    # 命中 logged_out_sel（composer 占位「请登录」）→ wait_login_ready 快速判未登录
+    _patch_yb(monkeypatch, _FakePage('<div data-placeholder="请登录后输入内容"></div>'))
     ans = yb.YuanbaoProvider().query("k", web_search=True)
     assert ans.status == "blocked"
 
 
 def test_yuanbao_ok_when_answer_present(monkeypatch):
+    # 答案在 hyc-common-markdown（深度思考推理带 -cot 后缀，已排除）。元宝信源走
+    # 「源」抽屉（scrape_source_panel，fake 里返回 []），故此处只验 ok+答案，不验 citations。
     html = ('<div contenteditable="true"></div>'
-            '<div class="markdown-body">小鹏G6 '
-            '<a href="https://zhuanlan.zhihu.com/p/77">知乎</a></div>')
+            '<div class="hyc-common-markdown hyc-common-markdown-style">小鹏G6 不错</div>')
     _patch_yb(monkeypatch, _FakePage(html), wait=lambda *a, **k: None)
     ans = yb.YuanbaoProvider().query("k", web_search=True)
-    assert ans.status == "ok" and ans.citations[0].url.endswith("/p/77")
+    assert ans.status == "ok"
+    assert "小鹏G6" in ans.answer_text

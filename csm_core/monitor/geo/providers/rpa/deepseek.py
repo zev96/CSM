@@ -29,20 +29,23 @@ class DeepSeekProvider:
         try:
             with rpa_page(self.platform, headless=False) as page:
                 page.goto(spec.url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(2000)
-                if not _flow.detect_login(page, logged_in_sel=spec.logged_in_sel,
-                                          logged_out_sel=spec.logged_out_sel):
+                if not _flow.wait_login_ready(page, logged_in_sel=spec.logged_in_sel,
+                                              logged_out_sel=spec.logged_out_sel):
                     return GeoAnswer(platform=self.platform, keyword=keyword,
                                      status="blocked", error="DeepSeek 未登录，请在设置中登录")
                 if web_search and spec.web_toggle_sel:
                     _flow.ensure_web_toggle(page, toggle_sel=spec.web_toggle_sel, want_on=True)
+                if spec.deep_think:               # 用户要求：开「深度思考」(R1)
+                    _flow.enable_toggle_by_text(page, text="深度思考")
+                    maybe_cancel(cancel_token)
                 _flow.submit_query(page, composer_sel=spec.composer_sel,
                                    send_sel=spec.send_sel, text=keyword)
 
                 done_pred = _flow.make_done_predicate(
                     page, generating_sel=spec.generating_sel, answer_sel=spec.answer_sel)
+                # 深度思考先流推理再流答案 → 总时长更长，超时放宽到 180s。
                 _flow.wait_stream_done(page, done_predicate=done_pred, idle_ms=1500,
-                                       timeout_s=120.0, cancel_token=cancel_token)
+                                       timeout_s=180.0, cancel_token=cancel_token)
                 html = page.content()
             answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
             cites = _flow.extract_citations(html, container_sel=spec.citation_sel,

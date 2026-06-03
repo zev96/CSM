@@ -122,7 +122,7 @@ const excerptSegs = computed<Seg[]>(() => {
       <div :style="{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: '7px' }">关于「{{ displayBrand }}」的原文</div>
       <div
         v-if="platform.excerpt"
-        :style="{ fontSize: '12.5px', lineHeight: 1.7, color: 'var(--ink-2)' }"
+        :style="{ fontSize: '12.5px', lineHeight: 1.7, color: 'var(--ink-2)', display: '-webkit-box', WebkitLineClamp: 8, WebkitBoxOrient: 'vertical', overflow: 'hidden' }"
       >
         <template v-for="(seg, i) in excerptSegs" :key="i">
           <b v-if="seg.hl" :style="{ color: 'var(--primary-deep)' }">{{ seg.text }}</b>
@@ -145,7 +145,7 @@ const excerptSegs = computed<Seg[]>(() => {
         v-if="platform.cites.length === 0"
         :style="{ fontSize: '11.5px', color: 'var(--ink-3)' }"
       >这次回答未引用可识别的来源。</div>
-      <div v-else class="flex flex-col" :style="{ gap: '7px' }">
+      <div v-else class="flex flex-col" :style="{ gap: '7px', maxHeight: '160px', overflowY: 'auto', paddingRight: '4px' }">
         <a
           v-for="(c, i) in platform.cites"
           :key="i"

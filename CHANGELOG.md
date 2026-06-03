@@ -21,6 +21,24 @@
   设置页新增「AI 卡位 · RPA 登录」分组（持久档登录，扫码/账号）。Kimi 由阶段 2 的
   API（无信源）改走 RPA 重新上线。geo_query 任务串行化 + 透传 cancel_token（长耗时
   RPA 可被「停止」及时中断；取消按控制流上抛，不记成采集失败）。
+- **GEO 阶段 3 · 真站校准打通三平台信源 + 交互加固**：DeepSeek（内联 `<a>` 信源；开
+  「深度思考」后推理与答案同 `ds-markdown`，抓取收窄到 `ds-assistant-message-main-content`
+  排除推理）、Kimi（信源在「搜索网页」toolcall 里——点开后全页抓 `<a>` + 过滤 bing 跳转壳
+  与自家域名）、腾讯元宝（全程无信源 URL，改抓「深度思考」检索资料标题作 name-only 信源；
+  答案排除 `-cot` 推理块）。RPA 交互：登录态轮询到可判定再判（修重 SPA 未加载完误报
+  「未登录」）；富文本编辑器（元宝 Quill / Kimi Lexical）提交加节流（聚焦→逐字→提交，修
+  瞬时打字+回车不触发发送）；元宝每轮先点「新建对话」开干净会话；按站点开「深度思考 /
+  联网搜索」开关。
+
+### Fixed
+- **新建 GEO 任务覆盖同品牌的已有任务（数据丢失）**：`monitor_tasks` 的
+  `UNIQUE(type, target_url)` + `create_task` 的 `ON CONFLICT DO UPDATE`，而 GEO `target_url`
+  原来仅按品牌派生（`geo://品牌`）——同品牌第二个任务撞键把第一个 UPDATE 覆盖。改为每任务
+  唯一（`geo://品牌/{uuid}`，编辑时沿用原键按 id 更新，新建必为新行）。
+- **AI 卡位任务列表与百度排名列表不一致**：改成百度同款两级下钻——Level 1 扁平任务表
+  （任务名字/变化/状态/操作），点任务进 Level 2 关键词列表（带返回），点关键词右栏出三
+  页签详情。信源榜改两列 + 固定高滚动（信源多时不撑长、不压扁散点图）；平台对比卡片原文
+  截断 8 行、信源固定高滚动（卡片高度受控，masonry 更均匀）。
 
 ### Notes
 - RPA 选择器随站点改版会失效，集中在 csm_core/monitor/geo/providers/rpa/sites.py，
