@@ -23,6 +23,7 @@ interface ResultItem {
   matches_brand: boolean;
   matched_brand: string | null;
   matched_field: string | null;
+  fulltext_status?: string;
   excerpt: string;
 }
 interface KeywordResult {
@@ -338,7 +339,7 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
                     v-if="r.matches_brand"
                     class="ml-1 text-[10px] px-1 rounded font-medium"
                     :style="{ background: 'var(--primary-deep)', color: '#fff' }"
-                  >命中:{{ r.matched_brand }}({{ r.matched_field }})</span>
+                  >命中:{{ r.matched_brand }}({{ r.matched_field }})<template v-if="r.matched_field === 'fulltext'"> · 正文</template></span>
                 </td>
                 <td>{{ r.content_type }}</td>
                 <td class="truncate max-w-[80px]">{{ r.author_name }}</td>
