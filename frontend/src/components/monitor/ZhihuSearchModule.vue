@@ -66,9 +66,11 @@ const keywordResults = computed<KeywordResult[]>(() => latestMetric.value?.keywo
 
 // ── 近 7 天趋势 ───────────────────────────────────────────────────────────
 // result 历史（desc，最新在前），喂趋势图。复用 loadLatest 一次拉够，避免再发一次。
-const taskResults = ref<any[]>([]);
-// 知乎搜索固定取前 10（count=10），排名哨兵 = 11 表示「掉出前 10」。
-const RANK_SENTINEL = 11;
+const taskResults = ref<Array<{ checked_at: string; status: string; rank: number; metric: any }>>([]);
+// 知乎搜索固定取前 10（count=10）。排名哨兵 = 15（前 10 上限 + 5，对齐
+// ZhihuMonitorModule 的 alertTopN+5）：让「掉出前 10」在曲线上是明显的断崖，
+// 而不是 #10 → 11 的 +1 小抖动。
+const RANK_SENTINEL = 15;
 // 7 天日历 scaffold（今天 → 6 天前），对齐 ZhihuMonitorModule.sparkBuckets：
 // 同一天多次跑取最新一次；没数据的天 = null（LineChart spanGaps=false 自动画 gap，
 // 语义是「那天没监测」，区别于「那天命中 0 条」）。
@@ -292,7 +294,7 @@ onUnmounted(() => { if (stopSSE) stopSSE(); });
               <i class="inline-block w-2.5 h-2.5 rounded-sm" :style="{ background: TREND_MATCHED_COLOR }"></i>命中关键词数
             </span>
             <span class="flex items-center gap-1 text-[var(--ink-2)]">
-              <i class="inline-block w-2.5 h-2.5 rounded-sm" :style="{ background: TREND_RANK_COLOR }"></i>最优排名（越低越靠前，11=掉出前10）
+              <i class="inline-block w-2.5 h-2.5 rounded-sm" :style="{ background: TREND_RANK_COLOR }"></i>最优排名（越低越靠前；掉出前10 画在顶部）
             </span>
           </div>
           <LineChart
