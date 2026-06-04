@@ -38,6 +38,7 @@ from ..drivers.risk_detector import (
     RiskControlException,
     RiskSignal,
 )
+from ...browser_infra.window_util import surface_window, hide_window
 logger = logging.getLogger(__name__)
 
 
@@ -627,31 +628,38 @@ def _try_human_solve(
         except Exception:
             logger.exception("event_publisher raised; continue")
 
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        time.sleep(poll_interval_s)
-        try:
-            cur_url = page.url or ""
-        except Exception:
-            cur_url = ""
-        in_risk = any(p in cur_url for p in _RISK_URL_PATTERNS)
-        if in_risk:
-            continue
-        # URL 已离开风控域名 → 再检 DOM 验证码元素是否消失
-        any_captcha_dom = False
-        for sel in _RISK_DOM_SELECTORS:
-            try:
-                if page.query_selector(sel) is not None:
-                    any_captcha_dom = True
-                    break
-            except Exception:
-                continue
-        if not any_captcha_dom:
-            logger.info("human solve detected; resuming keyword #%d (%s)", kw_idx, keyword)
-            return True
+    # 把窗口移到屏幕可见区，方便用户找到并操作验证码
+    surface_window(page)
 
-    logger.warning("human solve timeout for keyword #%d (%s)", kw_idx, keyword)
-    return False
+    deadline = time.monotonic() + timeout_s
+    try:
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval_s)
+            try:
+                cur_url = page.url or ""
+            except Exception:
+                cur_url = ""
+            in_risk = any(p in cur_url for p in _RISK_URL_PATTERNS)
+            if in_risk:
+                continue
+            # URL 已离开风控域名 → 再检 DOM 验证码元素是否消失
+            any_captcha_dom = False
+            for sel in _RISK_DOM_SELECTORS:
+                try:
+                    if page.query_selector(sel) is not None:
+                        any_captcha_dom = True
+                        break
+                except Exception:
+                    continue
+            if not any_captcha_dom:
+                logger.info("human solve detected; resuming keyword #%d (%s)", kw_idx, keyword)
+                return True
+
+        logger.warning("human solve timeout for keyword #%d (%s)", kw_idx, keyword)
+        return False
+    finally:
+        # 无论解完还是超时，都把窗口移回屏外
+        hide_window(page)
 
 
 def _navigate_to_serp(page: Any, keyword: str) -> Any:

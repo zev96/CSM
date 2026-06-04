@@ -1290,6 +1290,60 @@ def test_try_human_solve_emits_notification_with_keyword(monkeypatch):
     assert "testkw" in captured[0].get("body", "")
 
 
+def test_try_human_solve_surfaces_then_hides(monkeypatch):
+    """验证码等待期间窗口上浮；退出（解完或超时）后窗口移回屏外。
+
+    检查：
+    - surface_window 与 hide_window 各调一次
+    - surface 发生在 hide 之前（无论是解完还是超时路径）
+    - 解完路径：返回 True
+    """
+    from csm_core.monitor.platforms import baidu_keyword
+
+    calls: list[str] = []
+    monkeypatch.setattr(baidu_keyword, "surface_window", lambda p: calls.append("surface"))
+    monkeypatch.setattr(baidu_keyword, "hide_window", lambda p: calls.append("hide"))
+    monkeypatch.setattr(baidu_keyword, "_notify", lambda **kw: None)
+
+    # page.url returns a safe (non-risk) URL → loop exits immediately with True
+    fake_page = MagicMock()
+    type(fake_page).url = property(lambda self: "https://www.baidu.com/s?wd=ok")
+    fake_page.query_selector.return_value = None  # no captcha DOM
+
+    solved = baidu_keyword._try_human_solve(
+        page=fake_page, keyword="x", kw_idx=0, timeout_s=2, poll_interval_s=0,
+    )
+    assert solved is True
+    assert "surface" in calls, "surface_window should have been called"
+    assert "hide" in calls, "hide_window should have been called"
+    assert calls.index("surface") < calls.index("hide"), (
+        f"surface must happen before hide; got call order: {calls}"
+    )
+
+
+def test_try_human_solve_hides_on_timeout(monkeypatch):
+    """超时路径：hide_window 也必须被调到（finally 覆盖两条出口）。"""
+    from csm_core.monitor.platforms import baidu_keyword
+
+    calls: list[str] = []
+    monkeypatch.setattr(baidu_keyword, "surface_window", lambda p: calls.append("surface"))
+    monkeypatch.setattr(baidu_keyword, "hide_window", lambda p: calls.append("hide"))
+    monkeypatch.setattr(baidu_keyword, "_notify", lambda **kw: None)
+
+    # page stays in risk URL → loop times out → returns False
+    fake_page = MagicMock()
+    type(fake_page).url = property(lambda self: "https://wappass.baidu.com/captcha")
+    fake_page.query_selector.return_value = MagicMock()  # captcha DOM still present
+
+    solved = baidu_keyword._try_human_solve(
+        page=fake_page, keyword="x", kw_idx=0, timeout_s=0.05, poll_interval_s=0.01,
+    )
+    assert solved is False
+    assert "surface" in calls, "surface_window should have been called even on timeout path"
+    assert "hide" in calls, "hide_window must be called in finally (timeout path)"
+    assert calls.index("surface") < calls.index("hide")
+
+
 # ── B' pivot: fetch() native mode 用 copy_path ──────────────────────────────
 
 def test_fetch_uses_copy_path_in_native_mode(monkeypatch):
