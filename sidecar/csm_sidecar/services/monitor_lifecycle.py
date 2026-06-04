@@ -15,6 +15,7 @@ from csm_core.monitor import storage
 from csm_core.monitor.drivers import browser_driver
 from csm_core.monitor.platforms.baidu_keyword import ADAPTER as BAIDU_ADAPTER
 from csm_core.monitor.platforms.zhihu_question import ADAPTER as ZHIHU_ADAPTER
+from csm_core.monitor.rate_limit import configure_pacing, configure_concurrency
 
 from . import config_service
 from .monitor_loop import MonitorLoop
@@ -67,6 +68,19 @@ def _apply_runtime_settings(cfg: AppConfig) -> None:
         )
     except Exception as e:
         logger.exception("BAIDU_ADAPTER.apply_settings failed: %s", e)
+    # 评论平台（bilibili/douyin/kuaishou_comment）没有 apply_settings —— 它们
+    # 用全局 pacer/semaphore。这里把 MonitorConfig 的节流/并发推进去，
+    # 让设置页的「请求间隔」「每平台并发」对评论平台真正生效（默认 5-15s /
+    # 并发 2 保持不变，防软封）。
+    for platform in ("bilibili_comment", "douyin_comment", "kuaishou_comment"):
+        try:
+            configure_pacing(platform, mcfg.request_delay_min, mcfg.request_delay_max)
+        except Exception:
+            logger.exception("comment platform pacing config failed: %s", platform)
+        try:
+            configure_concurrency(platform, mcfg.concurrency_per_platform)
+        except Exception:
+            logger.exception("comment platform concurrency config failed: %s", platform)
 
 
 def start(*, db_path: Path | None = None) -> MonitorLoop:
