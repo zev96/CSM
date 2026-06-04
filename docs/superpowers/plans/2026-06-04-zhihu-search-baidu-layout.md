@@ -1,3 +1,123 @@
+# 知乎搜索对齐百度排名两级布局 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 把知乎搜索监控（`ZhihuSearchModule.vue`）从单级布局改为与百度排名一致的两级双卡布局（L1 任务表+预览卡 / L2 关键词列表+单关键词详情）。
+
+**Architecture:** 纯前端，镜像 `history/BaiduRankingPage.vue` 的两级结构进 `ZhihuSearchModule.vue`，保持独立组件、不抽共享组件、不改 sidecar。状态算法抽成可测 util。数据形状不变（对齐 `csm_core/monitor/platforms/zhihu_search.py` 的 metric）。
+
+**Tech Stack:** Vue 3 `<script setup lang="ts">`、Pinia（`useSidecar`/`useMonitorStatus`）、vitest、既有组件 `Pill`/`Icon`/`LineChart`/`AddTaskModal`。
+
+**验证环境：** browser-dev（http://localhost:5173 → 监测中心 → 知乎搜索）。前端改动 vite 自动热更，**不重启 sidecar**。
+
+---
+
+## File Structure
+
+- **Create** `frontend/src/utils/zhihuSearchStatus.ts` — L1 状态列纯函数（可测，单一职责）。
+- **Create** `frontend/src/utils/__tests__/zhihuSearchStatus.spec.ts` — vitest。
+- **Rewrite** `frontend/src/components/monitor/ZhihuSearchModule.vue` — 单级 → 两级双卡（script + template 整体重写；复用现有 load/run/SSE 逻辑）。
+- **Unchanged** `frontend/src/views/MonitorView.vue` — `<ZhihuSearchModule />` 挂载点不动。
+
+---
+
+## Task 1: 状态算法 util（TDD）
+
+**Files:**
+- Create: `frontend/src/utils/zhihuSearchStatus.ts`
+- Test: `frontend/src/utils/__tests__/zhihuSearchStatus.spec.ts`
+
+规则（来自 spec）：无历史→未跑；`status==='error'`→鉴权失败(alert)；`status==='risk_control'`→限频(warn)；metric 任一关键词 `first_rank>0`→正常(ok)；全部前 10 无命中→未命中(info)；空 keywords→未跑。
+
+- [ ] **Step 1: Write the failing test**
+
+`frontend/src/utils/__tests__/zhihuSearchStatus.spec.ts`:
+```ts
+import { describe, it, expect } from "vitest";
+import { zhihuSearchTaskStatus } from "../zhihuSearchStatus";
+
+describe("zhihuSearchTaskStatus", () => {
+  it("无历史 → 未跑", () => {
+    expect(zhihuSearchTaskStatus(null)).toEqual({ label: "未跑", tone: "info" });
+  });
+  it("error → 鉴权失败", () => {
+    expect(zhihuSearchTaskStatus({ status: "error", metric: {} })).toEqual({ label: "鉴权失败", tone: "alert" });
+  });
+  it("risk_control → 限频", () => {
+    expect(zhihuSearchTaskStatus({ status: "risk_control", metric: {} })).toEqual({ label: "限频", tone: "warn" });
+  });
+  it("任一关键词 first_rank>0 → 正常", () => {
+    expect(zhihuSearchTaskStatus({ status: "ok", metric: { keywords: [{ first_rank: -1 }, { first_rank: 3 }] } }))
+      .toEqual({ label: "正常", tone: "ok" });
+  });
+  it("全部前 10 无命中 → 未命中", () => {
+    expect(zhihuSearchTaskStatus({ status: "ok", metric: { keywords: [{ first_rank: -1 }, { first_rank: 0 }] } }))
+      .toEqual({ label: "未命中", tone: "info" });
+  });
+  it("空 keywords → 未跑", () => {
+    expect(zhihuSearchTaskStatus({ status: "ok", metric: { keywords: [] } })).toEqual({ label: "未跑", tone: "info" });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run (from `frontend/`): `npx vitest run src/utils/__tests__/zhihuSearchStatus.spec.ts`
+Expected: FAIL — `Failed to resolve import "../zhihuSearchStatus"`.
+
+- [ ] **Step 3: Write minimal implementation**
+
+`frontend/src/utils/zhihuSearchStatus.ts`:
+```ts
+export type ZhihuSearchTone = "ok" | "warn" | "alert" | "info";
+export interface ZhihuSearchStatus {
+  label: string;
+  tone: ZhihuSearchTone;
+}
+
+/**
+ * L1「状态」列 —— 基于该任务最新一份 result（taskHistories[id][0]）。
+ * latest 形如 { status, metric }；null/undefined = 无历史。
+ */
+export function zhihuSearchTaskStatus(
+  latest: { status?: string | null; metric?: any } | null | undefined,
+): ZhihuSearchStatus {
+  if (!latest) return { label: "未跑", tone: "info" };
+  if (latest.status === "error") return { label: "鉴权失败", tone: "alert" };
+  if (latest.status === "risk_control") return { label: "限频", tone: "warn" };
+  const kws = latest.metric?.keywords;
+  if (!Array.isArray(kws) || kws.length === 0) return { label: "未跑", tone: "info" };
+  const anyHit = kws.some((k: any) => Number(k?.first_rank) > 0);
+  return anyHit ? { label: "正常", tone: "ok" } : { label: "未命中", tone: "info" };
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run (from `frontend/`): `npx vitest run src/utils/__tests__/zhihuSearchStatus.spec.ts`
+Expected: PASS — 6 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/src/utils/zhihuSearchStatus.ts frontend/src/utils/__tests__/zhihuSearchStatus.spec.ts
+git commit -m "feat(monitor-ui): zhihu_search L1 状态算法 util + 测试"
+```
+
+---
+
+## Task 2: 重写 ZhihuSearchModule 为两级双卡
+
+**Files:**
+- Rewrite: `frontend/src/components/monitor/ZhihuSearchModule.vue`
+
+整体替换 `<script setup>` 与 `<template>`。沿用现有数据接口（`/api/monitor/tasks?type=zhihu_search`、`/api/monitor/results?task_id`、`/api/monitor/tasks/{id}/run-now`、SSE `/api/monitor/events`）。新增：`previewId`（L1 预览）、`selectedKeywordIdx`（L2 选中）、`taskHistories` 每任务历史 fan-out（L1 状态+预览趋势）、`enterDetail`/`backToList`、`exportPreviewCsv`、`openSchedule`，并用 Task 1 的 `zhihuSearchTaskStatus`。**默认行为改为停在 L1**（`previewId=第一条`，不再自动 `selectTask`）。
+
+- [ ] **Step 1: 替换 `<script setup>`**
+
+把 `ZhihuSearchModule.vue` 的整个 `<script setup lang="ts"> ... </script>` 替换为：
+
+```vue
 <script setup lang="ts">
 /**
  * 知乎搜索排名监控 —— 两级双卡布局（对齐 history/BaiduRankingPage.vue）。
@@ -236,7 +356,13 @@ watch(keywordResults, (kws) => {
   if (kws.length > 0 && selectedKeywordIdx.value === null) selectedKeywordIdx.value = 0;
 });
 </script>
+```
 
+- [ ] **Step 2: 替换 `<template>`**
+
+把整个 `<template> ... </template>` 替换为：
+
+```vue
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-4">
 
@@ -420,3 +546,58 @@ watch(keywordResults, (kws) => {
     <AddTaskModal v-model:open="showModal" :default-type="'zhihu_search' as any" :editing-task="editingTask as any" @created="onTaskSaved" @updated="onTaskSaved" />
   </div>
 </template>
+```
+
+- [ ] **Step 3: 类型检查 + 编译**
+
+Run (from `frontend/`): `npx vue-tsc --noEmit -p tsconfig.app.json`
+Expected: 无 error（若报 `LineChart` 的 `dual-axis` / `series` prop 类型，对照原文件该用法本就存在，应通过）。
+同时确认 vite 控制台（持久后台 `bccwf7wzz`）无编译报错。
+
+- [ ] **Step 4: 手测 L1（browser-dev）**
+
+http://localhost:5173 → 监测中心 → 知乎搜索。用 playwright 截图核对：
+- 默认落地在 **L1**（不再直接进详情）：左「监测任务」表（任务名/变化/状态/操作 + 新增任务）、右「任务详情」预览卡（目标品牌 / 近 7 天趋势 / 导出数据·定时监测）。
+- hover/点击任务行 → 右卡预览定位该任务；状态列 Pill 正确（`0603` 有命中应显示「正常」）。
+- console 0 error。
+
+- [ ] **Step 5: 手测 L2（browser-dev）**
+
+- 点任务名 `0603` → 进 **L2**：左关键词列表（命中数/首位/状态）+ 右单关键词详情（KPI 命中条数·首位排名 + 结果表）。
+- 点不同关键词，右卡结果表切换；命中行高亮、`命中:品牌(...)` 标记，`matched_field==='fulltext'` 显示「· 正文」。
+- 若开了全文匹配未配 Cookie：左卡顶部出现「全文匹配未生效」状态条。
+- 点返回箭头 → 回 L1。`▶ 启动监测` 跑整任务、跑动中禁用显示「监测中…」。
+- console 0 error。
+
+- [ ] **Step 6: 手测边角**
+
+- 删除任务（确认弹窗 → 列表刷新）。
+- 导出数据：下载 `{任务名}-知乎命中-YYYY-MM-DD.csv`，列 `关键词,命中条数,首位排名`。
+- 定时监测：打开编辑弹窗。
+- 空态：无结果任务进 L2 显示「还没有结果」。
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add frontend/src/components/monitor/ZhihuSearchModule.vue
+git commit -m "feat(monitor-ui): zhihu_search 两级双卡布局（对齐百度排名）"
+```
+
+---
+
+## Self-Review
+
+**Spec coverage：**
+- 架构镜像/纯前端 → Task 2 ✓
+- L1 任务表 + 预览卡（品牌/7天趋势/导出·定时）→ Task 2 template ✓
+- L2 关键词列表（命中数/首位/状态 + no_cookie/鉴权/限频状态条）+ 单关键词详情（KPI + 结果表 + 「·正文」 + 启动监测跑整任务）→ Task 2 template ✓
+- 状态算法 → Task 1 ✓
+- taskHistories fan-out → `loadAllTaskHistories` ✓
+- 导出 CSV / 定时监测 → `exportPreviewCsv` / `openSchedule` ✓
+- 不做告警 hero / 批量导入 / 双榜 / 卡位率 / L2 单关键词跑 → 均未引入 ✓
+
+**Type 一致性：** `zhihuSearchTaskStatus` 签名在 Task 1 定义、Task 2 `statusOf` 调用一致；`KeywordResult`/`ResultItem` 字段与 zhihu_search.py metric 一致（`first_rank` -1=无命中、`matched_count`、`results`、`fulltext_status`、`matched_field`）。
+
+**Placeholder 扫描：** 无 TBD/TODO；所有 step 含完整代码或精确命令。
+
+**已知非阻塞项：** `LineChart` 的 `dual-axis`/`series` 用法直接沿用原 `ZhihuSearchModule` 既有调用，prop 契约不变。L2 不重复任务级趋势（spec 已记录的取舍）。
