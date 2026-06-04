@@ -106,7 +106,7 @@ class KuaishouCommentAdapter:
         progress_cb: "ProgressCb | None" = None,
         **_kwargs,
     ) -> MonitorResult:
-        # **_kwargs 吞掉 monitor_loop 的 progress_cb / resume_from。
+        # **_kwargs 吞掉 monitor_loop 的 resume_from 等未来扩展参数。
         # cancel_token 让用户「停止」点击在 fetch 中途生效（不再等整个
         # GraphQL 分页拉完）。
         if not self._breaker.allow():

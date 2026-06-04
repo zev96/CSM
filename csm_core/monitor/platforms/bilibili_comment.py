@@ -53,7 +53,7 @@ class BilibiliCommentAdapter:
         progress_cb: "ProgressCb | None" = None,
         **_kwargs,
     ) -> MonitorResult:
-        # **_kwargs swallows monitor_loop 的 progress_cb / resume_from。
+        # **_kwargs swallows monitor_loop 的 resume_from 等未来扩展参数。
         # cancel_token 是真正用到的协作取消信号 —— 用户在 UI 点「停止」
         # 时 monitor_loop 会 set 它，本函数沿途多处 maybe_cancel(...) 检查
         # 后立刻退出（避免完整跑完一次 fetch 才听取消）。
