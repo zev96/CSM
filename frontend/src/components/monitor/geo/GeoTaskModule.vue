@@ -399,7 +399,7 @@ onUnmounted(() => {
         class="flex flex-shrink-0 items-center justify-between"
         :style="{ gap: '12px', padding: '18px 20px 14px' }"
       >
-        <div class="font-display" :style="{ fontSize: '16px', fontWeight: 700 }">卡位任务</div>
+        <div class="font-display" :style="{ fontSize: '14px', fontWeight: 600 }">卡位任务</div>
         <button
           type="button"
           class="inline-flex flex-shrink-0 items-center"
@@ -435,15 +435,14 @@ onUnmounted(() => {
         v-if="!demoMode"
         class="grid flex-shrink-0 items-center text-[11px] uppercase"
         :style="{
-          gridTemplateColumns: '1.6fr .85fr .85fr 1fr',
+          gridTemplateColumns: '1.5fr .9fr 1.1fr',
           letterSpacing: '1.2px',
           color: 'var(--ink-3)',
           borderBottom: '1px solid var(--line)',
-          padding: '8px 10px',
+          padding: '8px 22px',
         }"
       >
         <div>任务名字</div>
-        <div class="text-center">变化</div>
         <div class="text-center">状态</div>
         <div class="text-center">操作</div>
       </div>
@@ -472,7 +471,7 @@ onUnmounted(() => {
           -->
           <div
             class="geo-row grid cursor-pointer items-center"
-            :style="{ gridTemplateColumns: '1.6fr .85fr .85fr 1fr', padding: '13px 10px', borderRadius: '10px', background: selectedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
+            :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', padding: '13px 10px', borderRadius: '10px', background: selectedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
             @click="enterTask(node.task)"
           >
             <!-- 任务名字 + N关键词·品牌 -->
@@ -486,9 +485,6 @@ onUnmounted(() => {
                 {{ node.keywords.length }} 个关键词<template v-if="node.brand"> · 品牌 {{ node.brand }}</template>
               </div>
             </div>
-
-            <!-- 变化：无历史，一律"—" -->
-            <div class="text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
 
             <!-- 状态：运行中显示 N / M + 细进度条；空闲显示药丸 -->
             <div class="flex flex-col items-center" :style="{ gap: '4px' }">
@@ -551,30 +547,33 @@ onUnmounted(() => {
 
       <!-- ── Level 2：钻入某任务后的关键词列表（带返回头）── -->
       <template v-else>
-        <!-- 头（不滚动）：返回 + 任务名 + 关键词数/品牌副标 -->
+        <!-- 头（不滚动）：圆形返回 + eyebrow + 任务名 + 关键词数徽章（对齐百度 L2）-->
         <div
-          class="flex flex-shrink-0 flex-col"
-          :style="{ gap: '8px', padding: '18px 20px 14px' }"
+          class="flex flex-shrink-0 items-start"
+          :style="{ gap: '12px', padding: '18px 20px 14px' }"
         >
           <button
             type="button"
-            class="inline-flex items-center self-start"
-            :style="{ gap: '4px', padding: '0', fontSize: '12px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }"
+            class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center"
+            :style="{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'inherit' }"
+            title="返回任务列表"
             @click="backToTasks()"
           >
-            <Icon name="arrowLeft" :size="13" :stroke="1.8" />
-            <span>返回</span>
+            <Icon name="arrowLeft" :size="14" :stroke="1.8" />
           </button>
-          <div v-if="drilledTask" :style="{ minWidth: 0 }">
+          <div v-if="drilledTask" class="min-w-0 flex-1">
+            <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">AI 卡位 · 关键词列表</div>
             <div
               class="font-display truncate"
-              :style="{ fontSize: '14px', fontWeight: 700, color: 'var(--ink)' }"
+              :style="{ fontSize: '14px', fontWeight: 600, color: 'var(--ink)', marginTop: '1px' }"
               :title="drilledTask.name"
             >{{ drilledTask.name }}</div>
-            <div class="truncate" :style="{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '1px' }">
-              {{ keywordsOf(drilledTask).length }} 个关键词 · 品牌 {{ brandOf(drilledTask) }}
-            </div>
           </div>
+          <div
+            v-if="drilledTask"
+            class="flex-shrink-0 self-center text-[11px]"
+            :style="{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-3)', padding: '4px 10px' }"
+          >{{ keywordsOf(drilledTask).length }} 个关键词</div>
         </div>
 
         <!-- 关键词列表（可滚动）：点选关键词 → 右栏详情 -->
@@ -589,8 +588,7 @@ onUnmounted(() => {
                 padding: '10px 12px',
                 margin: '2px 0',
                 borderRadius: '10px',
-                borderLeft: '3px solid ' + (selectedKeyword === k ? 'var(--primary)' : 'transparent'),
-                background: selectedKeyword === k ? 'var(--primary-soft)' : 'transparent',
+                background: selectedKeyword === k ? 'var(--card-2)' : 'transparent',
               }"
               @click="selectKeyword(drilledTaskId!, k)"
             >
@@ -598,8 +596,8 @@ onUnmounted(() => {
                 class="truncate"
                 :style="{
                   fontSize: '12.5px',
-                  fontWeight: selectedKeyword === k ? 700 : 500,
-                  color: selectedKeyword === k ? 'var(--primary-deep)' : 'var(--ink-2)',
+                  fontWeight: selectedKeyword === k ? 600 : 500,
+                  color: selectedKeyword === k ? 'var(--ink)' : 'var(--ink-2)',
                 }"
                 :title="k"
               >{{ k }}</span>

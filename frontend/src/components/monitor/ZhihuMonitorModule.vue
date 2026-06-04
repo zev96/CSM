@@ -954,7 +954,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             borderBottom: '1px solid var(--line)',
           }"
         >
-          <div>批次名</div>
+          <div>任务名字</div>
           <div class="text-center">问题数</div>
           <div class="text-center">操作</div>
         </div>
