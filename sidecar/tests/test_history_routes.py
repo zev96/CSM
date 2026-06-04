@@ -345,3 +345,126 @@ def test_baidu_keyword_history_invalid_range_400(client: TestClient, monitor_db:
     resp = client.get("/api/monitor/history/baidu-keyword?range=2d")
     assert resp.status_code == 400
     assert "range" in resp.json()["detail"]
+
+
+# ── Zhihu search history ───────────────────────────────────────────────────
+
+def _seed_zhihu_search_task(client: TestClient, **overrides) -> int:
+    body = {
+        "type": "zhihu_search",
+        "name": "知乎搜索-石头扫地机",
+        "target_url": "https://www.zhihu.com/search?q=扫地机器人哪个好",
+        "config": {
+            "search_keywords": ["扫地机器人哪个好", "自清洁扫地机"],
+            "target_brand": "石头",
+        },
+        "schedule_cron": "manual",
+        "enabled": True,
+    }
+    body.update(overrides)
+    resp = client.post("/api/monitor/tasks", json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def _seed_zhihu_search_result(task_id: int, *, checked_at: datetime, keyword_metrics: list[dict]):
+    """Insert a zhihu_search MonitorResult with the new metric shape."""
+    search_keywords = [km["keyword"] for km in keyword_metrics]
+    storage.save_result(MonitorResult(
+        task_id=task_id,
+        checked_at=checked_at,
+        status="ok",
+        rank=-1,
+        metric={
+            "source": "zhihu_openapi",
+            "search_keywords": search_keywords,
+            "keywords": keyword_metrics,
+            "total_keywords": len(keyword_metrics),
+            "matched_keywords": sum(1 for km in keyword_metrics if km["matched_count"] > 0),
+            "total_matches": sum(km["matched_count"] for km in keyword_metrics),
+        },
+        error_message="",
+    ))
+
+
+def test_zhihu_search_history_empty_db(client: TestClient, monitor_db: Path):
+    """空 DB 时返回 200，monitored_keywords=0，keywords=[]。"""
+    resp = client.get("/api/monitor/history/zhihu-search?range=7d")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["range"] == "7d"
+    assert body["kpis"]["monitored_keywords"] == 0
+    assert body["keywords"] == []
+    assert len(body["daily_series"]) == 7
+    assert all(d["avg_match_rate"] == 0.0 for d in body["daily_series"])
+
+
+def test_zhihu_search_history_kpis_and_keyword_rows(client: TestClient, monitor_db: Path):
+    """单个 task + 单次结果 → monitored_keywords=2，关键词行字段正确。"""
+    tid = _seed_zhihu_search_task(client)
+    now = datetime.now()
+
+    kw_metrics = [
+        {
+            "keyword": "扫地机器人哪个好",
+            "matched_count": 3,
+            "first_rank": 2,
+            "result_count": 10,
+            "results": [{"rank": 2, "matches_brand": True}],
+        },
+        {
+            "keyword": "自清洁扫地机",
+            "matched_count": 0,
+            "first_rank": -1,
+            "result_count": 8,
+            "results": [],
+        },
+    ]
+    _seed_zhihu_search_result(tid, checked_at=now, keyword_metrics=kw_metrics)
+
+    resp = client.get("/api/monitor/history/zhihu-search?range=7d")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    k = body["kpis"]
+    assert k["monitored_keywords"] == 2
+    assert k["brands_covered"] == 1
+
+    kw_rows = body["keywords"]
+    assert len(kw_rows) == 2
+
+    row1 = next(r for r in kw_rows if r["search_keyword"] == "扫地机器人哪个好")
+    assert row1["matched_count"] == 3
+    assert row1["best_rank"] == 2
+    assert row1["task_id"] == tid
+    assert row1["target_brand"] == "石头"
+
+    row2 = next(r for r in kw_rows if r["search_keyword"] == "自清洁扫地机")
+    assert row2["matched_count"] == 0
+    assert row2["best_rank"] == -1
+
+
+def test_zhihu_search_history_change_kind_new(client: TestClient, monitor_db: Path):
+    """无命中 → 有命中 → change_kind=new。"""
+    tid = _seed_zhihu_search_task(
+        client,
+        config={"search_keywords": ["kw1"], "target_brand": "石头"},
+    )
+    now = datetime.now()
+    _seed_zhihu_search_result(tid, checked_at=now - timedelta(hours=2), keyword_metrics=[
+        {"keyword": "kw1", "matched_count": 0, "first_rank": -1, "result_count": 10, "results": []},
+    ])
+    _seed_zhihu_search_result(tid, checked_at=now, keyword_metrics=[
+        {"keyword": "kw1", "matched_count": 2, "first_rank": 3, "result_count": 10,
+         "results": [{"rank": 3, "matches_brand": True}]},
+    ])
+    body = client.get("/api/monitor/history/zhihu-search?range=7d").json()
+    row = next(r for r in body["keywords"] if r["task_id"] == tid)
+    assert row["change_kind"] == "new"
+    assert body["kpis"]["changed_up"] == 1
+
+
+def test_zhihu_search_history_invalid_range_400(client: TestClient, monitor_db: Path):
+    resp = client.get("/api/monitor/history/zhihu-search?range=2d")
+    assert resp.status_code == 400
+    assert "range" in resp.json()["detail"]
