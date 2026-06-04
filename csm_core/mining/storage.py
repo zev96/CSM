@@ -273,12 +273,17 @@ def get_conn() -> sqlite3.Connection:
 
 
 # ── Job CRUD ──────────────────────────────────────────────────────────
-def create_job(keyword: str, platforms: list[str], target_per_platform: int) -> int:
+def create_job(
+    keyword: str,
+    platforms: list[str],
+    target_per_platform: int,
+    brand_keywords: list[str] | None = None,
+) -> int:
     conn = get_conn()
     cur = conn.execute(
         """
-        INSERT INTO mining_jobs(keyword, platforms_json, target_per_platform, status, progress_json)
-        VALUES(?, ?, ?, 'pending', ?)
+        INSERT INTO mining_jobs(keyword, platforms_json, target_per_platform, status, progress_json, brand_keywords_json)
+        VALUES(?, ?, ?, 'pending', ?, ?)
         RETURNING id
         """,
         (
@@ -286,6 +291,7 @@ def create_job(keyword: str, platforms: list[str], target_per_platform: int) -> 
             json.dumps(platforms, ensure_ascii=False),
             target_per_platform,
             json.dumps({p: {"got": 0, "target": target_per_platform, "phase": "queued"} for p in platforms}, ensure_ascii=False),
+            json.dumps(brand_keywords or [], ensure_ascii=False),
         ),
     )
     return int(cur.fetchone()[0])
@@ -466,6 +472,12 @@ def _row_to_job_dict(row) -> dict[str, Any]:
     keys = row.keys()
     video_count = int(row["_video_count"] or 0) if "_video_count" in keys else 0
     commented_count = int(row["_commented_count"] or 0) if "_commented_count" in keys else 0
+    # brand_keywords_json is v8-only; tolerate v7-era rows in mixed-version
+    # test setups by reading through a try/except like ai_summary in _row_to_video_dict.
+    try:
+        brand_keywords = json.loads(row["brand_keywords_json"]) if row["brand_keywords_json"] else []
+    except (IndexError, KeyError):
+        brand_keywords = []
     return {
         "id": row["id"],
         "keyword": row["keyword"],
@@ -481,6 +493,7 @@ def _row_to_job_dict(row) -> dict[str, Any]:
         # 全部已评论 → 已完成；有未评论 → 进行中；抓取层失败 → 失败
         "video_count": video_count,
         "commented_count": commented_count,
+        "brand_keywords": brand_keywords,
     }
 
 
@@ -694,6 +707,15 @@ def _row_to_video_dict(row) -> dict[str, Any]:
         ai_summary = row["ai_summary"]
     except (IndexError, KeyError):
         ai_summary = None
+    # brand_comment_hits + exclude_reason are v8-only; same tolerant pattern.
+    try:
+        brand_comment_hits = row["brand_comment_hits"]
+    except (IndexError, KeyError):
+        brand_comment_hits = None
+    try:
+        exclude_reason = row["exclude_reason"]
+    except (IndexError, KeyError):
+        exclude_reason = None
     return {
         "id": row["id"],
         "platform": row["platform"],
@@ -713,6 +735,8 @@ def _row_to_video_dict(row) -> dict[str, Any]:
         "commented_at": row["commented_at"],
         "first_seen_at": row["first_seen_at"],
         "ai_summary": ai_summary,
+        "brand_comment_hits": brand_comment_hits,
+        "exclude_reason": exclude_reason,
         "source_keywords": [k for k in keys_csv.split(",") if k],
     }
 
@@ -1180,3 +1204,77 @@ def apply_v6_migration(conn: sqlite3.Connection) -> None:
     """
     for stmt in _DDL_V6_MINING:
         conn.execute(stmt)
+
+
+# ── Schema v8 additions ─────────────────────────────────────────────────
+# Brand pre-filter: track how many brand-seeded comments a video has
+# (brand_comment_hits) and why it was excluded (exclude_reason).
+# mining_jobs gains brand_keywords_json to store the seed keywords used
+# for the brand detection pass.
+
+
+def apply_v8_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v7 → v8.
+
+    Adds brand pre-filter columns:
+      - videos.brand_comment_hits INTEGER
+      - videos.exclude_reason TEXT
+      - mining_jobs.brand_keywords_json TEXT NOT NULL DEFAULT '[]'
+
+    Each ALTER is guarded by PRAGMA table_info because SQLite has no
+    ADD COLUMN IF NOT EXISTS — mirrors apply_v4_migration's pattern.
+    """
+    # Guard videos columns.
+    videos_cols = set()
+    for row in conn.execute("PRAGMA table_info(videos)").fetchall():
+        try:
+            videos_cols.add(row[1])
+        except (IndexError, TypeError):
+            videos_cols.add(row["name"])
+    if "brand_comment_hits" not in videos_cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN brand_comment_hits INTEGER")
+    if "exclude_reason" not in videos_cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN exclude_reason TEXT")
+
+    # Guard mining_jobs column.
+    jobs_cols = set()
+    for row in conn.execute("PRAGMA table_info(mining_jobs)").fetchall():
+        try:
+            jobs_cols.add(row[1])
+        except (IndexError, TypeError):
+            jobs_cols.add(row["name"])
+    if "brand_keywords_json" not in jobs_cols:
+        conn.execute(
+            "ALTER TABLE mining_jobs ADD COLUMN brand_keywords_json TEXT NOT NULL DEFAULT '[]'"
+        )
+
+
+# ── Brand pre-filter setters ──────────────────────────────────────────
+
+
+def mark_brand_excluded(video_id: int, hits: int) -> bool:
+    """Mark a video as excluded by brand detection.
+
+    Sets excluded=1, exclude_reason='brand_seeded', brand_comment_hits=hits.
+    Returns True if the row existed and was updated.
+    """
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE videos SET excluded=1, exclude_reason='brand_seeded', brand_comment_hits=? WHERE id=?",
+        (int(hits), video_id),
+    )
+    return cur.rowcount > 0
+
+
+def set_brand_hits(video_id: int, hits: int) -> bool:
+    """Record brand comment hit count without excluding the video.
+
+    Used when hits < threshold — we record the count for visibility but
+    do not flip excluded.  Returns True if the row existed.
+    """
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE videos SET brand_comment_hits=? WHERE id=?",
+        (int(hits), video_id),
+    )
+    return cur.rowcount > 0

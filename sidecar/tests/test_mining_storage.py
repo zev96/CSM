@@ -183,3 +183,93 @@ def test_mining_browser_import_only():
     from csm_core.browser_infra import mining_browser
     assert callable(mining_browser.launched_page)
     assert callable(mining_browser.has_login_cookie)
+
+
+# ── V8 migration: brand pre-filter columns ───────────────────────────────
+
+def test_v8_migration_columns_exist(db):
+    """videos gets brand_comment_hits + exclude_reason; mining_jobs gets brand_keywords_json."""
+    conn = monitor_storage.get_conn()
+
+    videos_cols = {row[1] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
+    assert "brand_comment_hits" in videos_cols, "videos.brand_comment_hits missing"
+    assert "exclude_reason" in videos_cols, "videos.exclude_reason missing"
+
+    jobs_cols = {row[1] for row in conn.execute("PRAGMA table_info(mining_jobs)").fetchall()}
+    assert "brand_keywords_json" in jobs_cols, "mining_jobs.brand_keywords_json missing"
+
+
+def test_mark_brand_excluded_sets_fields(db):
+    """mark_brand_excluded sets excluded=1, exclude_reason='brand_seeded', brand_comment_hits."""
+    jid = ms.create_job("扫地机器人", ["douyin"], 50)
+    vid_id = ms.upsert_video_and_link(_make_card(), jid)
+
+    result = ms.mark_brand_excluded(vid_id, hits=4)
+    assert result is True
+
+    # list_videos filters excluded=0, so query directly.
+    conn = monitor_storage.get_conn()
+    row = conn.execute(
+        "SELECT excluded, exclude_reason, brand_comment_hits FROM videos WHERE id=?",
+        (vid_id,),
+    ).fetchone()
+    assert row["excluded"] == 1
+    assert row["exclude_reason"] == "brand_seeded"
+    assert row["brand_comment_hits"] == 4
+
+
+def test_mark_brand_excluded_unknown_id_returns_false(db):
+    assert ms.mark_brand_excluded(999999, hits=1) is False
+
+
+def test_create_job_with_brand_keywords(db):
+    """create_job accepts brand_keywords; get_job surfaces them via brand_keywords key."""
+    jid = ms.create_job("扫地机器人", ["douyin"], 50, brand_keywords=["石头", "roborock"])
+    job = ms.get_job(jid)
+    assert job["brand_keywords"] == ["石头", "roborock"]
+
+
+def test_create_job_default_brand_keywords_empty(db):
+    """create_job without brand_keywords → brand_keywords=[] in get_job."""
+    jid = ms.create_job("k", ["douyin"], 50)
+    job = ms.get_job(jid)
+    assert job["brand_keywords"] == []
+
+
+def test_set_brand_hits_updates_without_excluding(db):
+    """set_brand_hits records hits but does NOT flip excluded."""
+    jid = ms.create_job("k", ["douyin"], 50)
+    vid_id = ms.upsert_video_and_link(_make_card(), jid)
+
+    ms.set_brand_hits(vid_id, hits=2)
+
+    conn = monitor_storage.get_conn()
+    row = conn.execute(
+        "SELECT excluded, brand_comment_hits FROM videos WHERE id=?",
+        (vid_id,),
+    ).fetchone()
+    assert row["excluded"] == 0      # NOT excluded
+    assert row["brand_comment_hits"] == 2
+
+
+def test_row_to_video_dict_surfaces_brand_fields(db):
+    """_row_to_video_dict (via list_videos include_excluded) exposes brand_comment_hits + exclude_reason."""
+    jid = ms.create_job("k", ["douyin"], 50)
+    vid_id = ms.upsert_video_and_link(_make_card(), jid)
+    ms.mark_brand_excluded(vid_id, hits=7)
+
+    # Use the conn directly to bypass excluded=0 filter in list_videos.
+    conn = monitor_storage.get_conn()
+    row = conn.execute(
+        """
+        SELECT v.*, GROUP_CONCAT(sk.keyword) AS source_keywords
+        FROM videos v
+        LEFT JOIN video_source_keywords sk ON sk.video_id = v.id
+        WHERE v.id=?
+        GROUP BY v.id
+        """,
+        (vid_id,),
+    ).fetchone()
+    d = ms._row_to_video_dict(row)
+    assert d["brand_comment_hits"] == 7
+    assert d["exclude_reason"] == "brand_seeded"
