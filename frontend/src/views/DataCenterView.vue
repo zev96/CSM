@@ -19,7 +19,8 @@ import RetentionPage from "@/components/monitor/history/RetentionPage.vue";
 import ZhihuRankingPage from "@/components/monitor/history/ZhihuRankingPage.vue";
 import BaiduSEOAnalytics from "@/components/monitor/history/BaiduSEOAnalytics.vue";
 import ZhihuSearchAnalyticsPage from "@/components/monitor/history/ZhihuSearchAnalyticsPage.vue";
-type HistorySubtab = "retention" | "zhihu" | "baidu" | "zhihu_search";
+import GeoAnalyticsPage from "@/components/monitor/geo/GeoAnalyticsPage.vue";
+type HistorySubtab = "retention" | "zhihu" | "baidu" | "zhihu_search" | "geo";
 
 const router = useRouter();
 const historySubtab = ref<HistorySubtab>("retention");
@@ -33,6 +34,7 @@ const HISTORY_TABS: Array<{ k: HistorySubtab; l: string }> = [
   { k: "zhihu_search", l: "知乎搜索" },
   { k: "retention", l: "平台评论" },
   { k: "baidu", l: "百度排名" },
+  { k: "geo", l: "GEO" },
 ];
 
 function goToCommentTask(payload: {
@@ -164,6 +166,7 @@ function goToBaiduTask(_payload: { taskId: number }) {
           v-else-if="historySubtab === 'baidu'"
           @navigate="goToBaiduTask"
         />
+        <GeoAnalyticsPage v-else-if="historySubtab === 'geo'" />
       </div>
     </section>
   </div>
