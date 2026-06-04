@@ -112,3 +112,73 @@ def test_douyin_fetch_reports_progress_per_page():
     assert ok is True
     assert [c["text"] for c in comments] == ["a", "b", "c"]
     assert calls == [(2, 150), (3, 150)]
+
+
+from csm_core.monitor.platforms.kuaishou_comment import KuaishouCommentAdapter
+
+
+def _ks_page(texts, *, pcursor_v2):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "data": {
+            "visionCommentList": {
+                "rootCommentsV2": [
+                    {"commentId": f"c{i}", "content": t, "authorName": "a", "likedCount": 0}
+                    for i, t in enumerate(texts)
+                ],
+                "rootComments": [],
+                "pcursorV2": pcursor_v2,
+                "pcursor": "no_more",
+            }
+        }
+    }
+    return resp
+
+
+def _ks_adapter():
+    a = KuaishouCommentAdapter()
+    a._pacer.wait = lambda: None
+    return a
+
+
+def test_kuaishou_fetch_reports_progress_per_page():
+    sess = MagicMock()
+    sess.post.side_effect = [
+        _ks_page(["a", "b"], pcursor_v2="next"),
+        _ks_page(["c"], pcursor_v2="no_more"),
+    ]
+    calls = []
+    a = _ks_adapter()
+    comments, ok, err = a._fetch_comments(
+        sess, "photo1", limit=150,
+        progress_cb=lambda c, t: calls.append((c, t)),
+    )
+    assert ok is True
+    assert [c["text"] for c in comments] == ["a", "b", "c"]
+    assert calls == [(2, 150), (3, 150)]
+
+
+def test_kuaishou_fetch_uses_scrape_top_n_as_limit(monkeypatch):
+    """fetch() 应把 task.config.scrape_top_n 当抓取上限（对齐 B站 test）。"""
+    from csm_core.monitor.base import MonitorTask
+
+    a = _ks_adapter()
+    captured = {}
+
+    def fake_fetch(session, photo_id, limit, cancel_token=None, progress_cb=None):
+        captured["limit"] = limit
+        return [], True, None
+
+    monkeypatch.setattr(a, "_extract_video_id", lambda *x, **k: ("photo1", ""))
+    monkeypatch.setattr(a, "_fetch_comments", fake_fetch)
+    a._breaker.allow = lambda: True
+    a._breaker.record_success = lambda: None
+    a._cookies.pick = lambda: None
+    task = MonitorTask(
+        id=1, type="kuaishou_comment", name="t",
+        target_url="https://www.kuaishou.com/short-video/abc",
+        config={"my_comment_text": "hi", "scrape_top_n": 40},
+    )
+    a.fetch(task, progress_cb=None)
+    assert captured["limit"] == 40
