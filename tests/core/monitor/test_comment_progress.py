@@ -8,6 +8,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from csm_core.monitor.platforms.bilibili_comment import BilibiliCommentAdapter
+from csm_core.monitor.platforms.douyin_comment import DouyinCommentAdapter
 
 
 def _bili_page(replies, *, is_end, next_cursor=0):
@@ -75,3 +76,39 @@ def test_bilibili_fetch_uses_scrape_top_n_as_limit(monkeypatch):
     )
     a.fetch(task, progress_cb=None)
     assert captured["limit"] == 40
+
+
+def _douyin_page(texts, *, has_more, cursor=0):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "comments": [
+            {"text": t, "user": {"nickname": "n"}, "digg_count": 1} for t in texts
+        ],
+        "has_more": has_more,
+        "cursor": cursor,
+    }
+    return resp
+
+
+def _douyin_adapter():
+    a = DouyinCommentAdapter()
+    a._pacer.wait = lambda: None
+    return a
+
+
+def test_douyin_fetch_reports_progress_per_page():
+    sess = MagicMock()
+    sess.get.side_effect = [
+        _douyin_page(["a", "b"], has_more=1, cursor=20),
+        _douyin_page(["c"], has_more=0),
+    ]
+    calls = []
+    a = _douyin_adapter()
+    comments, ok, err = a._fetch_comments(
+        sess, "7xxx", limit=150,
+        progress_cb=lambda c, t: calls.append((c, t)),
+    )
+    assert ok is True
+    assert [c["text"] for c in comments] == ["a", "b", "c"]
+    assert calls == [(2, 150), (3, 150)]
