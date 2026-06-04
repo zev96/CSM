@@ -57,6 +57,46 @@ _RULES: dict[str, str] = {
 }
 
 
+# host 级拆分：一个主域名下的多个独立内容平台，注册域名会合并掉它们，
+# 所以在「完整 host」层识别后拆开（百度系/微信）。⚠️ 写入时生效：
+# geo_citations 存的是这里产出的 domain，老数据是合并态，需重跑才体现。
+_CANONICAL_HOST: dict[str, tuple[str, str]] = {
+    "baijiahao.baidu.com": ("baijiahao.baidu.com", "百家号"),
+    "baike.baidu.com": ("baike.baidu.com", "百度百科"),
+    "zhidao.baidu.com": ("zhidao.baidu.com", "百度知道"),
+    "tieba.baidu.com": ("tieba.baidu.com", "贴吧"),
+    "mp.weixin.qq.com": ("mp.weixin.qq.com", "微信公众号"),
+}
+
+# source_type → 权威度基数（高权重信源排序用）。未知类型回退「其他」。
+_AUTHORITY: dict[str, float] = {
+    "权威媒体": 1.0, "百度百科": 0.9, "知乎": 0.8,
+    "百家号": 0.6, "微信公众号": 0.6, "小红书": 0.6,
+    "百度知道": 0.5, "电商": 0.4, "贴吧": 0.3, "其他": 0.2,
+}
+
+
+def authority(source_type: str) -> float:
+    return _AUTHORITY.get(source_type, _AUTHORITY["其他"])
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower().strip(".")
+    except Exception:
+        return ""
+
+
+def canonical_source(url: str) -> tuple[str, str]:
+    """(canonical domain, source_type)。先查 host 级拆分表（百度系/微信），
+    否则注册域名 + 规则分类（*.zhihu.com 在 registered_domain 合并）。"""
+    host = _host(url)
+    if host in _CANONICAL_HOST:
+        return _CANONICAL_HOST[host]
+    dom = registered_domain(url)
+    return dom, classify_source(dom)
+
+
 def registered_domain(url: str) -> str:
     try:
         host = (urlparse(url).hostname or "").lower().strip(".")
@@ -91,8 +131,6 @@ def classify_source(domain: str) -> str:
 def classify_citations(cits: list[Citation]) -> list[ClassifiedCitation]:
     out: list[ClassifiedCitation] = []
     for c in cits:
-        dom = registered_domain(c.url)
-        out.append(ClassifiedCitation(
-            url=c.url, title=c.title, domain=dom, source_type=classify_source(dom),
-        ))
+        dom, st = canonical_source(c.url)
+        out.append(ClassifiedCitation(url=c.url, title=c.title, domain=dom, source_type=st))
     return out

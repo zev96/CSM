@@ -35,3 +35,31 @@ def test_registered_domain_fallback_without_tldextract(monkeypatch):
     assert classify.registered_domain("https://www.beijing.gov.cn/foo") == "beijing.gov.cn"
     assert classify.registered_domain("http://mp.weixin.qq.com/s/xxx") == "qq.com"
     assert classify.registered_domain("not a url") == ""
+
+
+def test_canonical_splits_baidu_products():
+    from csm_core.monitor.geo.classify import canonical_source
+    assert canonical_source("https://baijiahao.baidu.com/s?id=1") == ("baijiahao.baidu.com", "百家号")
+    assert canonical_source("https://baike.baidu.com/item/x") == ("baike.baidu.com", "百度百科")
+    assert canonical_source("https://zhidao.baidu.com/q/1") == ("zhidao.baidu.com", "百度知道")
+    assert canonical_source("https://mp.weixin.qq.com/s/abc") == ("mp.weixin.qq.com", "微信公众号")
+
+
+def test_canonical_merges_zhihu_subdomains():
+    from csm_core.monitor.geo.classify import canonical_source
+    assert canonical_source("https://zhuanlan.zhihu.com/p/1") == ("zhihu.com", "知乎")
+    assert canonical_source("https://www.zhihu.com/question/1") == ("zhihu.com", "知乎")
+
+
+def test_authority_table():
+    from csm_core.monitor.geo.classify import authority
+    assert authority("权威媒体") > authority("知乎") > authority("其他")
+    assert authority("未知类型") == authority("其他")
+
+
+def test_classify_citations_uses_canonical():
+    from csm_core.monitor.geo.classify import classify_citations
+    from csm_core.monitor.geo.models import Citation
+    out = classify_citations([Citation(url="https://baijiahao.baidu.com/s?id=1", title="t")])
+    assert out[0].domain == "baijiahao.baidu.com"
+    assert out[0].source_type == "百家号"
