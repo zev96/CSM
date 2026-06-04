@@ -27,6 +27,8 @@ PlatformPhase = Literal[
     # 里 poll 等用户手动解。这个 phase 期间 job.status 保持 "running"，
     # 前端能看到任务"等待验证"的中间态。解完回 scrolling；超时才 bail。
     "captcha_waiting",
+    # v0.8: 预筛 pass — search 收齐后对候选视频抓首页评论做品牌词计数。
+    "prefilter",
 ]
 
 
@@ -70,6 +72,7 @@ class MiningJob(BaseModel):
     keyword: str
     platforms: list[Platform] = Field(default_factory=lambda: ["douyin", "bilibili", "kuaishou"])
     target_per_platform: int = 50
+    brand_keywords: list[str] = Field(default_factory=list)
     status: MiningStatus = "pending"
     progress: dict[str, dict[str, Any]] = Field(default_factory=dict)
     error_message: str = ""
@@ -103,3 +106,4 @@ class StartJobRequest(BaseModel):
     keyword: str = Field(min_length=1, max_length=80)
     platforms: list[Platform] = Field(default_factory=lambda: ["douyin", "bilibili", "kuaishou"])
     target_per_platform: int = Field(default=50, ge=10, le=200)
+    brand_keywords: list[str] = Field(default_factory=list)
