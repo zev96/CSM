@@ -18,6 +18,7 @@ from csm_core.monitor.base import MonitorResult, MonitorStatus, MonitorTask, Tas
 
 PLATFORM_TYPES: tuple[TaskType, ...] = (
     "zhihu_question",
+    "zhihu_search",
     "bilibili_comment",
     "douyin_comment",
     "kuaishou_comment",
@@ -212,6 +213,36 @@ def get_summary() -> dict[str, Any]:
                 latest_top_n = (latest.metric or {}).get("top_n") if latest else None
                 cfg_top_n = (t.config or {}).get("top_n")
                 entry["top_n"] = int(latest_top_n or cfg_top_n or 10)
+            elif ttype == "zhihu_search":
+                recent = storage.list_results(t.id, limit=7)
+                latest = recent[0] if recent else None
+                prev = recent[1] if len(recent) > 1 else None
+                entry["latest"] = result_to_dict(latest) if latest else None
+                entry["prev"] = result_to_dict(prev) if prev else None
+                entry["series"] = [
+                    {
+                        "checked_at": r.checked_at.isoformat() if r.checked_at else None,
+                        "matched": int((r.metric or {}).get("total_matches") or 0),
+                    }
+                    for r in reversed(recent)
+                ]
+            elif ttype == "geo_query":
+                recent = storage.list_results(t.id, limit=7)
+                latest = recent[0] if recent else None
+                entry["latest"] = result_to_dict(latest) if latest else None
+                entry["series"] = [
+                    {
+                        "checked_at": r.checked_at.isoformat() if r.checked_at else None,
+                        "soc": float((r.metric or {}).get("soc") or 0.0),
+                    }
+                    for r in reversed(recent)
+                ]
+                m0 = (latest.metric or {}) if latest else {}
+                entry["kpi_snapshot"] = {
+                    "soc": float(m0.get("soc") or 0.0),
+                    "sentiment": float(m0.get("sentiment_score") or 0.0),
+                    "mentioned": int(m0.get("mentioned") or 0),
+                }
             else:
                 latest = storage.latest_result(t.id)
                 entry["latest"] = result_to_dict(latest) if latest else None
