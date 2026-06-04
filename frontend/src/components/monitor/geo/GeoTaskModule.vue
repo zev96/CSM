@@ -399,7 +399,7 @@ onUnmounted(() => {
         class="flex flex-shrink-0 items-center justify-between"
         :style="{ gap: '12px', padding: '18px 20px 14px' }"
       >
-        <div class="font-display" :style="{ fontSize: '16px', fontWeight: 700 }">卡位任务</div>
+        <div class="font-display" :style="{ fontSize: '14px', fontWeight: 600 }">卡位任务</div>
         <button
           type="button"
           class="inline-flex flex-shrink-0 items-center"
@@ -435,15 +435,14 @@ onUnmounted(() => {
         v-if="!demoMode"
         class="grid flex-shrink-0 items-center text-[11px] uppercase"
         :style="{
-          gridTemplateColumns: '1.6fr .85fr .85fr 1fr',
+          gridTemplateColumns: '1.5fr .9fr 1.1fr',
           letterSpacing: '1.2px',
           color: 'var(--ink-3)',
           borderBottom: '1px solid var(--line)',
-          padding: '8px 10px',
+          padding: '8px 22px',
         }"
       >
         <div>任务名字</div>
-        <div class="text-center">变化</div>
         <div class="text-center">状态</div>
         <div class="text-center">操作</div>
       </div>
@@ -472,7 +471,7 @@ onUnmounted(() => {
           -->
           <div
             class="geo-row grid cursor-pointer items-center"
-            :style="{ gridTemplateColumns: '1.6fr .85fr .85fr 1fr', padding: '13px 10px', borderRadius: '10px', background: selectedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
+            :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', padding: '13px 10px', borderRadius: '10px', background: selectedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
             @click="enterTask(node.task)"
           >
             <!-- 任务名字 + N关键词·品牌 -->
@@ -486,9 +485,6 @@ onUnmounted(() => {
                 {{ node.keywords.length }} 个关键词<template v-if="node.brand"> · 品牌 {{ node.brand }}</template>
               </div>
             </div>
-
-            <!-- 变化：无历史，一律"—" -->
-            <div class="text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
 
             <!-- 状态：运行中显示 N / M + 细进度条；空闲显示药丸 -->
             <div class="flex flex-col items-center" :style="{ gap: '4px' }">
