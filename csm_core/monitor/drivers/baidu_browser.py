@@ -24,6 +24,7 @@ from typing import Any, Iterator
 
 from .patchright_pool import ensure_browsers_path
 from .chrome_detect import prune_profile_caches
+from csm_core.browser_infra.window_util import offscreen_args
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ def baidu_browser_session(
     use_native_chrome: bool = False,
     chrome_executable_path: str | None = None,
     chrome_profile_name: str = "Default",
+    hidden_window: bool = True,
 ) -> Iterator[BaiduBrowserSession]:
     """启动百度抓取专用的持久 BrowserContext。
 
@@ -102,6 +104,8 @@ def baidu_browser_session(
             ],
             viewport={"width": 1366, "height": 768},
         )
+        # native 永远有头，直接追加移屏外 flags（hidden_window=False 时为空列表）
+        launch_kwargs["args"] += offscreen_args(hidden_window)
     else:
         target_dir = user_data_dir or _default_user_data_dir()
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -116,6 +120,9 @@ def baidu_browser_session(
             ],
             viewport={"width": 1366, "height": 768},
         )
+        # 有头才有窗口，headless 时不追加（无窗口可移）
+        if not headless:
+            launch_kwargs["args"] += offscreen_args(hidden_window)
 
     pw = None
     context = None

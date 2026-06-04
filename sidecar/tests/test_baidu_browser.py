@@ -101,12 +101,57 @@ def test_baidu_browser_session_uses_persistent_context(fake_pw, tmp_path):
     # viewport is propagated
     assert chromium.last_kwargs["viewport"] == {"width": 1366, "height": 768}
     # launch flags include the image-disabled blink flag (keeps SERP抓取轻量).
-    # The off-screen + minimized hacks were removed — they made elements
-    # report 0×0 boundingClientRect which broke patchright actionability.
+    # headless=True → no window → offscreen args must NOT be added.
     args = chromium.last_kwargs["args"]
     assert "--blink-settings=imagesEnabled=false" in args
     assert "--window-position=-32000,-32000" not in args
-    assert "--start-minimized" not in args
+    assert "--disable-features=CalculateNativeWinOcclusion" not in args
+
+
+def test_self_built_headed_hidden_has_offscreen_flags(fake_pw, tmp_path):
+    """自建 profile + headless=False + hidden_window=True（默认）→
+    args 应包含 --window-position=-32000,-32000 和反遮挡 flags。
+    off-screen 已借助反遮挡 flags 重新启用（修复了历史上的 0×0 BoundingClientRect bug）。
+    """
+    from csm_core.monitor.drivers import baidu_browser
+
+    with baidu_browser.baidu_browser_session(
+        headless=False, user_data_dir=tmp_path / "p", hidden_window=True
+    ):
+        pass
+
+    args = fake_pw.chromium.last_kwargs["args"]
+    assert "--window-position=-32000,-32000" in args
+    assert "--disable-features=CalculateNativeWinOcclusion" in args
+    assert "--blink-settings=imagesEnabled=false" in args  # 自建 flag 不变
+
+
+def test_self_built_headless_no_offscreen_flags(fake_pw, tmp_path):
+    """自建 profile + headless=True → 无窗口 → offscreen args 不应存在。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    with baidu_browser.baidu_browser_session(
+        headless=True, user_data_dir=tmp_path / "p"
+    ):
+        pass
+
+    args = fake_pw.chromium.last_kwargs["args"]
+    assert "--window-position=-32000,-32000" not in args
+    assert "--disable-features=CalculateNativeWinOcclusion" not in args
+
+
+def test_self_built_headed_hidden_window_false_no_offscreen_flags(fake_pw, tmp_path):
+    """自建 profile + headless=False + hidden_window=False → 即使有头也不移屏外。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    with baidu_browser.baidu_browser_session(
+        headless=False, user_data_dir=tmp_path / "p", hidden_window=False
+    ):
+        pass
+
+    args = fake_pw.chromium.last_kwargs["args"]
+    assert "--window-position=-32000,-32000" not in args
+    assert "--disable-features=CalculateNativeWinOcclusion" not in args
 
 
 def test_baidu_browser_session_closes_on_exit(fake_pw, tmp_path):
@@ -209,6 +254,9 @@ def test_baidu_browser_session_native_mode_uses_chrome_channel(monkeypatch, tmp_
     assert "--profile-directory=Profile 1" in args
     # native mode 不加 --blink-settings=imagesEnabled=false
     assert "--blink-settings=imagesEnabled=false" not in args
+    # native 永远有头；默认 hidden_window=True → 必须含移屏外+反遮挡 flags
+    assert "--window-position=-32000,-32000" in args
+    assert "--disable-features=CalculateNativeWinOcclusion" in args
 
 
 def test_baidu_browser_session_self_built_mode_unchanged(monkeypatch, tmp_path):
