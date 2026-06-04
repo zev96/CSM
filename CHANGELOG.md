@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.6.0] - 2026-06-04
 
 ### Added
 - **AI 卡位监控（GEO）· 阶段 1**：新增 `geo_query` 监测任务类型，批量关键词 × AI 平台（阶段 1 接入通义千问 / Kimi，走各自联网 API）自动采集回答与引用信源，LLM 抽取后产出四大卡位 KPI——**曝光度 Share of Chat**（<20% 判「隐身」）、**首推率**、**净情感得分**、**引用信源聚合榜**（按域名频次降序，自动归类知乎 / 小红书 / 权威媒体 / 电商 / 其他，指导「精准喂饭」铺内容）。一品牌一任务，任务内 `关键词 × 平台` fan-out，复用现有监测调度 / SSE / 凭证 / 批量·续抓·取消基建。
@@ -31,6 +31,10 @@
   联网搜索」开关。
 - 监测中心新增「知乎搜索排名」监控：用知乎官方搜索 API 对关键词取前 10 结果，追踪目标品牌词命中位置。需在设置页填写知乎开放平台 Access Secret。
 
+### Changed
+- **百度「原生 Chrome 副本」缓存自动清理**（原挂名 0.5.11，从未单独发布，并入本版）：每轮百度监控结束、副本 Chrome 完全关闭后，自动删除副本里的 Chrome 缓存目录（`Service Worker` / `Cache` / `Code Cache` / `CacheStorage` / `Shared Dictionary` 等），使副本常态维持 ~0.5GB，不再随监控运行无限增长（实测旧副本曾涨到 14GB，其中 86% 是 `Service Worker\CacheStorage`）。仅清缓存，保留 `Network\Cookies` 登录态、`Local State`、IndexedDB / Local Storage / Extensions，无需重新登录、功能零改动。`copy_profile_to` 导入时同步纳入 `CacheStorage` / `Shared Dictionary` 跳过名单。
+- **监测中心 UI 一致性大调**：① 知乎搜索排名改为与百度同款两级双卡布局（L1 任务表 + 任务详情预览卡，L2 关键词列表 + 单关键词详情）；② AI 卡位（GEO）任务列表 / L2 对齐百度（去「变化」列、标题 14px、列对齐；返回头改圆形按钮 + eyebrow + 关键词数徽章、选中改低调底色）；③ 知乎搜索 L2 详情卡镜像知乎问题右卡（KPI 卡位数量 / 最高排名 + 最近 7 天卡位趋势 + 前 10 结果固定高滚动卡片，含类型「专栏/回答」·作者·赞同·自家命中标记）；④ 知乎问题任务列头「批次名」→「任务名字」。
+
 ### Fixed
 - **新建 GEO 任务覆盖同品牌的已有任务（数据丢失）**：`monitor_tasks` 的
   `UNIQUE(type, target_url)` + `create_task` 的 `ON CONFLICT DO UPDATE`，而 GEO `target_url`
@@ -49,11 +53,6 @@
 ### Notes
 - RPA 选择器随站点改版会失效，集中在 csm_core/monitor/geo/providers/rpa/sites.py，
   失效时改那里 + 重新校准（见 acceptance 清单）。夸克AI 不在本期。
-
-## [0.5.11] - 2026-06-01
-
-### Changed
-- **百度「原生 Chrome 副本」缓存自动清理**：每轮百度监控结束、副本 Chrome 完全关闭后，自动删除副本里的 Chrome 缓存目录（`Service Worker` / `Cache` / `Code Cache` / `CacheStorage` / `Shared Dictionary` 等），使副本常态维持 ~0.5GB，不再随监控运行无限增长（实测旧副本曾涨到 14GB，其中 86% 是 `Service Worker\CacheStorage`）。仅清缓存，保留 `Network\Cookies` 登录态、`Local State`、IndexedDB / Local Storage / Extensions，无需重新登录、功能零改动。`copy_profile_to` 导入时同步纳入 `CacheStorage` / `Shared Dictionary` 跳过名单。
 
 ## [0.5.10] - 2026-05-29
 
