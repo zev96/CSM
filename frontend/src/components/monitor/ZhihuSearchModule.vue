@@ -74,45 +74,7 @@ function statusOf(t: Task) {
 function isRunning(id: number) { return monitorStatus.isRunning(id); }
 const taskProgress = computed(() => monitorStatus.taskProgress);
 
-// ── L1 预览卡近 7 天趋势（命中关键词数 + 最优排名），基于 previewTask 历史 ──
-const RANK_SENTINEL = 15;
-function buildTrend(history: ResultRow[]) {
-  const out: Array<{ iso: string; label: string; matched: number | null; rank: number | null }> = [];
-  const now = new Date();
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    out.push({ iso, label: String(d.getDate()), matched: null, rank: null });
-  }
-  const placed = new Set<string>();
-  for (const r of history) { // history desc（最新在前）
-    const d = new Date(r.checked_at);
-    if (Number.isNaN(d.getTime())) continue;
-    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    if (placed.has(iso)) continue;
-    const bucket = out.find((b) => b.iso === iso);
-    if (bucket) {
-      bucket.matched = Number(r.metric?.matched_keywords ?? 0);
-      const rk = Number(r.rank ?? -1);
-      bucket.rank = rk > 0 ? rk : RANK_SENTINEL;
-      placed.add(iso);
-    }
-  }
-  return out;
-}
-const previewTrend = computed(() => buildTrend(taskHistories.value[previewTask.value?.id ?? -1] ?? []));
-const hasPreviewTrend = computed(() => previewTrend.value.some((b) => b.matched !== null));
-const previewTrendLabels = computed(() => previewTrend.value.map((b) => b.label));
-const previewTrendMatched = computed(() => previewTrend.value.map((b) => b.matched));
-const previewTrendRank = computed(() => previewTrend.value.map((b) => b.rank));
-const TREND_MATCHED_COLOR = "#c9521f";
-const TREND_RANK_COLOR = "#8a8580";
-
 // ── L2 单关键词详情 helpers（镜像知乎问题右卡）──
-// 首位命中结果 = results 里第一个命中品牌的（results 按 rank 升序，即 first_rank 那条）
-const firstHit = computed<ResultItem | null>(() =>
-  currentKeyword.value?.results?.find((r) => r.matches_brand) ?? null,
-);
 // 选中关键词近 7 天「卡位数量(matched_count)」趋势 —— 从任务历史每天取该关键词的 matched_count
 const selectedKwTrend = computed<Array<{ iso: string; label: string; matched: number | null }>>(() => {
   const out: Array<{ iso: string; label: string; matched: number | null }> = [];
@@ -342,15 +304,14 @@ watch(keywordResults, (kws) => {
               <div class="font-display text-[14px] font-semibold">{{ previewTask.name }}</div>
               <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">任务详情</div>
             </div>
-            <div class="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
+            <div class="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
+              <div>
+                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">关键词数量</div>
+                <div class="font-display text-[18px] font-bold">{{ previewTask.config?.search_keywords?.length ?? 0 }}</div>
+              </div>
               <div>
                 <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">目标品牌</div>
                 <div class="text-[13px] font-medium">{{ previewTask.config?.target_brand || '—' }}</div>
-              </div>
-              <div>
-                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">近 7 天趋势</div>
-                <LineChart v-if="hasPreviewTrend" :labels="previewTrendLabels" dual-axis :series="[{ label: '命中关键词数', color: TREND_MATCHED_COLOR, data: previewTrendMatched }, { label: '最优排名', color: TREND_RANK_COLOR, data: previewTrendRank }]" />
-                <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">无历史数据 —— 跑几次「立即执行」后会成线。</div>
               </div>
             </div>
             <div class="pt-4 flex-shrink-0 flex gap-2">
@@ -411,13 +372,10 @@ watch(keywordResults, (kws) => {
             <div class="text-[11.5px]">查看该关键词的卡位详情</div>
           </div>
           <template v-else>
-            <!-- 标题：首位命中结果标题 + 链接（无命中 fallback 关键词）-->
-            <div class="mb-3 flex-shrink-0 flex items-start justify-between gap-2">
-              <div class="min-w-0">
-                <div class="font-display text-[14px] font-semibold truncate" :title="firstHit?.title || currentKeyword.keyword">{{ firstHit ? firstHit.title : currentKeyword.keyword }}</div>
-                <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">关键词：{{ currentKeyword.keyword }}</div>
-              </div>
-              <a v-if="firstHit?.url" :href="firstHit.url" target="_blank" rel="noopener" class="inline-flex flex-shrink-0 items-center gap-1 px-3 py-1.5 text-[11.5px]" :style="{ background: 'var(--card-2)', color: 'var(--ink-2)', border: '1px solid var(--line)', borderRadius: '999px', textDecoration: 'none' }" title="在浏览器打开该专栏/回答"><Icon name="external" :size="12" /><span>链接</span></a>
+            <!-- 标题：关键词（搜索词）-->
+            <div class="mb-3 flex-shrink-0">
+              <div class="font-display text-[14px] font-semibold truncate" :title="currentKeyword.keyword">{{ currentKeyword.keyword }}</div>
+              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">关键词详情</div>
             </div>
 
             <!-- KPI：卡位数量 / 最高排名 -->
@@ -463,7 +421,7 @@ watch(keywordResults, (kws) => {
                     <div class="mt-0.5 flex items-center gap-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
                       <span class="flex-shrink-0 px-1.5 rounded" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">{{ (r.content_type || '').toLowerCase() === 'article' ? '专栏' : (r.content_type || '').toLowerCase() === 'answer' ? '回答' : (r.content_type || '其他') }}</span>
                       <span class="truncate">{{ r.author_name || '—' }}</span>
-                      <span v-if="r.voteup_count" class="flex-shrink-0">· 👍 {{ r.voteup_count }}</span>
+                      <span v-if="r.voteup_count" class="flex-shrink-0">▲ {{ r.voteup_count }}</span>
                       <span v-if="r.matches_brand" class="ml-auto flex-shrink-0" :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">自家<template v-if="r.matched_field === 'fulltext'"> · 正文</template></span>
                     </div>
                   </div>
