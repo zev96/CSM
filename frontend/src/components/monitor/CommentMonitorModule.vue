@@ -25,6 +25,8 @@ import Spinner from "@/components/ui/Spinner.vue";
 import LineChart from "./history/LineChart.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 
+import ProgressBar from "@/components/ui/ProgressBar.vue";
+import { useMonitorStatus } from "@/stores/monitorStatus";
 import { useToast } from "@/composables/useToast";
 import {
   parseBatchName,
@@ -73,6 +75,33 @@ const emit = defineEmits<{
 }>();
 
 const toast = useToast();
+const monitorStatus = useMonitorStatus();
+
+// 把 video.id 反查回 task.id 用，L3 单视频 SSE / 立刻跑要原数字 id
+// NOTE: realTaskIdFromVideoId is defined further below (line ~244), but these
+// helpers are called only at render time so forward reference is fine for
+// function expressions hoisted through the module scope.
+
+// 单个 task（视频）当前抓取进度比例：running 且有 progress 时返回 0-1，
+// 否则 null（ProgressBar 收到 null 走 indeterminate shimmer）。
+function videoProgressValue(videoId: string): number | null {
+  const taskId = realTaskIdFromVideoId(videoId);
+  if (taskId == null) return null;
+  const p = monitorStatus.progressOf(taskId);
+  if (!p || !p.total) return null;
+  return Math.max(0, Math.min(1, p.current / p.total));
+}
+function isVideoRunning(videoId: string): boolean {
+  const taskId = realTaskIdFromVideoId(videoId);
+  return taskId != null ? monitorStatus.isRunning(taskId) : false;
+}
+// L3 详情「立刻监测」按钮文案：未跑=立刻监测；跑且有进度=监测中 N/total；跑但无进度=监测中…
+function detailRunLabel(videoId: string): string {
+  const taskId = realTaskIdFromVideoId(videoId);
+  if (taskId == null || !monitorStatus.isRunning(taskId)) return "立刻监测";
+  const p = monitorStatus.progressOf(taskId);
+  return p && p.total ? `监测中 ${p.current}/${p.total}` : "监测中…";
+}
 
 // 评论 tab 三级导航：
 //   selectedCommentTaskId  —— 一级 → 二级（左列从任务列表换成视频列表）
@@ -1014,6 +1043,13 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                   <div class="mt-0.5 truncate text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
                     {{ v.postedAt }}
                   </div>
+                  <ProgressBar
+                    v-if="isVideoRunning(v.id)"
+                    :value="videoProgressValue(v.id)"
+                    :height="3"
+                    tone="primary"
+                    :style="{ marginTop: '6px' }"
+                  />
                 </div>
                 <div class="text-center">
                   <!-- rank=0 (即 backend rank=-1) = 未在前 scrape_top_n 条命中，显示 "无" 与右侧 "未找到" pill 语义对齐 -->
@@ -1209,8 +1245,15 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                   :size="13"
                 />
                 <Icon v-else name="refresh" :size="13" />
-                <span>{{ runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0] ? "监测中…" : "立刻监测" }}</span>
+                <span>{{ detailRunLabel(selectedVideo.id) }}</span>
               </button>
+              <ProgressBar
+                v-if="isVideoRunning(selectedVideo.id)"
+                :value="videoProgressValue(selectedVideo.id)"
+                :height="4"
+                tone="primary"
+                :style="{ alignSelf: 'center', flex: 1, minWidth: '80px' }"
+              />
               <button
                 type="button"
                 class="inline-flex items-center gap-1.5 px-4 py-2 text-[12.5px] font-medium"
