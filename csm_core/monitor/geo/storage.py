@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from csm_core.monitor import storage as monitor_storage
+from .classify import authority
 from .models import GeoCell
 
 _DDL_V7_GEO: list[str] = [
@@ -152,9 +153,12 @@ def citation_leaderboard(
         e["count"] += 1
         e["_plats"].add(r["platform"])
         e["_kws"].add(r["keyword"])
-    out = [{"domain": e["domain"], "source_type": e["source_type"], "count": e["count"],
-            "platforms": sorted(e["_plats"]), "keywords": sorted(e["_kws"])} for e in agg.values()]
-    out.sort(key=lambda e: (-e["count"], e["domain"]))
+    out = [{
+        "domain": e["domain"], "source_type": e["source_type"], "count": e["count"],
+        "platforms": sorted(e["_plats"]), "keywords": sorted(e["_kws"]),
+        "weight": round(e["count"] * len(e["_plats"]) * authority(e["source_type"]), 2),
+    } for e in agg.values()]
+    out.sort(key=lambda e: (-e["weight"], -e["count"], e["domain"]))
     return out
 
 
