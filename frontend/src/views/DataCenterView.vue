@@ -18,7 +18,8 @@ import { useRouter } from "vue-router";
 import RetentionPage from "@/components/monitor/history/RetentionPage.vue";
 import ZhihuRankingPage from "@/components/monitor/history/ZhihuRankingPage.vue";
 import BaiduSEOAnalytics from "@/components/monitor/history/BaiduSEOAnalytics.vue";
-type HistorySubtab = "retention" | "zhihu" | "baidu";
+import ZhihuSearchAnalyticsPage from "@/components/monitor/history/ZhihuSearchAnalyticsPage.vue";
+type HistorySubtab = "retention" | "zhihu" | "baidu" | "zhihu_search";
 
 const router = useRouter();
 const historySubtab = ref<HistorySubtab>("retention");
@@ -28,7 +29,8 @@ const historySubtab = ref<HistorySubtab>("retention");
 // 顺序一致）。默认选中依然是 'retention'（业务定的"默认看评论留存"），
 // 列表顺序只影响展示位置。
 const HISTORY_TABS: Array<{ k: HistorySubtab; l: string }> = [
-  { k: "zhihu", l: "知乎排名" },
+  { k: "zhihu", l: "知乎问题" },
+  { k: "zhihu_search", l: "知乎搜索" },
   { k: "retention", l: "平台评论" },
   { k: "baidu", l: "百度排名" },
 ];
@@ -60,6 +62,10 @@ function goToZhihuTask(payload: { taskId: number }) {
     name: "monitor",
     query: { tab: "zhihu", task: payload.taskId },
   });
+}
+
+function goToZhihuSearchTask(payload: { taskId: number }) {
+  router.push({ name: "monitor", query: { tab: "zhihu_search", task: payload.taskId } });
 }
 
 function goToBaiduTask(_payload: { taskId: number }) {
@@ -149,6 +155,10 @@ function goToBaiduTask(_payload: { taskId: number }) {
         <ZhihuRankingPage
           v-else-if="historySubtab === 'zhihu'"
           @navigate="goToZhihuTask"
+        />
+        <ZhihuSearchAnalyticsPage
+          v-else-if="historySubtab === 'zhihu_search'"
+          @navigate="goToZhihuSearchTask"
         />
         <BaiduSEOAnalytics
           v-else-if="historySubtab === 'baidu'"
