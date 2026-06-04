@@ -1278,3 +1278,24 @@ def set_brand_hits(video_id: int, hits: int) -> bool:
         (int(hits), video_id),
     )
     return cur.rowcount > 0
+
+
+def videos_for_prefilter(job_id: int, platform: str) -> list[dict[str, Any]]:
+    """Return [{id, url}, ...] for not-excluded videos in this job+platform.
+
+    Used by the runner's brand pre-filter pass to enumerate which videos
+    to check for brand-seeded comments.  Only videos with excluded=0 are
+    returned so already-excluded rows are not re-processed.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT v.id, v.url
+        FROM videos v
+        JOIN video_source_keywords vsk ON vsk.video_id = v.id
+        WHERE vsk.job_id = ? AND v.platform = ? AND v.excluded = 0
+        ORDER BY v.first_seen_at ASC
+        """,
+        (job_id, platform),
+    ).fetchall()
+    return [{"id": r["id"], "url": r["url"]} for r in rows]
