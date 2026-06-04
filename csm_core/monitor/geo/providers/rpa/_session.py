@@ -24,7 +24,7 @@ _POLL_INTERVAL_MS = 2000
 @contextlib.contextmanager
 def rpa_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
     """采集用持久档页面。geo_ 前缀隔离命名空间；monitor-cookie 注入对 geo_* 无操作。"""
-    with launched_page(f"geo_{platform}", headless=headless) as page:
+    with launched_page(f"geo_{platform}", headless=headless, hidden_window=True) as page:
         yield page
 
 

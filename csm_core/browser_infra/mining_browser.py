@@ -25,6 +25,7 @@ from csm_core.browser_infra.patchright_pool import (
     ensure_browsers_path,
     _kill_process_tree,
 )
+from csm_core.browser_infra.window_util import offscreen_args
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _profile_dir_for(platform: str) -> Path:
 
 
 @contextlib.contextmanager
-def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
+def launched_page(platform: str, *, headless: bool = False, hidden_window: bool = False) -> Iterator[Any]:
     """Context-managed Patchright Page for one mining batch.
 
     On exit: OS-kills the Chromium tree (cross-thread-safe path, same
@@ -90,6 +91,7 @@ def launched_page(platform: str, *, headless: bool = False) -> Iterator[Any]:
             "--disable-dev-shm-usage",
             "--window-size=1000,700",
         ]
+        launch_args += offscreen_args(hidden_window)
         context = pw.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
             headless=headless,
