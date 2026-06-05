@@ -91,3 +91,26 @@ def test_missing_my_comment_text_returns_failed():
     res = build_match_result(task, _comments(["x"]), source="test")
     assert res.status == "failed"
     assert "my_comment_text" in res.error_message
+
+
+def test_report_progress_noop_when_cb_none():
+    from csm_core.monitor.platforms._comment_common import report_progress
+    # None cb 不应抛错
+    report_progress(None, 3, 10)
+
+
+def test_report_progress_forwards_current_total():
+    from csm_core.monitor.platforms._comment_common import report_progress
+    calls = []
+    report_progress(lambda c, t: calls.append((c, t)), 5, 150)
+    assert calls == [(5, 150)]
+
+
+def test_report_progress_swallows_cb_exception():
+    from csm_core.monitor.platforms._comment_common import report_progress
+
+    def boom(c, t):
+        raise RuntimeError("sink down")
+
+    # 上报失败绝不能打断抓取
+    report_progress(boom, 1, 2)

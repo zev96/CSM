@@ -21,7 +21,10 @@ from typing import Any
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask, maybe_cancel
 from ..rate_limit import get_pacer, get_breaker
 from ..drivers.cookie_store import CookieStore
-from ._comment_common import build_match_result, fail_result, risk_control_result
+from ._comment_common import (
+    build_match_result, fail_result, risk_control_result,
+    DEFAULT_SCRAPE_TOP_N, ProgressCb, report_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +103,10 @@ class KuaishouCommentAdapter:
         self,
         task: MonitorTask,
         cancel_token: threading.Event | None = None,
+        progress_cb: "ProgressCb | None" = None,
         **_kwargs,
     ) -> MonitorResult:
-        # **_kwargs 吞掉 monitor_loop 的 progress_cb / resume_from。
+        # **_kwargs 吞掉 monitor_loop 的 resume_from 等未来扩展参数。
         # cancel_token 让用户「停止」点击在 fetch 中途生效（不再等整个
         # GraphQL 分页拉完）。
         if not self._breaker.allow():
@@ -140,8 +144,10 @@ class KuaishouCommentAdapter:
         maybe_cancel(cancel_token)
 
         self._pacer.wait()
+        scrape_top_n = int(task.config.get("scrape_top_n") or DEFAULT_SCRAPE_TOP_N)
         comments, ok, err = self._fetch_comments(
-            session, photo_id, limit=200, cancel_token=cancel_token,
+            session, photo_id, limit=scrape_top_n,
+            cancel_token=cancel_token, progress_cb=progress_cb,
         )
         if not ok:
             self._breaker.record_failure()
@@ -210,6 +216,7 @@ class KuaishouCommentAdapter:
         photo_id: str,
         limit: int,
         cancel_token: threading.Event | None = None,
+        progress_cb: "ProgressCb | None" = None,
     ) -> tuple[list[dict[str, Any]], bool, str | None]:
         all_comments: list[dict[str, Any]] = []
         pcursor = ""
@@ -264,6 +271,7 @@ class KuaishouCommentAdapter:
                     "likes": int(c.get("likedCount") or 0),
                 })
 
+            report_progress(progress_cb, len(all_comments), limit)
             new_pcursor = (
                 vision.get("pcursorV2") if roots_v2 else vision.get("pcursor")
             ) or ""

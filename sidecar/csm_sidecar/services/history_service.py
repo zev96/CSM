@@ -555,6 +555,187 @@ def _baidu_daily_series(
     return series
 
 
+def get_zhihu_search_history(range_str: str) -> dict[str, Any]:
+    """知乎搜索 KPI + 每日趋势 + (task×keyword) 关键词列表。
+
+    镜像 get_baidu_keyword_history，但读 zhihu_search 字段名
+    (matched_count / first_rank)。每行 = 一个 (task, search_keyword)。
+    """
+    range_days = _parse_range(range_str)
+    now = datetime.now()
+    conn = storage.get_conn()
+    rows = conn.execute(
+        """
+        SELECT r.task_id, r.checked_at, r.status, r.rank, r.metric_json,
+               t.id AS t_id, t.name AS task_name, t.config_json
+        FROM monitor_results r
+        JOIN monitor_tasks t ON t.id = r.task_id
+        WHERE t.type = 'zhihu_search' AND t.enabled = 1 AND r.status = 'ok'
+        ORDER BY r.task_id ASC, r.checked_at DESC
+        """,
+    ).fetchall()
+    all_tasks = conn.execute(
+        "SELECT id, name, config_json FROM monitor_tasks WHERE type='zhihu_search' AND enabled=1",
+    ).fetchall()
+
+    per_task: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        m = json.loads(row["metric_json"] or "{}")
+        checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001
+        if not checked:
+            continue
+        per_task[row["task_id"]].append({
+            "checked_at": checked,
+            "metric": m,
+            "task_name": row["task_name"],
+        })
+
+    keyword_rows = []
+    for t in all_tasks:
+        cfg = json.loads(t["config_json"] or "{}")
+        results = per_task.get(t["id"], [])
+        curr_result = results[0] if results else None
+        prev_result = results[1] if len(results) > 1 else None
+        curr_m = curr_result["metric"] if curr_result else {}
+        prev_m = prev_result["metric"] if prev_result else {}
+        search_keywords = list(cfg.get("search_keywords") or [])
+        if not search_keywords and curr_m.get("search_keywords"):
+            search_keywords = list(curr_m["search_keywords"])
+        target_brand = cfg.get("target_brand", "")
+        for kw in search_keywords:
+            # _find_keyword_entry matches entry.get("keyword")==kw — confirmed present
+            curr_kw = _find_keyword_entry(curr_m, kw)
+            prev_kw = _find_keyword_entry(prev_m, kw)
+            curr_matched = int((curr_kw or {}).get("matched_count") or 0)
+            curr_best = int((curr_kw or {}).get("first_rank") or -1)
+            prev_matched = (int(prev_kw.get("matched_count") or 0)) if prev_kw else None
+            prev_best = (int(prev_kw.get("first_rank") or -1)) if prev_kw else None
+            _curr = {"matched_count": curr_matched, "best_rank": curr_best, "top_n": 10} if curr_kw else None
+            _prev = {"matched_count": (prev_matched or 0), "best_rank": (prev_best or -1), "top_n": 10} if prev_kw else None
+            kind, _ = _classify_zhihu_change(_curr, _prev)
+            results_list = (curr_kw or {}).get("results") or []
+            matched_ranks = [r["rank"] for r in results_list if r.get("matches_brand")]
+            keyword_rows.append({
+                "task_id": t["id"],
+                "task_name": t["name"],
+                "search_keyword": kw,
+                "target_brand": target_brand,
+                "matched_count": curr_matched,
+                "matched_count_prev": prev_matched,
+                "top_n": 10,
+                "matched_ranks": matched_ranks,
+                "best_rank": curr_best,
+                "best_rank_prev": prev_best,
+                "change_kind": kind,
+                "checked_at": (curr_result["checked_at"].isoformat() if curr_result else None),
+            })
+
+    monitored_keywords = len(keyword_rows)
+    hit_count_total = sum(k["matched_count"] for k in keyword_rows)
+    topn_total = monitored_keywords * 10
+    avg_match_rate_today = (hit_count_total / topn_total) if topn_total else 0.0
+    hit_count_prev = sum((k["matched_count_prev"] or 0) for k in keyword_rows if k["matched_count_prev"] is not None)
+    topn_prev_total = sum(10 for k in keyword_rows if k["matched_count_prev"] is not None)
+    avg_match_rate_prev = (hit_count_prev / topn_prev_total) if topn_prev_total else 0.0
+    changed_down = sum(1 for k in keyword_rows if k["change_kind"] in ("down", "dropped"))
+    changed_up = sum(1 for k in keyword_rows if k["change_kind"] in ("up", "new"))
+    brands_covered = len({
+        json.loads(t["config_json"] or "{}").get("target_brand", "")
+        for t in all_tasks
+        if json.loads(t["config_json"] or "{}").get("target_brand")
+    })
+    daily_series = _zhihu_search_daily_series(per_task, all_tasks, range_days=range_days, now=now)
+
+    return {
+        "range": range_str,
+        "kpis": {
+            "monitored_keywords": monitored_keywords,
+            "brands_covered": brands_covered,
+            "avg_match_rate_today": avg_match_rate_today,
+            "avg_match_rate_prev": avg_match_rate_prev,
+            "hit_count_total": hit_count_total,
+            "topn_total": topn_total,
+            "changed_keywords": changed_down + changed_up,
+            "changed_up": changed_up,
+            "changed_down": changed_down,
+        },
+        "daily_series": daily_series,
+        "keywords": keyword_rows,
+    }
+
+
+def _zhihu_search_daily_series(
+    per_task: dict[int, list[dict]],
+    all_tasks: list,
+    *,
+    range_days: int,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Per-day series for zhihu_search: avg_match_rate + change counts.
+
+    Mirrors _baidu_daily_series but reads matched_count / first_rank
+    (zhihu_search field names) instead of default_matched_count / default_first_rank.
+    """
+    series = []
+    # Build task→keywords map from config
+    task_keywords: dict[int, list[str]] = {}
+    for t in all_tasks:
+        cfg = json.loads(t["config_json"] or "{}")
+        kws = list(cfg.get("search_keywords") or [])
+        task_keywords[t["id"]] = kws
+
+    for d in range(range_days):
+        day = (now - timedelta(days=range_days - 1 - d)).date()
+        day_start = datetime.combine(day, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        hits = 0
+        topn = 0
+        changed_up = changed_down = 0
+
+        for task_id, results in per_task.items():
+            keywords_for_task = task_keywords.get(task_id, [])
+            curr_on_day = next((r for r in results if r["checked_at"] < day_end), None)
+            if not curr_on_day:
+                continue
+            prev_for_day = next((r for r in results if r["checked_at"] < day_start), None)
+
+            curr_m = curr_on_day["metric"]
+            prev_m = prev_for_day["metric"] if prev_for_day else {}
+
+            for kw in keywords_for_task:
+                curr_kw = _find_keyword_entry(curr_m, kw)
+                prev_kw = _find_keyword_entry(prev_m, kw)
+                if curr_kw is None:
+                    continue
+                c_matched = int(curr_kw.get("matched_count") or 0)
+                c_best = int(curr_kw.get("first_rank") or -1)
+                hits += c_matched
+                topn += 10
+
+                _curr = {"matched_count": c_matched, "best_rank": c_best, "top_n": 10}
+                _prev = None
+                if prev_kw:
+                    _prev = {
+                        "matched_count": int(prev_kw.get("matched_count") or 0),
+                        "best_rank": int(prev_kw.get("first_rank") or -1),
+                        "top_n": 10,
+                    }
+                kind, _ = _classify_zhihu_change(_curr, _prev)
+                if kind in ("up", "new"):
+                    changed_up += 1
+                elif kind in ("down", "dropped"):
+                    changed_down += 1
+
+        series.append({
+            "date": day.strftime("%Y-%m-%d"),
+            "avg_match_rate": (hits / topn) if topn else 0.0,
+            "changed_count": changed_up + changed_down,
+            "changed_up": changed_up,
+            "changed_down": changed_down,
+        })
+    return series
+
+
 def _collect_deletion_events(
     by_platform_date: dict[str, dict[str, dict[int, dict]]],
     *,

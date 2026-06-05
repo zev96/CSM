@@ -58,6 +58,7 @@ def start_job(body: StartJobRequest) -> dict[str, Any]:
             keyword=body.keyword,
             platforms=body.platforms,
             target_per_platform=body.target_per_platform,
+            brand_keywords=body.brand_keywords,
         )
     except RuntimeError as e:
         if "busy" in str(e):

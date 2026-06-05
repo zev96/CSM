@@ -399,7 +399,7 @@ onUnmounted(() => {
         class="flex flex-shrink-0 items-center justify-between"
         :style="{ gap: '12px', padding: '18px 20px 14px' }"
       >
-        <div class="font-display" :style="{ fontSize: '14px', fontWeight: 600 }">卡位任务</div>
+        <div class="font-display" :style="{ fontSize: '14px', fontWeight: 600 }">监测任务</div>
         <button
           type="button"
           class="inline-flex flex-shrink-0 items-center"
@@ -454,7 +454,7 @@ onUnmounted(() => {
           v-if="demoMode"
           class="text-center"
           :style="{ padding: '40px 8px', fontSize: '12.5px', color: 'var(--ink-3)' }"
-        >暂无卡位任务 · 点击「新建任务」开始监测 AI 平台卡位</div>
+        >暂无监测任务 · 点击「新建任务」开始监测 AI 平台卡位</div>
 
         <!-- 搜索无命中 -->
         <div
@@ -648,7 +648,7 @@ onUnmounted(() => {
       <div class="text-center" :style="{ fontSize: '12.5px', color: 'var(--ink-3)' }">
         {{
           tasks.length === 0
-            ? "新建一个卡位任务后，这里展示品牌在各 AI 平台的卡位详情。"
+            ? "新建一个监测任务后，这里展示品牌在各 AI 平台的卡位详情。"
             : "点左侧任务进入关键词列表，选择关键词查看其卡位详情。"
         }}
       </div>

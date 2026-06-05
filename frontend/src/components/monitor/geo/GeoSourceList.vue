@@ -34,7 +34,7 @@ function goMining(domain: string) {
   router.push({ name: "mining", query: { geo_keyword: props.keyword, geo_source: domain } });
 }
 
-const maxCount = computed(() => Math.max(1, ...props.board.map((b) => b.count)));
+const maxWeight = computed(() => Math.max(1, ...props.board.map((b) => b.weight)));
 const denom = computed(() => Math.max(1, props.total));
 </script>
 
@@ -66,7 +66,7 @@ const denom = computed(() => Math.max(1, props.total));
         </div>
         <div :style="{ marginTop: '5px' }">
           <div :style="{ height: '5px', borderRadius: '999px', background: 'rgba(28,26,23,.06)', overflow: 'hidden' }">
-            <div :style="{ width: `${Math.max(0, Math.min(1, b.count / maxCount)) * 100}%`, height: '100%', background: SRC_COLORS[i % SRC_COLORS.length], borderRadius: '999px' }" />
+            <div :style="{ width: `${Math.max(0, Math.min(1, b.weight / maxWeight)) * 100}%`, height: '100%', background: SRC_COLORS[i % SRC_COLORS.length], borderRadius: '999px' }" />
           </div>
         </div>
       </div>
@@ -74,6 +74,7 @@ const denom = computed(() => Math.max(1, props.total));
         <span class="font-display" :style="{ fontSize: '13px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }">{{ b.count }}</span>
         <span :style="{ fontSize: '10px', color: 'var(--ink-3)' }"> 次引用</span>
         <div :style="{ fontSize: '9.5px', color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums' }">平台引用率 {{ Math.round((b.platforms / denom) * 100) }}%</div>
+        <div :style="{ fontSize: '9.5px', color: 'var(--ink-3)' }">权重 {{ b.weight }}</div>
         <button
           type="button"
           :style="{ fontSize: '9px', color: 'var(--ink-4)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 0', lineHeight: 1.4 }"

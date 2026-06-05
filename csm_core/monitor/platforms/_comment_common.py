@@ -10,7 +10,7 @@ keeps the three adapters thin and consistent.
 from __future__ import annotations
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from ..base import MonitorResult, MonitorTask
 from ..text_match import find_best_match, DEFAULT_SIMILARITY_THRESHOLD
@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 #: 用户填的 top_n 是"理想排名上限"（默认 5），跟这个扫描范围是两回事，
 #: 之前混用导致 rank=20 的评论被 [:15] 切掉永远找不到。
 DEFAULT_SCRAPE_TOP_N = 150
+
+# 进度回调签名：progress_cb(已抓条数, 目标条数)。monitor_loop._run_one
+# 注入的 _progress_cb 就是这个形状（它内部已 try/except 发 SSE 事件）。
+ProgressCb = Callable[[int, int], None]
+
+
+def report_progress(progress_cb: "ProgressCb | None", current: int, total: int) -> None:
+    """安全调用进度回调：None 直接跳过；回调抛错只记 debug 不上抛。
+
+    抓取主流程绝不能因为「发个进度事件失败」而中断 —— SSE 队列满 / 客户端
+    断开都可能让 cb 抛错。"""
+    if progress_cb is None:
+        return
+    try:
+        progress_cb(int(current), int(total))
+    except Exception:
+        logger.debug("progress_cb raised; ignoring", exc_info=True)
 
 
 def build_match_result(

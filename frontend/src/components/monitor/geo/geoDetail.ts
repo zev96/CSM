@@ -111,6 +111,28 @@ export interface BoardRow {
   type: string;
   count: number;
   platforms: number;
+  weight: number;
+}
+
+/** GEO 分析页顶层聚合指标（result.metric 顶层，见 csm_core geo metrics.aggregate）。 */
+export interface GeoTopMetric {
+  soc: number;
+  sentiment_score: number;
+  mentioned: number;
+  ok_total: number;
+  total: number;
+  status_band?: string;
+  first_rank_rate?: number;
+}
+/** GEO 数据中心分析（一个任务/品牌的跨关键词聚合）。 */
+export interface GeoAnalytics {
+  keywords: string[];                                  // 矩阵行
+  platformIds: string[];                               // 矩阵列（平台 id，orderPlatforms 后去重）
+  matrix: Record<string, Record<string, PlatformVM>>;  // matrix[keyword][platformId] = cell VM
+  metric: GeoTopMetric | null;
+  history: HistoryPoint[];
+  board: BoardRow[];                                   // 全关键词带权重信源榜（后端已按 weight 排）
+  lastRunIso: string | null;
 }
 
 // ── helper（移植 geo-shared.jsx）─────────────────────────────────────────
@@ -376,6 +398,17 @@ export interface KeywordDetail {
 }
 
 // 平台排序：稳定展示顺序（先 GEO 既定顺序的 6 平台，再其余按名）。
+function dedupeById(vms: PlatformVM[]): PlatformVM[] {
+  const seen = new Set<string>();
+  const out: PlatformVM[] = [];
+  for (const v of vms) {
+    if (!seen.has(v.id)) {
+      seen.add(v.id);
+      out.push(v);
+    }
+  }
+  return out;
+}
 const PLATFORM_ORDER = ["doubao", "tongyi", "yuanbao", "kimi", "deepseek", "quark"];
 function orderPlatforms(arr: PlatformVM[]): PlatformVM[] {
   const idx = new Map(PLATFORM_ORDER.map((v, i) => [v, i]));
@@ -493,18 +526,20 @@ export function useGeoKeywordDetail(
         .sort((a, b) => a.iso.localeCompare(b.iso)) // old → new
         .map((e) => e.p);
 
-      // BOARD：citation leaderboard（已按关键词过滤）→ {domain,type,count,platforms数}。
+      // BOARD：citation leaderboard（已按关键词过滤）→ {domain,type,count,platforms数,weight}。
       const lb = (citRes.data?.leaderboard ?? []) as Array<{
         domain: string;
         source_type: string;
         count: number;
         platforms: string[];
+        weight?: number;
       }>;
       const board: BoardRow[] = lb.map((r) => ({
         domain: r.domain,
         type: r.source_type,
         count: r.count,
         platforms: Array.isArray(r.platforms) ? r.platforms.length : 0,
+        weight: r.weight ?? 0,
       }));
 
       const competitors = deriveCompetitors(platforms);
@@ -557,4 +592,145 @@ export function useGeoKeywordDetail(
   });
 
   return { detail, loading, error, reload, platformDenominator };
+}
+
+/**
+ * 拉取并装配某任务（一个品牌）的跨关键词 GEO 分析数据。
+ * 与 useGeoKeywordDetail 的差异：
+ *   - cells 不按关键词过滤 → 全关键词 matrix[keyword][platformId]
+ *   - citations 不传 keyword → 全任务带权重信源榜
+ *   - metric 取 result.metric 顶层（非 by_keyword）
+ *   - history 读顶层 soc / first_rank_rate（无需 by_keyword 下钻）
+ *   - 返回 analytics（GeoAnalytics）而非 detail（KeywordDetail）
+ */
+export function useGeoAnalytics(
+  taskId: Ref<number | null>,
+  brandTerms: Ref<string[]>,
+  configuredKeywords: Ref<string[]>,   // task.config.keywords（行顺序优先）
+  configuredPlatforms: Ref<string[]>,  // task.config.platforms（列顺序参考）
+) {
+  const sidecar = useSidecar();
+  const analytics = ref<GeoAnalytics | null>(null);
+  const loading = ref(false);
+  const error = ref(false);
+
+  async function reload(): Promise<void> {
+    const tid = taskId.value;
+    if (tid == null) {
+      analytics.value = null;
+      return;
+    }
+    loading.value = true;
+    error.value = false;
+    try {
+      const [cellsRes, resultsRes, citRes] = await Promise.all([
+        sidecar.client.get(`/api/monitor/geo/${tid}/latest-cells`),
+        sidecar.client.get("/api/monitor/results", {
+          params: { task_id: tid, limit: 8 },
+        }),
+        sidecar.client.get(`/api/monitor/geo/${tid}/citations`, {
+          params: { days: 30 },
+        }),
+      ]);
+
+      // race guard：await 期间用户切换了任务 → 丢弃结果。
+      if (taskId.value !== tid) return;
+
+      const terms = brandTerms.value.filter(Boolean);
+
+      // MATRIX：全量 cells（不按关键词过滤），按 keyword × platformId 分组。
+      const rawCells = (cellsRes.data?.cells ?? []) as RawCell[];
+      const matrix: Record<string, Record<string, PlatformVM>> = {};
+      const allVMs: PlatformVM[] = [];
+      for (const c of rawCells) {
+        const vm = cellToPlatform(c, terms);
+        (matrix[c.keyword] ||= {})[vm.id] = vm;
+        allVMs.push(vm);
+      }
+      const livePlatforms = dedupeById(allVMs);
+      const cfgPlatforms = configuredPlatforms.value.filter(Boolean);
+      const displayPlatforms = cfgPlatforms.length
+        ? orderPlatforms(mergeConfiguredPlatforms(livePlatforms, cfgPlatforms))
+        : orderPlatforms(livePlatforms);
+      const platformIds = displayPlatforms.map((p) => p.id);
+
+      // keywords：config.keywords 保序（含未跑到的），回退 cells 里出现的。
+      const cellKeywords = Object.keys(matrix);
+      const ckws = configuredKeywords.value.filter(Boolean);
+      const keywords = ckws.length ? ckws : cellKeywords;
+
+      // METRIC + HISTORY：results DESC → metric 取顶层（非 by_keyword）。
+      const results = (resultsRes.data?.results ?? []) as Array<{
+        checked_at: string | null;
+        status: string;
+        metric: GeoTopMetric | null;
+      }>;
+      const metric: GeoTopMetric | null = results.length
+        ? (results[0].metric ?? null)
+        : null;
+      const lastRunIso: string | null = results.length ? (results[0].checked_at ?? null) : null;
+
+      // 趋势横轴：最近 7 天按天聚合（DESC 先遇到 = 当天最后一跑），读顶层 soc / first_rank_rate。
+      const DAY_MS = 86_400_000;
+      const cutoff = Date.now() - 7 * DAY_MS;
+      const seenDay = new Map<string, { iso: string; p: HistoryPoint }>();
+      for (const r of results) {
+        if (!r.checked_at) continue;
+        const t = new Date(r.checked_at).getTime();
+        if (isNaN(t) || t < cutoff) continue;
+        const date = fmtShortDate(r.checked_at);
+        if (seenDay.has(date)) continue;
+        const m = r.metric;
+        seenDay.set(date, {
+          iso: r.checked_at,
+          p: { date, soc: m?.soc ?? 0, first: m?.first_rank_rate ?? 0 },
+        });
+      }
+      const history: HistoryPoint[] = [...seenDay.values()]
+        .sort((a, b) => a.iso.localeCompare(b.iso))
+        .map((e) => e.p);
+
+      // BOARD：全任务 citation leaderboard（无 keyword 过滤），带 weight。
+      const lb = (citRes.data?.leaderboard ?? []) as Array<{
+        domain: string;
+        source_type: string;
+        count: number;
+        platforms: string[];
+        weight?: number;
+      }>;
+      const board: BoardRow[] = lb.map((r) => ({
+        domain: r.domain,
+        type: r.source_type,
+        count: r.count,
+        platforms: Array.isArray(r.platforms) ? r.platforms.length : 0,
+        weight: r.weight ?? 0,
+      }));
+
+      if (taskId.value !== tid) return;
+      analytics.value = {
+        keywords,
+        platformIds,
+        matrix,
+        metric,
+        history,
+        board,
+        lastRunIso,
+      };
+    } catch {
+      if (taskId.value === tid) {
+        error.value = true;
+        analytics.value = null;
+      }
+    } finally {
+      if (taskId.value === tid) loading.value = false;
+    }
+  }
+
+  watch(
+    [taskId, brandTerms, configuredKeywords, configuredPlatforms],
+    () => void reload(),
+    { immediate: true },
+  );
+
+  return { analytics, loading, error, reload };
 }

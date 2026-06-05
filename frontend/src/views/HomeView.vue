@@ -3,7 +3,7 @@
  * 工作台 — 3 段布局，撑满父容器、整页不滚。
  *
  *   Row 1   ─ hero 紧凑（auto 高，自适应内容），平铺无外框
- *   Row 2   ─ flex-1 min-h-0，4 张监测卡（百度 / 知乎 / 评论留存 / 视频抓取）
+ *   Row 2   ─ flex-1 min-h-0，6 张监测卡 3×2（百度 / 知乎 / 评论留存 / 视频抓取 / 知乎搜索 / GEO）
  *   Row 3   ─ 140px 固定，最近文档（横排 4 卡，单行高）
  *
  * 之前是 hero 280px + Row2/Row3 flex-1 平分。参考设计把"最近文档"压成
@@ -23,6 +23,8 @@ import BaiduSeoCard from "@/components/home/BaiduSeoCard.vue";
 import ZhihuCard from "@/components/home/ZhihuCard.vue";
 import CommentRetentionCard from "@/components/home/CommentRetentionCard.vue";
 import VideoMiningCard from "@/components/home/VideoMiningCard.vue";
+import ZhihuSearchCard from "@/components/home/ZhihuSearchCard.vue";
+import GeoCard from "@/components/home/GeoCard.vue";
 import RecentDocsCard from "@/components/home/RecentDocsCard.vue";
 
 import { useConfig } from "@/stores/config";
@@ -64,15 +66,17 @@ onMounted(async () => {
     <!-- hero ↔ Row 2 固定 25px（比之前 45 缩 20px，让 Row 2 整体上移） -->
     <div class="flex-shrink-0" :style="{ height: '25px' }"></div>
 
-    <!-- Row 2：4 张监测卡，basis 340（比之前 320 加高 20px） -->
+    <!-- Row 2：6 张监测卡（3×2），basis 340 -->
     <div
-      class="grid min-h-0 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+      class="grid min-h-0 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
       :style="{ gap: '20px', flex: '340 1 340px', minHeight: '300px' }"
     >
       <BaiduSeoCard />
       <ZhihuCard />
       <CommentRetentionCard />
       <VideoMiningCard />
+      <ZhihuSearchCard />
+      <GeoCard />
     </div>
 
     <!-- Row 2 ↔ Row 3 固定 20px，所有窗口尺寸都不变 -->

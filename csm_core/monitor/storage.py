@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -146,6 +146,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # v7: GEO 卡位监控两张规范化表（geo_cells / geo_citations）。
     from csm_core.monitor.geo import storage as geo_storage
     geo_storage.apply_v7_migration(conn)
+    # v8: 品牌预筛列 — videos.brand_comment_hits / exclude_reason +
+    #     mining_jobs.brand_keywords_json。
+    mining_storage.apply_v8_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),

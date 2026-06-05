@@ -14,6 +14,7 @@ import time
 from typing import Callable
 
 from csm_core.mining import storage as mining_storage
+from csm_core.mining.comment_prefilter import count_brand_hits, fetch_video_comment_texts
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
@@ -27,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 PUBLISH_EVERY_N_CARDS = 5
 PUBLISH_EVERY_N_SECONDS = 10.0
+
+# Brand pre-filter constants.
+# A video is marked excluded when ≥ PREFILTER_THRESHOLD of its scraped
+# comments contain at least one brand keyword.
+PREFILTER_THRESHOLD = 3
+# How many comments to fetch per video for the brand-hit check.
+PREFILTER_SCRAPE_TOP_N = 30
 
 
 EventPublisher = Callable[[str, dict], None]
@@ -71,6 +79,7 @@ class MiningRunner:
             logger.warning("MiningRunner.run: unknown job %d", job_id)
             return
         cancel_event = self.register_cancel_event(job_id)
+        brand_keywords: list[str] = job.get("brand_keywords") or []
         mining_storage.mark_started(job_id)
         self.publish("job.started", {"job_id": job_id, "keyword": job["keyword"]})
 
@@ -147,7 +156,50 @@ class MiningRunner:
                 })
                 continue
 
+            # Brand pre-filter pass — only when the search completed successfully
+            # and brand keywords are configured. Runs BEFORE the final "done"
+            # progress write so any transient "prefilter" phase is overwritten.
+            if outcome.status == "done" and brand_keywords:
+                try:
+                    vids = mining_storage.videos_for_prefilter(job_id, platform)
+                    for i, v in enumerate(vids):
+                        if cancel_event.is_set():
+                            break
+                        # Transient prefilter progress — will be overwritten by
+                        # the final "done" write below, keeping phase integrity.
+                        mining_storage.update_platform_progress(
+                            job_id, platform,
+                            got=i, target=len(vids),
+                            phase="prefilter", note="筛重复评论",
+                        )
+                        self.publish("job.progress", {
+                            "job_id": job_id, "platform": platform,
+                            "phase": "prefilter", "got": i, "target": len(vids),
+                            "note": "筛重复评论",
+                        })
+                        texts = fetch_video_comment_texts(
+                            platform, v["url"], limit=PREFILTER_SCRAPE_TOP_N,
+                        )
+                        if not texts:
+                            # fail-open：抓不到评论 → 不排除，且不写 brand_comment_hits（保持 NULL=未检查，
+                            # 区别于「检查过、0 条品牌评论」的 0）。
+                            continue
+                        hits = count_brand_hits(texts, brand_keywords)
+                        if hits >= PREFILTER_THRESHOLD:
+                            mining_storage.mark_brand_excluded(v["id"], hits)
+                        else:
+                            mining_storage.set_brand_hits(v["id"], hits)
+                except Exception:
+                    logger.exception(
+                        "[runner] prefilter pass failed for platform=%s job=%s",
+                        platform, job_id,
+                    )
+                # No finally needed — the "done" progress write below always
+                # restores the correct phase, whether prefilter ran or not.
+
             # Final platform progress with outcome status.
+            # For status=="done" this always writes phase="done", which
+            # overwrites any transient "prefilter" phase written above.
             mining_storage.update_platform_progress(
                 job_id, platform,
                 got=outcome.cards_emitted,

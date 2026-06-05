@@ -692,12 +692,14 @@ onUnmounted(() => {
   if (stopMonitorBus) stopMonitorBus();
 });
 
-const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
-  { k: "zhihu", l: "知乎问题", ic: "radar" },
-  { k: "zhihu_search", l: "知乎搜索", ic: "search" },
-  { k: "comment", l: "平台评论", ic: "warn" },
-  { k: "baidu", l: "百度排名", ic: "search" },
-  { k: "geo", l: "AI 卡位", ic: "zap" },
+// 纯文字 pivot（无 icon）—— 跟数据中心 pivot 完全一致，避免两处 tab 条
+// 大小/位置不一。原先这里带 icon 让监控中心的 pill 比数据中心宽。
+const TAB_META: Array<{ k: Tab; l: string }> = [
+  { k: "zhihu", l: "知乎问题" },
+  { k: "zhihu_search", l: "知乎搜索" },
+  { k: "comment", l: "平台评论" },
+  { k: "baidu", l: "百度排名" },
+  { k: "geo", l: "GEO" },
 ];
 </script>
 
@@ -728,7 +730,7 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
                   ? "评论留存率监控"
                   : activeTab === "baidu"
                     ? "百度排名监控"
-                    : "AI 卡位监控（GEO）"
+                    : "GEO 监控"
           }}
         </div>
       </div>
@@ -755,18 +757,12 @@ const TAB_META: Array<{ k: Tab; l: string; ic: string }> = [
             color: activeTab === t.k ? '#fbf7ec' : 'var(--ink-3)',
             fontSize: '12.5px',
             fontWeight: 500,
-            gap: '6px',
             transition: 'background .15s, color .15s',
           }"
           @click="activeTab = t.k"
         >
-          <!--
-            原来 t.l 后面跟一颗 `tabCounts[t.k]` 数字胶囊（4 / 1 / 12），
-            被用户判定为无信息价值 —— 总条数对决策没帮助，反而让 pill
-            视觉变长。删掉，pill 只剩 icon + 名称。
-          -->
-          <Icon :name="t.ic" :size="13" />
-          <span>{{ t.l }}</span>
+          <!-- 纯文字 pill，跟数据中心 tab 一致（之前带 icon 让两处 pivot 大小不一）-->
+          {{ t.l }}
         </button>
       </div>
     </div>

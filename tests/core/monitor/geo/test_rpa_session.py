@@ -6,15 +6,18 @@ def test_rpa_page_wraps_launched_page_with_geo_prefix(monkeypatch):
     seen = {}
 
     @contextlib.contextmanager
-    def fake_launched(platform, *, headless=False):
+    def fake_launched(platform, *, headless=False, hidden_window=False, **_kw):
         seen["platform"] = platform
         seen["headless"] = headless
+        seen["hidden_window"] = hidden_window
         yield "PAGE"
 
     monkeypatch.setattr(sess, "launched_page", fake_launched)
     with sess.rpa_page("deepseek", headless=True) as p:
         assert p == "PAGE"
-    assert seen == {"platform": "geo_deepseek", "headless": True}
+    assert seen["platform"] == "geo_deepseek"
+    assert seen["headless"] is True
+    assert seen["hidden_window"] is True  # GEO RPA 必须移屏外
 
 
 def test_login_status_unknown_platform_returns_false():

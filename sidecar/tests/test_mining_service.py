@@ -83,3 +83,21 @@ def test_submit_rejects_when_busy(monkeypatch):
 def test_cancel_when_no_active_job_returns_false():
     mining_service.init()
     assert mining_service.cancel_job(999) is False
+
+
+def test_submit_job_brand_keywords_round_trips(monkeypatch):
+    """submit_job with brand_keywords persists them; get_job reads them back."""
+    class StubRunner:
+        def __init__(self, *a, **kw): pass
+        def run(self, job_id):
+            ms.finalize_job(job_id)
+        def register_cancel_event(self, job_id):
+            return threading.Event()
+        def cancel(self, job_id): return False
+
+    monkeypatch.setattr(mining_service, "MiningRunner", StubRunner)
+    mining_service.init()
+    jid = mining_service.submit_job("扫地机器人", ["douyin"], 50, brand_keywords=["石头"])
+    job = ms.get_job(jid)
+    assert job is not None
+    assert job["brand_keywords"] == ["石头"]

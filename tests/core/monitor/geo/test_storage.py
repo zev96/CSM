@@ -163,6 +163,56 @@ def test_cells_for_latest_run_empty_when_no_runs(fresh_db):
     assert geo_storage.cells_for_latest_run(tid) == []
 
 
+def test_citation_leaderboard_weight_and_sorts_by_weight(fresh_db):
+    """weight=count×len(platforms)×authority(source_type)；按 weight 降序排列。
+
+    设计：权威媒体 count=2×2平台×1.0=4.0 > 知乎 count=3×1平台×0.8=2.4，
+    低 count 的权威媒体应排在前面。
+    """
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="weight测试", target_url="geo://weight",
+        config={"brand": "weight"}))
+    checked_at = datetime.datetime.utcnow()
+    storage.save_result(MonitorResult(
+        task_id=tid, checked_at=checked_at, status="ok", rank=1, metric={}))
+
+    # people.com.cn (权威媒体): 1 citation on tongyi + 1 citation on kimi → count=2, 2 platforms
+    # zhihu.com (知乎): 3 citations all on tongyi → count=3, 1 platform
+    cells = [
+        GeoCell(platform="tongyi", keyword="电动车", mentioned=True, rank=1,
+                citations=[
+                    ClassifiedCitation(url="https://people.com.cn/a", domain="people.com.cn",
+                                       source_type="权威媒体"),
+                    ClassifiedCitation(url="https://zhihu.com/q1", domain="zhihu.com",
+                                       source_type="知乎"),
+                    ClassifiedCitation(url="https://zhihu.com/q2", domain="zhihu.com",
+                                       source_type="知乎"),
+                    ClassifiedCitation(url="https://zhihu.com/q3", domain="zhihu.com",
+                                       source_type="知乎"),
+                ]),
+        GeoCell(platform="kimi", keyword="电动车", mentioned=True, rank=2,
+                citations=[
+                    ClassifiedCitation(url="https://people.com.cn/b", domain="people.com.cn",
+                                       source_type="权威媒体"),
+                ]),
+    ]
+    geo_storage.record_run(tid, checked_at, cells)
+
+    board = geo_storage.citation_leaderboard(tid, days=3650)
+    assert all("weight" in b for b in board)
+    weights = [b["weight"] for b in board]
+    assert weights == sorted(weights, reverse=True)         # sorted by weight desc
+    assert board[0]["source_type"] == "权威媒体"             # higher weight despite lower count
+
+    # weight formula check for 权威媒体
+    pm = next(b for b in board if b["source_type"] == "权威媒体")
+    assert pm["weight"] == round(pm["count"] * len(pm["platforms"]) * 1.0, 2)
+
+    # sanity: zhihu weight < people weight
+    zh = next(b for b in board if b["source_type"] == "知乎")
+    assert zh["weight"] < pm["weight"]
+
+
 def test_v7_migration_adds_extraction_json_to_preexisting_table(tmp_path):
     """老库早先建了不含 extraction_json 的 geo_cells，再次迁移必须 ALTER 补列。
 

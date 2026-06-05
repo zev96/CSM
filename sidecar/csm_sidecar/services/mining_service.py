@@ -50,13 +50,20 @@ def active_job_id() -> int | None:
         return _active_job_id
 
 
-def submit_job(keyword: str, platforms: list[str], target_per_platform: int) -> int:
+def submit_job(
+    keyword: str,
+    platforms: list[str],
+    target_per_platform: int,
+    brand_keywords: list[str] | None = None,
+) -> int:
     global _active_job_id
     if _executor is None or _runner is None:
         raise RuntimeError("mining_service not initialized")
     # Reserve the slot atomically with the check. Create the DB row first
     # (cheap) so the reservation refers to a real job_id.
-    job_id = mining_storage.create_job(keyword, platforms, target_per_platform)
+    job_id = mining_storage.create_job(
+        keyword, platforms, target_per_platform, brand_keywords=brand_keywords
+    )
     with _active_lock:
         if _active_job_id is not None:
             # Rollback: the job we just created in storage is orphaned, mark it cancelled.
