@@ -127,6 +127,31 @@ def get_comment_retention_history(range_str: str) -> dict[str, Any]:
     return {"range": range_str, "platforms": platforms_out, "events": events}
 
 
+def get_geo_exposure_summary(range_str: str) -> dict[str, Any]:
+    """全部 geo 任务近 range 天的全局曝光率 + 较上一窗口 delta（首页 GEO 仪表盘卡）。
+
+    soc = Σmentioned / Σok_cells（全局口径，跨所有 geo 任务，复用 geo.metrics 的
+    soc 定义与 band 阈值 0.2/0.5）。soc_prev 取上一个同长窗口，delta = soc - soc_prev。
+    """
+    range_days = _parse_range(range_str)
+    from csm_core.monitor.geo import storage as geo_storage
+    from csm_core.monitor.geo.metrics import band
+
+    m_cur, ok_cur = geo_storage.exposure_window(range_days, offset_days=0)
+    m_prev, ok_prev = geo_storage.exposure_window(range_days, offset_days=range_days)
+    soc = (m_cur / ok_cur) if ok_cur else 0.0
+    soc_prev = (m_prev / ok_prev) if ok_prev else 0.0
+    return {
+        "range": range_str,
+        "soc": round(soc, 4),
+        "soc_prev": round(soc_prev, 4),
+        "delta": round(soc - soc_prev, 4),
+        "band": band(soc),          # hidden / weak / strong
+        "mentioned": m_cur,
+        "ok_cells": ok_cur,
+    }
+
+
 def get_zhihu_ranking_history(range_str: str) -> dict[str, Any]:
     """KPI + 每日趋势 + 全量问题列表（前端按 change_kind 自行 filter）。
 

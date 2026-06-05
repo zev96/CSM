@@ -174,6 +174,36 @@ def citation_leaderboard(
     return out
 
 
+def exposure_window(days: int, offset_days: int = 0) -> tuple[int, int]:
+    """全局曝光窗口聚合：返回 ``(mentioned, ok_total)``，跨所有任务。
+
+    口径同 metrics._block：分母 = ``status='ok'`` 的 cell 数（采集失败不算入
+    分母 —— 是"没问到"不是"问了没提及"）；分子 = 其中 ``mentioned=1`` 的数。
+
+    ``offset_days=0`` → 最近 ``days`` 天，**仅下界**（stored checked_at 是 local+'Z'，
+    SQL ``datetime('now')`` 是 UTC，给当前窗口加 ``< now`` 上界会误杀今天的 cell）。
+    ``offset_days>0`` → ``[now-(days+offset) .. now-offset)`` 窗口（较上周 delta 用）。
+    用 ``CASE WHEN`` 而非 ``FILTER`` 以兼容旧 SQLite。
+    """
+    conn = monitor_storage.get_conn()
+    where = ["checked_at >= datetime('now', ?)"]
+    args: list[Any] = [f"-{int(days) + int(offset_days)} days"]
+    if offset_days > 0:
+        where.append("checked_at < datetime('now', ?)")
+        args.append(f"-{int(offset_days)} days")
+    row = conn.execute(
+        f"""
+        SELECT
+          COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END), 0) AS ok_total,
+          COALESCE(SUM(CASE WHEN status='ok' AND mentioned=1 THEN 1 ELSE 0 END), 0) AS mentioned
+        FROM geo_cells
+        WHERE {' AND '.join(where)}
+        """,
+        args,
+    ).fetchone()
+    return int(row["mentioned"] or 0), int(row["ok_total"] or 0)
+
+
 def _hydrate_cells(conn: sqlite3.Connection, rows: list) -> list[dict[str, Any]]:
     """Shared cell-row hydration for both drill paths.
 

@@ -347,6 +347,16 @@ def get_zhihu_search_history(range_str: str = Query("7d", alias="range")) -> dic
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@router.get("/api/monitor/geo/summary")
+def get_geo_exposure_summary(range_str: str = Query("7d", alias="range")) -> dict[str, Any]:
+    """首页 GEO 仪表盘：全部 geo 任务的全局曝光率 soc + 较上周 delta + band。"""
+    _require_storage()
+    try:
+        return history_service.get_geo_exposure_summary(range_str=range_str)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 # ── Live event stream ──────────────────────────────────────────────────────
 @router.get("/api/monitor/events")
 async def stream_events():
