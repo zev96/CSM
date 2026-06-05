@@ -35,8 +35,8 @@ describe("CommentRetentionCard", () => {
   it("aggregates retention % and renders a platform tab", async () => {
     const w = mount(CommentRetentionCard);
     await flushPromises();
-    expect(w.text()).toContain("57%"); // 8/14 → 57
+    expect(w.text()).toContain("57%"); // 8/14 → 57（默认选中第一个平台 B 站）
     expect(w.text()).toContain("B 站");
-    expect(w.text()).toContain("全部");
+    expect(w.text()).not.toContain("全部"); // 「全部」选项已删除
   });
 });

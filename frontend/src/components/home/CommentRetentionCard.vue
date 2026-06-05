@@ -99,6 +99,19 @@ const series = computed<number[]>(() => {
   return out;
 });
 
+// X 轴日期标签：取当前展示 series 对应 daily_series 的「日」（"2026-06-08" → "8"）。
+const axisLabels = computed<string[]>(() => {
+  const src = activeKey.value
+    ? platforms.value[activeKey.value]?.daily_series
+    : available.value[0]
+      ? platforms.value[available.value[0][0]]?.daily_series
+      : [];
+  return (src ?? []).map((d) => {
+    const dd = (d.date ?? "").slice(8, 10);
+    return dd ? String(Number(dd)) : "";
+  });
+});
+
 const sparkColor = computed(() => {
   const p = Math.round(shownRate.value * 100);
   return p >= 80 ? "var(--green)" : p >= 50 ? "#e8a04a" : "var(--red)";
@@ -111,6 +124,9 @@ onMounted(async () => {
       params: { range: "7d" },
     });
     platforms.value = r.data?.platforms ?? {};
+    // 默认选中第一个有数据的平台（已删「全部」聚合选项）
+    const first = ORDER.find(([k]) => platforms.value[k]);
+    activeKey.value = first ? first[0] : null;
   } catch {
     /* 静默 */
   } finally {
@@ -122,7 +138,7 @@ onMounted(async () => {
 <template>
   <section
     class="card-frosted relative flex h-full flex-col overflow-hidden"
-    :style="{ padding: '16px' }"
+    :style="{ padding: '16px', containerType: 'size' }"
   >
     <div class="flex flex-shrink-0 items-center justify-between">
       <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">评论留存率</div>
@@ -139,7 +155,7 @@ onMounted(async () => {
     <div class="mt-2 flex flex-shrink-0 items-baseline gap-2">
       <div
         class="font-display font-bold"
-        :style="{ fontSize: '40px', lineHeight: 1, letterSpacing: '-1px', color: 'var(--ink)' }"
+        :style="{ fontSize: 'clamp(24px, 16cqh, 80px)', lineHeight: 1, letterSpacing: '-1px', color: 'var(--ink)' }"
       >
         {{ available.length ? Math.round(shownRate * 100) + "%" : "—" }}
       </div>
@@ -160,18 +176,7 @@ onMounted(async () => {
       </span>
     </div>
 
-    <div class="mt-2 mb-2 flex-shrink-0">
-      <Sparkline
-        :points="series"
-        :height="48"
-        :stroke="sparkColor"
-        :show-last="true"
-        :y-min="0"
-        :y-max="100"
-        fluid
-      />
-    </div>
-
+    <!-- 无数据空态 -->
     <div
       v-if="loaded && available.length === 0"
       class="flex min-h-0 flex-1 items-center justify-center text-center text-[12px]"
@@ -179,34 +184,37 @@ onMounted(async () => {
     >
       暂无评论留存数据
     </div>
-    <div v-else class="mt-auto flex flex-shrink-0 gap-1">
-      <button
-        type="button"
-        class="rounded-full px-2.5 py-1 text-[11px]"
-        :style="
-          activeKey === null
-            ? { background: 'var(--ink)', color: '#fff' }
-            : { background: 'var(--card-2)', color: 'var(--ink-2)' }
-        "
-        @click="activeKey = null"
-      >
-        全部
-      </button>
-      <button
-        v-for="[k, label] in available"
-        :key="k"
-        type="button"
-        class="rounded-full px-2.5 py-1 text-[11px]"
-        :style="
-          activeKey === k
-            ? { background: 'var(--ink)', color: '#fff' }
-            : { background: 'var(--card-2)', color: 'var(--ink-2)' }
-        "
-        @click="activeKey = k"
-      >
-        {{ label }}
-      </button>
-    </div>
+    <!-- 有数据：折线 + 横轴用 mt-auto 推到卡片底部，平台 tab 紧随其后 -->
+    <template v-else>
+      <div class="mt-auto mb-2 flex-shrink-0">
+        <Sparkline
+          :points="series"
+          :axis-labels="axisLabels"
+          :height="48"
+          :stroke="sparkColor"
+          :show-last="true"
+          :y-min="0"
+          :y-max="100"
+          fluid
+        />
+      </div>
+      <div class="flex flex-shrink-0 gap-1">
+        <button
+          v-for="[k, label] in available"
+          :key="k"
+          type="button"
+          class="rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors"
+          :style="
+            activeKey === k
+              ? { background: 'rgba(28,26,23,0.06)', color: 'var(--ink)' }
+              : { background: 'transparent', color: 'var(--ink-3)' }
+          "
+          @click="activeKey = k"
+        >
+          {{ label }}
+        </button>
+      </div>
+    </template>
   </section>
 </template>
 

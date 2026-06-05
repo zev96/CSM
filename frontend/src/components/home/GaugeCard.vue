@@ -53,7 +53,7 @@ onMounted(async () => {
 <template>
   <section
     class="card-frosted relative flex h-full flex-col overflow-hidden"
-    :style="{ padding: '16px' }"
+    :style="{ padding: '16px', containerType: 'size' }"
   >
     <div class="flex flex-shrink-0 items-center justify-between">
       <div class="text-[12px]" :style="{ color: 'var(--ink-3)' }">GEO</div>
@@ -68,7 +68,7 @@ onMounted(async () => {
     </div>
 
     <div class="flex min-h-0 flex-1 flex-col items-center justify-center">
-      <svg :viewBox="`0 0 ${R * 2 + 20} ${R + 30}`" :style="{ width: '100%', maxWidth: '210px' }">
+      <svg :viewBox="`0 0 ${R * 2 + 20} ${R + 30}`" :style="{ width: '100%', maxWidth: 'clamp(150px, 84cqh, 380px)' }">
         <path :d="ARC_PATH" fill="none" stroke="rgba(28,26,23,0.08)" :stroke-width="12" stroke-linecap="round" />
         <path
           :d="ARC_PATH"
@@ -88,7 +88,7 @@ onMounted(async () => {
       </svg>
       <span
         v-if="loaded"
-        class="mt-1 inline-flex h-5 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
+        class="mt-3 inline-flex h-5 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
         :style="
           deltaPct > 0
             ? { background: '#dde7d2', color: '#4d6b2f' }

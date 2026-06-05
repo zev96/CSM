@@ -87,7 +87,6 @@ function deltaText(d: number | null) {
         >
         <div class="min-w-0 flex-1">
           <div class="truncate text-[12px]" :style="{ color: 'var(--ink)' }">{{ r.domain }}</div>
-          <div class="truncate text-[10px]" :style="{ color: 'var(--ink-3)' }">{{ r.source_type }}</div>
         </div>
         <span
           class="inline-flex h-5 flex-shrink-0 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"

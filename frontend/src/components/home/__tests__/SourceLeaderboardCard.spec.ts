@@ -30,6 +30,6 @@ describe("SourceLeaderboardCard", () => {
     expect(w.text()).toContain("zhihu.com");
     expect(w.text()).toContain("新"); // zhihu rank_delta=null → 新进
     expect(w.text()).toContain("3"); // smzdm rank_delta
-    expect(w.text()).toContain("什么值得买"); // source_type
+    expect(w.text()).not.toContain("什么值得买"); // source_type 已删除，不再展示
   });
 });

@@ -1,14 +1,16 @@
 <script setup lang="ts">
 /**
- * 工作台 — bento 版式（按「图一」）。整页不滚，撑满父容器。
+ * 工作台 — bento 版式（按「图一」）。**全比例布局**：bento 填满 hero 以下的
+ * 全部高度，内部行高/列宽都用 flex 权重（比例），所以窗口放大缩小时所有卡片
+ * 等比缩放、任何尺寸都填满，不会出现「放到最大中间一大片空白」（图二）。
  *
- *   Row 1（auto，矮）  百度SEO │ 知乎问题 │ 知乎搜索 │ ┐
- *   Row 2（1fr）       评论留存率(跨2列) │ GEO    │ 高权重信源(跨 r1-2)
- *   Row 3（1fr）       (评论留存续)      │(GEO续) │ 最近文档
+ *   ┌ 左主区 (flex 3) ───────────────────────────┐ ┌ 右列 (flex 1) ──┐
+ *   │ 百度SEO │ 知乎问题 │ 知乎搜索   (行比例 17)  │ │ 高权重信源 (1)  │
+ *   │ 评论留存率(1.3) │ GEO(1)      (行比例 25)    │ │ 最近文档   (1)  │  ← 右列 1:1
+ *   └────────────────────────────────────────────┘ └────────────────┘
  *
- * 三张大数字卡（异动数）在第 1 行矮卡；评论留存 + GEO 仪表盘是高卡跨 2 行；
- * 高权重信源在右列跨上两行；最近文档在右下。视频抓取卡已从首页移除。
- * 精确 span/gap 可继续微调；卡片各自 overflow 处理高度。
+ * 比例：主区:右列宽=3:1；数字卡行:留存行高=17:25；右列两卡=1:1；留存:GEO=1.3:1。
+ * 全部 min-h-0 让其随窗口收缩；外层 overflow-hidden 兜底不滚。视频抓取卡已移除。
  */
 import { onMounted } from "vue";
 
@@ -36,59 +38,70 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
-    <!-- Row 1：hero 紧凑平铺 -->
+  <div class="flex h-full flex-col overflow-hidden">
+    <!-- 创作区 hero -->
     <div class="flex-shrink-0">
       <CreateArticleHero />
     </div>
 
-    <div class="flex-shrink-0" :style="{ height: '20px' }"></div>
+    <!-- 创作区 ↔ 卡片间距 -->
+    <div class="flex-shrink-0" :style="{ height: '36px' }"></div>
 
-    <!-- bento 网格：4 列 × 3 行（行1 auto 矮，行2/3 平分剩余） -->
-    <div
-      class="grid min-h-0 flex-1"
-      :style="{
-        gap: '16px',
-        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-        gridTemplateRows: 'auto minmax(0, 1fr) minmax(0, 1fr)',
-      }"
-    >
-      <div class="min-h-0" :style="{ gridColumn: '1', gridRow: '1' }">
-        <StatCardLoader
-          category="百度 SEO"
-          endpoint="/api/monitor/history/baidu-keyword"
-          value-key="changed_keywords"
-          tab="baidu"
-        />
+    <!-- bento：flex-1 填满剩余高度，内部全用比例 → 等比缩放、不留空白 -->
+    <div class="flex min-h-0 flex-1" :style="{ gap: '16px' }">
+      <!-- 左主区 (宽比例 3) -->
+      <div class="flex min-h-0 flex-col" :style="{ flex: '3 1 0', gap: '16px' }">
+        <!-- 数字卡行 (高比例 17) -->
+        <div class="flex min-h-0" :style="{ gap: '16px', flex: '17 1 0' }">
+          <div class="min-h-0 flex-1">
+            <StatCardLoader
+              category="百度 SEO"
+              endpoint="/api/monitor/history/baidu-keyword"
+              value-key="changed_keywords"
+              tab="baidu"
+            />
+          </div>
+          <div class="min-h-0 flex-1">
+            <StatCardLoader
+              category="知乎问题"
+              endpoint="/api/monitor/history/zhihu-ranking"
+              value-key="changed_questions"
+              tab="zhihu"
+            />
+          </div>
+          <div class="min-h-0 flex-1">
+            <StatCardLoader
+              category="知乎搜索"
+              endpoint="/api/monitor/history/zhihu-search"
+              value-key="changed_keywords"
+              tab="zhihu_search"
+            />
+          </div>
+        </div>
+
+        <!-- 评论留存 + GEO 行 (高比例 25)，内部 1.3:1 -->
+        <div class="flex min-h-0" :style="{ gap: '16px', flex: '25 1 0' }">
+          <div class="min-h-0" :style="{ flex: '1.3 1 0' }">
+            <CommentRetentionCard />
+          </div>
+          <div class="min-h-0" :style="{ flex: '1 1 0' }">
+            <GaugeCard />
+          </div>
+        </div>
       </div>
-      <div class="min-h-0" :style="{ gridColumn: '2', gridRow: '1' }">
-        <StatCardLoader
-          category="知乎问题"
-          endpoint="/api/monitor/history/zhihu-ranking"
-          value-key="changed_questions"
-          tab="zhihu"
-        />
-      </div>
-      <div class="min-h-0" :style="{ gridColumn: '3', gridRow: '1' }">
-        <StatCardLoader
-          category="知乎搜索"
-          endpoint="/api/monitor/history/zhihu-search"
-          value-key="changed_keywords"
-          tab="zhihu_search"
-        />
-      </div>
-      <div class="min-h-0" :style="{ gridColumn: '4', gridRow: '1 / span 2' }">
-        <SourceLeaderboardCard />
-      </div>
-      <div class="min-h-0" :style="{ gridColumn: '1 / span 2', gridRow: '2 / span 2' }">
-        <CommentRetentionCard />
-      </div>
-      <div class="min-h-0" :style="{ gridColumn: '3', gridRow: '2 / span 2' }">
-        <GaugeCard />
-      </div>
-      <div class="min-h-0" :style="{ gridColumn: '4', gridRow: '3' }">
-        <RecentDocsCard />
+
+      <!-- 右列 (宽比例 1)：高权重信源 + 最近文档 1:1 -->
+      <div class="flex min-h-0 flex-col" :style="{ flex: '1 1 0', gap: '16px' }">
+        <div class="min-h-0 flex-1">
+          <SourceLeaderboardCard />
+        </div>
+        <div class="min-h-0 flex-1">
+          <RecentDocsCard />
+        </div>
       </div>
     </div>
+
+    <!-- 底部留白 -->
+    <div class="flex-shrink-0" :style="{ height: '20px' }"></div>
   </div>
 </template>
