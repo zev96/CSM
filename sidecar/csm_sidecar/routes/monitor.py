@@ -699,6 +699,37 @@ def geo_citations(
     }
 
 
+@router.get("/api/monitor/geo/citations/leaderboard")
+def geo_citations_leaderboard(
+    days: int = Query(default=7, ge=1, le=90),
+    limit: int = Query(default=8, ge=1, le=50),
+) -> dict[str, Any]:
+    """全局高权重信源榜：跨所有 geo 任务近 ``days`` 天聚合，带排名较上一窗口的变化。
+
+    路径用静态前缀 ``/geo/citations/leaderboard`` —— 不会被 ``/geo/{task_id}/citations``
+    吞（``{task_id}`` 是 int，"citations" 绑不上）。``rank_delta`` 正=上升、负=下降、
+    None=上一个 ``days`` 天窗口里没出现（新进）。
+    """
+    _require_storage()
+    from csm_core.monitor.geo import storage as geo_storage
+
+    curr = geo_storage.citation_leaderboard(task_id=None, days=days)
+    prev = geo_storage.citation_leaderboard(task_id=None, days=days, offset_days=days)
+    prev_rank = {b["domain"]: i + 1 for i, b in enumerate(prev)}
+    out = []
+    for i, b in enumerate(curr[:limit]):
+        rank = i + 1
+        rp = prev_rank.get(b["domain"])
+        out.append({
+            "domain": b["domain"], "source_type": b["source_type"],
+            "count": b["count"], "weight": b["weight"],
+            "rank": rank,
+            "rank_prev": rp,
+            "rank_delta": (rp - rank) if rp is not None else None,
+        })
+    return {"days": days, "leaderboard": out}
+
+
 @router.get("/api/monitor/geo/{task_id}/export")
 def geo_export(task_id: int, days: int = Query(default=30, ge=1, le=3650)):
     """信源榜 Excel 导出：近 ``days`` 天全部 citation 聚合为 xlsx 文件下载。"""
