@@ -255,6 +255,7 @@ def get_zhihu_ranking_history(range_str: str) -> dict[str, Any]:
             "changed_questions": changed_total,
             "changed_up": changed_up,
             "changed_down": changed_down,
+            "changed_prev": _changed_prev_task(per_task, range_days, now),
         },
         "daily_series": daily_series,
         "questions": questions,
@@ -282,6 +283,64 @@ def _classify_zhihu_change(curr: dict | None, prev: dict | None) -> tuple[str, f
     if s_curr < s_prev:
         return "down", share
     return "flat", share
+
+
+def _changed_prev_task(per_task: dict[int, list[dict]], range_days: int, now: datetime) -> int:
+    """上一窗口（checked_at < now-range_days）每个 task 最近两条的异动计数。
+
+    per-task 形态：entry 直接含 matched_count/best_rank/top_n（zhihu_ranking 用）。
+    供大数字卡算「较上周净增减」：徽章 = changed(本窗口) - changed_prev。
+    """
+    cutoff = now - timedelta(days=range_days)
+    changed = 0
+    for results in per_task.values():
+        older = [r for r in results if r["checked_at"] < cutoff]  # results 已 DESC
+        if not older:
+            continue
+        curr = {"matched_count": older[0]["matched_count"],
+                "best_rank": older[0]["best_rank"], "top_n": older[0]["top_n"]}
+        prev = ({"matched_count": older[1]["matched_count"],
+                 "best_rank": older[1]["best_rank"], "top_n": older[1]["top_n"]}
+                if len(older) > 1 else None)
+        kind, _ = _classify_zhihu_change(curr, prev)
+        if kind in ("up", "down", "new", "dropped"):
+            changed += 1
+    return changed
+
+
+def _changed_prev_keyword(
+    per_task: dict[int, list[dict]], all_tasks: list, range_days: int, now: datetime,
+    *, mc_key: str, fr_key: str,
+) -> int:
+    """上一窗口的 per-keyword 异动计数。
+
+    per-keyword 形态：entry 存整条 run 的 ``metric``，按 config 的 search_keywords
+    展开（baidu 用 default_matched_count/default_first_rank；zhihu_search 用
+    matched_count/first_rank）。``_find_keyword_entry`` 在本模块稍后定义，运行时已可用。
+    """
+    cutoff = now - timedelta(days=range_days)
+    kw_map = {t["id"]: list(json.loads(t["config_json"] or "{}").get("search_keywords") or [])
+              for t in all_tasks}
+    changed = 0
+    for tid, results in per_task.items():
+        older = [r for r in results if r["checked_at"] < cutoff]
+        if not older:
+            continue
+        cm = older[0]["metric"]
+        pm = older[1]["metric"] if len(older) > 1 else {}
+        for kw in kw_map.get(tid, []):
+            ck = _find_keyword_entry(cm, kw)
+            pk = _find_keyword_entry(pm, kw)
+            if ck is None:
+                continue
+            _c = {"matched_count": int(ck.get(mc_key) or 0),
+                  "best_rank": int(ck.get(fr_key) or -1), "top_n": 10}
+            _p = ({"matched_count": int(pk.get(mc_key) or 0),
+                   "best_rank": int(pk.get(fr_key) or -1), "top_n": 10} if pk else None)
+            kind, _ = _classify_zhihu_change(_c, _p)
+            if kind in ("up", "down", "new", "dropped"):
+                changed += 1
+    return changed
 
 
 def _zhihu_daily_series(
@@ -492,6 +551,9 @@ def get_baidu_keyword_history(range_str: str) -> dict[str, Any]:
             "changed_keywords": changed_total,
             "changed_up": changed_up,
             "changed_down": changed_down,
+            "changed_prev": _changed_prev_keyword(
+                per_task, all_tasks, range_days, now,
+                mc_key="default_matched_count", fr_key="default_first_rank"),
             "captcha_count": captcha_count,
             "news_present_count": news_present_kw_count,
         },
@@ -683,6 +745,9 @@ def get_zhihu_search_history(range_str: str) -> dict[str, Any]:
             "changed_keywords": changed_down + changed_up,
             "changed_up": changed_up,
             "changed_down": changed_down,
+            "changed_prev": _changed_prev_keyword(
+                per_task, all_tasks, range_days, now,
+                mc_key="matched_count", fr_key="first_rank"),
         },
         "daily_series": daily_series,
         "keywords": keyword_rows,
