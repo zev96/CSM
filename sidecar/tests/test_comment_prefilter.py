@@ -51,6 +51,31 @@ def test_count_brand_hits_multiple_brands_same_text_counts_once():
     assert count_brand_hits(["石头 roborock 都提到了"], ["石头", "roborock"]) == 1
 
 
+def test_count_brand_hits_whitespace_in_comment():
+    """评论里把品牌词中间插了空格也应命中（希 喂 → 希喂 / CE WEY → CEWEY）。"""
+    from csm_core.mining.comment_prefilter import count_brand_hits
+
+    texts = ["希 喂 真好用", "希喂yyds", "用了 CE WEY 之后"]
+    assert count_brand_hits(texts, ["希喂"]) == 2          # "希 喂" + "希喂"
+    assert count_brand_hits(texts, ["CEWEY"]) == 1         # "CE WEY"
+    # 全角空格 　 也算
+    assert count_brand_hits(["希　喂 不错"], ["希喂"]) == 1
+
+
+def test_count_brand_hits_whitespace_in_brand():
+    """品牌词本身写成带空格（希 喂）也应能匹配到评论里的 希喂。"""
+    from csm_core.mining.comment_prefilter import count_brand_hits
+
+    assert count_brand_hits(["希喂真香"], ["希 喂"]) == 1
+
+
+def test_count_brand_hits_non_adjacent_chars_no_match():
+    """中间夹了非空白字符的不算（希望它能喂饱 ≠ 希喂）—— 只抹空白，不抹其他字。"""
+    from csm_core.mining.comment_prefilter import count_brand_hits
+
+    assert count_brand_hits(["希望它能喂饱大家"], ["希喂"]) == 0
+
+
 # ---------------------------------------------------------------------------
 # fetch_video_comment_texts
 # ---------------------------------------------------------------------------
