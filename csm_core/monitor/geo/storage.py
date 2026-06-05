@@ -128,9 +128,17 @@ def record_run(task_id: int, checked_at: "datetime | str", cells: list[GeoCell])
 
 
 def citation_leaderboard(
-    task_id: int, days: int = 30, platform: str | None = None, keyword: str | None = None,
+    task_id: int | None, days: int = 30, platform: str | None = None,
+    keyword: str | None = None, offset_days: int = 0,
 ) -> list[dict[str, Any]]:
-    """域名频次降序。返回 [{domain, source_type, count, platforms, keywords}].
+    """域名频次降序。返回 [{domain, source_type, count, platforms, keywords, weight}].
+
+    ``task_id=None`` → 跨全部任务聚合（首页全局高权重信源榜）。
+    ``offset_days>0`` → 查 ``[now-(days+offset) .. now-offset)`` 窗口（排名周对比用）。
+    ``offset_days=0``（默认）→ 最近 ``days`` 天，**只加下界**：stored checked_at 是
+    local+'Z'，而 SQL ``datetime('now')`` 是 UTC —— 给当前窗口加 ``< now`` 上界会把
+    今天 local 时间戳（比 UTC 提前数小时、读成"未来"）误杀，故 offset=0 时不加上界，
+    与历史行为一致。
 
     平台/关键词聚合在 Python 侧做（不用 group_concat）—— SQLite 的 group_concat
     无法在 DISTINCT 下指定分隔符，关键词里若含逗号会被 split 破坏。
@@ -138,8 +146,12 @@ def citation_leaderboard(
     conn = monitor_storage.get_conn()
     sql = ["SELECT domain, source_type, platform, keyword",
            "FROM geo_citations",
-           "WHERE task_id=? AND checked_at >= datetime('now', ?)"]
-    args: list[Any] = [task_id, f"-{int(days)} days"]
+           "WHERE checked_at >= datetime('now', ?)"]
+    args: list[Any] = [f"-{int(days) + int(offset_days)} days"]
+    if offset_days > 0:
+        sql.append("AND checked_at < datetime('now', ?)"); args.append(f"-{int(offset_days)} days")
+    if task_id is not None:
+        sql.append("AND task_id=?"); args.append(task_id)
     if platform:
         sql.append("AND platform=?"); args.append(platform)
     if keyword:
@@ -160,6 +172,36 @@ def citation_leaderboard(
     } for e in agg.values()]
     out.sort(key=lambda e: (-e["weight"], -e["count"], e["domain"]))
     return out
+
+
+def exposure_window(days: int, offset_days: int = 0) -> tuple[int, int]:
+    """全局曝光窗口聚合：返回 ``(mentioned, ok_total)``，跨所有任务。
+
+    口径同 metrics._block：分母 = ``status='ok'`` 的 cell 数（采集失败不算入
+    分母 —— 是"没问到"不是"问了没提及"）；分子 = 其中 ``mentioned=1`` 的数。
+
+    ``offset_days=0`` → 最近 ``days`` 天，**仅下界**（stored checked_at 是 local+'Z'，
+    SQL ``datetime('now')`` 是 UTC，给当前窗口加 ``< now`` 上界会误杀今天的 cell）。
+    ``offset_days>0`` → ``[now-(days+offset) .. now-offset)`` 窗口（较上周 delta 用）。
+    用 ``CASE WHEN`` 而非 ``FILTER`` 以兼容旧 SQLite。
+    """
+    conn = monitor_storage.get_conn()
+    where = ["checked_at >= datetime('now', ?)"]
+    args: list[Any] = [f"-{int(days) + int(offset_days)} days"]
+    if offset_days > 0:
+        where.append("checked_at < datetime('now', ?)")
+        args.append(f"-{int(offset_days)} days")
+    row = conn.execute(
+        f"""
+        SELECT
+          COALESCE(SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END), 0) AS ok_total,
+          COALESCE(SUM(CASE WHEN status='ok' AND mentioned=1 THEN 1 ELSE 0 END), 0) AS mentioned
+        FROM geo_cells
+        WHERE {' AND '.join(where)}
+        """,
+        args,
+    ).fetchone()
+    return int(row["mentioned"] or 0), int(row["ok_total"] or 0)
 
 
 def _hydrate_cells(conn: sqlite3.Connection, rows: list) -> list[dict[str, Any]]:
