@@ -185,10 +185,15 @@ export const useMiningStore = defineStore("mining", () => {
   // SSE teardown function from `subscribe()`. Null when no stream is open.
   let stopSse: (() => void) | null = null
 
-  async function startJob(keyword: string, platforms: Platform[], target: number): Promise<number> {
+  async function startJob(
+    keyword: string,
+    platforms: Platform[],
+    target: number,
+    brandKeywords: string[] = [],
+  ): Promise<number> {
     const resp = await api().post<{ job_id: number; job: MiningJob }>(
       "/api/mining/jobs",
-      { keyword, platforms, target_per_platform: target },
+      { keyword, platforms, target_per_platform: target, brand_keywords: brandKeywords },
     )
     activeJob.value = resp.data.job
     subscribeToJob(resp.data.job_id)

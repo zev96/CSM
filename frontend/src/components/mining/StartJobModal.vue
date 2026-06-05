@@ -17,10 +17,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:open", v: boolean): void;
-  (e: "submit", payload: { keyword: string; platforms: Platform[]; target: number }): void;
+  (e: "submit", payload: { keyword: string; platforms: Platform[]; target: number; brandKeywords: string[] }): void;
 }>();
 
 const kw = ref("");
+// 目标品牌词（选填）—— 抓完后逐视频抓评论，命中 ≥3 条的视频判为「已种草」
+// 跳过（见 mining/runner 预筛）。留空 → 后端 brand_keywords=[] → 预筛门控
+// 不满足 → 不按品牌筛。支持多个，用逗号 / 顿号 / 空格分隔。
+const brandKw = ref("");
 // Auto-pick all logged-in platforms by default.
 const picked = ref<Record<Platform, boolean>>({
   bilibili: !!props.loginStatus.bilibili,
@@ -34,6 +38,21 @@ const range = ref("近 1 周");
 const total = computed(() =>
   Object.values(picked.value).filter(Boolean).length * cap.value
 );
+
+// 品牌词输入 → 去重后的 list[str]。逗号(中/英)、顿号、空白都当分隔符。
+// 大小写不敏感去重，保留用户原始大小写写法。
+const brandList = computed<string[]>(() => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of brandKw.value.split(/[,，、\s]+/)) {
+    const t = part.trim();
+    if (t && !seen.has(t.toLowerCase())) {
+      seen.add(t.toLowerCase());
+      out.push(t);
+    }
+  }
+  return out;
+});
 
 const canSubmit = computed(
   () => kw.value.trim() && Object.values(picked.value).some(v => v)
@@ -49,6 +68,7 @@ watch(
     // 先重置表单（包括 kw），再按 prefillKeyword 预填关键词。
     // 这样：新开弹窗干净 → 若有来自 GEO 信源榜的预填 → 填入。
     kw.value = "";
+    brandKw.value = "";
     picked.value = {
       bilibili: !!props.loginStatus.bilibili,
       douyin: !!props.loginStatus.douyin,
@@ -78,6 +98,7 @@ function onSubmit() {
     keyword: kw.value.trim(),
     platforms: (["bilibili", "douyin", "kuaishou"] as Platform[]).filter(p => picked.value[p]),
     target: cap.value,
+    brandKeywords: brandList.value,
   });
 }
 </script>
@@ -135,6 +156,42 @@ function onSubmit() {
             style="color: var(--ink-3);"
           >
             建议针对来源：{{ props.prefillSource }}
+          </div>
+        </div>
+
+        <!-- 目标品牌词（选填）—— 引流预筛：评论区已有 ≥3 条命中的视频自动跳过 -->
+        <div class="mt-5">
+          <div class="mb-1.5 flex items-baseline gap-1.5">
+            <label class="text-[11.5px] font-semibold">目标品牌词</label>
+            <span class="text-[11px]" style="color: var(--ink-3);">选填 · 多个用逗号 / 空格分隔</span>
+          </div>
+          <div
+            class="flex items-center"
+            style="background: var(--card-white); border: 1px solid var(--line-2); border-radius: 14px; padding: 0 14px; height: 46px;"
+          >
+            <Icon name="radar" :size="15" style="opacity: 0.6"/>
+            <input
+              v-model="brandKw"
+              placeholder="例如：CEWEY，希亦（留空＝不按品牌预筛）"
+              class="kw-input flex-1 bg-transparent outline-none px-2.5"
+              style="font-size: 14px; color: var(--ink);"
+            />
+            <button
+              v-if="brandKw"
+              @click="brandKw = ''"
+              class="inline-flex items-center justify-center"
+              style="width: 22px; height: 22px; border-radius: 999px; color: var(--ink-3);"
+            ><Icon name="x" :size="12"/></button>
+          </div>
+          <div class="mt-1.5 text-[11px]" style="color: var(--ink-3);">
+            <template v-if="brandList.length">
+              抓到的视频会顺带抓评论：评论区已有 <b style="color: var(--ink-2)">≥3 条</b>含
+              <b style="color: var(--ink-2)">{{ brandList.join(' / ') }}</b>
+              的视频自动跳过（避免重复种草，一条视频最多 3 条种草评论）。
+            </template>
+            <template v-else>
+              留空＝只去重、不按品牌预筛。填了品牌词，已种草 ≥3 条的视频会自动排除。
+            </template>
           </div>
         </div>
 
@@ -227,7 +284,7 @@ function onSubmit() {
           <div class="text-[11.5px] leading-snug" style="color: var(--ink-2)">
             预计抓取 <b class="font-display" style="color: var(--ink)">{{ total }}</b> 条视频，约需
             <b class="font-mono" style="color: var(--ink)">{{ Math.max(2, Math.round(total / 25)) }}–{{ Math.max(4, Math.round(total / 15)) }} 分钟</b>。
-            抓完后会自动去重 &amp; 过滤已评论。
+            抓完后自动去重<template v-if="brandList.length"> &amp; 按品牌词预筛已种草视频</template>。
           </div>
         </div>
       </div>

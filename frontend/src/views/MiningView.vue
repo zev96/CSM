@@ -139,10 +139,10 @@ async function onSelectJob(id: number) {
   await store.selectJob(id);
 }
 
-async function onStartSubmit(payload: { keyword: string; platforms: Platform[]; target: number }) {
+async function onStartSubmit(payload: { keyword: string; platforms: Platform[]; target: number; brandKeywords: string[] }) {
   showNewTask.value = false;
   try {
-    const newJobId = await store.startJob(payload.keyword, payload.platforms, payload.target);
+    const newJobId = await store.startJob(payload.keyword, payload.platforms, payload.target, payload.brandKeywords);
     await store.selectJob(newJobId);
   } catch (e: any) {
     const detail = e?.response?.data?.detail as string | undefined;
