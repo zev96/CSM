@@ -63,6 +63,8 @@ const props = defineProps<{
    * 天花板"）。不传 = 走默认 auto-scale。
    */
   yMax?: number;
+  /** 容器高度 —— 默认固定 170px；传 "100%" 让图表填满 flex 父容器（避免溢出遮挡）。 */
+  height?: string;
 }>();
 
 const data = computed(() => ({
@@ -137,7 +139,7 @@ const options = computed<any>(() => {
 </script>
 
 <template>
-  <div style="position: relative; height: 170px;">
+  <div :style="{ position: 'relative', height: height ?? '170px' }">
     <Line :data="data" :options="options" />
   </div>
 </template>

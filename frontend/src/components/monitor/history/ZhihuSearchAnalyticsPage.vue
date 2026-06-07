@@ -90,7 +90,7 @@ const chartLabels = computed(() =>
 const chartSeries = computed(() => {
   if (!data.value) return [];
   return [
-    { label: "命中率 %", color: "#ee6a2a", data: data.value.daily_series.map((d) => Math.round(d.avg_match_rate * 100)) },
+    { label: "占有率 %", color: "#ee6a2a", data: data.value.daily_series.map((d) => Math.round(d.avg_match_rate * 100)) },
     { label: "异动关键词数", color: "#1e1c19", data: data.value.daily_series.map((d) => d.changed_count) },
   ];
 });
@@ -153,7 +153,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
         <div class="flex justify-between items-start">
           <div class="flex items-center gap-1.5 text-[11.5px] font-medium" :style="{ color: 'var(--ink-2)' }">
             <span :style="{ width: '8px', height: '8px', borderRadius: '50%', background: '#ee6a2a' }" />
-            平均命中率
+            品牌占有率
           </div>
           <span
             class="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-medium"
@@ -169,7 +169,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
         <!-- Sparkline 按用户要求移除 —— 切 range 时直接换数字即可，
              不再画 7d/30d 的趋势小曲线（主图区已有大图覆盖趋势）。 -->
         <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-          命中位 <b :style="{ color: 'var(--ink)' }">{{ data.kpis.hit_count_total }}</b> / {{ data.kpis.topn_total }}
+          卡位 <b :style="{ color: 'var(--ink)' }">{{ data.kpis.hit_count_total }}</b> / {{ data.kpis.topn_total }}
         </div>
       </div>
       <!-- KPI 3: 异动关键词 -->
@@ -194,9 +194,9 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
       :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-inner)', padding: '14px' }"
     >
       <div class="flex justify-between items-center mb-2">
-        <div class="text-[12.5px] font-semibold">命中率与异动趋势</div>
+        <div class="text-[12.5px] font-semibold">占有率与异动趋势</div>
         <div class="flex gap-3 text-[11px]" :style="{ color: 'var(--ink-2)' }">
-          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#ee6a2a', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />命中率 %</span>
+          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#ee6a2a', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />占有率 %</span>
           <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#1e1c19', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动关键词数</span>
         </div>
       </div>
@@ -249,7 +249,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
         }"
       >
         <div>关键词</div>
-        <div class="text-center">命中数</div>
+        <div class="text-center">卡位</div>
         <div class="text-center">排名</div>
         <div class="text-center">状态</div>
       </div>

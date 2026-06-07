@@ -1,6 +1,11 @@
 <script setup lang="ts">
 /**
- * GEO 数据中心分析页 —— 跨关键词聚合矩阵 + 高权重信源榜 + 曝光趋势。
+ * GEO 数据中心分析页（重构对齐图二/三）——
+ *   概览条（关键词 + 覆盖分布 + 曝光率/情感环比）
+ *   关键词 × AI平台 · 覆盖卡：[重点 | 覆盖榜] 切换
+ *     重点  = 待优化关键词 + 各平台覆盖率近 5 周
+ *     覆盖榜 = 关键词 × 平台覆盖表（点格展开该平台 AI 原文 + 信源）
+ *   下半：高权重信源榜 + 曝光趋势（三段堆叠面积）
  * 自包含：自己加载 geo_query 任务列表 + useGeoAnalytics。
  */
 import { ref, computed, onMounted, watch } from "vue";
@@ -8,7 +13,9 @@ import { ref, computed, onMounted, watch } from "vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useGeoAnalytics, type PlatformVM } from "@/components/monitor/geo/geoDetail";
-import GeoKeywordMatrix from "@/components/monitor/geo/GeoKeywordMatrix.vue";
+import GeoOverviewBar from "@/components/monitor/geo/GeoOverviewBar.vue";
+import GeoCoverageBoard from "@/components/monitor/geo/GeoCoverageBoard.vue";
+import GeoFocusPanel from "@/components/monitor/geo/GeoFocusPanel.vue";
 import GeoSourceList from "@/components/monitor/geo/GeoSourceList.vue";
 import GeoPlatformBlock from "@/components/monitor/geo/GeoPlatformBlock.vue";
 import GeoTrend from "@/components/monitor/geo/charts/GeoTrend.vue";
@@ -72,15 +79,24 @@ const { analytics, loading } = useGeoAnalytics(
   configuredPlatforms,
 );
 
-// ── 选中格 ─────────────────────────────────────────────────────────────
+// ── 视图切换 + 选中格（覆盖榜下钻）─────────────────────────────────────
+const view = ref<"focus" | "board">("focus");
 const selectedCell = ref<PlatformVM | null>(null);
+const selectedCellKey = ref<{ keyword: string; platformId: string } | null>(null);
 
 function onCell(p: { keyword: string; platformId: string }): void {
-  selectedCell.value = analytics.value?.matrix[p.keyword]?.[p.platformId] ?? null;
+  const cell = analytics.value?.matrix[p.keyword]?.[p.platformId] ?? null;
+  selectedCell.value = cell;
+  selectedCellKey.value = cell ? { keyword: p.keyword, platformId: p.platformId } : null;
+}
+function clearCell(): void {
+  selectedCell.value = null;
+  selectedCellKey.value = null;
 }
 
-watch(selectedTaskId, () => {
-  selectedCell.value = null;
+watch(selectedTaskId, clearCell);
+watch(view, (v) => {
+  if (v === "focus") clearCell(); // 原文下钻只属于覆盖榜
 });
 
 // ── KPI computeds ─────────────────────────────────────────────────────
@@ -110,7 +126,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col" :style="{ gap: '16px' }">
+  <div class="flex h-full min-h-0 flex-col" :style="{ gap: '14px' }">
 
     <!-- ── 顶部：任务选择器 ─────────────────────────────────────────────── -->
     <div class="flex flex-shrink-0 items-center" :style="{ gap: '10px' }">
@@ -156,89 +172,106 @@ onMounted(async () => {
     <!-- ── 主体内容 ─────────────────────────────────────────────────────── -->
     <template v-else-if="analytics">
 
-      <!-- KPI 四格 -->
-      <div
-        class="flex-shrink-0"
-        :style="{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }"
-      >
-        <div
-          v-for="kpi in [
-            { label: '监测关键词数', value: String(kwCount) },
-            { label: '平均曝光率', value: socPct + '%' },
-            { label: '平均情感', value: sentiment.toFixed(2) },
-            { label: '高权重信源', value: String(sourceCount) },
-          ]"
-          :key="kpi.label"
-          :style="{
-            background: 'var(--card-2)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-inner, 10px)',
-            padding: '12px 14px',
-          }"
-        >
-          <div :style="{ fontSize: '9.5px', color: 'var(--ink-3)', marginBottom: '4px', letterSpacing: '0.5px' }">{{ kpi.label }}</div>
-          <div class="font-display" :style="{ fontSize: '22px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }">{{ kpi.value }}</div>
-        </div>
-      </div>
+      <!-- 概览条 -->
+      <GeoOverviewBar
+        :kw-count="kwCount"
+        :coverage="analytics.coverage"
+        :soc-pct="socPct"
+        :soc-delta="analytics.socDelta"
+        :sentiment="sentiment"
+        :sentiment-delta="analytics.sentimentDelta"
+      />
 
-      <!-- 关键词 × AI 平台矩阵 -->
+      <!-- 关键词 × AI平台 · 覆盖 -->
       <div
-        class="flex-shrink-0"
+        class="flex min-h-0 flex-col"
         :style="{
+          flex: '1.1 1 0',
           background: 'var(--card-2)',
           border: '1px solid var(--line)',
           borderRadius: 'var(--radius-inner, 10px)',
           padding: '14px 16px',
         }"
       >
-        <div :style="{ fontSize: '12px', fontWeight: 700, color: 'var(--ink)', marginBottom: '12px' }">关键词 × AI 平台</div>
-        <GeoKeywordMatrix
-          :keywords="analytics.keywords"
+        <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
+          <div :style="{ fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }">关键词 × AI平台 · 覆盖</div>
+          <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">
+            <button
+              v-for="t in [{ k: 'focus', l: '重点' }, { k: 'board', l: '覆盖榜' }]"
+              :key="t.k"
+              type="button"
+              class="px-3.5 py-1 rounded-full text-[12px] font-medium"
+              :style="{
+                background: view === t.k ? 'var(--dark)' : 'transparent',
+                color: view === t.k ? 'var(--card)' : 'var(--ink-3)',
+                border: 'none', cursor: 'pointer',
+              }"
+              @click="view = (t.k as 'focus' | 'board')"
+            >{{ t.l }}</button>
+          </div>
+        </div>
+
+        <GeoFocusPanel
+          v-if="view === 'focus'"
+          :to-improve="analytics.toImprove"
+          :platform-weekly="analytics.platformWeekly"
+        />
+        <GeoCoverageBoard
+          v-else
+          :rows="analytics.keywordRows"
           :platform-ids="analytics.platformIds"
-          :matrix="analytics.matrix"
+          :selected="selectedCellKey"
           @cell="onCell"
         />
       </div>
 
-      <!-- 点格后展示该格回答原文 + 引用信源 -->
-      <div v-if="selectedCell" class="flex-shrink-0">
-        <GeoPlatformBlock
-          :platform="selectedCell"
-          :brand="brand"
-          :brand-terms="brandTerms"
-        />
+      <!-- 覆盖榜下钻：该平台 AI 原文 + 引用信源 -->
+      <div
+        v-if="view === 'board' && selectedCell"
+        class="flex-shrink-0"
+        :style="{ maxHeight: '300px', overflowY: 'auto' }"
+      >
+        <div class="mb-1 flex items-center justify-between">
+          <div :style="{ fontSize: '11px', color: 'var(--ink-3)' }">
+            {{ selectedCellKey?.keyword }} · 平台原文
+          </div>
+          <button
+            type="button"
+            :style="{ fontSize: '11px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer' }"
+            @click="clearCell"
+          >收起 ✕</button>
+        </div>
+        <GeoPlatformBlock :platform="selectedCell" :brand="brand" :brand-terms="brandTerms" />
       </div>
 
       <!-- 下半：信源榜 + 曝光趋势（并排） -->
-      <div
-        class="flex min-h-0"
-        :style="{ gap: '16px', flex: '1 1 auto' }"
-      >
+      <div class="flex min-h-0" :style="{ gap: '16px', flex: '1 1 0' }">
         <!-- 高权重信源榜 -->
         <div
           class="flex min-h-0 flex-col"
           :style="{
-            flex: '1 1 50%',
+            flex: '1 1 52%',
             background: 'var(--card-2)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--radius-inner, 10px)',
             padding: '14px 16px',
           }"
         >
-          <div :style="{ fontSize: '12px', fontWeight: 700, color: 'var(--ink)', marginBottom: '10px', flexShrink: 0 }">高权重信源榜</div>
+          <div class="mb-2 flex flex-shrink-0 items-baseline gap-2">
+            <div :style="{ fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }">高权重信源榜</div>
+            <div :style="{ fontSize: '11px', color: 'var(--ink-3)' }">{{ sourceCount }} 条</div>
+          </div>
           <GeoSourceList
             :board="analytics.board"
             :total="analytics.platformIds.length"
-            :task-id="selectedTaskId ?? 0"
-            keyword=""
           />
         </div>
 
         <!-- 曝光趋势 -->
         <div
-          v-if="analytics.history.length"
+          class="flex min-h-0 flex-col"
           :style="{
-            flex: '1 1 50%',
+            flex: '1 1 48%',
             background: 'var(--card-2)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--radius-inner, 10px)',
