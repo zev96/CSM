@@ -74,6 +74,12 @@ function statusOf(t: Task) {
 function isRunning(id: number) { return monitorStatus.isRunning(id); }
 const taskProgress = computed(() => monitorStatus.taskProgress);
 
+// 该关键词的知乎搜索结果页 URL（右卡「知乎搜索页」链接跳转 —— 按当前选中关键词派生，
+// 不再用任务级 target_url，那只由首个关键词派生）。
+function keywordSearchUrl(kw: string): string {
+  return `https://www.zhihu.com/search?type=content&q=${encodeURIComponent(kw)}`;
+}
+
 // ── L2 单关键词详情 helpers（镜像知乎问题右卡）──
 // 选中关键词近 7 天「卡位数量(matched_count)」趋势 —— 从任务历史每天取该关键词的 matched_count
 const selectedKwTrend = computed<Array<{ iso: string; label: string; matched: number | null }>>(() => {
@@ -335,7 +341,6 @@ watch(keywordResults, (kws) => {
               <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">知乎搜索 · 关键词列表</div>
               <div class="font-display text-[14px] font-semibold mt-0.5">{{ selectedTask?.name ?? '' }}</div>
             </div>
-            <a v-if="selectedTask?.target_url" :href="selectedTask.target_url" target="_blank" class="flex-shrink-0 self-center text-[11.5px] text-[var(--primary-deep)] hover:underline">知乎搜索页 ↗</a>
           </div>
 
           <!-- 知乎特有状态条 -->
@@ -344,7 +349,7 @@ watch(keywordResults, (kws) => {
           <div v-if="fulltextNoCookie" class="mb-2 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }"><Pill tone="warn">全文匹配未生效</Pill>已开启全文匹配但未配置知乎 Cookie，请到 Cookie 管理添加。</div>
 
           <div class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.6fr .6fr .6fr .6fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
-            <div>关键词</div><div class="text-center">命中数</div><div class="text-center">首位</div><div class="text-center">状态</div>
+            <div>关键词</div><div class="text-center">卡位</div><div class="text-center">首位</div><div class="text-center">状态</div>
           </div>
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <div v-if="!keywordResults.length" class="py-10 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">还没有结果，点右下「启动监测」。</div>
@@ -373,9 +378,22 @@ watch(keywordResults, (kws) => {
           </div>
           <template v-else>
             <!-- 标题：关键词（搜索词）-->
-            <div class="mb-3 flex-shrink-0">
-              <div class="font-display text-[14px] font-semibold truncate" :title="currentKeyword.keyword">{{ currentKeyword.keyword }}</div>
-              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">关键词详情</div>
+            <div class="mb-3 flex-shrink-0 flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <div class="font-display text-[14px] font-semibold truncate" :title="currentKeyword.keyword">{{ currentKeyword.keyword }}</div>
+                <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">关键词详情</div>
+              </div>
+              <a
+                :href="keywordSearchUrl(currentKeyword.keyword)"
+                target="_blank"
+                rel="noopener"
+                class="inline-flex flex-shrink-0 items-center gap-1 px-3 py-1.5 text-[11.5px]"
+                :style="{ background: 'var(--card-2)', color: 'var(--ink-2)', border: '1px solid var(--line)', borderRadius: '999px', textDecoration: 'none' }"
+                title="在浏览器打开该关键词的知乎搜索页"
+              >
+                <Icon name="external" :size="12" />
+                <span>知乎搜索页</span>
+              </a>
             </div>
 
             <!-- KPI：卡位数量 / 最高排名 -->

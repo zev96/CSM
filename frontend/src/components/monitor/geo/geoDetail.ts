@@ -100,6 +100,7 @@ export interface HistoryPoint {
   date: string;
   soc: number;
   first: number;
+  sentiment?: number; // 顶层 sentiment_score（数据中心聚合填；详情/趋势可忽略）
 }
 export interface CompetitorVM {
   name: string;
@@ -124,6 +125,24 @@ export interface GeoTopMetric {
   status_band?: string;
   first_rank_rate?: number;
 }
+/** 覆盖榜单行（数据中心覆盖榜表派生）。 */
+export interface GeoKeywordRow {
+  keyword: string;
+  cells: (PlatformVM | null)[]; // 与 platformIds 对齐
+  mentioned: number; // 命中平台数
+  total: number; // 平台总数
+  band: CoverageBand;
+  score: number; // 曝光分 0–100
+  scoreDelta: number; // 环比（近 7 天，0 = 无基线/持平）
+}
+
+/** 待优化关键词行（重点视图）。 */
+export interface GeoImproveRow {
+  keyword: string;
+  band: CoverageBand; // blind / partial
+  missing: string[]; // 缺失平台 id（保持 platformIds 顺序）
+}
+
 /** GEO 数据中心分析（一个任务/品牌的跨关键词聚合）。 */
 export interface GeoAnalytics {
   keywords: string[];                                  // 矩阵行
@@ -133,6 +152,13 @@ export interface GeoAnalytics {
   history: HistoryPoint[];
   board: BoardRow[];                                   // 全关键词带权重信源榜（后端已按 weight 排）
   lastRunIso: string | null;
+  // ── 重构新增（对齐图二/三）──
+  coverage: CoverageDist;               // 覆盖分布（霸屏/部分/盲区）
+  socDelta: number;                     // 平均曝光率近 7 天环比
+  sentimentDelta: number;               // 平均情感近 7 天环比
+  keywordRows: GeoKeywordRow[];         // 覆盖榜（按曝光分降序）
+  toImprove: GeoImproveRow[];           // 待优化（盲区优先）
+  platformWeekly: PlatformWeeklySeries; // 各平台近 5 周覆盖率
 }
 
 // ── helper（移植 geo-shared.jsx）─────────────────────────────────────────
@@ -214,6 +240,133 @@ export function placeholderPlatform(id: string): PlatformVM {
     recommended: [],
     cites: [],
   };
+}
+
+// ── 数据中心 GEO 覆盖派生（覆盖榜 / 概览覆盖分布 / 待优化 / 曝光分）────────
+// 纯函数，单测见 __tests__/geoDetail.spec.ts。「覆盖/提及」= cellStatus 命中
+// first|hit；未提及/失败/未跑/缺格都算「未覆盖」。
+
+export type CoverageBand = "dominated" | "partial" | "blind";
+
+export interface KeywordCoverage {
+  mentioned: number; // 提及（首推或上榜）你的平台数
+  total: number; // 比较的平台总数（= platformIds.length）
+  band: CoverageBand; // dominated 霸屏 · partial 部分覆盖 · blind 盲区
+  missing: string[]; // 未覆盖平台 id（保持 platformIds 顺序）
+}
+
+/** 单关键词跨平台覆盖分类。 */
+export function classifyKeywordCoverage(
+  row: Record<string, PlatformVM> | undefined,
+  platformIds: string[],
+): KeywordCoverage {
+  let mentioned = 0;
+  const missing: string[] = [];
+  for (const p of platformIds) {
+    const cell = row?.[p];
+    const kind = cell ? cellStatus(cell).kind : "miss";
+    if (kind === "first" || kind === "hit") mentioned += 1;
+    else missing.push(p);
+  }
+  const total = platformIds.length;
+  const band: CoverageBand =
+    mentioned === 0 ? "blind" : mentioned === total ? "dominated" : "partial";
+  return { mentioned, total, band, missing };
+}
+
+export interface CoverageDist {
+  dominated: number;
+  partial: number;
+  blind: number;
+}
+
+/** 跨关键词汇总覆盖分布（概览条 stacked bar）。 */
+export function coverageDistribution(
+  matrix: Record<string, Record<string, PlatformVM>>,
+  keywords: string[],
+  platformIds: string[],
+): CoverageDist {
+  const dist: CoverageDist = { dominated: 0, partial: 0, blind: 0 };
+  for (const kw of keywords) {
+    dist[classifyKeywordCoverage(matrix[kw], platformIds).band] += 1;
+  }
+  return dist;
+}
+
+/** 曝光分 0–100：有 soc 用 round(soc×100)，否则回退覆盖率 mentioned/total。 */
+export function exposureScore(
+  soc: number | null | undefined,
+  coverage?: { mentioned: number; total: number },
+): number {
+  const clamp = (v: number) => Math.max(0, Math.min(100, Math.round(v)));
+  if (typeof soc === "number" && !Number.isNaN(soc)) return clamp(soc * 100);
+  if (coverage && coverage.total > 0) return clamp((coverage.mentioned / coverage.total) * 100);
+  return 0;
+}
+
+export interface PlatformWeeklySeries {
+  weekLabels: string[];
+  series: { platformId: string; rates: (number | null)[] }[];
+}
+
+const _WEEK_MS = 7 * 86_400_000;
+/** 某日期所在自然周的周一 0 点（本地时区）时间戳。 */
+function _startOfWeekMs(d: Date): number {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = (x.getDay() + 6) % 7; // 周一=0 … 周日=6
+  x.setDate(x.getDate() - dow);
+  return x.getTime();
+}
+
+/**
+ * 逐平台近 `weeks` 周覆盖率（mentioned/ok_total×100）。每个 (平台,周) 取该周
+ * 最新一次运行；空周 null。标签从旧到新，末位 = 本周。
+ */
+export function weeklyPlatformCoverage(
+  results: Array<{
+    checked_at: string | null;
+    metric: { by_platform?: Record<string, { mentioned: number; ok_total: number }> } | null;
+  }>,
+  platformIds: string[],
+  now: Date,
+  weeks = 5,
+): PlatformWeeklySeries {
+  const nowWeek = _startOfWeekMs(now);
+  const latestTs: Record<string, number[]> = {};
+  const rates: Record<string, (number | null)[]> = {};
+  for (const p of platformIds) {
+    latestTs[p] = Array(weeks).fill(-Infinity);
+    rates[p] = Array(weeks).fill(null);
+  }
+  for (const r of results) {
+    if (!r.checked_at) continue;
+    const t = new Date(r.checked_at);
+    if (Number.isNaN(t.getTime())) continue;
+    const weeksAgo = Math.round((nowWeek - _startOfWeekMs(t)) / _WEEK_MS);
+    if (weeksAgo < 0 || weeksAgo >= weeks) continue;
+    const idx = weeks - 1 - weeksAgo;
+    const ts = t.getTime();
+    const bp = r.metric?.by_platform ?? {};
+    for (const p of platformIds) {
+      const cell = bp[p];
+      if (!cell || !cell.ok_total) continue;
+      if (ts >= latestTs[p][idx]) {
+        latestTs[p][idx] = ts;
+        rates[p][idx] = Math.round((cell.mentioned / cell.ok_total) * 100);
+      }
+    }
+  }
+  const weekLabels: string[] = [];
+  for (let i = 0; i < weeks; i++) weekLabels.push(i === weeks - 1 ? "本周" : `W${i + 1}`);
+  return { weekLabels, series: platformIds.map((p) => ({ platformId: p, rates: rates[p] })) };
+}
+
+/**
+ * 信源榜上榜门槛：引用次数 ≥ `minCount`（默认 10）且有真实网址 —— 域名非空、
+ * 含「.」（剔除空域名与「其他来源」这类聚合桶，它们没有可点开的网址）。
+ */
+export function filterBoard(rows: BoardRow[], minCount = 10): BoardRow[] {
+  return rows.filter((r) => r.count >= minCount && /\./.test((r.domain || "").trim()));
 }
 
 /**
@@ -626,7 +779,8 @@ export function useGeoAnalytics(
       const [cellsRes, resultsRes, citRes] = await Promise.all([
         sidecar.client.get(`/api/monitor/geo/${tid}/latest-cells`),
         sidecar.client.get("/api/monitor/results", {
-          params: { task_id: tid, limit: 8 },
+          // 60 条够近 5 周（GEO 多为日级或更稀）做逐平台周分桶 + 近 7 天首末环比。
+          params: { task_id: tid, limit: 60 },
         }),
         sidecar.client.get(`/api/monitor/geo/${tid}/citations`, {
           params: { days: 30 },
@@ -659,38 +813,50 @@ export function useGeoAnalytics(
       const ckws = configuredKeywords.value.filter(Boolean);
       const keywords = ckws.length ? ckws : cellKeywords;
 
-      // METRIC + HISTORY：results DESC → metric 取顶层（非 by_keyword）。
+      // METRIC + HISTORY：results DESC → metric 取顶层 + by_keyword/by_platform 下钻。
+      type FullMetric = GeoTopMetric & {
+        by_keyword?: Record<string, KeywordMetric>;
+        by_platform?: Record<string, { mentioned: number; ok_total: number }>;
+      };
       const results = (resultsRes.data?.results ?? []) as Array<{
         checked_at: string | null;
         status: string;
-        metric: GeoTopMetric | null;
+        metric: FullMetric | null;
       }>;
       const metric: GeoTopMetric | null = results.length
         ? (results[0].metric ?? null)
         : null;
       const lastRunIso: string | null = results.length ? (results[0].checked_at ?? null) : null;
 
-      // 趋势横轴：最近 7 天按天聚合（DESC 先遇到 = 当天最后一跑），读顶层 soc / first_rank_rate。
+      // 趋势横轴：最近 7 天按天聚合（DESC 先遇到 = 当天最后一跑），整条 metric 入桶
+      // 以便派生 soc/first/sentiment 趋势 + 首末环比 + 逐词曝光分基线。
       const DAY_MS = 86_400_000;
       const cutoff = Date.now() - 7 * DAY_MS;
-      const seenDay = new Map<string, { iso: string; p: HistoryPoint }>();
+      const seenDay = new Map<string, { iso: string; metric: FullMetric | null }>();
       for (const r of results) {
         if (!r.checked_at) continue;
         const t = new Date(r.checked_at).getTime();
         if (isNaN(t) || t < cutoff) continue;
         const date = fmtShortDate(r.checked_at);
         if (seenDay.has(date)) continue;
-        const m = r.metric;
-        seenDay.set(date, {
-          iso: r.checked_at,
-          p: { date, soc: m?.soc ?? 0, first: m?.first_rank_rate ?? 0 },
-        });
+        seenDay.set(date, { iso: r.checked_at, metric: r.metric });
       }
-      const history: HistoryPoint[] = [...seenDay.values()]
-        .sort((a, b) => a.iso.localeCompare(b.iso))
-        .map((e) => e.p);
+      const days = [...seenDay.values()].sort((a, b) => a.iso.localeCompare(b.iso)); // old → new
+      const history: HistoryPoint[] = days.map((d) => ({
+        date: fmtShortDate(d.iso),
+        soc: d.metric?.soc ?? 0,
+        first: d.metric?.first_rank_rate ?? 0,
+        sentiment: d.metric?.sentiment_score ?? 0,
+      }));
+      // 首末环比（近 7 天窗口内最旧日 → 最新日）。
+      const socDelta = history.length >= 2 ? history[history.length - 1].soc - history[0].soc : 0;
+      const sentimentDelta =
+        history.length >= 2
+          ? (history[history.length - 1].sentiment ?? 0) - (history[0].sentiment ?? 0)
+          : 0;
 
       // BOARD：全任务 citation leaderboard（无 keyword 过滤），带 weight。
+      // 上榜门槛：引用 ≥ 10 次 + 有真实网址（filterBoard）。
       const lb = (citRes.data?.leaderboard ?? []) as Array<{
         domain: string;
         source_type: string;
@@ -698,13 +864,51 @@ export function useGeoAnalytics(
         platforms: string[];
         weight?: number;
       }>;
-      const board: BoardRow[] = lb.map((r) => ({
-        domain: r.domain,
-        type: r.source_type,
-        count: r.count,
-        platforms: Array.isArray(r.platforms) ? r.platforms.length : 0,
-        weight: r.weight ?? 0,
-      }));
+      const board: BoardRow[] = filterBoard(
+        lb.map((r) => ({
+          domain: r.domain,
+          type: r.source_type,
+          count: r.count,
+          platforms: Array.isArray(r.platforms) ? r.platforms.length : 0,
+          weight: r.weight ?? 0,
+        })),
+      );
+
+      // ── 覆盖派生（图二/三）──
+      const coverage = coverageDistribution(matrix, keywords, platformIds);
+      const platformWeekly = weeklyPlatformCoverage(results, platformIds, new Date(), 5);
+      const latestByKw = (metric as FullMetric | null)?.by_keyword ?? {};
+      const baseByKw = (days.length ? days[0].metric?.by_keyword : null) ?? {};
+      const keywordRows: GeoKeywordRow[] = keywords
+        .map((kw) => {
+          const cov = classifyKeywordCoverage(matrix[kw], platformIds);
+          const cells = platformIds.map((p) => matrix[kw]?.[p] ?? null);
+          const score = exposureScore(latestByKw[kw]?.soc, {
+            mentioned: cov.mentioned,
+            total: cov.total,
+          });
+          const baseSoc = baseByKw[kw]?.soc;
+          const scoreDelta = typeof baseSoc === "number" ? score - exposureScore(baseSoc) : 0;
+          return {
+            keyword: kw,
+            cells,
+            mentioned: cov.mentioned,
+            total: cov.total,
+            band: cov.band,
+            score,
+            scoreDelta,
+          };
+        })
+        .sort((a, b) => b.score - a.score || b.mentioned - a.mentioned);
+      const bandWeight: Record<CoverageBand, number> = { blind: 0, partial: 1, dominated: 2 };
+      const toImprove: GeoImproveRow[] = keywords
+        .map((kw) => {
+          const cov = classifyKeywordCoverage(matrix[kw], platformIds);
+          return { keyword: kw, band: cov.band, missing: cov.missing, _m: cov.mentioned };
+        })
+        .filter((r) => r.band !== "dominated")
+        .sort((a, b) => bandWeight[a.band] - bandWeight[b.band] || a._m - b._m)
+        .map(({ keyword, band, missing }) => ({ keyword, band, missing }));
 
       if (taskId.value !== tid) return;
       analytics.value = {
@@ -715,6 +919,12 @@ export function useGeoAnalytics(
         history,
         board,
         lastRunIso,
+        coverage,
+        socDelta,
+        sentimentDelta,
+        keywordRows,
+        toImprove,
+        platformWeekly,
       };
     } catch {
       if (taskId.value === tid) {
