@@ -43,11 +43,10 @@ function rate(b: BoardRow): number {
       >
         <!-- 序号 -->
         <span class="font-display" :style="{ fontSize: '12px', fontWeight: 700, color: 'var(--ink-4)', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }">{{ i + 1 }}</span>
-        <!-- 域名 + 类型 -->
+        <!-- 域名（类型徽章按用户要求移除，仅留圆点 + 域名）-->
         <div class="flex items-center" :style="{ gap: '6px', minWidth: 0 }">
           <span :style="{ width: '8px', height: '8px', borderRadius: '999px', background: SRC_COLORS[i % SRC_COLORS.length], flexShrink: 0 }" />
           <span class="truncate" :style="{ fontSize: '12.5px', fontWeight: 600 }" :title="b.domain">{{ b.domain || "—" }}</span>
-          <span class="flex-shrink-0" :style="{ fontSize: '9px', color: 'var(--ink-4)', background: 'var(--card-2)', borderRadius: '4px', padding: '1px 5px' }">{{ b.type || "其他" }}</span>
         </div>
         <!-- 引用次数 -->
         <div :style="{ textAlign: 'right', whiteSpace: 'nowrap' }">

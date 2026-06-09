@@ -687,13 +687,17 @@ export function useGeoKeywordDetail(
         platforms: string[];
         weight?: number;
       }>;
-      const board: BoardRow[] = lb.map((r) => ({
-        domain: r.domain,
-        type: r.source_type,
-        count: r.count,
-        platforms: Array.isArray(r.platforms) ? r.platforms.length : 0,
-        weight: r.weight ?? 0,
-      }));
+      // 上榜门槛：引用 ≥ 10 次 + 有真实网址（与数据中心 useGeoAnalytics 一致），
+      // 否则信源图例会拖出几十个低频域名把散点图压得很小。
+      const board: BoardRow[] = filterBoard(
+        lb.map((r) => ({
+          domain: r.domain,
+          type: r.source_type,
+          count: r.count,
+          platforms: Array.isArray(r.platforms) ? r.platforms.length : 0,
+          weight: r.weight ?? 0,
+        })),
+      );
 
       const competitors = deriveCompetitors(platforms);
       const headCompetitor = competitors.length ? competitors[0].name : "";

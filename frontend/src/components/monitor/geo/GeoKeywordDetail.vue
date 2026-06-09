@@ -349,20 +349,25 @@ const matrixDenom = denom;
             >暂无信源数据 · 运行后 AI 引用的来源域名会汇总到这里。</div>
             <div
               v-else
-              :style="{ display: 'flex', flexDirection: 'column', gap: '14px' }"
+              :style="{ display: 'flex', flexDirection: 'column', gap: '16px' }"
             >
-              <!-- 散点（上）：居中限宽，不随排行榜长度变形 -->
-              <div :style="{ width: '100%', maxWidth: '480px', margin: '0 auto' }">
-                <GeoScatter
-                  :points="srcPoints"
-                  :show-labels="false"
-                  x-title="引用次数"
-                  y-title="平台引用率"
-                  y-top="100%"
-                  y-bot="0"
-                  zone="高权重"
-                />
-                <div class="flex flex-wrap justify-center" :style="{ gap: '12px', marginTop: '8px' }">
+              <!-- 散点（左）+ 平台图例（右）：左右布局 —— 图更大、图例成列更易读 -->
+              <div :style="{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '20px', alignItems: 'center' }">
+                <div :style="{ minWidth: 0 }">
+                  <GeoScatter
+                    :points="srcPoints"
+                    :show-labels="false"
+                    x-title="引用次数"
+                    y-title="平台引用率"
+                    y-top="100%"
+                    y-bot="0"
+                    zone="高权重"
+                  />
+                </div>
+                <div
+                  class="flex flex-col"
+                  :style="{ gap: '9px', minWidth: 0, maxHeight: '240px', overflowY: 'auto', paddingRight: '4px' }"
+                >
                   <GeoLegendDot
                     v-for="(b, i) in board"
                     :key="b.domain"

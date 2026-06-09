@@ -65,6 +65,15 @@ const props = defineProps<{
   yMax?: number;
   /** 容器高度 —— 默认固定 170px；传 "100%" 让图表填满 flex 父容器（避免溢出遮挡）。 */
   height?: string;
+  /**
+   * 数据点圆点半径 —— 默认 0（只在 hover 显示，留存/知乎页保持原样）。传 >0 让
+   * 每个数据点常显小圆点（GEO 覆盖率图用，避免必须 hover 才看得到值）。
+   */
+  pointRadius?: number;
+  /**
+   * 画布内边距(px) —— 默认 0。给百分比图留顶/右边距，避免 100% 数据点贴边被裁。
+   */
+  padding?: number;
 }>();
 
 const data = computed(() => ({
@@ -76,8 +85,14 @@ const data = computed(() => ({
     data: s.data,
     borderWidth: 2.2,
     tension: 0.25,
-    pointRadius: 0,
-    pointHoverRadius: 4,
+    pointRadius: props.pointRadius ?? 0,
+    pointHoverRadius: Math.max(4, (props.pointRadius ?? 0) + 1),
+    pointBackgroundColor: s.color,
+    pointBorderColor: "#fbf7ec",
+    pointBorderWidth: props.pointRadius ? 1 : 0,
+    // 常显圆点时关闭裁剪 —— chart.js 默认把数据集裁到 chartArea，导致正好
+    // 落在 100%（轴顶）的点被切成半圆。配合 layout.padding 留白即可完整显示。
+    clip: props.pointRadius ? (false as const) : undefined,
     fill: false,
     yAxisID: props.dualAxis && i === 1 ? "y1" : "y",
   })),
@@ -87,6 +102,7 @@ const options = computed<any>(() => {
   const base = {
     responsive: true,
     maintainAspectRatio: false,
+    layout: { padding: props.padding ?? 0 },
     interaction: { mode: "index", intersect: false },
     plugins: {
       legend: { display: false },  // 外部 legend 由父组件绘，更可控

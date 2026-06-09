@@ -16,20 +16,29 @@ import {
 const props = defineProps<{
   rows: GeoKeywordRow[];
   platformIds: string[];
-  selected: { keyword: string; platformId: string } | null;
 }>();
 
+// 点击行（或某平台格）→ 跳转下钻页（父组件接管，不再页内下拉）。
+// platformId='' = 整行点击（不定位具体平台）；非空 = 点中的平台置顶高亮。
 const emit = defineEmits<{ cell: [payload: { keyword: string; platformId: string }] }>();
+
+function openRow(keyword: string): void {
+  emit("cell", { keyword, platformId: "" });
+}
+function openCell(e: MouseEvent, keyword: string, platformId: string): void {
+  e.stopPropagation(); // 别再冒泡触发整行点击
+  emit("cell", { keyword, platformId });
+}
 
 // 列：# / 关键词(收窄, 让热力图贴近) / 平台覆盖格 / 弹性占位 / 命中 / 曝光分。
 // 关键词不再用 1.5fr（会把热力图推到最右、和关键词之间空一大段），改 bounded
 // 宽度，多余宽度交给热力图右侧的 1fr 占位，命中/曝光分仍右对齐。
 const cols = computed(
-  () => `28px minmax(150px, 220px) ${props.platformIds.length * 28}px 1fr 56px 84px`,
+  () => `28px minmax(150px, 220px) ${props.platformIds.length * 56}px 1fr 56px 84px`,
 );
 
 function bg(cell: PlatformVM | null): string {
-  if (!cell) return "transparent";
+  if (!cell) return "var(--card)";
   const k = cellStatus(cell).kind;
   return k === "first"
     ? "var(--green)"
@@ -37,7 +46,16 @@ function bg(cell: PlatformVM | null): string {
       ? "var(--primary-soft)"
       : k === "fail"
         ? "rgba(216,90,72,.10)"
-        : "transparent";
+        : "var(--card)"; // miss / pending —— 浅底 + 描边，避免和卡片背景一致看不见
+}
+// 格子描边：命中=主色、失败=淡红、首推=无、未提及/未运行/空=暖灰描边（与图例「未提及」一致）。
+function bd(cell: PlatformVM | null): string {
+  if (!cell) return "1px solid var(--ink-4)";
+  const k = cellStatus(cell).kind;
+  if (k === "hit") return "1px solid var(--primary-deep)";
+  if (k === "fail") return "1px solid rgba(216,90,72,.35)";
+  if (k === "first") return "none";
+  return "1px solid var(--ink-4)"; // miss / pending
 }
 function fg(cell: PlatformVM | null): string {
   if (!cell) return "var(--ink-4)";
@@ -51,9 +69,6 @@ function label(cell: PlatformVM | null): string {
   if (k === "hit") return `#${cell.rank}`;
   if (k === "fail") return "!";
   return ""; // miss / pending 留空
-}
-function isSel(keyword: string, platformId: string): boolean {
-  return props.selected?.keyword === keyword && props.selected?.platformId === platformId;
 }
 </script>
 
@@ -70,7 +85,7 @@ function isSel(keyword: string, platformId: string): boolean {
         <span :style="{ fontSize: '10.5px', color: 'var(--ink-3)' }">榜单</span>
       </span>
       <span class="inline-flex items-center" :style="{ gap: '5px' }">
-        <span :style="{ width: '11px', height: '11px', borderRadius: '3px', border: '1px solid var(--line)' }" />
+        <span :style="{ width: '11px', height: '11px', borderRadius: '3px', background: 'var(--card)', border: '1px solid var(--ink-4)' }" />
         <span :style="{ fontSize: '10.5px', color: 'var(--ink-3)' }">未提及</span>
       </span>
     </div>
@@ -82,11 +97,11 @@ function isSel(keyword: string, platformId: string): boolean {
     >
       <div :style="{ fontSize: '10px', color: 'var(--ink-3)', textAlign: 'center' }">#</div>
       <div :style="{ fontSize: '10px', color: 'var(--ink-3)' }">关键词</div>
-      <div class="flex" :style="{ gap: '4px' }">
+      <div class="flex" :style="{ gap: '0px' }">
         <div
           v-for="p in platformIds"
           :key="p"
-          :style="{ width: '24px', fontSize: '8.5px', color: 'var(--ink-3)', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden' }"
+          :style="{ width: '56px', fontSize: '10.5px', fontWeight: 600, color: 'var(--ink-3)', textAlign: 'center', whiteSpace: 'nowrap' }"
           :title="platformShort(p)"
         >{{ platformShort(p) }}</div>
       </div>
@@ -101,32 +116,40 @@ function isSel(keyword: string, platformId: string): boolean {
       <div
         v-for="(row, ri) in rows"
         :key="row.keyword"
-        class="grid items-center"
+        class="geo-kw-row grid items-center"
+        role="button"
+        tabindex="0"
+        :title="`查看「${row.keyword}」各平台原文`"
         :style="{
           gridTemplateColumns: cols, gap: '8px', padding: '9px 10px',
           borderBottom: '1px solid rgba(28,26,23,0.05)',
         }"
+        @click="openRow(row.keyword)"
+        @keydown.enter.prevent="openRow(row.keyword)"
       >
         <div class="font-display" :style="{ fontSize: '12px', fontWeight: 700, color: 'var(--ink-4)', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }">{{ ri + 1 }}</div>
         <div class="truncate" :style="{ fontSize: '12.5px', fontWeight: 600, color: 'var(--ink)' }" :title="row.keyword">{{ row.keyword }}</div>
-        <!-- 平台覆盖格 -->
-        <div class="flex" :style="{ gap: '4px' }">
+        <!-- 平台覆盖格（每格放进 50px 居中槽，与加宽后的表头对齐）-->
+        <div class="flex" :style="{ gap: '0px' }">
           <div
             v-for="(cell, ci) in row.cells"
             :key="ci"
-            class="font-display"
-            :style="{
-              width: '24px', height: '22px', borderRadius: '6px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '10px', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-              background: bg(cell), color: fg(cell),
-              border: cell ? (cellStatus(cell).kind === 'hit' ? '1px solid var(--primary-deep)' : 'none') : '1px solid var(--line)',
-              boxShadow: isSel(row.keyword, platformIds[ci]) ? '0 0 0 2px var(--ink)' : 'none',
-              cursor: cell ? 'pointer' : 'default',
-            }"
-            :title="cell ? `${platformShort(platformIds[ci])} · ${cellStatus(cell).label}` : platformShort(platformIds[ci])"
-            @click="cell ? emit('cell', { keyword: row.keyword, platformId: platformIds[ci] }) : undefined"
-          >{{ label(cell) }}</div>
+            :style="{ width: '56px', display: 'flex', justifyContent: 'center' }"
+          >
+            <div
+              class="font-display"
+              :style="{
+                width: '28px', height: '24px', borderRadius: '6px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '10.5px', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                background: bg(cell), color: fg(cell),
+                border: bd(cell),
+                cursor: 'pointer',
+              }"
+              :title="cell ? `${platformShort(platformIds[ci])} · ${cellStatus(cell).label}` : platformShort(platformIds[ci])"
+              @click="cell && openCell($event, row.keyword, platformIds[ci])"
+            >{{ label(cell) }}</div>
+          </div>
         </div>
         <!-- 弹性占位：把热力图推近关键词、命中/曝光分推到右侧 -->
         <div />
@@ -152,3 +175,20 @@ function isSel(keyword: string, platformId: string): boolean {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 可点击的覆盖榜行 —— 行本身无 inline 背景，scoped :hover 安全（不会压死
+   选中态橙底，因为这里已无选中态）。整行 + 平台格都跳转下钻页。 */
+.geo-kw-row {
+  cursor: pointer;
+  transition: background 0.12s ease;
+  border-radius: 8px;
+}
+.geo-kw-row:hover {
+  background: rgba(28, 26, 23, 0.035);
+}
+.geo-kw-row:focus-visible {
+  outline: none;
+  background: rgba(28, 26, 23, 0.05);
+}
+</style>

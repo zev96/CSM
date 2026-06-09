@@ -9,7 +9,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
-import Sparkline from "@/components/ui/Sparkline.vue";
+import LineChart from "@/components/monitor/history/LineChart.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 
@@ -117,6 +117,12 @@ const sparkColor = computed(() => {
   return p >= 80 ? "var(--green)" : p >= 50 ? "#e8a04a" : "var(--red)";
 });
 
+// LineChart 入参：单序列（当前选中平台的每日留存率）。借数据中心同款图表控件
+// 拿到纵轴 + 背景网格。
+const chartSeries = computed(() => [
+  { label: "留存率", color: sparkColor.value, data: series.value },
+]);
+
 onMounted(async () => {
   try {
     await whenReady();
@@ -184,18 +190,16 @@ onMounted(async () => {
     >
       暂无评论留存数据
     </div>
-    <!-- 有数据：折线 + 横轴用 mt-auto 推到卡片底部，平台 tab 紧随其后 -->
+    <!-- 有数据：折线图（数据中心同款 LineChart：带纵轴 + 背景网格）填满
+         %数字与平台 tab 之间的空间，tab 固定在底部 -->
     <template v-else>
-      <div class="mt-auto mb-2 flex-shrink-0">
-        <Sparkline
-          :points="series"
-          :axis-labels="axisLabels"
-          :height="48"
-          :stroke="sparkColor"
-          :show-last="true"
-          :y-min="0"
+      <div class="mt-2 mb-2 min-h-0 flex-1">
+        <LineChart
+          height="100%"
+          :labels="axisLabels"
+          :series="chartSeries"
           :y-max="100"
-          fluid
+          :y-axis-formatter="(v) => `${v}%`"
         />
       </div>
       <div class="flex flex-shrink-0 gap-1">

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 /**
- * 曝光趋势 —— 三段堆叠面积（强曝光 / 首曝光 / 未曝光）+ 头部当前值 + 近 7 天
- * 首末环比 pp 徽章 + 底部 曝光SoC / 首推率 切换。
+ * 曝光趋势 —— 近 7 天日历轴上的「单值柱状图」。
  *
- *   强曝光 = first_rank_rate（你被首推的占比，绿）
- *   首曝光 = soc − first_rank_rate（提及但非首推，橙）
- *   未曝光 = 1 − soc（没提及你，灰）
+ * 设计（按用户要求精简）：
+ *   - 左侧 Y 轴（0/50/100 刻度 + 浅网格），柱顶直接标数值 —— 不再靠 hover。
+ *   - 去掉图例（未/首/强曝光）、灰色「未曝光」背景段、右上角大数值。
+ *   - 横轴恒为近 7 天（今天最右），有运行的天画柱，空天只留浅日期。
+ *   - 底部切换：曝光 SoC / 首推率（柱高 = 选中指标当天值）。
+ *   - 响应式 viewBox（ResizeObserver）铺满容器。
  *
- * 入参 history[] = {date, soc, first}（按时间正序；近 N 天每天一点）。
+ * 入参 history[] = {date:"M/D", soc, first}（按时间正序；仅含有运行的天）。
  */
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import type { HistoryPoint } from "@/components/monitor/geo/geoDetail";
 import { pct } from "@/components/monitor/geo/geoDetail";
@@ -18,14 +20,35 @@ const props = defineProps<{ history: HistoryPoint[] }>();
 
 const metric = ref<"soc" | "first">("soc");
 
-const W = 482;
-const H = 150;
-const padL = 6;
-const padR = 10;
-const padT = 12;
-const padB = 22;
-const plotW = W - padL - padR;
-const plotH = H - padT - padB;
+// ── 响应式尺寸：viewBox = 容器真实像素，铺满 ──────────────────────────────
+const wrap = ref<HTMLElement | null>(null);
+const vw = ref(480);
+const vh = ref(150);
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  const el = wrap.value;
+  if (!el || typeof ResizeObserver === "undefined") return;
+  ro = new ResizeObserver((entries) => {
+    const r = entries[0]?.contentRect;
+    if (!r) return;
+    if (r.width > 0) vw.value = r.width;
+    if (r.height > 0) vh.value = r.height;
+  });
+  ro.observe(el);
+});
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  ro = null;
+});
+
+const padL = 30; // 留给 Y 轴刻度
+const padR = 12;
+const padT = 18; // 留给柱顶数值
+const padB = 20; // 留给日期轴
+const innerL = 16; // 首日柱不压在 Y 轴上
+const innerR = 8;
+const plotW = computed(() => Math.max(20, vw.value - padL - padR));
+const plotH = computed(() => Math.max(20, vh.value - padT - padB));
 
 interface P {
   date: string;
@@ -35,119 +58,154 @@ interface P {
 const pts = computed<P[]>(() =>
   props.history.map((h) => {
     const soc = Math.max(0, Math.min(1, h.soc));
-    const first = Math.max(0, Math.min(soc, h.first)); // 首推率 ≤ 曝光率，防止反带
+    const first = Math.max(0, Math.min(soc, h.first));
     return { date: h.date, soc, first };
   }),
 );
-const n = computed(() => pts.value.length);
-const x = (i: number) => padL + (n.value > 1 ? (i * plotW) / (n.value - 1) : plotW / 2);
-const y = (v: number) => padT + (1 - v) * plotH;
 
-const curV = computed(() => {
-  const a = pts.value;
-  if (!a.length) return 0;
-  const p = a[a.length - 1];
-  return metric.value === "soc" ? p.soc : p.first;
-});
-const firstV = computed(() => {
-  const a = pts.value;
-  if (!a.length) return 0;
-  return metric.value === "soc" ? a[0].soc : a[0].first;
-});
-const delta = computed(() => curV.value - firstV.value);
-
-/** 上边界 upper → 下边界 lower 之间的堆叠面积 polygon（左→右上边界 + 右→左下边界）。 */
-function poly(upper: (p: P) => number, lower: (p: P) => number): string {
-  const a = pts.value;
-  if (!a.length) return "";
-  const up = a.map((p, i) => `${x(i).toFixed(1)},${y(upper(p)).toFixed(1)}`);
-  const lo = a.map((p, i) => `${x(i).toFixed(1)},${y(lower(p)).toFixed(1)}`).reverse();
-  return [...up, ...lo].join(" ");
+// ── 近 7 天日历轴（今天最右；有数据落柱，其余空天）─────────────────────────
+interface Slot {
+  label: string;
+  point: P | null;
 }
-const strongArea = computed(() => poly((p) => p.first, () => 0)); // 强曝光 0→first
-const firstArea = computed(() => poly((p) => p.soc, (p) => p.first)); // 首曝光 first→soc
-const hiddenArea = computed(() => poly(() => 1, (p) => p.soc)); // 未曝光 soc→1
-const socLine = computed(() =>
-  pts.value.map((p, i) => `${x(i).toFixed(1)},${y(p.soc).toFixed(1)}`).join(" "),
+const slots = computed<Slot[]>(() => {
+  const byLabel = new Map(pts.value.map((p) => [p.date, p]));
+  const today = new Date();
+  const matched = new Set<string>();
+  const out: Slot[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+    const label = `${d.getMonth() + 1}/${d.getDate()}`;
+    const point = byLabel.get(label) ?? null;
+    if (point) matched.add(label);
+    out.push({ label, point });
+  }
+  const extra = pts.value
+    .filter((p) => !matched.has(p.date))
+    .map((p) => ({ label: p.date, point: p }));
+  return [...extra, ...out];
+});
+const nSlots = computed(() => slots.value.length);
+const slotX = (i: number): number => {
+  const x0 = padL + innerL;
+  const w = Math.max(10, plotW.value - innerL - innerR);
+  return nSlots.value > 1 ? x0 + (i * w) / (nSlots.value - 1) : x0 + w / 2;
+};
+const y = (v: number): number => padT + (1 - v) * plotH.value;
+
+const realCols = computed(() =>
+  slots.value
+    .map((s, i) => ({ i, label: s.label, point: s.point }))
+    .filter((c): c is { i: number; label: string; point: P } => c.point != null),
 );
-const firstLine = computed(() =>
-  pts.value.map((p, i) => `${x(i).toFixed(1)},${y(p.first).toFixed(1)}`).join(" "),
-);
-const activePts = computed(() =>
-  pts.value.map((p) => (metric.value === "soc" ? p.soc : p.first)),
+const nReal = computed(() => realCols.value.length);
+
+const barColor = computed(() =>
+  metric.value === "soc" ? "var(--primary-deep)" : "var(--green)",
 );
 
-const legend = [
-  { label: "未曝光", color: "var(--ink-3)" },
-  { label: "首曝光", color: "var(--primary-deep)" },
-  { label: "强曝光", color: "var(--green)" },
+// 单值柱：柱高 = 当天选中指标值，柱顶标数值。
+const bars = computed(() =>
+  realCols.value.map((c) => {
+    const val = metric.value === "soc" ? c.point.soc : c.point.first;
+    const cx = slotX(c.i);
+    const slotW =
+      nSlots.value > 1
+        ? Math.max(10, plotW.value - innerL - innerR) / (nSlots.value - 1)
+        : plotW.value;
+    const w = Math.max(16, Math.min(36, slotW * 0.5));
+    const topY = y(val);
+    return {
+      cx,
+      x: cx - w / 2,
+      w,
+      topY,
+      h: Math.max(1, y(0) - topY),
+      label: pct(val),
+    };
+  }),
+);
+
+// Y 轴：刻度线 0/25/50/75/100，标签 0/50/100。
+const yGrid = [0, 0.25, 0.5, 0.75, 1];
+const yLabels = [
+  { v: 1, t: "100" },
+  { v: 0.5, t: "50" },
+  { v: 0, t: "0" },
 ];
 </script>
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <!-- 头：标题 + 当前值 + 涨跌 + 图例 -->
-    <div class="flex flex-shrink-0 items-baseline justify-between gap-2" :style="{ marginBottom: '6px' }">
-      <div class="flex items-baseline gap-2">
-        <span class="font-display" :style="{ fontSize: '13px', fontWeight: 700 }">曝光趋势</span>
-        <span :style="{ fontSize: '10.5px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }">近 7 天</span>
+    <!-- 头：标题（右上角大数值已按要求去掉）-->
+    <div class="flex flex-shrink-0 items-baseline gap-2" :style="{ marginBottom: '8px' }">
+      <span class="font-display" :style="{ fontSize: '13px', fontWeight: 700 }">曝光趋势</span>
+      <span :style="{ fontSize: '10.5px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }">近 7 天</span>
+    </div>
+
+    <!-- 图表（响应式铺满；min-height 防止自适应详情页里被压塌，但要足够小，
+         让 默认 800px 窗口的矮卡片也放得下 header+chart+toggle 不溢出）-->
+    <div ref="wrap" class="min-h-0 flex-1" :style="{ overflow: 'hidden', minHeight: '78px' }">
+      <div v-if="!nReal" class="flex h-full items-center justify-center" :style="{ fontSize: '12px', color: 'var(--ink-3)' }">
+        还没有运行历史 —— 跑几次采集后这里会成趋势。
       </div>
-      <div class="flex items-center gap-2">
-        <span class="font-display" :style="{ fontSize: '16px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }">{{ pct(curV) }}</span>
-        <span
-          v-if="n >= 2"
-          class="inline-flex items-center"
+      <svg
+        v-else
+        width="100%"
+        height="100%"
+        preserveAspectRatio="xMidYMid meet"
+        :viewBox="`0 0 ${vw} ${vh}`"
+        :style="{ display: 'block' }"
+      >
+        <!-- Y 轴网格线 -->
+        <line
+          v-for="(t, gi) in yGrid"
+          :key="'yg' + gi"
+          :x1="padL"
+          :x2="vw - padR"
+          :y1="y(t)"
+          :y2="y(t)"
+          :stroke="t === 0 ? 'var(--line-2)' : 'var(--line)'"
+          stroke-width="1"
+        />
+        <!-- Y 轴竖线 -->
+        <line :x1="padL" :x2="padL" :y1="y(1)" :y2="y(0)" stroke="var(--line-2)" stroke-width="1" />
+        <!-- Y 轴刻度标签 -->
+        <text
+          v-for="(yl, li) in yLabels"
+          :key="'yl' + li"
+          :x="padL - 6"
+          :y="y(yl.v) + 3"
+          text-anchor="end"
+          :style="{ fontSize: '9px', fill: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums' }"
+        >{{ yl.t }}</text>
+
+        <!-- 单值柱 + 柱顶数值 -->
+        <template v-for="(b, bi) in bars" :key="'b' + bi">
+          <rect :x="b.x" :y="b.topY" :width="b.w" :height="b.h" :fill="barColor" opacity="0.9" rx="3" />
+          <text
+            :x="b.cx"
+            :y="b.topY - 5"
+            text-anchor="middle"
+            :style="{ fontSize: '10.5px', fontWeight: 700, fill: barColor, fontVariantNumeric: 'tabular-nums' }"
+          >{{ b.label }}</text>
+        </template>
+
+        <!-- 日期轴（有数据的天加粗深色，空天浅色）-->
+        <text
+          v-for="(s, di) in slots"
+          :key="'d' + di"
+          :x="slotX(di)"
+          :y="vh - 5"
+          text-anchor="middle"
           :style="{
-            gap: '2px', whiteSpace: 'nowrap', fontSize: '11px', fontWeight: 700,
-            padding: '2px 7px', borderRadius: '999px', fontVariantNumeric: 'tabular-nums',
-            color: delta >= 0 ? 'var(--green)' : 'var(--red)',
-            background: delta >= 0 ? 'rgba(122,155,94,.14)' : 'rgba(216,90,72,.14)',
+            fontSize: '9px',
+            fill: s.point ? 'var(--ink)' : 'var(--ink-4)',
+            fontWeight: s.point ? 700 : 400,
+            fontVariantNumeric: 'tabular-nums',
           }"
-        >{{ delta >= 0 ? "↑" : "↓" }} {{ Math.abs(Math.round(delta * 100)) }}pp</span>
-      </div>
-    </div>
-
-    <!-- 图例 -->
-    <div class="flex flex-shrink-0 items-center gap-3" :style="{ marginBottom: '4px' }">
-      <span v-for="b in legend" :key="b.label" class="inline-flex items-center" :style="{ gap: '4px' }">
-        <span :style="{ width: '8px', height: '8px', borderRadius: '2px', background: b.color, opacity: 0.85, display: 'inline-block' }" />
-        <span :style="{ fontSize: '10px', color: 'var(--ink-3)' }">{{ b.label }}</span>
-      </span>
-    </div>
-
-    <div class="min-h-0 flex-1" :style="{ overflow: 'hidden' }">
-    <div v-if="!n" class="flex h-full items-center justify-center" :style="{ fontSize: '12px', color: 'var(--ink-3)' }">
-      还没有运行历史 —— 跑几次采集后这里会成趋势。
-    </div>
-    <svg v-else width="100%" height="100%" preserveAspectRatio="xMidYMid meet" :viewBox="`0 0 ${W} ${H}`" :style="{ display: 'block' }">
-      <!-- 三段堆叠面积（自下而上：强 / 首 / 未） -->
-      <polygon :points="strongArea" fill="rgba(122,155,94,.22)" />
-      <polygon :points="firstArea" fill="rgba(238,106,42,.20)" />
-      <polygon :points="hiddenArea" fill="rgba(28,26,23,.05)" />
-      <!-- 边界线（soc 实、first 虚） -->
-      <polyline :points="socLine" fill="none" stroke="var(--primary-deep)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" :opacity="metric === 'soc' ? 1 : 0.45" />
-      <polyline :points="firstLine" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" :opacity="metric === 'first' ? 1 : 0.45" />
-      <!-- 当前指标数据点 -->
-      <circle
-        v-for="(v, i) in activePts"
-        :key="i"
-        :cx="x(i)"
-        :cy="y(v)"
-        :r="i === n - 1 ? 4.5 : 2.6"
-        :fill="i === n - 1 ? (metric === 'soc' ? 'var(--primary-deep)' : 'var(--green)') : '#fff'"
-        :stroke="metric === 'soc' ? 'var(--primary-deep)' : 'var(--green)'"
-        :stroke-width="i === n - 1 ? 2 : 1.6"
-      />
-      <!-- 日期轴 -->
-      <text
-        v-for="(p, i) in pts"
-        :key="'d' + i"
-        :x="x(i)"
-        :y="H - 6"
-        text-anchor="middle"
-        :style="{ fontSize: '8.5px', fill: i === n - 1 ? 'var(--ink)' : 'var(--ink-3)', fontWeight: i === n - 1 ? 700 : 400, fontVariantNumeric: 'tabular-nums' }"
-      >{{ p.date }}</text>
-    </svg>
+        >{{ s.label }}</text>
+      </svg>
     </div>
 
     <!-- 指标切换 -->
