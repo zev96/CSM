@@ -90,11 +90,13 @@ function bandLabel(band: GeoImproveRow["band"]): string {
           :labels="platformWeekly.weekLabels"
           :series="chartSeries"
           :y-max="100"
+          :point-radius="3"
+          :padding="12"
           :y-axis-formatter="(v) => `${v}%`"
         />
       </div>
-      <!-- 平台图例 -->
-      <div class="flex flex-shrink-0 flex-wrap" :style="{ gap: '10px', marginTop: '8px' }">
+      <!-- 平台图例（居中）-->
+      <div class="flex flex-shrink-0 flex-wrap justify-center" :style="{ gap: '10px', marginTop: '8px' }">
         <span v-for="(s, i) in platformWeekly.series" :key="s.platformId" class="inline-flex items-center" :style="{ gap: '5px' }">
           <span :style="{ width: '10px', height: '3px', borderRadius: '999px', background: color(i), display: 'inline-block' }" />
           <span :style="{ fontSize: '10.5px', color: 'var(--ink-2)' }">{{ platformShort(s.platformId) }}</span>

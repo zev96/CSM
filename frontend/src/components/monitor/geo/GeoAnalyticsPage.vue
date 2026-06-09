@@ -12,12 +12,17 @@ import { ref, computed, onMounted, watch } from "vue";
 
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
-import { useGeoAnalytics, type PlatformVM } from "@/components/monitor/geo/geoDetail";
+import {
+  useGeoAnalytics,
+  placeholderPlatform,
+  type PlatformVM,
+  type GeoKeywordRow,
+} from "@/components/monitor/geo/geoDetail";
 import GeoOverviewBar from "@/components/monitor/geo/GeoOverviewBar.vue";
 import GeoCoverageBoard from "@/components/monitor/geo/GeoCoverageBoard.vue";
 import GeoFocusPanel from "@/components/monitor/geo/GeoFocusPanel.vue";
 import GeoSourceList from "@/components/monitor/geo/GeoSourceList.vue";
-import GeoPlatformBlock from "@/components/monitor/geo/GeoPlatformBlock.vue";
+import GeoKeywordDrilldown from "@/components/monitor/geo/GeoKeywordDrilldown.vue";
 import GeoTrend from "@/components/monitor/geo/charts/GeoTrend.vue";
 import type { Task } from "@/utils/monitor-types";
 
@@ -79,31 +84,43 @@ const { analytics, loading } = useGeoAnalytics(
   configuredPlatforms,
 );
 
-// ── 视图切换 + 选中格（覆盖榜下钻）─────────────────────────────────────
+// ── 视图切换 + 覆盖榜下钻（跳转下一级页面，不再页内下拉）────────────────
 const view = ref<"focus" | "board">("focus");
-const selectedCell = ref<PlatformVM | null>(null);
-const selectedCellKey = ref<{ keyword: string; platformId: string } | null>(null);
+const drill = ref<{ keyword: string; platformId: string } | null>(null);
 
-function onCell(p: { keyword: string; platformId: string }): void {
-  const cell = analytics.value?.matrix[p.keyword]?.[p.platformId] ?? null;
-  selectedCell.value = cell;
-  selectedCellKey.value = cell ? { keyword: p.keyword, platformId: p.platformId } : null;
+function openDrill(p: { keyword: string; platformId: string }): void {
+  if (!analytics.value) return;
+  drill.value = { keyword: p.keyword, platformId: p.platformId };
 }
-function clearCell(): void {
-  selectedCell.value = null;
-  selectedCellKey.value = null;
+function closeDrill(): void {
+  drill.value = null;
 }
 
-watch(selectedTaskId, clearCell);
+// 下钻页要的「该关键词全部平台」（按列顺序，缺采集补占位卡）+ 覆盖统计行。
+const drillPlatforms = computed<PlatformVM[]>(() => {
+  const a = analytics.value;
+  const kw = drill.value?.keyword;
+  if (!a || !kw) return [];
+  const row = a.matrix[kw] ?? {};
+  return a.platformIds.map((pid) => row[pid] ?? placeholderPlatform(pid));
+});
+const drillRow = computed<GeoKeywordRow | null>(() => {
+  const a = analytics.value;
+  const kw = drill.value?.keyword;
+  if (!a || !kw) return null;
+  return a.keywordRows.find((r) => r.keyword === kw) ?? null;
+});
+
+// 切任务 / 切回重点视图 → 收起下钻（回到看板）。
+watch(selectedTaskId, closeDrill);
 watch(view, (v) => {
-  if (v === "focus") clearCell(); // 原文下钻只属于覆盖榜
+  if (v !== "board") closeDrill();
 });
 
 // ── KPI computeds ─────────────────────────────────────────────────────
 const kwCount = computed(() => analytics.value?.keywords.length ?? 0);
 const socPct = computed(() => Math.round((analytics.value?.metric?.soc ?? 0) * 100));
 const sentiment = computed(() => analytics.value?.metric?.sentiment_score ?? 0);
-const sourceCount = computed(() => analytics.value?.board.length ?? 0);
 
 // ── 任务显示名 ─────────────────────────────────────────────────────────
 function taskLabel(t: Task): string {
@@ -128,8 +145,8 @@ onMounted(async () => {
 <template>
   <div class="flex h-full min-h-0 flex-col" :style="{ gap: '14px' }">
 
-    <!-- ── 顶部：任务选择器 ─────────────────────────────────────────────── -->
-    <div class="flex flex-shrink-0 items-center" :style="{ gap: '10px' }">
+    <!-- ── 顶部：任务选择器（下钻页内隐藏，让详情顶到卡顶）──────────────── -->
+    <div v-if="!drill" class="flex flex-shrink-0 items-center" :style="{ gap: '10px' }">
       <span :style="{ fontSize: '11px', color: 'var(--ink-3)', flexShrink: 0 }">监测任务</span>
       <select
         v-if="tasks.length > 0"
@@ -171,6 +188,22 @@ onMounted(async () => {
 
     <!-- ── 主体内容 ─────────────────────────────────────────────────────── -->
     <template v-else-if="analytics">
+
+      <!-- 覆盖榜下钻 —— 跳转的下一级页面（替代原页内下拉，修复布局错乱）-->
+      <GeoKeywordDrilldown
+        v-if="drill"
+        class="min-h-0 flex-1"
+        :keyword="drill.keyword"
+        :row="drillRow"
+        :platforms="drillPlatforms"
+        :brand="brand"
+        :brand-terms="brandTerms"
+        :highlight-platform-id="drill.platformId"
+        @back="closeDrill"
+      />
+
+      <!-- 看板（默认态）-->
+      <template v-else>
 
       <!-- 概览条 -->
       <GeoOverviewBar
@@ -220,28 +253,8 @@ onMounted(async () => {
           v-else
           :rows="analytics.keywordRows"
           :platform-ids="analytics.platformIds"
-          :selected="selectedCellKey"
-          @cell="onCell"
+          @cell="openDrill"
         />
-      </div>
-
-      <!-- 覆盖榜下钻：该平台 AI 原文 + 引用信源 -->
-      <div
-        v-if="view === 'board' && selectedCell"
-        class="flex-shrink-0"
-        :style="{ maxHeight: '300px', overflowY: 'auto' }"
-      >
-        <div class="mb-1 flex items-center justify-between">
-          <div :style="{ fontSize: '11px', color: 'var(--ink-3)' }">
-            {{ selectedCellKey?.keyword }} · 平台原文
-          </div>
-          <button
-            type="button"
-            :style="{ fontSize: '11px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer' }"
-            @click="clearCell"
-          >收起 ✕</button>
-        </div>
-        <GeoPlatformBlock :platform="selectedCell" :brand="brand" :brand-terms="brandTerms" />
       </div>
 
       <!-- 下半：信源榜 + 曝光趋势（并排） -->
@@ -259,7 +272,6 @@ onMounted(async () => {
         >
           <div class="mb-2 flex flex-shrink-0 items-baseline gap-2">
             <div :style="{ fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }">高权重信源榜</div>
-            <div :style="{ fontSize: '11px', color: 'var(--ink-3)' }">{{ sourceCount }} 条</div>
           </div>
           <GeoSourceList
             :board="analytics.board"
@@ -282,6 +294,7 @@ onMounted(async () => {
         </div>
       </div>
 
+      </template>
     </template>
 
   </div>
