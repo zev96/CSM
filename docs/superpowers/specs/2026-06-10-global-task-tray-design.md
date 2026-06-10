@@ -14,7 +14,7 @@
 **做：**
 - 新建 `taskTray` 聚合 store（纯前端，读现有 4 个 store，不新建 SSE 连接）。
 - 新建 `TaskTrayButton`（LeftNav 底部、铃铛上方）+ `TaskTrayPanel`（浮层）。
-- `monitorStatus` 扩展：消费 `waiting_chrome_close` / `chrome_closed` / `captcha_required` / `captcha_resolved` 事件（后端已在发，前端未接）。
+- `monitorStatus` 扩展：消费 `waiting_chrome_close` / `chrome_closed` / `needs_captcha`（实发事件）+ `captcha_*` 三件套（仅声明、从未 publish，handler 保留作前向兼容——实施期勘误）。
 - 监测任务名缓存（id → {name, type}，懒加载 `GET /api/monitor/tasks`）。
 - 托盘内取消：监测（组）/ 引流 / 批量走现有端点；**单篇生成补后端取消端点**（唯一后端改动）。
 - 通知补齐：监测/引流/批量/单篇四类的完成与失败全部推入通知铃铛（见 §6 勘误——铃铛此前是空壳）。
@@ -67,7 +67,7 @@ interface TrayTask {
 - **引流一张卡**：标题带关键词；subtitle 按平台拼接（`快手 31/50 · 抖音已完成`，phase=captcha_waiting → 计入验证码态）；progress = Σgot/Σtarget。
 - **批量**：「批量生成 · 第 i/N 篇」，subtitle 当前关键词；progress 用 store 现成 getter。
 - **单篇**：subtitle = 当前阶段名；progress = (stageIndex+1)/6。
-- **state 推导优先级**：captcha > waiting > running。`waiting_chrome_close` → 「排队中 · 等待浏览器空闲」；`captcha_required` / `login.required` / phase=captcha_waiting → 「需要人工验证」（橙色，点击直达处理页）。
+- **state 推导优先级**：captcha > waiting > running。`waiting_chrome_close` → 「排队中 · 等待浏览器空闲」；`needs_captcha`（实发）/ `captcha_required`（前向兼容）/ `login.required` / phase=captcha_waiting → 「需要人工验证」（橙色，点击直达处理页）；`progress` 事件清 phase（卡死恢复路径）。
 - **角标数 N** = 底层运行中任务总数（如监测 5 + 引流 1 = 6），非卡片数；>9 显示 `9+`。
 
 ### 4.2 ETA 估算（纯前端）

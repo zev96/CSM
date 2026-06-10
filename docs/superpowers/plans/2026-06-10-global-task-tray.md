@@ -196,7 +196,9 @@ git commit -m "feat(tray): ETA 估算器（进度速率 EMA）"
 - Modify: `frontend/src/stores/monitorStatus.ts`
 - Test: `frontend/src/stores/__tests__/monitorStatus.spec.ts`（新建）
 
-后端 `/api/monitor/events` 早就在广播 `waiting_chrome_close / chrome_closed / captcha_required / captcha_resolved / captcha_timeout`（见 `sidecar/csm_sidecar/services/monitor_loop.py:56-63`，payload 是 MonitorEvent dataclass，带 `task_id`），前端一直没接。本任务把内联 SSE handler 提取成命名表（`_dispatchSse` 测试钩子），并新增两块状态。
+后端 `/api/monitor/events` 的 EventKind 声明了 `waiting_chrome_close / chrome_closed / captcha_required / captcha_resolved / captcha_timeout`（`sidecar/csm_sidecar/services/monitor_loop.py:56-63`，payload 带 `task_id`），前端一直没接。本任务把内联 SSE handler 提取成命名表（`_dispatchSse` 测试钩子），并新增两块状态。
+
+> **勘误（Task 2 质量审查发现）**：captcha 三件套只在 EventKind 里**声明过、从未被任何后端代码 publish**；真正实发的验证码事件是 `needs_captcha`（`csm_core/monitor/platforms/baidu_keyword.py` 人工解验证等待，payload 带真实 task_id；另有 `routes/monitor.py` 以 task_id=0 复用于登录窗口场景，必须用 task_id>0 守卫排除）。因此追加两处修复：①`needs_captcha` handler 也 `_setPhase(d.task_id, "captcha")`（task_id>0 时）；②`progress` handler `_setPhase(d.task_id, null)` 作为卡死 phase 的恢复路径（progress=正在抓，两种等待场景都不发 progress，无误清窗口）；③captcha 三件套 handler 保留作前向兼容。已随 Task 2 收口 commit 落地。
 
 - [x] **Step 1: 写失败测试**
 

@@ -259,9 +259,15 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
       const cur = typeof d.progress_current === "number" ? d.progress_current : 0;
       const tot = typeof d.progress_total === "number" ? d.progress_total : 0;
       setProgress(d.task_id, cur, tot);
+      // progress = 正在抓取 —— 清掉可能因丢事件卡住的排队/验证码 phase（恢复路径：
+      // 两种等待场景都不发 progress，所以不存在误清窗口）。
+      _setPhase(d.task_id, null);
     },
     // ── Native-Chrome mode events ──────────────────────────────────
     needs_captcha: (d: any) => {
+      // 实发的验证码事件（captcha_required 三件套后端从未 publish，仅留作前向兼容）。
+      // task_id=0 是登录窗口场景的复用，不是任务验证码 —— 必须排除。
+      if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, "captcha");
       const kw = typeof d.keyword === "string" ? d.keyword : "";
       void _notify?.("CSM 百度监控", `需要人工解验证码（关键词：${kw}），点击浏览器窗口`);
     },
