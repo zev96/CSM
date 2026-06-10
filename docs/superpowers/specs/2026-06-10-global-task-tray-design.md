@@ -110,9 +110,9 @@ interface TrayTask {
 > **勘误（2026-06-10 写实施计划前的实地核查）**：`useNotifications().push()` 原本全工程**零调用方**——铃铛是空壳；监测完成此前推的是 OS 级系统通知（useSystemNotify），不是铃铛。设计时「监测/批量通知已有」的假设不成立，本节修订为全量补齐四类。
 
 - 新增通知类别 `monitor_done`（「监测任务完成」）与 `mining_done`（「引流任务完成」）到 `NOTIFICATION_CATEGORIES`（localStorage 向前兼容逻辑已有，默认开）。
-- 监测 `finished` → `push(category: "monitor_done")`；`failed` → `push(category: "monitor_alert")`（用户主动取消、风控分支保持静默，沿用现有 toast 分流逻辑）。
-- mining `job.finished` → `push("引流任务完成", {body: 关键词+各平台数量, tone: 全平台完成=success / 部分平台失败或部分完成=warn, category: "mining_done"})`。
-- 批量 `done` → `push(category: "article_success")`；`error` → `push(category: "article_failure")`（复用既有「生成文章」类别，批量本质也是生成文章）。
+- 监测 `finished` → `push(category: "monitor_done")`；`failed` → `push(category: "monitor_alert")`（用户主动取消、风控分支保持静默，沿用现有 toast 分流逻辑）。body 的「共 N 项」从 store 内最后一次 progress 抢救（后端 finished 事件不带 progress_total），拿不到则省略该段。
+- mining `job.finished` → `push("引流任务完成", {body: 关键词+完成情况, tone: 全平台完成=success / 部分=warn, category: "mining_done"})`；`status === "cancelled"`（用户主动停止）静默不推。
+- 批量 `done` → `push(category: "article_success")`；`error` → `push(category: "article_failure")`（复用既有「生成文章」类别，批量本质也是生成文章）；`by_status.cancelled > 0`（用户主动停止的批次）静默不推。
 - article `done` → `push(category: "article_success")`；`error` → `push(category: "article_failure")`；用户主动取消（cancelled 标记）不推。
 - 效果：任务从托盘消失的瞬间铃铛红点亮起，每类可在通知设置单独开关。
 
