@@ -179,3 +179,50 @@ def test_reap_stale_spares_recently_active_buffer():
     bus.publish(job, "stage", index=0)    # ...but a fresh publish bumps last_activity
     assert bus.reap_stale() == 0          # recent activity spares it
     assert bus.active_jobs() == 1
+
+
+@pytest.mark.asyncio
+async def test_second_concurrent_stream_rejected_without_disturbing_first():
+    """两个客户端订阅同一 job_id：第二条 attach 必须被干净拒绝，且
+    不能 reap 掉第一条仍在 drain 的 buffer（否则第一条会卡在孤儿 queue）。
+    第一条必须照常收到全部事件 + 终态。"""
+    bus = EventBus()
+    job = bus.create_job()
+    first_events: list[dict] = []
+
+    async def first():
+        async for e in bus.stream(job, ping_seconds=0.05):
+            first_events.append(e)
+            if e["kind"] == "done":
+                return
+
+    task = asyncio.create_task(first())
+    await asyncio.sleep(0.02)          # 让第一条进入 stream() 并置 streaming=True
+    bus.publish(job, "stage", index=0)
+    await asyncio.sleep(0.02)          # 让第一条 drain 掉这条事件
+
+    # 第二条并发 attach → 被拒绝，且不得删 buffer
+    second_events = [e async for e in bus.stream(job)]
+    assert second_events == [{"kind": "error", "error": f"already streaming: {job}"}]
+    assert bus.active_jobs() == 1      # buffer 在被拒绝的 attach 后仍存活
+
+    # 第一条仍正常：终态送达，且事件没被瓜分（index=0 在第一条手里）
+    bus.finish(job, document="/x.md")
+    await asyncio.wait_for(task, timeout=2.0)
+    assert first_events[-1]["kind"] == "done"
+    assert any(e.get("index") == 0 for e in first_events)
+
+
+@pytest.mark.asyncio
+async def test_stream_after_first_closes_succeeds():
+    """第一条流结束（buffer 随 finally 回收）后，对该 job 的新 stream 得到
+    干净的 unknown job_id（而不是 already streaming）——确认 streaming 标志
+    不会泄漏。"""
+    bus = EventBus()
+    job = bus.create_job()
+    bus.finish(job)
+    drained = [e async for e in bus.stream(job)]   # 第一条：drain done 后 finally reap
+    assert drained[-1]["kind"] == "done"
+    # buffer 已回收，新 attach 走 unknown 分支（不是 already streaming）
+    again = [e async for e in bus.stream(job)]
+    assert again == [{"kind": "error", "error": f"unknown job_id: {job}"}]

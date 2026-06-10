@@ -71,8 +71,9 @@ def test_export_csv_returns_attachment(client: TestClient, monitor_db: Path):
     r = client.get("/api/mining/videos/export.csv")
     assert r.status_code == 200
     assert "text/csv" in r.headers["content-type"]
-    assert r.text.startswith("﻿")  # BOM
-    assert "platform,video_id,url" in r.text
+    assert r.text.startswith("﻿")  # BOM so Excel auto-detects UTF-8
+    # 2026-05 重排：中文表头（给兼职人填返图）
+    assert "序号,平台,视频链接" in r.text
 
 
 # ── Phase 2/3 export.csv enhancements (T12) ──────────────────────────
@@ -86,6 +87,14 @@ def _parse_csv_response(text: str) -> tuple[list[str], list[list[str]]]:
     return rows[0], rows[1:]
 
 
+def _tier_cols(tier: int) -> tuple[int, int, int]:
+    """新版 CSV 布局 序号|平台|视频链接 + N×(内容|图片|返图) 下，
+    1-based tier 的 (评论内容, 评论图片, 评论返图) 三列索引。
+    列名按层重复，必须按位置定位而非 header.index。"""
+    base = 3 + (tier - 1) * 3
+    return base, base + 1, base + 2
+
+
 def _insert_video(platform: str = "douyin", pid: str = "vid1", url: str = "u") -> int:
     conn = monitor_storage.get_conn()
     cur = conn.execute(
@@ -96,127 +105,120 @@ def _insert_video(platform: str = "douyin", pid: str = "vid1", url: str = "u") -
     return int(cur.fetchone()[0])
 
 
-def test_export_csv_no_comments_no_ai_summary_backward_compatible(
+def test_export_csv_no_comments_base_columns_only(
     client: TestClient, monitor_db: Path,
 ):
-    """No comments, no ai_summary → only the new ai_summary column gets
-    appended; no comment_tier_N columns at all (max_tier=0)."""
+    """无评论 → max_tier=0 → 仅三列基础表头，不追加任何层列；
+    ai_summary 已随 2026-05 重排从 CSV 下线。"""
     _insert_video()
     r = client.get("/api/mining/videos/export.csv")
     assert r.status_code == 200
     header, data = _parse_csv_response(r.text)
-    assert "ai_summary" in header
-    assert header[-1] == "ai_summary"  # no tier cols appended
-    assert not any(h.startswith("comment_tier_") for h in header)
-    assert not any(h.startswith("images_tier_") for h in header)
+    assert header == ["序号", "平台", "视频链接"]
+    assert not any(h.startswith("第") for h in header)
+    assert "ai_summary" not in header
     assert len(data) == 1
-    # ai_summary column should be empty
-    assert data[0][header.index("ai_summary")] == ""
 
 
-def test_export_csv_ai_summary_populated(client: TestClient, monitor_db: Path):
+def test_export_csv_excludes_ai_summary(client: TestClient, monitor_db: Path):
+    """ai_summary 故意不进 CSV（对兼职人无用、徒增列宽）—— 守护这个有意排除。"""
     vid = _insert_video()
     ms.set_ai_summary(vid, "这是 AI 速览文本")
     r = client.get("/api/mining/videos/export.csv")
-    header, data = _parse_csv_response(r.text)
-    assert data[0][header.index("ai_summary")] == "这是 AI 速览文本"
+    header, _ = _parse_csv_response(r.text)
+    assert "ai_summary" not in header
+    assert "这是 AI 速览文本" not in r.text
 
 
 def test_export_csv_one_comment_one_video_two_videos(
     client: TestClient, monitor_db: Path,
 ):
-    """One video has a tier-1 comment, another has none. Header has
-    comment_tier_1 + images_tier_1; the second video's row leaves them
-    empty."""
-    v1 = _insert_video(pid="a")
-    v2 = _insert_video(pid="b")
+    """一个视频有 tier-1 评论、另一个没有。表头含 第1层 三连列、无第2层；
+    没评论的那行三列留空；评论返图永远空。"""
+    v1 = _insert_video(pid="a", url="ua")
+    _insert_video(pid="b", url="ub")
     ms.create_comment(v1, tier=1, text="hello", image_ids=["img-x", "img-y"])
 
     r = client.get("/api/mining/videos/export.csv")
     header, data = _parse_csv_response(r.text)
-    assert "comment_tier_1" in header
-    assert "images_tier_1" in header
-    assert "comment_tier_2" not in header
+    assert "第1层评论内容" in header
+    assert "评论图片" in header
+    assert "评论返图" in header
+    assert "第2层评论内容" not in header
 
-    rows_by_pid = {row[header.index("video_id")]: row for row in data}
-    a_row = rows_by_pid["a"]
-    b_row = rows_by_pid["b"]
-    assert a_row[header.index("comment_tier_1")] == "hello"
-    assert a_row[header.index("images_tier_1")] == "images/img-x,images/img-y"
-    assert b_row[header.index("comment_tier_1")] == ""
-    assert b_row[header.index("images_tier_1")] == ""
+    rows_by_url = {row[2]: row for row in data}  # 列 2 = 视频链接
+    a_row = rows_by_url["ua"]
+    b_row = rows_by_url["ub"]
+    content, images, refimg = _tier_cols(1)
+    assert a_row[content] == "hello"
+    assert a_row[images] == "images/img-x,images/img-y"
+    assert a_row[refimg] == ""           # 评论返图永远空
+    assert b_row[content] == ""
+    assert b_row[images] == ""
 
 
 def test_export_csv_skipping_tier_keeps_intermediate_empty(
     client: TestClient, monitor_db: Path,
 ):
-    """Tier 1 and tier 3 present, tier 2 missing → header still includes
-    comment_tier_2 + images_tier_2 (empty), comment_tier_3 + images_tier_3
-    populated."""
-    v1 = _insert_video(pid="a")
+    """tier 1、3 有评论，tier 2 没有 → 表头仍含 第1/2/3层三连列，
+    第2层留空，第1/3层有值。"""
+    v1 = _insert_video(pid="a", url="ua")
     ms.create_comment(v1, tier=1, text="t1", image_ids=["i1"])
     ms.create_comment(v1, tier=3, text="t3", image_ids=["i3a", "i3b"])
 
     r = client.get("/api/mining/videos/export.csv")
     header, data = _parse_csv_response(r.text)
-    for col in (
-        "comment_tier_1", "images_tier_1",
-        "comment_tier_2", "images_tier_2",
-        "comment_tier_3", "images_tier_3",
-    ):
-        assert col in header
+    assert "第1层评论内容" in header
+    assert "第2层评论内容" in header
+    assert "第3层评论内容" in header
     row = data[0]
-    assert row[header.index("comment_tier_1")] == "t1"
-    assert row[header.index("images_tier_1")] == "images/i1"
-    assert row[header.index("comment_tier_2")] == ""
-    assert row[header.index("images_tier_2")] == ""
-    assert row[header.index("comment_tier_3")] == "t3"
-    assert row[header.index("images_tier_3")] == "images/i3a,images/i3b"
+    c1, im1, _ = _tier_cols(1)
+    c2, im2, _ = _tier_cols(2)
+    c3, im3, _ = _tier_cols(3)
+    assert row[c1] == "t1"
+    assert row[im1] == "images/i1"
+    assert row[c2] == ""
+    assert row[im2] == ""
+    assert row[c3] == "t3"
+    assert row[im3] == "images/i3a,images/i3b"
 
 
 def test_export_csv_ids_filter(client: TestClient, monitor_db: Path):
-    """?ids=1,3 exports only those videos, regardless of the
-    already_commented filter (which defaults to "uncommented only")."""
-    v1 = _insert_video(pid="a")
-    v2 = _insert_video(pid="b")
-    v3 = _insert_video(pid="c")
-    # v2 is "already commented" — would normally be excluded by the
-    # default commented=0 filter, but ?ids overrides that.
+    """?ids=... 只导出选中视频，覆盖默认 commented=0 过滤。按 视频链接 keying。"""
+    v1 = _insert_video(pid="a", url="ua")
+    v2 = _insert_video(pid="b", url="ub")
+    v3 = _insert_video(pid="c", url="uc")
     monitor_storage.get_conn().execute(
         "UPDATE videos SET already_commented=1 WHERE id=?", (v2,),
     )
 
     r = client.get(f"/api/mining/videos/export.csv?ids={v1},{v3}")
     header, data = _parse_csv_response(r.text)
-    pids = {row[header.index("video_id")] for row in data}
-    assert pids == {"a", "c"}
+    urls = {row[2] for row in data}
+    assert urls == {"ua", "uc"}
 
-    # ids list including the commented one also works.
     r2 = client.get(f"/api/mining/videos/export.csv?ids={v1},{v2},{v3}")
     _, data2 = _parse_csv_response(r2.text)
-    pids2 = {row[header.index("video_id")] for row in data2}
-    assert pids2 == {"a", "b", "c"}
+    urls2 = {row[2] for row in data2}
+    assert urls2 == {"ua", "ub", "uc"}
 
 
 def test_export_csv_ids_only_considers_selected_videos_for_max_tier(
     client: TestClient, monitor_db: Path,
 ):
-    """max_tier should be computed from the selected video set, not the
-    whole DB — otherwise an unrelated video with 5 tiers would balloon
-    the header for an ids=... export."""
-    v1 = _insert_video(pid="a")
-    v2 = _insert_video(pid="b")
+    """max_tier 只按选中视频集算 —— 只要 v1 时表头只该有第1层。"""
+    v1 = _insert_video(pid="a", url="ua")
+    v2 = _insert_video(pid="b", url="ub")
     ms.create_comment(v1, tier=1, text="t1")
     ms.create_comment(v2, tier=1, text="x1")
     ms.create_comment(v2, tier=2, text="x2")
     ms.create_comment(v2, tier=3, text="x3")
 
-    # Only ask for v1 → max_tier should be 1, header has 1 pair only.
     r = client.get(f"/api/mining/videos/export.csv?ids={v1}")
     header, _ = _parse_csv_response(r.text)
-    assert "comment_tier_1" in header
-    assert "comment_tier_2" not in header
-    assert "comment_tier_3" not in header
+    assert "第1层评论内容" in header
+    assert "第2层评论内容" not in header
+    assert "第3层评论内容" not in header
 
 
 def test_login_status_returns_three_platforms(client: TestClient, monitor_db: Path, tmp_path):
