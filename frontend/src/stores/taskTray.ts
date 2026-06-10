@@ -267,7 +267,7 @@ export const useTaskTray = defineStore("taskTray", () => {
       progress,
       state: "running",
       etaText: progress == null ? null : eta.observe(key, progress, Date.now()),
-      cancellable: false, // PR2 接通 /api/generate/{id}/cancel 后翻 true
+      cancellable: true,
       route: { name: "article" },
       count: 1,
     };
@@ -378,7 +378,7 @@ export const useTaskTray = defineStore("taskTray", () => {
           await batch.cancel();
           return;
         case "article":
-          // PR2: await article.cancelJob();
+          await article.cancelJob();
           return;
       }
     } catch (e) {

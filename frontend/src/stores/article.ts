@@ -218,6 +218,23 @@ export const useArticle = defineStore("article", {
       this._teardown();
       if (this.status === "running") this.status = "idle";
     },
+    /** 请求后端协作式取消（POST /api/generate/{id}/cancel）。
+     * 后端命中检查点后会推 error 事件（cancelled: true），由 SSE handler
+     * 静默回 idle；这里不直接动 status，避免和事件流赛跑。
+     * 端点对已结束/未知 job 返回 200 {ok:false}（无副作用）；真正的网络异常
+     * 才落到 catch。 */
+    async cancelJob(): Promise<void> {
+      if (!this.jobId) {
+        this.cancel();
+        return;
+      }
+      const sidecar = useSidecar();
+      try {
+        await sidecar.client.post(`/api/generate/${this.jobId}/cancel`);
+      } catch {
+        /* 网络异常 —— 事件流自会收尾 */
+      }
+    },
     /** Replace the local final text — used by polish results that the
      * user accepts manually (no auto-write back to disk). */
     setFinalText(text: string) {

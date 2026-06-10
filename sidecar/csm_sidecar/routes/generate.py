@@ -58,3 +58,14 @@ async def stream_events(job_id: str):
                 ),
             }
     return EventSourceResponse(_gen())
+
+
+@router.post("/api/generate/{job_id}/cancel")
+def cancel_generate(job_id: str) -> dict:
+    """Cooperatively cancel a running generate job.
+
+    Already-finished / unknown job is a no-op (``ok=False``). The job
+    terminates via an ``error`` SSE event carrying ``cancelled: true``.
+    """
+    ok = generate_service.request_cancel(job_id)
+    return {"job_id": job_id, "ok": ok}

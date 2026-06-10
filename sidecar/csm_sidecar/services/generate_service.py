@@ -66,6 +66,37 @@ class GenerateRequest:
 _executor: ThreadPoolExecutor | None = None
 _lock = threading.Lock()
 
+# ── 协作式取消 ───────────────────────────────────────────────────────
+# request_cancel 只对仍在 _live 里的 job 生效；_run_job 在各 stage 检查点
+# （含调用 LLM 前）调 _checkpoint，命中则以 error 事件收尾（EventBus 只认
+# done/error 终结流），payload 带 cancelled=True 让前端静默处理。
+# LLM 调用本身不可中断；「导出」阶段不设检查点 —— LLM 已经花了钱，
+# 落盘比丢弃好。与 batch/monitor 的协作式语义一致。
+_live: set[str] = set()
+_cancelled: set[str] = set()
+_state_lock = threading.Lock()
+
+
+class _CancelledGenerate(Exception):
+    """Raised at a checkpoint when the user requested cancel."""
+
+
+def request_cancel(job_id: str) -> bool:
+    """Return True if the job is live and was newly marked for cancel."""
+    with _state_lock:
+        if job_id not in _live or job_id in _cancelled:
+            return False
+        _cancelled.add(job_id)
+    bus.publish(job_id, "cancel_requested")
+    return True
+
+
+def _checkpoint(job_id: str) -> None:
+    with _state_lock:
+        hit = job_id in _cancelled
+    if hit:
+        raise _CancelledGenerate()
+
 
 def _get_executor() -> ThreadPoolExecutor:
     global _executor
@@ -87,6 +118,8 @@ def shutdown() -> None:
 def submit(req: GenerateRequest) -> str:
     """Kick off a job, return the ``job_id`` to subscribe via SSE."""
     job_id = bus.create_job()
+    with _state_lock:
+        _live.add(job_id)
     _get_executor().submit(_run_job, job_id, req)
     return job_id
 
@@ -118,13 +151,16 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
                 raise FileNotFoundError(f"skill not found: {req.skill_id}")
             skill_prompt = skill.body
 
+        _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="扫描资料库", index=0, total=6)
         index = scan_vault(vault_root)
         registry = build_brand_registry(vault_root)
 
+        _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="加载模板", index=1, total=6)
         template = load_template(tpl_path)
 
+        _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="采样 blocks", index=2, total=6)
         plan = assemble_plan(
             keyword=req.keyword,
@@ -141,6 +177,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             job_id, plan, template_id=req.template_id, seed=req.seed,
         )
 
+        _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="组装 prompt", index=3, total=6)
         draft = compose_draft(plan)
 
@@ -171,6 +208,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             draft=draft,
         ))
 
+        _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="调用 LLM", index=4, total=6)
         final_text = client.complete(system=system, user=user)
 
@@ -193,9 +231,16 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             draft=draft,
             final_text=final_text,
         )
+    except _CancelledGenerate:
+        logger.info("generate job %s cancelled by user", job_id)
+        bus.fail(job_id, error="cancelled", cancelled=True)
     except Exception as e:
         logger.exception("generate job %s failed", job_id)
         bus.fail(job_id, error=f"{type(e).__name__}: {e}")
+    finally:
+        with _state_lock:
+            _live.discard(job_id)
+            _cancelled.discard(job_id)
 
 
 def _plan_to_dict(plan: Any) -> dict[str, Any]:
