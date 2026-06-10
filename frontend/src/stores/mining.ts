@@ -287,7 +287,32 @@ export const useMiningStore = defineStore("mining", () => {
       done: () => {
         if (stopSse) { stopSse(); stopSse = null }
       },
+    }, {
+      onError: () => { void _refreshActiveJobSnapshot() },
     })
+  }
+
+  /**
+   * SSE 断线时的快照对账：拉一次 GET /api/mining/jobs/{id}（routes/mining.py
+   * get_job 直接返回 job dict），把断线期间错过的 progress/status 补回来。
+   * 任务已终态则顺手收掉流。
+   */
+  async function _refreshActiveJobSnapshot() {
+    const job = activeJob.value
+    if (!job) return
+    try {
+      const resp = await api().get<MiningJob>(`/api/mining/jobs/${job.id}`)
+      const fresh = resp.data
+      if (!fresh || typeof fresh.id !== "number") return
+      activeJob.value = fresh
+      _patchJobInList(fresh.id, () => fresh)
+      if (!["pending", "running"].includes(fresh.status) && stopSse) {
+        stopSse()
+        stopSse = null
+      }
+    } catch {
+      /* 瞬时网络问题 —— EventSource 自己会重连，下次事件兜底 */
+    }
   }
 
   async function cancelActive() {

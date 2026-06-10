@@ -147,6 +147,8 @@ export const useBatch = defineStore("batch", {
           });
           this._teardown();
         },
+      }, {
+        onError: () => { void this.refreshSnapshot(); },
       });
     },
     async refreshSnapshot(): Promise<void> {

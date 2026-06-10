@@ -1355,7 +1355,7 @@ git commit -m "test(tray): 取消分发 + 最近完成区用例"
 
 监测已有 30s hydrate 兜底，不动。EventSource 自带断线重连，onError 只做一次轻量快照对账（错过的事件靠快照补），**不**主动 close。
 
-- [ ] **Step 1: client.ts — subscribe 签名扩展**
+- [x] **Step 1: client.ts — subscribe 签名扩展**
 
 ```ts
 export interface SSEOptions {
@@ -1389,7 +1389,7 @@ export function subscribe(
 }
 ```
 
-- [ ] **Step 2: mining.ts — 断线快照对账**
+- [x] **Step 2: mining.ts — 断线快照对账**
 
 `subscribeToJob` 末尾的 `subscribe(...)` 调用补第三参（在 handlers 对象之后）：
 
@@ -1426,7 +1426,7 @@ export function subscribe(
   }
 ```
 
-- [ ] **Step 3: batch.ts — 断线快照对账**
+- [x] **Step 3: batch.ts — 断线快照对账**
 
 `submit` 里 `this.stop = subscribe(...)` 调用补第三参：
 
@@ -1436,12 +1436,12 @@ export function subscribe(
       });
 ```
 
-- [ ] **Step 4: 类型回归**
+- [x] **Step 4: 类型回归**
 
 Run: `cd frontend && npx vitest run src/stores/__tests__/taskTray.spec.ts src/stores/__tests__/monitorStatus.spec.ts`
 Expected: PASS（subscribe mock 兼容新第三参——mock 是 `vi.fn(() => () => {})`，多收一个参数无影响）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/api/client.ts frontend/src/stores/mining.ts frontend/src/stores/batch.ts

@@ -115,6 +115,11 @@ export interface SSEHandlers {
   [event: string]: (data: any) => void;
 }
 
+export interface SSEOptions {
+  /** EventSource onerror 时回调（连接会自动重连；用于触发一次快照对账）。 */
+  onError?: () => void;
+}
+
 /**
  * Subscribe to a sidecar SSE stream by relative path.
  * Returns a teardown function that closes the underlying EventSource.
@@ -127,7 +132,11 @@ export interface SSEHandlers {
  *     error:  (d) => { console.error(d.error); stop(); },
  *   });
  */
-export function subscribe(path: string, handlers: SSEHandlers): () => void {
+export function subscribe(
+  path: string,
+  handlers: SSEHandlers,
+  opts: SSEOptions = {},
+): () => void {
   const url = useSidecar().sseURL(path);
   const es = new EventSource(url);
   for (const [event, handler] of Object.entries(handlers)) {
@@ -141,6 +150,9 @@ export function subscribe(path: string, handlers: SSEHandlers): () => void {
       }
       handler(data);
     });
+  }
+  if (opts.onError) {
+    es.onerror = () => opts.onError!();
   }
   return () => es.close();
 }
