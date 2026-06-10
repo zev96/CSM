@@ -143,3 +143,39 @@ async def test_concurrent_publish_from_threads_is_safe():
         events.append(e)
     stage_indices = sorted(e["index"] for e in events if e["kind"] == "stage")
     assert stage_indices == list(range(n))
+
+
+@pytest.mark.asyncio
+async def test_reap_stale_spares_actively_streamed_job():
+    """A long job whose buffer outlives stale_after must NOT be reaped while
+    an SSE client is attached — and its terminal event must still arrive."""
+    bus = EventBus(stale_after_seconds=0.05)
+    job = bus.create_job()
+
+    drained: list[dict] = []
+
+    async def consume():
+        async for e in bus.stream(job):
+            drained.append(e)
+            if e["kind"] == "done":
+                return
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.1)  # exceed stale_after while stream attached + not done
+    bus.publish(job, "stage", index=0)
+    assert bus.reap_stale() == 0          # actively-streamed buffer survives
+    assert bus.active_jobs() == 1
+    bus.finish(job, document="/x.md")     # terminal event still reaches the stream
+    await asyncio.wait_for(task, timeout=2.0)
+    assert drained[-1]["kind"] == "done"
+
+
+def test_reap_stale_spares_recently_active_buffer():
+    """An orphan (no stream) that is STILL producing events keeps its buffer:
+    last_activity bump means created_at age alone no longer triggers reaping."""
+    bus = EventBus(stale_after_seconds=0.05)
+    job = bus.create_job()
+    time.sleep(0.1)                       # created_at is now older than stale_after...
+    bus.publish(job, "stage", index=0)    # ...but a fresh publish bumps last_activity
+    assert bus.reap_stale() == 0          # recent activity spares it
+    assert bus.active_jobs() == 1
