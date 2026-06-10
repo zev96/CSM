@@ -20,6 +20,7 @@ import { defineStore } from "pinia";
 
 import { subscribe } from "@/api/client";
 import { useSidecar } from "./sidecar";
+import { useNotifications } from "@/composables/useNotifications";
 
 export interface GenerateRequest {
   keyword: string;
@@ -174,11 +175,28 @@ export const useArticle = defineStore("article", {
           this.plan = d.plan ?? null;
           this.stageIndex = STAGES.length;
           this.status = "done";
+          useNotifications().push("文章生成完成", {
+            body: this.title,
+            tone: "success",
+            category: "article_success",
+          });
           this._teardown();
         },
         error: (d: any) => {
+          if (d?.cancelled) {
+            // 用户主动取消（/api/generate/{id}/cancel）—— 静默回 idle，不算失败
+            this.status = "idle";
+            this.error = null;
+            this._teardown();
+            return;
+          }
           this.error = d.error ?? "unknown error";
           this.status = "error";
+          useNotifications().push("文章生成失败", {
+            body: this.error ?? "",
+            tone: "error",
+            category: "article_failure",
+          });
           this._teardown();
         },
       });

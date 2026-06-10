@@ -25,6 +25,7 @@ import type { AxiosError } from "axios"
 import { subscribe } from "@/api/client"
 import { useSidecar } from "@/stores/sidecar"
 import { useStaleGuard } from "@/composables/useStaleGuard"
+import { useNotifications } from "@/composables/useNotifications"
 
 export type Platform = "douyin" | "bilibili" | "kuaishou"
 export type CommentedFilter = "0" | "1" | "all"
@@ -144,6 +145,7 @@ function api() {
 
 export const useMiningStore = defineStore("mining", () => {
   const activeJob = ref<MiningJob | null>(null)
+  const bell = useNotifications()
   const videos = ref<Video[]>([])
   const total = ref(0)
   const loading = ref(false)
@@ -259,6 +261,16 @@ export const useMiningStore = defineStore("mining", () => {
           status: d.summary.status,
           finished_at: new Date().toISOString(),
         }))
+        const st = String(d.summary?.status ?? "")
+        const ok = st === "done" || st === "completed"
+        const kw = activeJob.value?.id === d.job_id
+          ? activeJob.value.keyword
+          : (jobs.value.find(j => j.id === d.job_id)?.keyword ?? "")
+        bell.push("引流任务完成", {
+          body: `「${kw}」${ok ? "全部平台完成" : "部分平台未完成"}`,
+          tone: ok ? "success" : "warn",
+          category: "mining_done",
+        })
         if (stopSse) { stopSse(); stopSse = null }
         refreshVideos()
         // Refresh the full jobs list to pick up any post-run server-side

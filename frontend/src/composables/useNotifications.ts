@@ -29,6 +29,8 @@ export type NotificationCategory =
   | "ranking_change"
   | "comment_change"
   | "monitor_alert"
+  | "monitor_done"
+  | "mining_done"
   | "export_done"
   | "system";
 
@@ -68,6 +70,16 @@ export const NOTIFICATION_CATEGORIES: NotificationCategoryMeta[] = [
     key: "monitor_alert",
     label: "监测告警",
     hint: "Cookie 失效、抓取连续失败等系统级告警",
+  },
+  {
+    key: "monitor_done",
+    label: "监测任务完成",
+    hint: "「立刻监测」任务跑完一轮时推送",
+  },
+  {
+    key: "mining_done",
+    label: "引流任务完成",
+    hint: "视频抓取任务结束（含部分完成）时推送",
   },
   {
     key: "export_done",

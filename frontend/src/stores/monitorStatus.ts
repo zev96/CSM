@@ -32,6 +32,7 @@ import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { useSystemNotify } from "@/composables/useSystemNotify";
+import { useNotifications } from "@/composables/useNotifications";
 
 interface ProgressEntry {
   current: number;
@@ -69,6 +70,7 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
   // 最近一次终态 —— 托盘「最近完成」区推断 ✓/✗ 用。只增不删（数量级 = 任务数）。
   const lastOutcomes = ref<Record<number, "done" | "failed" | "cancelled">>({});
   const toast = useToast();
+  const bell = useNotifications();
   // Lazy-initialise the notify singleton the first time the store is created.
   if (!_notify) {
     const { notify } = useSystemNotify();
@@ -294,6 +296,11 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
         // System notification for completed tasks.
         const total = typeof d.progress_total === "number" ? String(d.progress_total) : "?";
         void _notify?.("CSM 百度监控", `监控完成，已抓 ${total} 词`);
+        bell.push("监测任务完成", {
+          body: `任务 #${d.task_id} · 共 ${total} 项`,
+          tone: "success",
+          category: "monitor_done",
+        });
       }
     },
     failed: (d: any) => {
@@ -318,6 +325,11 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
         ? "队列繁忙，请稍后重试或减少同时运行的任务"
         : (err.split("\n")[0] || "未知原因");
       toast.error(`监测任务 #${d.task_id} 失败：${reason}`);
+      bell.push(`监测任务 #${d.task_id} 失败`, {
+        body: reason,
+        tone: "error",
+        category: "monitor_alert",
+      });
     },
   };
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { subscribe } from "@/api/client";
+import { useNotifications } from "@/composables/useNotifications";
 
 const getMock = vi.fn();
 const postMock = vi.fn();
@@ -100,5 +101,35 @@ describe("monitorStatus — phase / outcome", () => {
     await m.hydrate();
     expect(m.isRunning(7)).toBe(false);
     expect(m.phaseOf(7)).toBeNull();
+  });
+});
+
+describe("monitorStatus — 铃铛通知", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    localStorage.clear();
+    const n = useNotifications();
+    n.clear();
+    n.setEnabled(true);
+  });
+
+  it("finished → 推 monitor_done 铃铛通知", () => {
+    const m = useMonitorStatus();
+    m.markRunning(7);
+    m._dispatchSse("finished", { task_id: 7, progress_total: 10 });
+    const n = useNotifications();
+    expect(n.items.value[0]?.category).toBe("monitor_done");
+    expect(n.items.value[0]?.tone).toBe("success");
+  });
+
+  it("failed(cancelled by user) → 不推铃铛；普通 failed → 推 monitor_alert", () => {
+    const m = useMonitorStatus();
+    const n = useNotifications();
+    m.markRunning(7);
+    m._dispatchSse("failed", { task_id: 7, error: "cancelled by user" });
+    expect(n.items.value.length).toBe(0);
+    m.markRunning(8);
+    m._dispatchSse("failed", { task_id: 8, error: "boom" });
+    expect(n.items.value[0]?.category).toBe("monitor_alert");
   });
 });

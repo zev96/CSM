@@ -9,6 +9,7 @@ import { defineStore } from "pinia";
 
 import { subscribe } from "@/api/client";
 import { useSidecar } from "./sidecar";
+import { useNotifications } from "@/composables/useNotifications";
 
 export interface BatchItem {
   index: number;
@@ -123,11 +124,22 @@ export const useBatch = defineStore("batch", {
           this.byStatus = d.by_status ?? {};
           this.totalDuration = d.total_duration_seconds ?? 0;
           this.finishedAt = new Date().toISOString();
+          const failedCount = Number((d.by_status ?? {}).failed ?? 0);
+          useNotifications().push("批量生成完成", {
+            body: `共 ${this.total} 篇 · 成功 ${Number((d.by_status ?? {}).success ?? 0)}${failedCount ? ` · 失败 ${failedCount}` : ""}`,
+            tone: failedCount ? "warn" : "success",
+            category: "article_success",
+          });
           this._teardown();
         },
         error: (d: any) => {
           this.status = "error";
           this.error = d.error ?? "unknown error";
+          useNotifications().push("批量生成失败", {
+            body: this.error ?? "",
+            tone: "error",
+            category: "article_failure",
+          });
           this._teardown();
         },
       });
