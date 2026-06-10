@@ -198,7 +198,7 @@ git commit -m "feat(tray): ETA 估算器（进度速率 EMA）"
 
 后端 `/api/monitor/events` 早就在广播 `waiting_chrome_close / chrome_closed / captcha_required / captcha_resolved / captcha_timeout`（见 `sidecar/csm_sidecar/services/monitor_loop.py:56-63`，payload 是 MonitorEvent dataclass，带 `task_id`），前端一直没接。本任务把内联 SSE handler 提取成命名表（`_dispatchSse` 测试钩子），并新增两块状态。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```ts
 // frontend/src/stores/__tests__/monitorStatus.spec.ts
@@ -268,12 +268,12 @@ describe("monitorStatus — phase / outcome", () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd frontend && npx vitest run src/stores/__tests__/monitorStatus.spec.ts`
 Expected: FAIL —— `m._dispatchSse is not a function`
 
-- [ ] **Step 3: 实现（monitorStatus.ts 改动）**
+- [x] **Step 3: 实现（monitorStatus.ts 改动）**
 
 3a. 文件顶部 `interface ProgressEntry` 后加导出类型：
 
@@ -395,12 +395,12 @@ export type MonitorTaskPhase = "waiting_chrome" | "captcha";
 
 3f. store return 对象追加：`taskPhase, lastOutcomes, phaseOf, _dispatchSse,`
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd frontend && npx vitest run src/stores/__tests__/monitorStatus.spec.ts`
 Expected: PASS（4 passed）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/stores/monitorStatus.ts frontend/src/stores/__tests__/monitorStatus.spec.ts

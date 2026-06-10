@@ -38,6 +38,8 @@ interface ProgressEntry {
   total: number;
 }
 
+export type MonitorTaskPhase = "waiting_chrome" | "captcha";
+
 // Module-level notify singleton — store is created once per app lifetime,
 // so this is effectively module-level. Must be called inside the store
 // factory (after Pinia is active) to satisfy Tauri plugin constraints.
@@ -60,6 +62,12 @@ const _optimisticMarkedAt = new Map<number, number>();
 export const useMonitorStatus = defineStore("monitorStatus", () => {
   const runningTaskIds = ref<Set<number>>(new Set());
   const taskProgress = ref<Record<number, ProgressEntry>>({});
+  // 任务特殊阶段（百度原生 Chrome：排队等浏览器空闲 / 等人工验证码）。
+  // 由 waiting_chrome_close / captcha_* SSE 事件驱动；started/finished/
+  // failed/hydrate 时清理。托盘用它区分「排队中/需人工验证」与真「运行中」。
+  const taskPhase = ref<Record<number, MonitorTaskPhase>>({});
+  // 最近一次终态 —— 托盘「最近完成」区推断 ✓/✗ 用。只增不删（数量级 = 任务数）。
+  const lastOutcomes = ref<Record<number, "done" | "failed" | "cancelled">>({});
   const toast = useToast();
   // Lazy-initialise the notify singleton the first time the store is created.
   if (!_notify) {
@@ -94,6 +102,19 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     return taskProgress.value[taskId] ?? null;
   }
 
+  function phaseOf(taskId: number): MonitorTaskPhase | null {
+    return taskPhase.value[taskId] ?? null;
+  }
+
+  function _setPhase(taskId: number, phase: MonitorTaskPhase | null): void {
+    const has = taskId in taskPhase.value;
+    if (phase == null && !has) return;
+    const next = { ...taskPhase.value };
+    if (phase == null) delete next[taskId];
+    else next[taskId] = phase;
+    taskPhase.value = next;
+  }
+
   function markRunning(taskId: number): void {
     // Stamp the optimistic-mark time so hydrate() can ride out the race
     // where /api/monitor/running hasn't enrolled this task yet (slot
@@ -107,6 +128,7 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
   }
 
   function clearRunning(taskId: number): void {
+    _setPhase(taskId, null);
     // Clear the optimistic ledger entry regardless of whether the task
     // was in runningTaskIds — callers that clear after a failed POST
     // need this too.
@@ -187,6 +209,12 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
         if (next.has(numK)) nextProgress[numK] = v;
       }
       taskProgress.value = nextProgress;
+      const nextPhase: Record<number, MonitorTaskPhase> = {};
+      for (const [k, v] of Object.entries(taskPhase.value)) {
+        const numK = Number(k);
+        if (next.has(numK)) nextPhase[numK] = v;
+      }
+      taskPhase.value = nextPhase;
     } catch {
       // Silently ignore — caller will retry on next poll.
     }
@@ -214,6 +242,84 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     }
   }
 
+  // SSE 处理表 —— 提取成命名对象让单测能经 _dispatchSse 直接驱动，
+  // 不需要真 EventSource。start() 把同一张表绑给 subscribe。
+  const _sseHandlers: Record<string, (d: any) => void> = {
+    started: (d: any) => {
+      if (typeof d.task_id === "number" && d.task_id > 0) {
+        markRunning(d.task_id);
+        _setPhase(d.task_id, null); // 新增：真正开跑，清掉排队/验证码态
+        // Backend has now confirmed the task is running; the optimistic
+        // grace window is no longer needed.
+        _optimisticMarkedAt.delete(d.task_id);
+      }
+    },
+    progress: (d: any) => {
+      if (typeof d.task_id !== "number") return;
+      const cur = typeof d.progress_current === "number" ? d.progress_current : 0;
+      const tot = typeof d.progress_total === "number" ? d.progress_total : 0;
+      setProgress(d.task_id, cur, tot);
+    },
+    // ── Native-Chrome mode events ──────────────────────────────────
+    needs_captcha: (d: any) => {
+      const kw = typeof d.keyword === "string" ? d.keyword : "";
+      void _notify?.("CSM 百度监控", `需要人工解验证码（关键词：${kw}），点击浏览器窗口`);
+    },
+    waiting_chrome_close: (d: any) => {
+      if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, "waiting_chrome");
+    },
+    chrome_closed: (d: any) => {
+      if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, null);
+    },
+    captcha_required: (d: any) => {
+      if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, "captcha");
+    },
+    captcha_resolved: (d: any) => {
+      if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, null);
+    },
+    captcha_timeout: (d: any) => {
+      if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, null);
+    },
+    // ── End native-Chrome mode events ─────────────────────────────
+    finished: (d: any) => {
+      if (typeof d.task_id === "number") {
+        clearRunning(d.task_id);
+        lastOutcomes.value = { ...lastOutcomes.value, [d.task_id]: "done" };
+        // System notification for completed tasks.
+        const total = typeof d.progress_total === "number" ? String(d.progress_total) : "?";
+        void _notify?.("CSM 百度监控", `监控完成，已抓 ${total} 词`);
+      }
+    },
+    failed: (d: any) => {
+      if (typeof d.task_id !== "number") return;
+      clearRunning(d.task_id);
+      const err = String(d.error ?? "");
+      lastOutcomes.value = {
+        ...lastOutcomes.value,
+        [d.task_id]: err.includes("cancelled by user") ? "cancelled" : "failed",
+      };
+      // Triage the failure reason so the user gets a useful toast.
+      // - cancelled by user: they clicked 停止, no surprise — stay silent
+      // - risk control: a separate SSE `risk_control` event carries the
+      //   recovery UI (resume from breakpoint), no toast from here to
+      //   avoid double-notifying
+      // - slot timeout: friendly hint about queue saturation
+      // - everything else: surface the first line so failures during
+      //   navigated-away periods don't vanish silently
+      if (err.includes("cancelled by user")) return;
+      if (err.startsWith("风控拦截") || err.includes("captcha")) return;
+      const reason = err.includes("timeout waiting for platform slot")
+        ? "队列繁忙，请稍后重试或减少同时运行的任务"
+        : (err.split("\n")[0] || "未知原因");
+      toast.error(`监测任务 #${d.task_id} 失败：${reason}`);
+    },
+  };
+
+  /** 测试钩子：把一条 SSE 事件喂给处理表。生产路径 subscribe 绑同一张表。 */
+  function _dispatchSse(kind: string, d: any): void {
+    _sseHandlers[kind]?.(d);
+  }
+
   /**
    * Subscribe to SSE and start the periodic hydration poll. Idempotent —
    * safe to call multiple times. Should be invoked once at app boot
@@ -222,55 +328,7 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
   function start(): void {
     if (started) return;
     started = true;
-    stopSse = subscribe("/api/monitor/events", {
-      started: (d: any) => {
-        if (typeof d.task_id === "number" && d.task_id > 0) {
-          markRunning(d.task_id);
-          // Backend has now confirmed the task is running; the optimistic
-          // grace window is no longer needed.
-          _optimisticMarkedAt.delete(d.task_id);
-        }
-      },
-      progress: (d: any) => {
-        if (typeof d.task_id !== "number") return;
-        const cur = typeof d.progress_current === "number" ? d.progress_current : 0;
-        const tot = typeof d.progress_total === "number" ? d.progress_total : 0;
-        setProgress(d.task_id, cur, tot);
-      },
-      // ── Native-Chrome mode events ──────────────────────────────────
-      needs_captcha: (d: any) => {
-        const kw = typeof d.keyword === "string" ? d.keyword : "";
-        void _notify?.("CSM 百度监控", `需要人工解验证码（关键词：${kw}），点击浏览器窗口`);
-      },
-      // ── End native-Chrome mode events ─────────────────────────────
-      finished: (d: any) => {
-        if (typeof d.task_id === "number") {
-          clearRunning(d.task_id);
-          // System notification for completed tasks.
-          const total = typeof d.progress_total === "number" ? String(d.progress_total) : "?";
-          void _notify?.("CSM 百度监控", `监控完成，已抓 ${total} 词`);
-        }
-      },
-      failed: (d: any) => {
-        if (typeof d.task_id !== "number") return;
-        clearRunning(d.task_id);
-        // Triage the failure reason so the user gets a useful toast.
-        // - cancelled by user: they clicked 停止, no surprise — stay silent
-        // - risk control: a separate SSE `risk_control` event carries the
-        //   recovery UI (resume from breakpoint), no toast from here to
-        //   avoid double-notifying
-        // - slot timeout: friendly hint about queue saturation
-        // - everything else: surface the first line so failures during
-        //   navigated-away periods don't vanish silently
-        const err = String(d.error ?? "");
-        if (err.includes("cancelled by user")) return;
-        if (err.startsWith("风控拦截") || err.includes("captcha")) return;
-        const reason = err.includes("timeout waiting for platform slot")
-          ? "队列繁忙，请稍后重试或减少同时运行的任务"
-          : (err.split("\n")[0] || "未知原因");
-        toast.error(`监测任务 #${d.task_id} 失败：${reason}`);
-      },
-    });
+    stopSse = subscribe("/api/monitor/events", _sseHandlers);
     // Initial sync + periodic safety net. 30 s is conservative — covers
     // sidecar restarts and any race where SSE drops/reconnects without
     // replaying the event we missed.
@@ -293,8 +351,11 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
   return {
     runningTaskIds,
     taskProgress,
+    taskPhase,
+    lastOutcomes,
     isRunning,
     progressOf,
+    phaseOf,
     markRunning,
     clearRunning,
     setProgress,
@@ -304,5 +365,6 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     stop,
     taskMutationNonce,
     bumpTaskMutation,
+    _dispatchSse,
   };
 });
