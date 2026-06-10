@@ -11,9 +11,11 @@ import { useRoute, useRouter } from "vue-router";
 
 import Icon from "./ui/Icon.vue";
 import NotificationDropdown from "./ui/NotificationDropdown.vue";
+import TaskTrayPanel from "./ui/TaskTrayPanel.vue";
 import logoUrl from "@/assets/logo.png";
 import { useConfig } from "@/stores/config";
 import { useNotifications } from "@/composables/useNotifications";
+import { useTaskTray } from "@/stores/taskTray";
 
 const route = useRoute();
 const router = useRouter();
@@ -30,14 +32,35 @@ function gotoAccount() {
   router.push({ name: "settings", hash: "#account" }).catch(() => {});
 }
 
+// 通知铃铛 + 任务托盘：两个浮层互斥（同时只开一个）。
+// 任务托盘挂在 LeftNav（常驻组件）上，让 useTaskTray() 的 watcher
+// （最近完成登记、元数据懒加载）从 app 启动起就活着，而不是等浮层首开。
+const notify = useNotifications();
+const tray = useTaskTray();
+const notifOpen = ref(false);
+const trayOpen = ref(false);
+
 // 通知铃铛：点击 toggle 下拉面板。打开瞬间标全部已读 ——
 // "打开 = 看过" 比强迫逐条点合理。
-const notify = useNotifications();
-const notifOpen = ref(false);
 function toggleNotif() {
   notifOpen.value = !notifOpen.value;
-  if (notifOpen.value) notify.markAllRead();
+  if (notifOpen.value) {
+    trayOpen.value = false;
+    notify.markAllRead();
+  }
 }
+
+function toggleTray() {
+  trayOpen.value = !trayOpen.value;
+  if (trayOpen.value) {
+    notifOpen.value = false;
+    void tray.ensureMonitorMeta(true); // 打开时强刷一次任务名缓存
+  }
+}
+
+const trayBadge = computed(() =>
+  tray.runningCount > 9 ? "9+" : String(tray.runningCount),
+);
 
 const NAV_TOP = [
   { key: "home", icon: "home", label: "工作台" },
@@ -132,6 +155,32 @@ function go(key: string) {
     </div>
 
     <div class="flex flex-col items-center gap-2">
+      <!--
+        任务托盘按钮 —— 铃铛正上方。有任务时数字角标 + 呼吸光圈；
+        浮层从 nav 右侧弹出（同 NotificationDropdown 范式）。
+      -->
+      <div class="relative">
+        <button
+          title="后台任务"
+          type="button"
+          class="relative inline-flex items-center justify-center transition"
+          :class="{ 'tray-btn-active': tray.runningCount > 0 }"
+          :style="{
+            width: '44px',
+            height: '44px',
+            borderRadius: '14px',
+            color: tray.runningCount > 0 ? 'var(--primary)' : 'var(--ink-2)',
+            background: trayOpen ? 'rgba(28,26,23,0.05)' : 'transparent',
+          }"
+          @mouseenter="(e) => { if (!trayOpen) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
+          @mouseleave="(e) => { if (!trayOpen) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
+          @click="toggleTray"
+        >
+          <Icon name="zap" :size="18" />
+          <span v-if="tray.runningCount > 0" class="tray-badge absolute">{{ trayBadge }}</span>
+        </button>
+        <TaskTrayPanel :open="trayOpen" @close="trayOpen = false" />
+      </div>
       <!--
         通知 bell —— 放在「设置」按钮正上方。badge 在有未读时显示。
         wrapper relative 给 NotificationDropdown absolute 定位用，
@@ -236,3 +285,33 @@ function go(key: string) {
     </div>
   </nav>
 </template>
+
+<style scoped>
+.tray-badge {
+  top: 5px;
+  right: 5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg-inner);
+}
+@keyframes trayPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(238, 106, 42, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(238, 106, 42, 0);
+  }
+}
+.tray-btn-active {
+  animation: trayPulse 2.2s ease-in-out infinite;
+}
+</style>

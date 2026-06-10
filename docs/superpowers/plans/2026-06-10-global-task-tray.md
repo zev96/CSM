@@ -1748,10 +1748,13 @@ git commit -m "feat(tray): TaskTrayPanel 浮层（运行中 + 最近完成 + 取
 
 ### Task 9: LeftNav 集成 + PR1 收尾
 
+> **范围补记**：PR1 现额外含一处后端修复 `fix(sidecar): reap_stale 不再回收运行中/在传任务的事件队列`（commit 28bb07f）——`event_bus.reap_stale` 原按 `created_at` 回收，>10min 的 mining/batch/generate 任务事件队列被中途删除、终态 done/error 静默丢失，前端卡「运行中」收不到完成通知。这是托盘「完成→通知/最近完成」链路对长任务成立的硬前置，故随 PR1 一起发。PR body 需点出。另：本任务顺带补 Task 5/6 评审标记的最近完成「上限 3 条 + 同卡去重」覆盖缺口（taskTray.spec.ts）。
+
 **Files:**
 - Modify: `frontend/src/components/LeftNav.vue`
+- Test: `frontend/src/stores/__tests__/taskTray.spec.ts`（补 cap/dedup 两条）
 
-- [ ] **Step 1: script 部分改动**
+- [x] **Step 1: script 部分改动**
 
 imports 加：
 
@@ -1794,7 +1797,7 @@ const trayBadge = computed(() =>
 );
 ```
 
-- [ ] **Step 2: template 改动 —— 通知 bell 的 `<div class="relative">` 之前插入**
+- [x] **Step 2: template 改动 —— 通知 bell 的 `<div class="relative">` 之前插入**
 
 ```vue
       <!--
@@ -1825,7 +1828,7 @@ const trayBadge = computed(() =>
       </div>
 ```
 
-- [ ] **Step 3: 文件尾部新增 scoped 样式块（LeftNav 目前没有 style 块；角标定位与呼吸动效都是会变化/动画属性，放 scoped CSS）**
+- [x] **Step 3: 文件尾部新增 scoped 样式块（LeftNav 目前没有 style 块；角标定位与呼吸动效都是会变化/动画属性，放 scoped CSS）**
 
 ```vue
 <style scoped>
@@ -1859,7 +1862,7 @@ const trayBadge = computed(() =>
 </style>
 ```
 
-- [ ] **Step 4: 全量回归 + 类型检查**
+- [x] **Step 4: 全量回归 + 类型检查**
 
 ```powershell
 cd frontend
@@ -1871,7 +1874,7 @@ git checkout -- vite.config.js
 ```
 Expected: vitest 全绿；vue-tsc 无错误。
 
-- [ ] **Step 5: Commit + 提 PR1**
+- [x] **Step 5: Commit + 提 PR1**
 
 ```bash
 git add frontend/src/components/LeftNav.vue
