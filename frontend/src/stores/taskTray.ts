@@ -196,11 +196,11 @@ export const useTaskTray = defineStore("taskTray", () => {
       target += pr.target ?? 0;
       if (pr.phase === "captcha_waiting") {
         captcha = true;
-        parts.push(`${PLATFORM_LABEL[p]}等待验证`);
+        parts.push(`${PLATFORM_LABEL[p] ?? p}等待验证`);
       } else if (pr.phase === "done") {
-        parts.push(`${PLATFORM_LABEL[p]}已完成`);
+        parts.push(`${PLATFORM_LABEL[p] ?? p}已完成`);
       } else {
-        parts.push(`${PLATFORM_LABEL[p]} ${pr.got ?? 0}/${pr.target ?? 0}`);
+        parts.push(`${PLATFORM_LABEL[p] ?? p} ${pr.got ?? 0}/${pr.target ?? 0}`);
       }
     }
     const key = `mining:${job.id}`;
@@ -222,12 +222,13 @@ export const useTaskTray = defineStore("taskTray", () => {
 
   // ── 批量生成 ─────────────────────────────────────────────────────
   const batchCard = computed<TrayTask | null>(() => {
-    if (batch.status !== "running") return null;
+    const jobId = batch.jobId;
+    if (batch.status !== "running" || !jobId) return null;
     const runningItem = batch.items.find((i) => i.status === "running");
     const doneCount = batch.items.filter(
       (i) => i.status === "success" || i.status === "failed" || i.status === "cancelled",
     ).length;
-    const key = `batch:${batch.jobId ?? "pending"}`;
+    const key = `batch:${jobId}`;
     const progress = batch.total > 0 ? batch.progress : null;
     return {
       key,
@@ -248,8 +249,9 @@ export const useTaskTray = defineStore("taskTray", () => {
 
   // ── 单篇生成 ─────────────────────────────────────────────────────
   const articleCard = computed<TrayTask | null>(() => {
-    if (article.status !== "running") return null;
-    const key = `article:${article.jobId ?? "pending"}`;
+    const jobId = article.jobId;
+    if (article.status !== "running" || !jobId) return null;
+    const key = `article:${jobId}`;
     const progress = article.stageIndex >= 0 ? article.progress : null;
     return {
       key,
@@ -286,7 +288,9 @@ export const useTaskTray = defineStore("taskTray", () => {
   function _outcomeFor(task: TrayTask): TrayOutcome {
     switch (task.kind) {
       case "mining": {
-        const st = String(mining.activeJob?.status ?? "");
+        const aj = mining.activeJob;
+        if (!aj || `mining:${aj.id}` !== task.key) return "done";
+        const st = String(aj.status ?? "");
         if (st.includes("fail")) return "failed";
         if (st === "cancelled" || st === "interrupted") return "cancelled";
         return "done"; // done / completed / partial_done

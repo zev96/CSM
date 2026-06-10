@@ -19,6 +19,8 @@ vi.mock("@/api/client", () => ({ subscribe: vi.fn(() => () => {}) }));
 
 import { useTaskTray } from "@/stores/taskTray";
 import { useMonitorStatus } from "@/stores/monitorStatus";
+import { useBatch } from "@/stores/batch";
+import { useArticle } from "@/stores/article";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -97,5 +99,31 @@ describe("taskTray — 监测聚合", () => {
     await nextTick();
     expect(tray.runningTasks[0].title).toBe("监测任务");
     expect(tray.runningTasks[0].subtitle).toContain("任务 #99");
+  });
+});
+
+describe("taskTray — 幽灵完成条目回归", () => {
+  it("batch 提交中间态（running 但 jobId 未返回）不产生卡片与最近完成", async () => {
+    const batch = useBatch();
+    const tray = useTaskTray();
+    batch.$patch({ status: "running", jobId: null, total: 0 });
+    await nextTick();
+    expect(tray.runningTasks.find((t) => t.kind === "batch")).toBeUndefined();
+    batch.$patch({ jobId: "u1", total: 5 });
+    await nextTick();
+    expect(tray.runningTasks.find((t) => t.kind === "batch")).toBeTruthy();
+    expect(tray.recentFinished.length).toBe(0);
+  });
+
+  it("article 提交中间态同样不产生幽灵条目", async () => {
+    const article = useArticle();
+    const tray = useTaskTray();
+    article.$patch({ status: "running", jobId: null, title: "kw" });
+    await nextTick();
+    expect(tray.runningTasks.find((t) => t.kind === "article")).toBeUndefined();
+    article.$patch({ jobId: "g1", currentStage: "扫描资料库", stageIndex: 0 });
+    await nextTick();
+    expect(tray.runningTasks.find((t) => t.kind === "article")).toBeTruthy();
+    expect(tray.recentFinished.length).toBe(0);
   });
 });

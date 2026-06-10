@@ -254,6 +254,13 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
         // Backend has now confirmed the task is running; the optimistic
         // grace window is no longer needed.
         _optimisticMarkedAt.delete(d.task_id);
+        // 重跑会产生新一轮终态 —— 把上一轮的记录清掉，避免 hydrate 兜底
+        // 清场时托盘把旧 outcome 错按到新一轮头上。
+        if (d.task_id in lastOutcomes.value) {
+          const next = { ...lastOutcomes.value };
+          delete next[d.task_id];
+          lastOutcomes.value = next;
+        }
       }
     },
     progress: (d: any) => {

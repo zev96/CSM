@@ -57,4 +57,14 @@ describe("EtaEstimator", () => {
     expect(e.observe("a", 0.3, 120_000)).toBeNull(); // 重新计数
     expect(e.observe("b", 0.5, 0)).toBeNull();        // b 是独立首样本
   });
+
+  it("同一进度重复 observe 是无副作用的（computed 重复求值安全）", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.1, 0);
+    const first = e.observe("k", 0.2, 60_000);
+    expect(first).toBe("约 8 分钟");
+    // 同 (p, 更晚的 now) 重复求值 N 次 —— 不更新样本、结果稳定
+    expect(e.observe("k", 0.2, 61_000)).toBe("约 8 分钟");
+    expect(e.observe("k", 0.2, 62_000)).toBe("约 8 分钟");
+  });
 });

@@ -102,6 +102,15 @@ describe("monitorStatus — phase / outcome", () => {
     expect(m.isRunning(7)).toBe(false);
     expect(m.phaseOf(7)).toBeNull();
   });
+
+  it("重跑（started）清掉上一轮终态记录", () => {
+    const m = useMonitorStatus();
+    m.markRunning(7);
+    m._dispatchSse("failed", { task_id: 7, error: "boom" });
+    expect(m.lastOutcomes[7]).toBe("failed");
+    m._dispatchSse("started", { task_id: 7 });
+    expect(m.lastOutcomes[7]).toBeUndefined();
+  });
 });
 
 describe("monitorStatus — 铃铛通知", () => {
