@@ -19,6 +19,7 @@ vi.mock("@/api/client", () => ({ subscribe: vi.fn(() => () => {}) }));
 
 import { useTaskTray } from "@/stores/taskTray";
 import { useMonitorStatus } from "@/stores/monitorStatus";
+import { useMiningStore } from "@/stores/mining";
 import { useBatch } from "@/stores/batch";
 import { useArticle } from "@/stores/article";
 
@@ -125,5 +126,147 @@ describe("taskTray — 幽灵完成条目回归", () => {
     await nextTick();
     expect(tray.runningTasks.find((t) => t.kind === "article")).toBeTruthy();
     expect(tray.recentFinished.length).toBe(0);
+  });
+});
+
+describe("taskTray — 引流/批量/单篇卡片", () => {
+  it("mining activeJob → 卡片：平台分项 subtitle + Σgot/Σtarget", async () => {
+    const mining = useMiningStore();
+    const tray = useTaskTray();
+    mining.activeJob = {
+      id: 3,
+      keyword: "宠物吸尘器",
+      platforms: ["kuaishou", "douyin"],
+      target_per_platform: 50,
+      status: "running",
+      progress: {
+        kuaishou: { got: 31, target: 50, phase: "fetching" },
+        douyin: { got: 50, target: 50, phase: "done" },
+      } as any,
+      error_message: "",
+      created_at: "",
+      started_at: null,
+      finished_at: null,
+    };
+    await nextTick();
+    const card = tray.runningTasks.find((t) => t.kind === "mining")!;
+    expect(card.title).toContain("宠物吸尘器");
+    expect(card.subtitle).toContain("快手 31/50");
+    expect(card.subtitle).toContain("抖音已完成");
+    expect(card.progress).toBeCloseTo(81 / 100);
+    expect(card.cancellable).toBe(true);
+  });
+
+  it("batch running → 第 i/N 篇 subtitle + progress getter", async () => {
+    const batch = useBatch();
+    const tray = useTaskTray();
+    batch.$patch({
+      status: "running",
+      jobId: "u1",
+      total: 5,
+      items: [
+        { index: 1, keyword: "a", status: "success", duration_seconds: 1, document: null, error_type: null, error_message: null },
+        { index: 2, keyword: "b", status: "success", duration_seconds: 1, document: null, error_type: null, error_message: null },
+        { index: 3, keyword: "c", status: "running", duration_seconds: 0, document: null, error_type: null, error_message: null },
+        { index: 4, keyword: "d", status: "queued", duration_seconds: 0, document: null, error_type: null, error_message: null },
+        { index: 5, keyword: "e", status: "queued", duration_seconds: 0, document: null, error_type: null, error_message: null },
+      ],
+    });
+    await nextTick();
+    const card = tray.runningTasks.find((t) => t.kind === "batch")!;
+    expect(card.title).toBe("批量生成 · 5 篇");
+    expect(card.subtitle).toContain("第 3/5 篇");
+    expect(card.subtitle).toContain("c");
+    expect(card.progress).toBeCloseTo(0.4);
+  });
+
+  it("article running → 阶段 subtitle，PR1 不可取消", async () => {
+    const article = useArticle();
+    const tray = useTaskTray();
+    article.$patch({
+      status: "running",
+      jobId: "g1",
+      title: "无线吸尘器",
+      currentStage: "调用 LLM",
+      stageIndex: 4,
+    });
+    await nextTick();
+    const card = tray.runningTasks.find((t) => t.kind === "article")!;
+    expect(card.title).toContain("无线吸尘器");
+    expect(card.subtitle).toBe("调用 LLM（5/6）");
+    expect(card.progress).toBeCloseTo(5 / 6);
+    expect(card.cancellable).toBe(false);
+  });
+
+  it("runningCount = 监测底层任务数 + 其余卡各 1", async () => {
+    const monitor = useMonitorStatus();
+    const article = useArticle();
+    const tray = useTaskTray();
+    monitor.markRunning(11);
+    monitor.markRunning(12);
+    article.$patch({ status: "running", jobId: "g1", title: "kw", currentStage: "导出", stageIndex: 5 });
+    await flushPromises();
+    await nextTick();
+    expect(tray.runningCount).toBe(3);
+  });
+});
+
+describe("taskTray — 取消分发 + 最近完成", () => {
+  it("监测组卡取消 → 对组内每个 id POST cancel", async () => {
+    const monitor = useMonitorStatus();
+    const tray = useTaskTray();
+    monitor.markRunning(11);
+    monitor.markRunning(12);
+    await flushPromises();
+    await nextTick();
+    const zhihu = tray.runningTasks.find((t) => t.kind === "monitor")!;
+    await tray.cancelTask(zhihu);
+    expect(postMock).toHaveBeenCalledWith("/api/monitor/tasks/11/cancel");
+    expect(postMock).toHaveBeenCalledWith("/api/monitor/tasks/12/cancel");
+  });
+
+  it("mining 取消 → POST /api/mining/jobs/{id}/cancel", async () => {
+    const mining = useMiningStore();
+    const tray = useTaskTray();
+    mining.activeJob = {
+      id: 3, keyword: "k", platforms: ["douyin"], target_per_platform: 50,
+      status: "running", progress: {} as any, error_message: "",
+      created_at: "", started_at: null, finished_at: null,
+    };
+    await nextTick();
+    await tray.cancelTask(tray.runningTasks.find((t) => t.kind === "mining")!);
+    expect(postMock).toHaveBeenCalledWith("/api/mining/jobs/3/cancel");
+  });
+
+  it("任务从 running 消失 → 进最近完成区（mining completed → done）并可清空", async () => {
+    const mining = useMiningStore();
+    const tray = useTaskTray();
+    mining.activeJob = {
+      id: 3, keyword: "k", platforms: ["douyin"], target_per_platform: 50,
+      status: "running", progress: {} as any, error_message: "",
+      created_at: "", started_at: null, finished_at: null,
+    };
+    await nextTick();
+    expect(tray.runningTasks.length).toBe(1);
+
+    mining.activeJob = { ...mining.activeJob!, status: "completed" };
+    await nextTick();
+    expect(tray.runningTasks.length).toBe(0);
+    expect(tray.recentFinished.length).toBe(1);
+    expect(tray.recentFinished[0].outcome).toBe("done");
+    expect(tray.recentFinished[0].title).toContain("k");
+
+    tray.clearFinished();
+    expect(tray.recentFinished.length).toBe(0);
+  });
+
+  it("batch error → 最近完成 outcome=failed", async () => {
+    const batch = useBatch();
+    const tray = useTaskTray();
+    batch.$patch({ status: "running", jobId: "u1", total: 1, items: [] });
+    await nextTick();
+    batch.$patch({ status: "error", error: "boom" });
+    await nextTick();
+    expect(tray.recentFinished[0]?.outcome).toBe("failed");
   });
 });
