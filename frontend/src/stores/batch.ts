@@ -138,6 +138,15 @@ export const useBatch = defineStore("batch", {
           this._teardown();
         },
         error: (d: any) => {
+          const msg = String(d?.error ?? "");
+          if (msg.startsWith("unknown job_id")) {
+            // 断线期间事件队列已被 sidecar 回收 —— 合成 error，不是真失败。
+            // EventSource 会持续重连并反复收到它，等效 ~3s 轮询：用快照对账，
+            // 真终态由 refreshSnapshot 落地（含完成通知）后，下一轮再收流。
+            void this.refreshSnapshot();
+            if (this.status !== "running") this._teardown();
+            return;
+          }
           this.status = "error";
           this.error = d.error ?? "unknown error";
           useNotifications().push("批量生成失败", {
@@ -160,8 +169,22 @@ export const useBatch = defineStore("batch", {
         this.total = this.items.length || this.total;
         this.outDir = r.data.out_dir ?? this.outDir;
         if (r.data.finished_at) {
+          const wasRunning = this.status === "running";
           this.finishedAt = r.data.finished_at;
-          if (this.status === "running") this.status = "done";
+          if (wasRunning) {
+            this.status = "done";
+            // 从快照得知完成（done 事件已随断线被回收）—— 补完成通知，
+            // 口径与 done handler 一致（含取消静默）。
+            const failedCount = this.items.filter((i) => i.status === "failed").length;
+            const cancelledCount = this.items.filter((i) => i.status === "cancelled").length;
+            if (cancelledCount === 0) {
+              useNotifications().push("批量生成完成", {
+                body: `共 ${this.total} 篇 · 成功 ${this.items.filter((i) => i.status === "success").length}${failedCount ? ` · 失败 ${failedCount}` : ""}`,
+                tone: failedCount ? "warn" : "success",
+                category: "article_success",
+              });
+            }
+          }
         }
       } catch {
         /* ignore */

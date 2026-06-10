@@ -1355,6 +1355,8 @@ git commit -m "test(tray): 取消分发 + 最近完成区用例"
 
 监测已有 30s hydrate 兜底，不动。EventSource 自带断线重连，onError 只做一次轻量快照对账（错过的事件靠快照补），**不**主动 close。
 
+> **勘误（Task 7 质量审查收口）**：①快照对账不能整体替换 jobs[] 条目——`get_job` 不带 `video_count`/`commented_count` 聚合列，需保留旧值；②断线错过的 `job.finished`/`done` **不会重放**（事件队列断线即被回收），终态经快照得知时须补齐 finished 收尾（mining：铃铛+refreshVideos+loadJobs；batch：refreshSnapshot 置 done 时补完成通知）；③batch 重连撞已回收队列会收到合成 `unknown job_id` error——前置守卫转快照对账，不算真失败（等效 ~3s 轮询直到终态）。
+
 - [x] **Step 1: client.ts — subscribe 签名扩展**
 
 ```ts
