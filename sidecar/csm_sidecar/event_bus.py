@@ -114,10 +114,21 @@ class EventBus:
         """
         with self._lock:
             buf = self._buffers.get(job_id)
-            if buf is not None:
+            # 一个 job 同时只允许一条活跃 stream。并发的第二条（第二个标签页 /
+            # EventSource 重连撞上尚未关闭的旧连接）会与第一条竞争同一个
+            # queue（事件被瓜分），且先结束的一条 finally-reap 会把 buffer 删掉、
+            # 让另一条永久阻塞在孤儿 queue 上。这里探测并拒绝并发 attach。
+            reject = buf is not None and buf.streaming
+            if buf is not None and not reject:
                 buf.streaming = True
         if buf is None:
             yield {"kind": "error", "error": f"unknown job_id: {job_id}"}
+            return
+        if reject:
+            # 拒绝并发的第二条：yield 终态 error 后直接 return，**不进入下面的
+            # try/finally**，因此不会 reap 掉第一条正在使用的 buffer。被拒的
+            # 客户端 EventSource 会自行重连，待第一条关闭后即可成功 attach。
+            yield {"kind": "error", "error": f"already streaming: {job_id}"}
             return
         try:
             while True:
