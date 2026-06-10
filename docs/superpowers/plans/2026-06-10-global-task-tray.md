@@ -112,8 +112,9 @@ describe("EtaEstimator", () => {
     e.observe("k", 0.1, 0);
     e.observe("k", 0.2, 60_000);          // rate=0.1/min
     const text = e.observe("k", 0.21, 120_000); // 瞬时掉到 0.01/min
-    // EMA(α=0.3)=0.3*0.01+0.7*0.1=0.037/min → 剩 0.79/0.037≈21.4min
-    expect(text).toBe("约 21 分钟");
+    // 常规 EMA（α=0.3 权重在新样本）：0.3*0.01+0.7*0.1=0.073/min
+    // → 剩 0.79/0.073≈10.8min。平滑语义：旧速率占大头，ETA 不随瞬时抖动跳变。
+    expect(text).toBe("约 11 分钟");
   });
 });
 ```
