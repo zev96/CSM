@@ -1456,9 +1456,12 @@ git commit -m "feat(tray): SSE 断线快照对账（subscribe onError + mining/b
 
 **Files:**
 - Create: `frontend/src/components/ui/TaskTrayPanel.vue`
+- Modify: `frontend/src/stores/taskTray.ts`（cancellingKeys，取消防重入）
 - Test: `frontend/src/components/ui/__tests__/TaskTrayPanel.spec.ts`
 
-- [ ] **Step 1: 写失败测试**
+> **补充（Task 4 审查建议，随本任务落地）**：store 增加 `cancellingKeys`（取消防重入），✕ 点击后 disabled + meta 区显示「停止中…」，卡片消失时在 recentFinished watcher 中清除。
+
+- [x] **Step 1: 写失败测试**
 
 ```ts
 // frontend/src/components/ui/__tests__/TaskTrayPanel.spec.ts
@@ -1516,12 +1519,12 @@ describe("TaskTrayPanel", () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd frontend && npx vitest run src/components/ui/__tests__/TaskTrayPanel.spec.ts`
 Expected: FAIL —— 找不到组件
 
-- [ ] **Step 3: 实现组件**
+- [x] **Step 3: 实现组件**
 
 ```vue
 <!-- frontend/src/components/ui/TaskTrayPanel.vue -->
@@ -1728,16 +1731,16 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
 </style>
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd frontend && npx vitest run src/components/ui/__tests__/TaskTrayPanel.spec.ts`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add frontend/src/components/ui/TaskTrayPanel.vue frontend/src/components/ui/__tests__/TaskTrayPanel.spec.ts
-git commit -m "feat(tray): TaskTrayPanel 浮层（运行中 + 最近完成 + 取消）"
+git add frontend/src/components/ui/TaskTrayPanel.vue frontend/src/components/ui/__tests__/TaskTrayPanel.spec.ts frontend/src/stores/taskTray.ts docs/superpowers/plans/2026-06-10-global-task-tray.md
+git commit -m "feat(tray): TaskTrayPanel 浮层（运行中 + 最近完成 + 取消防重入）"
 ```
 
 ---

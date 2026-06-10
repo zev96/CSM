@@ -90,6 +90,9 @@ export const useTaskTray = defineStore("taskTray", () => {
 
   const eta = new EtaEstimator();
 
+  // ── 取消防重入（key 集合）────────────────────────────────────────
+  const cancellingKeys = ref(new Set<string>());
+
   // ── 监测任务元数据缓存（id → {name,type}）──────────────────────────
   // 懒加载：running 集合出现缓存未命中的 id 时拉一次全量
   // GET /api/monitor/tasks（type 参数可选，不传=全量）。
@@ -325,6 +328,11 @@ export const useTaskTray = defineStore("taskTray", () => {
     for (const t of prev) {
       if (nowKeys.has(t.key)) continue;
       eta.drop(t.key);
+      if (cancellingKeys.value.has(t.key)) {
+        const next = new Set(cancellingKeys.value);
+        next.delete(t.key);
+        cancellingKeys.value = next;
+      }
       recentFinished.value = recentFinished.value.filter((f) => f.key !== t.key);
       recentFinished.value.unshift({
         key: t.key,
@@ -347,6 +355,8 @@ export const useTaskTray = defineStore("taskTray", () => {
 
   // ── 取消分发（✕ 按钮，不弹确认框）────────────────────────────────
   async function cancelTask(task: TrayTask): Promise<void> {
+    if (cancellingKeys.value.has(task.key)) return;
+    cancellingKeys.value = new Set(cancellingKeys.value).add(task.key);
     switch (task.kind) {
       case "monitor":
         await Promise.allSettled(
@@ -373,5 +383,6 @@ export const useTaskTray = defineStore("taskTray", () => {
     ensureMonitorMeta,
     cancelTask,
     clearFinished,
+    cancellingKeys,
   };
 });
