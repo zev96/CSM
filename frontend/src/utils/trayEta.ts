@@ -29,7 +29,7 @@ export class EtaEstimator {
     }
     if (p > prev.p && now > prev.t) {
       const inst = (p - prev.p) / (now - prev.t);
-      const rate = prev.rate == null ? inst : EMA_ALPHA * prev.rate + (1 - EMA_ALPHA) * inst;
+      const rate = prev.rate == null ? inst : EMA_ALPHA * inst + (1 - EMA_ALPHA) * prev.rate;
       this.samples.set(key, { p, t: now, rate, n: prev.n + 1 });
     }
     const cur = this.samples.get(key)!;
