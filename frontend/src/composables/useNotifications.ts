@@ -74,7 +74,7 @@ export const NOTIFICATION_CATEGORIES: NotificationCategoryMeta[] = [
   {
     key: "monitor_done",
     label: "监测任务完成",
-    hint: "「立刻监测」任务跑完一轮时推送",
+    hint: "监测任务跑完一轮时推送（含定时）",
   },
   {
     key: "mining_done",

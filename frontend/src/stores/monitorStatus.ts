@@ -291,13 +291,19 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     // ── End native-Chrome mode events ─────────────────────────────
     finished: (d: any) => {
       if (typeof d.task_id === "number") {
+        // 后端 finished 事件不带 progress_total（只有 progress 事件带），
+        // 先从 store 里最后一次 progress 抢救 total（clearRunning 会清掉它）。
+        const knownTotal =
+          progressOf(d.task_id)?.total ??
+          (typeof d.progress_total === "number" ? d.progress_total : null);
         clearRunning(d.task_id);
         lastOutcomes.value = { ...lastOutcomes.value, [d.task_id]: "done" };
-        // System notification for completed tasks.
-        const total = typeof d.progress_total === "number" ? String(d.progress_total) : "?";
-        void _notify?.("CSM 百度监控", `监控完成，已抓 ${total} 词`);
+        void _notify?.(
+          "CSM 百度监控",
+          knownTotal != null ? `监控完成，已抓 ${knownTotal} 词` : "监控完成",
+        );
         bell.push("监测任务完成", {
-          body: `任务 #${d.task_id} · 共 ${total} 项`,
+          body: knownTotal != null ? `任务 #${d.task_id} · 共 ${knownTotal} 项` : `任务 #${d.task_id}`,
           tone: "success",
           category: "monitor_done",
         });

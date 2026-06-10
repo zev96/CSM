@@ -253,24 +253,28 @@ export const useMiningStore = defineStore("mining", () => {
       },
       "job.finished": (d: any) => {
         if (activeJob.value && activeJob.value.id === d.job_id) {
-          activeJob.value.status = d.summary.status
+          activeJob.value.status = d.summary?.status
           activeJob.value.finished_at = new Date().toISOString()
         }
         _patchJobInList(d.job_id, j => ({
           ...j,
-          status: d.summary.status,
+          status: d.summary?.status,
           finished_at: new Date().toISOString(),
         }))
         const st = String(d.summary?.status ?? "")
-        const ok = st === "done" || st === "completed"
-        const kw = activeJob.value?.id === d.job_id
-          ? activeJob.value.keyword
-          : (jobs.value.find(j => j.id === d.job_id)?.keyword ?? "")
-        bell.push("引流任务完成", {
-          body: `「${kw}」${ok ? "全部平台完成" : "部分平台未完成"}`,
-          tone: ok ? "success" : "warn",
-          category: "mining_done",
-        })
+        if (st !== "cancelled") {
+          // 用户主动取消不推「完成」通知 —— 与 monitor/article 的取消静默一致
+          const ok = st === "done" || st === "completed"
+          const aj = activeJob.value
+          const kw = aj && aj.id === d.job_id
+            ? aj.keyword
+            : (jobs.value.find(j => j.id === d.job_id)?.keyword ?? "")
+          bell.push("引流任务完成", {
+            body: `「${kw}」${ok ? "全部平台完成" : "部分平台未完成"}`,
+            tone: ok ? "success" : "warn",
+            category: "mining_done",
+          })
+        }
         if (stopSse) { stopSse(); stopSse = null }
         refreshVideos()
         // Refresh the full jobs list to pick up any post-run server-side

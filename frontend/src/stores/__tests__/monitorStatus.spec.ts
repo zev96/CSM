@@ -132,4 +132,13 @@ describe("monitorStatus — 铃铛通知", () => {
     m._dispatchSse("failed", { task_id: 8, error: "boom" });
     expect(n.items.value[0]?.category).toBe("monitor_alert");
   });
+
+  it("finished 不带 progress_total 时用 store 里的 progress total 兜底", () => {
+    const m = useMonitorStatus();
+    m.markRunning(7);
+    m.setProgress(7, 3, 10);
+    m._dispatchSse("finished", { task_id: 7 });
+    const n = useNotifications();
+    expect(n.items.value[0]?.body).toContain("共 10 项");
+  });
 });

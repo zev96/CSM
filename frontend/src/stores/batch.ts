@@ -124,12 +124,17 @@ export const useBatch = defineStore("batch", {
           this.byStatus = d.by_status ?? {};
           this.totalDuration = d.total_duration_seconds ?? 0;
           this.finishedAt = new Date().toISOString();
-          const failedCount = Number((d.by_status ?? {}).failed ?? 0);
-          useNotifications().push("批量生成完成", {
-            body: `共 ${this.total} 篇 · 成功 ${Number((d.by_status ?? {}).success ?? 0)}${failedCount ? ` · 失败 ${failedCount}` : ""}`,
-            tone: failedCount ? "warn" : "success",
-            category: "article_success",
-          });
+          const byStatus = (d.by_status ?? {}) as Record<string, number>;
+          const failedCount = Number(byStatus.failed ?? 0);
+          const cancelledCount = Number(byStatus.cancelled ?? 0);
+          if (cancelledCount === 0) {
+            // 含被取消项 = 用户主动停的批次 —— 静默，与 monitor/article 取消语义一致
+            useNotifications().push("批量生成完成", {
+              body: `共 ${this.total} 篇 · 成功 ${Number(byStatus.success ?? 0)}${failedCount ? ` · 失败 ${failedCount}` : ""}`,
+              tone: failedCount ? "warn" : "success",
+              category: "article_success",
+            });
+          }
           this._teardown();
         },
         error: (d: any) => {
