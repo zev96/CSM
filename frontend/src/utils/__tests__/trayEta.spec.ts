@@ -38,4 +38,23 @@ describe("EtaEstimator", () => {
     // → 剩 0.79/0.073≈10.8min。平滑语义：旧速率占大头，ETA 不随瞬时抖动跳变。
     expect(text).toBe("约 11 分钟");
   });
+
+  it("非法 p（NaN / 越界）→ null 且不污染状态", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.1, 0);
+    e.observe("k", 0.2, 60_000);
+    expect(e.observe("k", NaN, 90_000)).toBeNull();
+    expect(e.observe("k", 1.5, 90_000)).toBeNull();
+    // 状态未被污染：下一个正常样本仍按既有速率出 ETA
+    expect(e.observe("k", 0.3, 120_000)).toBe("约 7 分钟");
+  });
+
+  it("drop 后重新 observe 视同首样本；多 key 互不污染", () => {
+    const e = new EtaEstimator();
+    e.observe("a", 0.1, 0);
+    e.observe("a", 0.2, 60_000);
+    e.drop("a");
+    expect(e.observe("a", 0.3, 120_000)).toBeNull(); // 重新计数
+    expect(e.observe("b", 0.5, 0)).toBeNull();        // b 是独立首样本
+  });
 });

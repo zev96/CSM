@@ -7,6 +7,7 @@
  * 进度回退视为同 key 被新一轮任务复用 → 重置。
  *
  * `now` 由调用方传入（生产传 Date.now()），测试可注入假时钟。
+ * 已知限制：进度停滞时不衰减速率，ETA 会冻结在停滞前的估值。
  */
 const EMA_ALPHA = 0.3;
 const MIN_PROGRESS = 0.05;
@@ -22,6 +23,7 @@ export class EtaEstimator {
   private samples = new Map<string, Sample>();
 
   observe(key: string, p: number, now: number): string | null {
+    if (!Number.isFinite(p) || p < 0 || p > 1) return null;
     const prev = this.samples.get(key);
     if (!prev || p < prev.p) {
       this.samples.set(key, { p, t: now, rate: null, n: 1 });

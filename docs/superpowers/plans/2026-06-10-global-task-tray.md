@@ -72,7 +72,7 @@ vi.mock("@/api/client", () => ({ subscribe: vi.fn(() => () => {}) }));
 - Create: `frontend/src/utils/trayEta.ts`
 - Test: `frontend/src/utils/__tests__/trayEta.spec.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```ts
 // frontend/src/utils/__tests__/trayEta.spec.ts
@@ -119,12 +119,12 @@ describe("EtaEstimator", () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd frontend && npx vitest run src/utils/__tests__/trayEta.spec.ts`
 Expected: FAIL —— `Cannot find module '@/utils/trayEta'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```ts
 // frontend/src/utils/trayEta.ts
@@ -176,12 +176,12 @@ export class EtaEstimator {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd frontend && npx vitest run src/utils/__tests__/trayEta.spec.ts`
 Expected: PASS（5 passed）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/utils/trayEta.ts frontend/src/utils/__tests__/trayEta.spec.ts
