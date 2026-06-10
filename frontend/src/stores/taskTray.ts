@@ -327,6 +327,13 @@ export const useTaskTray = defineStore("taskTray", () => {
     const nowKeys = new Set(now.map((t) => t.key));
     for (const t of prev) {
       if (nowKeys.has(t.key)) continue;
+      // 监测组卡因 meta 缓存补齐而改名（fallback「监测任务」→ 真实组名）时，
+      // 旧 key 消失但成员还在跑 —— 是改名不是完成，跳过登记（同 Task 4
+      // batch/article 幽灵条目的 monitor 变体）。
+      if (t.kind === "monitor" && (t.memberIds ?? []).some((id) => monitor.isRunning(id))) {
+        eta.drop(t.key);
+        continue;
+      }
       eta.drop(t.key);
       if (cancellingKeys.value.has(t.key)) {
         const next = new Set(cancellingKeys.value);
@@ -357,21 +364,30 @@ export const useTaskTray = defineStore("taskTray", () => {
   async function cancelTask(task: TrayTask): Promise<void> {
     if (cancellingKeys.value.has(task.key)) return;
     cancellingKeys.value = new Set(cancellingKeys.value).add(task.key);
-    switch (task.kind) {
-      case "monitor":
-        await Promise.allSettled(
-          (task.memberIds ?? []).map((id) => monitor.cancel(id)),
-        );
-        return;
-      case "mining":
-        await mining.cancelActive();
-        return;
-      case "batch":
-        await batch.cancel();
-        return;
-      case "article":
-        // PR2: await article.cancelJob();
-        return;
+    try {
+      switch (task.kind) {
+        case "monitor":
+          await Promise.allSettled(
+            (task.memberIds ?? []).map((id) => monitor.cancel(id)),
+          );
+          return;
+        case "mining":
+          await mining.cancelActive();
+          return;
+        case "batch":
+          await batch.cancel();
+          return;
+        case "article":
+          // PR2: await article.cancelJob();
+          return;
+      }
+    } catch (e) {
+      // 取消请求没发出去（如 mining 非 409 失败）—— 回滚，让 ✕ 可重试，
+      // 不让「停止中…」骗人。
+      const next = new Set(cancellingKeys.value);
+      next.delete(task.key);
+      cancellingKeys.value = next;
+      throw e;
     }
   }
 

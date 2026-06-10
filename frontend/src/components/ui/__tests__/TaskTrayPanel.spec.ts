@@ -57,10 +57,10 @@ describe("TaskTrayPanel", () => {
     // 防重入：再点不再发请求
     postMock.mockClear();
     const btn2 = w.find("button[title='停止任务']");
-    if (btn2.exists()) {
-      await btn2.trigger("click");
-      await flushPromises();
-      expect(postMock).not.toHaveBeenCalled();
-    }
+    expect(btn2.exists()).toBe(true);
+    expect(btn2.attributes("disabled")).toBeDefined();
+    await btn2.trigger("click");
+    await flushPromises();
+    expect(postMock).not.toHaveBeenCalled();
   });
 });

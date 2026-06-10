@@ -1460,6 +1460,7 @@ git commit -m "feat(tray): SSE 断线快照对账（subscribe onError + mining/b
 - Test: `frontend/src/components/ui/__tests__/TaskTrayPanel.spec.ts`
 
 > **补充（Task 4 审查建议，随本任务落地）**：store 增加 `cancellingKeys`（取消防重入），✕ 点击后 disabled + meta 区显示「停止中…」，卡片消失时在 recentFinished watcher 中清除。
+> **勘误（Task 8 质量审查收口）**：①cancelTask 失败时回滚 cancellingKeys（否则 ✕ 永久 disabled、「停止中…」撒谎）；②监测组卡因 meta 补齐改名时（成员仍 running）跳过 recentFinished 登记——Task 4 幽灵条目的 monitor 变体；③卡片整行可点 + truncate 加 :title。
 
 - [x] **Step 1: 写失败测试**
 

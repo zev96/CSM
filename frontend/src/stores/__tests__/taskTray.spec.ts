@@ -269,4 +269,39 @@ describe("taskTray — 取消分发 + 最近完成", () => {
     await nextTick();
     expect(tray.recentFinished[0]?.outcome).toBe("failed");
   });
+
+  it("meta 缓存补齐导致组卡改名 → 不产生幽灵完成", async () => {
+    getMock.mockResolvedValueOnce({ data: { tasks: [] } }); // 首拉为空 → fallback 组名
+    const monitor = useMonitorStatus();
+    const tray = useTaskTray();
+    monitor.markRunning(11);
+    await flushPromises();
+    await nextTick();
+    expect(tray.runningTasks[0].title).toBe("监测任务");
+
+    getMock.mockResolvedValue({
+      data: { tasks: [{ id: 11, name: "扫地机器人怎么选", type: "zhihu_question" }] },
+    });
+    await tray.ensureMonitorMeta(true);
+    await nextTick();
+    expect(tray.runningTasks[0].title).toContain("知乎问题监测");
+    expect(tray.recentFinished.length).toBe(0); // 改名 ≠ 完成
+  });
+
+  it("取消请求失败 → cancellingKeys 回滚，✕ 可重试", async () => {
+    const mining = useMiningStore();
+    const tray = useTaskTray();
+    mining.activeJob = {
+      id: 3, keyword: "k", platforms: ["douyin"], target_per_platform: 50,
+      status: "running", progress: {} as any, error_message: "",
+      created_at: "", started_at: null, finished_at: null,
+    };
+    await nextTick();
+    const card = tray.runningTasks.find((t) => t.kind === "mining")!;
+    postMock.mockRejectedValueOnce(
+      Object.assign(new Error("boom"), { response: { status: 500 } }),
+    );
+    await expect(tray.cancelTask(card)).rejects.toThrow();
+    expect(tray.cancellingKeys.has(card.key)).toBe(false);
+  });
 });

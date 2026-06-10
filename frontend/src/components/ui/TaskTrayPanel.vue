@@ -108,8 +108,9 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
         <li
           v-for="t in tray.runningTasks"
           :key="t.key"
-          class="px-4 py-3 hover:bg-[rgba(28,26,23,0.04)]"
+          class="cursor-pointer px-4 py-3 hover:bg-[rgba(28,26,23,0.04)]"
           :style="{ borderBottom: '1px solid var(--line)' }"
+          @click="gotoTask(t)"
         >
           <div class="flex items-start gap-2.5">
             <span
@@ -118,10 +119,11 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
             >
               <Icon :name="t.icon" :size="15" />
             </span>
-            <div class="min-w-0 flex-1 cursor-pointer" @click="gotoTask(t)">
-              <div class="truncate text-[12.5px] font-medium leading-tight">{{ t.title }}</div>
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-[12.5px] font-medium leading-tight" :title="t.title">{{ t.title }}</div>
               <div
                 class="mt-0.5 truncate text-[11.5px]"
+                :title="t.subtitle"
                 :style="{ color: t.state === 'captcha' ? 'var(--red)' : 'var(--ink-3)' }"
               >
                 {{ t.subtitle }}
@@ -170,7 +172,7 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
           <span class="flex-shrink-0" :style="{ color: outcomeMeta(f.outcome).color }">
             <Icon :name="outcomeMeta(f.outcome).icon" :size="14" />
           </span>
-          <div class="min-w-0 flex-1 truncate text-[12px]">{{ f.title }}</div>
+          <div class="min-w-0 flex-1 truncate text-[12px]" :title="f.title">{{ f.title }}</div>
           <div class="flex-shrink-0 text-[10.5px]" :style="{ color: 'var(--ink-4)' }">
             {{ outcomeMeta(f.outcome).label }}
           </div>
