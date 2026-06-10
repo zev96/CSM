@@ -180,7 +180,7 @@ describe("taskTray — 引流/批量/单篇卡片", () => {
     expect(card.progress).toBeCloseTo(0.4);
   });
 
-  it("article running → 阶段 subtitle，PR1 不可取消", async () => {
+  it("article running → 阶段 subtitle，PR2 可取消", async () => {
     const article = useArticle();
     const tray = useTaskTray();
     article.$patch({
@@ -195,7 +195,7 @@ describe("taskTray — 引流/批量/单篇卡片", () => {
     expect(card.title).toContain("无线吸尘器");
     expect(card.subtitle).toBe("调用 LLM（5/6）");
     expect(card.progress).toBeCloseTo(5 / 6);
-    expect(card.cancellable).toBe(false);
+    expect(card.cancellable).toBe(true);
   });
 
   it("runningCount = 监测底层任务数 + 其余卡各 1", async () => {
@@ -356,5 +356,21 @@ describe("taskTray — 最近完成上限与去重", () => {
     monitor._dispatchSse("finished", { task_id: 1, progress_total: 1 });
     await nextTick();
     expect(tray.recentFinished.length).toBe(1); // 去重，未堆叠成 2 条
+  });
+});
+
+describe("taskTray — 单篇取消（PR2）", () => {
+  it("article 卡 cancellable=true 且取消调 /api/generate/{id}/cancel", async () => {
+    const article = useArticle();
+    const tray = useTaskTray();
+    article.$patch({
+      status: "running", jobId: "g1", title: "kw",
+      currentStage: "调用 LLM", stageIndex: 4,
+    });
+    await nextTick();
+    const card = tray.runningTasks.find((t) => t.kind === "article")!;
+    expect(card.cancellable).toBe(true);
+    await tray.cancelTask(card);
+    expect(postMock).toHaveBeenCalledWith("/api/generate/g1/cancel");
   });
 });

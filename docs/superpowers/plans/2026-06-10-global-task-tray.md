@@ -2052,7 +2052,7 @@ git commit -m "feat(generate): 单篇生成协作式取消端点 POST /api/gener
 - Modify: `frontend/src/stores/taskTray.ts`
 - Test: `frontend/src/stores/__tests__/taskTray.spec.ts`（追加）
 
-- [ ] **Step 1: 追加失败测试**
+- [x] **Step 1: 追加失败测试**
 
 ```ts
 describe("taskTray — 单篇取消（PR2）", () => {
@@ -2074,12 +2074,12 @@ describe("taskTray — 单篇取消（PR2）", () => {
 
 同时把 Task 5 中 article 用例的 `expect(card.cancellable).toBe(false);` 改为 `toBe(true)`。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd frontend && npx vitest run src/stores/__tests__/taskTray.spec.ts`
 Expected: FAIL —— cancellable 仍为 false
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 3a. `article.ts` 的 `cancel()` action 之后新增：
 
@@ -2110,7 +2110,7 @@ Expected: FAIL —— cancellable 仍为 false
         return;
 ```
 
-- [ ] **Step 4: 跑全量测试 + 类型检查**
+- [x] **Step 4: 跑全量测试 + 类型检查**
 
 ```powershell
 cd frontend
@@ -2120,7 +2120,7 @@ git checkout -- vite.config.js
 ```
 Expected: 全绿。
 
-- [ ] **Step 5: Commit + 提 PR2**
+- [x] **Step 5: Commit + 提 PR2**
 
 ```bash
 git add frontend/src/stores/article.ts frontend/src/stores/taskTray.ts frontend/src/stores/__tests__/taskTray.spec.ts
