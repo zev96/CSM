@@ -18,7 +18,9 @@ Lifetime
 A queue is allocated by ``create_job``, drained by ``stream``, and
 disposed when the stream sees the ``done`` sentinel. If a client never
 connects, the queue is reaped by ``reap_stale`` (called periodically by
-the lifespan handler in stage A3.x).
+the lifespan handler in stage A3.x). ``reap_stale`` only removes buffers
+that are silent AND have no attached SSE client, so long-running jobs are
+never reaped mid-run.
 """
 from __future__ import annotations
 
@@ -38,7 +40,12 @@ logger = logging.getLogger(__name__)
 class _JobBuffer:
     queue: queue.Queue[dict[str, Any]] = field(default_factory=queue.Queue)
     created_at: float = field(default_factory=time.monotonic)
+    # 每次 publish/finish/fail 都刷新 —— 让仍在产出事件的任务不会被中途回收
+    # （bug：运行超过 stale_after 的长任务，buffer 被删后终态事件静默丢失）。
+    last_activity: float = field(default_factory=time.monotonic)
     done: bool = False
+    # SSE 客户端正在连接并 drain 这个 buffer 时为 True；只要有流挂着就绝不回收。
+    streaming: bool = False
 
 
 class EventBus:
@@ -74,6 +81,7 @@ class EventBus:
             # Late publish after done — drop. Keeps streams from re-opening
             # on cleanup races.
             return
+        buf.last_activity = time.monotonic()
         event: dict[str, Any] = {"kind": kind, **data}
         buf.queue.put(event)
 
@@ -84,6 +92,7 @@ class EventBus:
             if buf is None:
                 return
             buf.done = True
+            buf.last_activity = time.monotonic()
         buf.queue.put({"kind": "done", **data})
 
     def fail(self, job_id: str, error: str, **data: Any) -> None:
@@ -92,6 +101,7 @@ class EventBus:
             if buf is None:
                 return
             buf.done = True
+            buf.last_activity = time.monotonic()
         buf.queue.put({"kind": "error", "error": error, **data})
 
     async def stream(self, job_id: str, *, ping_seconds: float = 15.0) -> AsyncIterator[dict[str, Any]]:
@@ -104,6 +114,8 @@ class EventBus:
         """
         with self._lock:
             buf = self._buffers.get(job_id)
+            if buf is not None:
+                buf.streaming = True
         if buf is None:
             yield {"kind": "error", "error": f"unknown job_id: {job_id}"}
             return
@@ -121,7 +133,15 @@ class EventBus:
             self._reap(job_id)
 
     def reap_stale(self) -> int:
-        """Drop buffers that finished long ago without ever being streamed.
+        """Drop buffers that have gone quiet — finished or orphaned (never
+        streamed) — without disturbing jobs that are still active.
+
+        A buffer is reaped only when NO SSE client is attached
+        (``streaming`` is False) AND it has been silent for ``stale_after``
+        seconds (measured from ``last_activity``, which every
+        publish/finish/fail bumps). This spares long-running jobs whose
+        buffer would otherwise be deleted mid-run — silently dropping the
+        terminal ``done``/``error`` event the frontend waits on.
 
         Returns the number reaped. Call periodically (e.g. once a minute).
         """
@@ -130,7 +150,7 @@ class EventBus:
         with self._lock:
             stale = [
                 jid for jid, b in self._buffers.items()
-                if (now - b.created_at) > self._stale_after
+                if not b.streaming and (now - b.last_activity) > self._stale_after
             ]
             for jid in stale:
                 del self._buffers[jid]

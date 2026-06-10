@@ -9,6 +9,7 @@ import { defineStore } from "pinia";
 
 import { subscribe } from "@/api/client";
 import { useSidecar } from "./sidecar";
+import { useNotifications } from "@/composables/useNotifications";
 
 export interface BatchItem {
   index: number;
@@ -123,13 +124,40 @@ export const useBatch = defineStore("batch", {
           this.byStatus = d.by_status ?? {};
           this.totalDuration = d.total_duration_seconds ?? 0;
           this.finishedAt = new Date().toISOString();
+          const byStatus = (d.by_status ?? {}) as Record<string, number>;
+          const failedCount = Number(byStatus.failed ?? 0);
+          const cancelledCount = Number(byStatus.cancelled ?? 0);
+          if (cancelledCount === 0) {
+            // 含被取消项 = 用户主动停的批次 —— 静默，与 monitor/article 取消语义一致
+            useNotifications().push("批量生成完成", {
+              body: `共 ${this.total} 篇 · 成功 ${Number(byStatus.success ?? 0)}${failedCount ? ` · 失败 ${failedCount}` : ""}`,
+              tone: failedCount ? "warn" : "success",
+              category: "article_success",
+            });
+          }
           this._teardown();
         },
         error: (d: any) => {
+          const msg = String(d?.error ?? "");
+          if (msg.startsWith("unknown job_id")) {
+            // 断线期间事件队列已被 sidecar 回收 —— 合成 error，不是真失败。
+            // EventSource 会持续重连并反复收到它，等效 ~3s 轮询：用快照对账，
+            // 真终态由 refreshSnapshot 落地（含完成通知）后，下一轮再收流。
+            void this.refreshSnapshot();
+            if (this.status !== "running") this._teardown();
+            return;
+          }
           this.status = "error";
           this.error = d.error ?? "unknown error";
+          useNotifications().push("批量生成失败", {
+            body: this.error ?? "",
+            tone: "error",
+            category: "article_failure",
+          });
           this._teardown();
         },
+      }, {
+        onError: () => { void this.refreshSnapshot(); },
       });
     },
     async refreshSnapshot(): Promise<void> {
@@ -141,8 +169,22 @@ export const useBatch = defineStore("batch", {
         this.total = this.items.length || this.total;
         this.outDir = r.data.out_dir ?? this.outDir;
         if (r.data.finished_at) {
+          const wasRunning = this.status === "running";
           this.finishedAt = r.data.finished_at;
-          if (this.status === "running") this.status = "done";
+          if (wasRunning) {
+            this.status = "done";
+            // 从快照得知完成（done 事件已随断线被回收）—— 补完成通知，
+            // 口径与 done handler 一致（含取消静默）。
+            const failedCount = this.items.filter((i) => i.status === "failed").length;
+            const cancelledCount = this.items.filter((i) => i.status === "cancelled").length;
+            if (cancelledCount === 0) {
+              useNotifications().push("批量生成完成", {
+                body: `共 ${this.total} 篇 · 成功 ${this.items.filter((i) => i.status === "success").length}${failedCount ? ` · 失败 ${failedCount}` : ""}`,
+                tone: failedCount ? "warn" : "success",
+                category: "article_success",
+              });
+            }
+          }
         }
       } catch {
         /* ignore */

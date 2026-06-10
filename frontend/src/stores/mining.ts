@@ -25,6 +25,7 @@ import type { AxiosError } from "axios"
 import { subscribe } from "@/api/client"
 import { useSidecar } from "@/stores/sidecar"
 import { useStaleGuard } from "@/composables/useStaleGuard"
+import { useNotifications } from "@/composables/useNotifications"
 
 export type Platform = "douyin" | "bilibili" | "kuaishou"
 export type CommentedFilter = "0" | "1" | "all"
@@ -144,6 +145,7 @@ function api() {
 
 export const useMiningStore = defineStore("mining", () => {
   const activeJob = ref<MiningJob | null>(null)
+  const bell = useNotifications()
   const videos = ref<Video[]>([])
   const total = ref(0)
   const loading = ref(false)
@@ -251,14 +253,28 @@ export const useMiningStore = defineStore("mining", () => {
       },
       "job.finished": (d: any) => {
         if (activeJob.value && activeJob.value.id === d.job_id) {
-          activeJob.value.status = d.summary.status
+          activeJob.value.status = d.summary?.status
           activeJob.value.finished_at = new Date().toISOString()
         }
         _patchJobInList(d.job_id, j => ({
           ...j,
-          status: d.summary.status,
+          status: d.summary?.status,
           finished_at: new Date().toISOString(),
         }))
+        const st = String(d.summary?.status ?? "")
+        if (st !== "cancelled") {
+          // 用户主动取消不推「完成」通知 —— 与 monitor/article 的取消静默一致
+          const ok = st === "done" || st === "completed"
+          const aj = activeJob.value
+          const kw = aj && aj.id === d.job_id
+            ? aj.keyword
+            : (jobs.value.find(j => j.id === d.job_id)?.keyword ?? "")
+          bell.push("引流任务完成", {
+            body: `「${kw}」${ok ? "全部平台完成" : "部分平台未完成"}`,
+            tone: ok ? "success" : "warn",
+            category: "mining_done",
+          })
+        }
         if (stopSse) { stopSse(); stopSse = null }
         refreshVideos()
         // Refresh the full jobs list to pick up any post-run server-side
@@ -271,7 +287,51 @@ export const useMiningStore = defineStore("mining", () => {
       done: () => {
         if (stopSse) { stopSse(); stopSse = null }
       },
+    }, {
+      onError: () => { void _refreshActiveJobSnapshot() },
     })
+  }
+
+  /**
+   * SSE 断线时的快照对账：拉一次 GET /api/mining/jobs/{id}（routes/mining.py
+   * get_job 直接返回 job dict），把断线期间错过的 progress/status 补回来。
+   * 注意：事件队列断线即被 sidecar 回收、错过的 job.finished 不会重放 ——
+   * 终态经快照得知时，这里是唯一恢复路径，要补齐 finished handler 的收尾。
+   */
+  async function _refreshActiveJobSnapshot() {
+    const job = activeJob.value
+    if (!job) return
+    try {
+      const resp = await api().get<MiningJob>(`/api/mining/jobs/${job.id}`)
+      const fresh = resp.data
+      if (!fresh || typeof fresh.id !== "number") return
+      activeJob.value = fresh
+      // get_job 不带 list_jobs 才有的聚合列（video_count/commented_count）——
+      // 整体替换会把真实计数清零；保留列表里的旧值。
+      _patchJobInList(fresh.id, j => ({
+        ...fresh,
+        video_count: j.video_count,
+        commented_count: j.commented_count,
+      }))
+      if (!["pending", "running"].includes(fresh.status) && stopSse) {
+        stopSse()
+        stopSse = null
+        // 与 job.finished handler 同款收尾（互斥：finished 先到则 stopSse 已
+        // 为 null，不会走到这里 —— 无重复通知）。
+        if (fresh.status !== "cancelled") {
+          const ok = fresh.status === "done" || fresh.status === "completed"
+          bell.push("引流任务完成", {
+            body: `「${fresh.keyword}」${ok ? "全部平台完成" : "部分平台未完成"}`,
+            tone: ok ? "success" : "warn",
+            category: "mining_done",
+          })
+        }
+        refreshVideos()
+        loadJobs().catch(() => { /* non-fatal */ })
+      }
+    } catch {
+      /* 瞬时网络问题 —— EventSource 自己会重连，下次事件兜底 */
+    }
   }
 
   async function cancelActive() {

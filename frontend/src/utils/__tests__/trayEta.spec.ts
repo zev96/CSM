@@ -1,0 +1,70 @@
+import { describe, it, expect } from "vitest";
+
+import { EtaEstimator } from "@/utils/trayEta";
+
+describe("EtaEstimator", () => {
+  it("首个样本与进度 <5% 时不出 ETA", () => {
+    const e = new EtaEstimator();
+    expect(e.observe("k", 0.02, 0)).toBeNull();
+    expect(e.observe("k", 0.04, 60_000)).toBeNull(); // 有速率但 p < 0.05
+  });
+
+  it("稳定速率 → 约 X 分钟", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.1, 0);
+    // 60s 走了 10% → 剩 80% ≈ 8 分钟
+    expect(e.observe("k", 0.2, 60_000)).toBe("约 8 分钟");
+  });
+
+  it("剩余 <60s → 不到 1 分钟", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.5, 0);
+    expect(e.observe("k", 0.98, 60_000)).toBe("不到 1 分钟");
+  });
+
+  it("进度回退（同 key 复用于新一轮任务）→ 重置不出脏 ETA", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.5, 0);
+    e.observe("k", 0.9, 10_000);
+    expect(e.observe("k", 0.1, 20_000)).toBeNull();
+  });
+
+  it("EMA 平滑：速率突变不会让 ETA 跳变到瞬时值", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.1, 0);
+    e.observe("k", 0.2, 60_000);          // rate=0.1/min
+    const text = e.observe("k", 0.21, 120_000); // 瞬时掉到 0.01/min
+    // 常规 EMA（α=0.3 权重在新样本）：0.3*0.01+0.7*0.1=0.073/min
+    // → 剩 0.79/0.073≈10.8min。平滑语义：旧速率占大头，ETA 不随瞬时抖动跳变。
+    expect(text).toBe("约 11 分钟");
+  });
+
+  it("非法 p（NaN / 越界）→ null 且不污染状态", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.1, 0);
+    e.observe("k", 0.2, 60_000);
+    expect(e.observe("k", NaN, 90_000)).toBeNull();
+    expect(e.observe("k", 1.5, 90_000)).toBeNull();
+    // 状态未被污染：下一个正常样本仍按既有速率出 ETA
+    expect(e.observe("k", 0.3, 120_000)).toBe("约 7 分钟");
+  });
+
+  it("drop 后重新 observe 视同首样本；多 key 互不污染", () => {
+    const e = new EtaEstimator();
+    e.observe("a", 0.1, 0);
+    e.observe("a", 0.2, 60_000);
+    e.drop("a");
+    expect(e.observe("a", 0.3, 120_000)).toBeNull(); // 重新计数
+    expect(e.observe("b", 0.5, 0)).toBeNull();        // b 是独立首样本
+  });
+
+  it("同一进度重复 observe 是无副作用的（computed 重复求值安全）", () => {
+    const e = new EtaEstimator();
+    e.observe("k", 0.1, 0);
+    const first = e.observe("k", 0.2, 60_000);
+    expect(first).toBe("约 8 分钟");
+    // 同 (p, 更晚的 now) 重复求值 N 次 —— 不更新样本、结果稳定
+    expect(e.observe("k", 0.2, 61_000)).toBe("约 8 分钟");
+    expect(e.observe("k", 0.2, 62_000)).toBe("约 8 分钟");
+  });
+});
