@@ -17,7 +17,7 @@
 - `monitorStatus` 扩展：消费 `waiting_chrome_close` / `chrome_closed` / `captcha_required` / `captcha_resolved` 事件（后端已在发，前端未接）。
 - 监测任务名缓存（id → {name, type}，懒加载 `GET /api/monitor/tasks`）。
 - 托盘内取消：监测（组）/ 引流 / 批量走现有端点；**单篇生成补后端取消端点**（唯一后端改动）。
-- 通知补齐：引流完成、单篇完成/失败推入通知铃铛（监测、批量已有）。
+- 通知补齐：监测/引流/批量/单篇四类的完成与失败全部推入通知铃铛（见 §6 勘误——铃铛此前是空壳）。
 - 「最近完成」区：托盘底部保留最近 3 条终态任务。
 
 **不做：**
@@ -91,7 +91,7 @@ interface TrayTask {
 
 ## 5. UI 层
 
-### 5.1 `TaskTrayButton`（LeftNav 底部，铃铛上方）
+### 5.1 任务按钮（LeftNav 底部，铃铛上方；按铃铛先例内联在 LeftNav.vue，不单抽组件）
 
 - 44×44、radius 14px，与现有底部按钮同规格；图标常驻（0 任务时安静态：无角标、无动效，仍可点开看空态/最近完成）。
 - 有任务：右上数字角标（参照铃铛红点样式放大为数字 pill）+ 呼吸动效；tooltip「N 个任务运行中」。
@@ -107,10 +107,14 @@ interface TrayTask {
 
 ## 6. 通知栏整合
 
-- 新增通知类别 `mining_done`（「引流任务完成」）到 `NOTIFICATION_CATEGORIES`（localStorage 向前兼容逻辑已有，默认开）。
+> **勘误（2026-06-10 写实施计划前的实地核查）**：`useNotifications().push()` 原本全工程**零调用方**——铃铛是空壳；监测完成此前推的是 OS 级系统通知（useSystemNotify），不是铃铛。设计时「监测/批量通知已有」的假设不成立，本节修订为全量补齐四类。
+
+- 新增通知类别 `monitor_done`（「监测任务完成」）与 `mining_done`（「引流任务完成」）到 `NOTIFICATION_CATEGORIES`（localStorage 向前兼容逻辑已有，默认开）。
+- 监测 `finished` → `push(category: "monitor_done")`；`failed` → `push(category: "monitor_alert")`（用户主动取消、风控分支保持静默，沿用现有 toast 分流逻辑）。
 - mining `job.finished` → `push("引流任务完成", {body: 关键词+各平台数量, tone: 全平台完成=success / 部分平台失败或部分完成=warn, category: "mining_done"})`。
-- article `done` → `push(category: "article_success")`；`error` → `push(category: "article_failure")`（两类别已存在）。
-- 监测 finished、批量 done 的通知已有，不动。效果：任务从托盘消失的瞬间铃铛红点亮起，类别可在通知设置单独开关。
+- 批量 `done` → `push(category: "article_success")`；`error` → `push(category: "article_failure")`（复用既有「生成文章」类别，批量本质也是生成文章）。
+- article `done` → `push(category: "article_success")`；`error` → `push(category: "article_failure")`；用户主动取消（cancelled 标记）不推。
+- 效果：任务从托盘消失的瞬间铃铛红点亮起，每类可在通知设置单独开关。
 
 ## 7. 后端改动（唯一）：单篇生成取消端点
 
