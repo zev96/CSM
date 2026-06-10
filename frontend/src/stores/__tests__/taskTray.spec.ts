@@ -305,3 +305,56 @@ describe("taskTray — 取消分发 + 最近完成", () => {
     expect(tray.cancellingKeys.has(card.key)).toBe(false);
   });
 });
+
+describe("taskTray — 最近完成上限与去重", () => {
+  it("最近完成最多保留 3 条，更早完成的被挤掉", async () => {
+    getMock.mockResolvedValue({
+      data: {
+        tasks: [
+          { id: 1, name: "甲", type: "zhihu_question" },
+          { id: 2, name: "乙", type: "zhihu_search" },
+          { id: 3, name: "丙", type: "baidu_keyword" },
+          { id: 4, name: "丁", type: "geo_query" },
+        ],
+      },
+    });
+    const monitor = useMonitorStatus();
+    const tray = useTaskTray();
+    monitor.markRunning(1);
+    monitor.markRunning(2);
+    monitor.markRunning(3);
+    monitor.markRunning(4);
+    await flushPromises();
+    await nextTick();
+    expect(tray.runningTasks.length).toBe(4);
+    // 4 个分组一次性完成 → watcher 一轮登记 4 条，截到最近 3 条
+    monitor._dispatchSse("finished", { task_id: 1, progress_total: 1 });
+    monitor._dispatchSse("finished", { task_id: 2, progress_total: 1 });
+    monitor._dispatchSse("finished", { task_id: 3, progress_total: 1 });
+    monitor._dispatchSse("finished", { task_id: 4, progress_total: 1 });
+    await nextTick();
+    expect(tray.runningTasks.length).toBe(0);
+    expect(tray.recentFinished.length).toBe(3);
+    // 最早完成的「知乎问题监测」(id 1) 被挤掉
+    expect(tray.recentFinished.some((f) => f.key === "monitor:知乎问题监测")).toBe(false);
+  });
+
+  it("同一卡片再次完成 → 最近完成去重（仍 1 条）", async () => {
+    getMock.mockResolvedValue({
+      data: { tasks: [{ id: 1, name: "甲", type: "zhihu_question" }] },
+    });
+    const monitor = useMonitorStatus();
+    const tray = useTaskTray();
+    monitor.markRunning(1);
+    await flushPromises();
+    await nextTick();
+    monitor._dispatchSse("finished", { task_id: 1, progress_total: 1 });
+    await nextTick();
+    expect(tray.recentFinished.length).toBe(1);
+    monitor.markRunning(1); // 同组再跑一轮
+    await nextTick();
+    monitor._dispatchSse("finished", { task_id: 1, progress_total: 1 });
+    await nextTick();
+    expect(tray.recentFinished.length).toBe(1); // 去重，未堆叠成 2 条
+  });
+});
