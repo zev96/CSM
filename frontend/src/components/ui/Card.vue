@@ -19,13 +19,12 @@ const cardVariants = cva("transition-colors", {
   defaultVariants: { surface: "default", padding: "default" },
 });
 
-const props = defineProps<{ muted?: boolean; padless?: boolean; dark?: boolean }>();
-const surface = () => (props.dark ? "dark" : props.muted ? "muted" : "default");
+defineProps<{ muted?: boolean; padless?: boolean; dark?: boolean }>();
 </script>
 
 <template>
   <section
-    :class="cardVariants({ surface: surface(), padding: padless ? 'none' : 'default' })"
+    :class="cardVariants({ surface: dark ? 'dark' : muted ? 'muted' : 'default', padding: padless ? 'none' : 'default' })"
     :style="{ borderRadius: 'var(--radius-card)' }"
   >
     <slot />

@@ -15,8 +15,8 @@
   --ink-2: #4d4943;
   --ink-3: #7a7569;
   --ink-4: #a89f8d;
-  --line: rgba(28, 26, 23, 0.08);
-  --line-2: rgba(28, 26, 23, 0.14);
+  --line: rgba(var(--ink-rgb), 0.08);
+  --line-2: rgba(var(--ink-rgb), 0.14);
   --primary: #ee6a2a;
   --primary-soft: #f7d5be;
   --primary-deep: #c9521f;
