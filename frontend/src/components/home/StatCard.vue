@@ -21,9 +21,9 @@ defineProps<{
 const emit = defineEmits<{ detail: [] }>();
 
 function pillStyle(d: number) {
-  if (d > 0) return { background: "#dde7d2", color: "#4d6b2f" };
-  if (d < 0) return { background: "#f3d3cd", color: "#a3382a" };
-  return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
+  if (d > 0) return { background: "var(--green-soft)", color: "var(--green-deep)" };
+  if (d < 0) return { background: "var(--red-soft)", color: "var(--red-deep)" };
+  return { background: "rgba(var(--ink-rgb), 0.06)", color: "var(--ink-2)" };
 }
 </script>
 
@@ -71,12 +71,12 @@ function pillStyle(d: number) {
 
 <style scoped>
 .trend-detail {
-  background: rgba(28, 26, 23, 0.04);
+  background: rgba(var(--ink-rgb), 0.04);
   color: var(--ink-2);
-  border: 1px solid rgba(28, 26, 23, 0.06);
+  border: 1px solid rgba(var(--ink-rgb), 0.06);
   transition: background-color 0.12s ease;
 }
 .trend-detail:hover {
-  background: rgba(28, 26, 23, 0.08);
+  background: rgba(var(--ink-rgb), 0.08);
 }
 </style>

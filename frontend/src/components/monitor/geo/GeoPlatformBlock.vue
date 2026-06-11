@@ -30,12 +30,12 @@ const pending = computed(() => isPending(props.platform));
 // 头部色调：首推=绿、提及=橙、未运行=中性灰、未提及/失败=红。
 const tint = computed(() =>
   st.value.kind === "first"
-    ? "rgba(122,155,94,.16)"
+    ? "rgba(var(--green-rgb), .16)"
     : st.value.kind === "hit"
       ? "var(--primary-soft)"
       : st.value.kind === "pending"
         ? "var(--card-2)"
-        : "rgba(216,90,72,.12)",
+        : "rgba(var(--red-rgb), .12)",
 );
 const badgeBg = computed(() => (st.value.kind === "first" ? "var(--green)" : "#fff"));
 const badgeColor = computed(() => (st.value.kind === "first" ? "#fff" : st.value.color));
@@ -132,7 +132,7 @@ const excerptSegs = computed<Seg[]>(() => {
       <div
         v-else
         class="inline-flex items-center"
-        :style="{ gap: '7px', fontSize: '12px', color: 'var(--red)', background: 'rgba(216,90,72,.08)', borderRadius: '8px', padding: '7px 10px' }"
+        :style="{ gap: '7px', fontSize: '12px', color: 'var(--red)', background: 'rgba(var(--red-rgb), .08)', borderRadius: '8px', padding: '7px 10px' }"
       >
         <span :style="{ width: '6px', height: '6px', borderRadius: '999px', background: 'var(--red)' }" />
         本次回答未提及{{ displayBrand }}

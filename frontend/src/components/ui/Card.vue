@@ -1,31 +1,30 @@
 <script setup lang="ts">
 /**
- * Base card surface — paper-coloured background, soft shadow, density
- * padding driven by --density-pad. Mirrors the ``Card`` primitive in
- * CSM-RE1（V1）/src/ui.jsx.
+ * Base card surface。Variants 用 cva（与 Btn.vue 同范式）：
+ *   surface: default(纸面) / muted(深一档) / dark(暗底亮字, 无边框)
+ *   padding: default(--density-pad) / none(自定义布局)
+ * 公开 prop 不变：muted / padless / dark。
  */
-defineProps<{
-  /** Use the deeper ``--card-2`` shade (for nested or "muted" cards). */
-  muted?: boolean;
-  /** Drop the inner padding — for cards that want their own layout. */
-  padless?: boolean;
-  /** Dark hero treatment — used by OutreachHero. */
-  dark?: boolean;
-}>();
+import { cva } from "class-variance-authority";
+
+const cardVariants = cva("transition-colors", {
+  variants: {
+    surface: {
+      default: "bg-card border border-line",
+      muted: "bg-card-2 border border-line",
+      dark: "bg-dark text-card",
+    },
+    padding: { default: "pad-d", none: "" },
+  },
+  defaultVariants: { surface: "default", padding: "default" },
+});
+
+defineProps<{ muted?: boolean; padless?: boolean; dark?: boolean }>();
 </script>
 
 <template>
   <section
-    class="transition-colors"
-    :class="[
-      dark
-        ? 'bg-dark text-card border-transparent'
-        : muted
-          ? 'bg-card-2 border-line'
-          : 'bg-card border-line',
-      padless ? '' : 'pad-d',
-      !dark && 'border',
-    ]"
+    :class="cardVariants({ surface: dark ? 'dark' : muted ? 'muted' : 'default', padding: padless ? 'none' : 'default' })"
     :style="{ borderRadius: 'var(--radius-card)' }"
   >
     <slot />
