@@ -34,6 +34,10 @@ frontend/*.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
 
+# vue-tsc -b 会 emit 的 vite.config 兄弟文件（构建产物，不应进 VCS）
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
 # Claude Code agent worktrees —— 这些 git worktree 注册在主仓库下面，
 # 否则 git status 会把每个子 worktree 误报成 deleted/modified/untracked。
 .claude/worktrees/
