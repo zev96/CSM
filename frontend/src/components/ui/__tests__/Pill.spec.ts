@@ -9,7 +9,9 @@ describe("Pill", () => {
     expect(w.classes()).toContain("text-ink-3");
   });
   it("ok tone → 绿", () => {
-    expect(mount(Pill, { props: { tone: "ok" } }).classes()).toContain("text-green");
+    const c = mount(Pill, { props: { tone: "ok" } }).classes();
+    expect(c).toContain("bg-green-soft");
+    expect(c).toContain("text-green-deep");
   });
   it("warn tone → 黄底 + tokenized 深黄字（不再硬编码 #a07a18）", () => {
     const c = mount(Pill, { props: { tone: "warn" } }).classes();
@@ -17,7 +19,9 @@ describe("Pill", () => {
     expect(c).toContain("text-yellow-deep");
   });
   it("alert / primary tone", () => {
-    expect(mount(Pill, { props: { tone: "alert" } }).classes()).toContain("text-red");
+    const alertC = mount(Pill, { props: { tone: "alert" } }).classes();
+    expect(alertC).toContain("bg-red-soft");
+    expect(alertC).toContain("text-red-deep");
     expect(mount(Pill, { props: { tone: "primary" } }).classes()).toContain("text-primary-deep");
   });
   it("保留基础排版 class", () => {

@@ -12,9 +12,9 @@ const pillVariants = cva(
   {
     variants: {
       tone: {
-        ok: "bg-green/15 text-green",
+        ok: "bg-green-soft text-green-deep",
         warn: "bg-yellow-soft text-yellow-deep",
-        alert: "bg-red/15 text-red",
+        alert: "bg-red-soft text-red-deep",
         primary: "bg-primary-soft text-primary-deep",
         info: "bg-card-2 text-ink-3",
       },
