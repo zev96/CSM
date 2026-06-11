@@ -3,9 +3,9 @@ import { describe, it, expect } from "vitest";
 
 import StatCard from "@/components/home/StatCard.vue";
 
-// jsdom 把内联 :style 的 hex 归一化成 rgb，所以断言 rgb 数字而非 hex 字面。
-const GREEN = "221, 231, 210"; // #dde7d2
-const RED = "243, 211, 205"; // #f3d3cd
+// pillStyle 现在输出 CSS token，断言变量名而非字面 rgb。
+const GREEN_TOKEN = "var(--green-soft)";
+const RED_TOKEN = "var(--red-soft)";
 
 describe("StatCard", () => {
   it("shows value and a green up pill when delta>0", () => {
@@ -14,14 +14,14 @@ describe("StatCard", () => {
     });
     expect(w.text()).toContain("5");
     expect(w.text()).toContain("2");
-    expect(w.html()).toContain(GREEN);
+    expect(w.html()).toContain(GREEN_TOKEN);
   });
 
   it("shows a red pill when delta<0", () => {
     const w = mount(StatCard, {
       props: { category: "x", value: 3, delta: -1, loaded: true },
     });
-    expect(w.html()).toContain(RED);
+    expect(w.html()).toContain(RED_TOKEN);
     expect(w.text()).toContain("1");
   });
 
@@ -29,8 +29,8 @@ describe("StatCard", () => {
     const w = mount(StatCard, {
       props: { category: "x", value: 0, delta: null, loaded: true },
     });
-    expect(w.html()).not.toContain(GREEN);
-    expect(w.html()).not.toContain(RED);
+    expect(w.html()).not.toContain(GREEN_TOKEN);
+    expect(w.html()).not.toContain(RED_TOKEN);
   });
 
   it("shows dash before loaded", () => {
