@@ -31,6 +31,7 @@ import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection
 import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
 
+import { useTweaks } from "@/composables/useTweaks";
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
@@ -316,8 +317,8 @@ watch(
 // 注：language / checkUpdates / exportFrontmatter / exportDedupReport /
 // imageHandling / preferredSkillId / hookStrength / density / autoVaultRefs /
 // sentenceMaxLen / monitorFreq / monitorBrowser 都已随 UI 移除而清理。
+const tweaks = useTweaks();
 const localUI = reactive({
-  theme: "system",
   autoStart: false,
   filenameTemplate: "{date}-{title}-{seq}",
 });
@@ -955,7 +956,7 @@ async function saveAccountEdit() {
           <template v-if="section === 'general'">
             <SettingsRow label="主题" hint="界面配色 — 跟随系统/明亮/暗色">
               <FormSelect
-                v-model="localUI.theme"
+                v-model="tweaks.state.theme"
                 :options="[
                   { label: '跟随系统', value: 'system' },
                   { label: '明亮', value: 'light' },
