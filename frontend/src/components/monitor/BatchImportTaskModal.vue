@@ -1096,7 +1096,7 @@ async function submitAll() {
         class="inline-flex items-center gap-1.5"
         :style="{
           background: validRows.length ? 'var(--dark)' : 'var(--card-2)',
-          color: validRows.length ? '#fff' : 'var(--ink-3)',
+          color: validRows.length ? 'var(--card-white)' : 'var(--ink-3)',
           padding: '7px 18px',
           fontSize: '12.5px',
           fontWeight: 500,

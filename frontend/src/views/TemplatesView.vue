@@ -238,7 +238,7 @@ onMounted(async () => {
               fontSize: '12.5px',
               fontWeight: 500,
               background: tab === x.id ? 'var(--dark)' : 'transparent',
-              color: tab === x.id ? '#fbf7ec' : 'var(--ink-3)',
+              color: tab === x.id ? 'var(--card)' : 'var(--ink-3)',
             }"
             @click="tab = x.id as any"
           >

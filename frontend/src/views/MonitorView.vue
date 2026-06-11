@@ -754,7 +754,7 @@ const TAB_META: Array<{ k: Tab; l: string }> = [
             padding: '0 16px',
             borderRadius: '999px',
             background: activeTab === t.k ? 'var(--dark)' : 'transparent',
-            color: activeTab === t.k ? '#fbf7ec' : 'var(--ink-3)',
+            color: activeTab === t.k ? 'var(--card)' : 'var(--ink-3)',
             fontSize: '12.5px',
             fontWeight: 500,
             transition: 'background .15s, color .15s',

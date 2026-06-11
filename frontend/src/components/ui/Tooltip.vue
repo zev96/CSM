@@ -107,7 +107,7 @@ const transformByPlacement: Record<string, string> = {
           left: `${pos.left}px`,
           transform: transformByPlacement[placement],
           background: 'var(--dark)',
-          color: '#fbf7ec',
+          color: 'var(--card)',
           fontSize: '11.5px',
           lineHeight: 1.45,
           padding: '6px 10px',

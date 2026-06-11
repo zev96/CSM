@@ -6,7 +6,7 @@ import Icon from "./Icon.vue";
 const { toasts, dismiss } = useToast();
 
 const TONES: Record<string, { bg: string; fg: string; icon: string }> = {
-  info:    { bg: "var(--dark)",         fg: "#fbf7ec",      icon: "wand" },
+  info:    { bg: "var(--dark)",         fg: "var(--card)",  icon: "wand" },
   success: { bg: "#3f6b48",             fg: "#eaf5ec",      icon: "check" },
   warn:    { bg: "var(--yellow)",       fg: "#3f3315",      icon: "wand" },
   error:   { bg: "var(--red)",          fg: "#fff",         icon: "x" },

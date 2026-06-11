@@ -226,7 +226,7 @@ function onSubmit() {
                 :style="{
                   flex: 1, height: '28px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 500,
                   background: sort === s ? 'var(--dark)' : 'transparent',
-                  color: sort === s ? '#fbf7ec' : 'var(--ink-2)',
+                  color: sort === s ? 'var(--card)' : 'var(--ink-2)',
                   border: 'none', cursor: 'pointer',
                 }"
               >{{ s }}</button>
@@ -241,7 +241,7 @@ function onSubmit() {
                 :style="{
                   flex: 1, height: '28px', borderRadius: '999px', fontSize: '11px', fontWeight: 500,
                   background: range === s ? 'var(--dark)' : 'transparent',
-                  color: range === s ? '#fbf7ec' : 'var(--ink-2)',
+                  color: range === s ? 'var(--card)' : 'var(--ink-2)',
                   border: 'none', cursor: 'pointer',
                   whiteSpace: 'nowrap', padding: '0 4px',
                 }"

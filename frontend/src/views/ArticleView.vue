@@ -1992,7 +1992,7 @@ const tabSectionLabel = computed(() => {
                   fontWeight: 500,
                   borderRadius: '10px',
                   background: 'var(--dark)',
-                  color: '#fbf7ec',
+                  color: 'var(--card)',
                   border: '1px solid var(--dark)',
                 }"
                 @click="showExportModal = true"
@@ -2148,7 +2148,7 @@ const tabSectionLabel = computed(() => {
                 fontWeight: 500,
                 borderRadius: '999px',
                 background: 'var(--dark)',
-                color: '#fbf7ec',
+                color: 'var(--card)',
                 border: '1px solid var(--dark)',
               }"
               @click="doExport"

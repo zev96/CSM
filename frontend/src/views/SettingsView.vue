@@ -1319,7 +1319,7 @@ async function saveAccountEdit() {
                       fontSize: '11.5px',
                       background:
                         (get('concurrency') ?? 3) === n ? 'var(--dark)' : 'transparent',
-                      color: (get('concurrency') ?? 3) === n ? '#fbf7ec' : 'var(--ink-3)',
+                      color: (get('concurrency') ?? 3) === n ? 'var(--card)' : 'var(--ink-3)',
                       cursor: 'pointer',
                     }"
                     @click="setField('concurrency', n)"

@@ -102,7 +102,7 @@ const toast = useToast();
     <Card v-else-if="active === 'polishing'">
       <div
         class="relative overflow-hidden p-6"
-        :style="{ background: 'var(--dark)', color: '#fbf7ec', borderRadius: 'var(--radius-card)' }"
+        :style="{ background: 'var(--dark)', color: 'var(--card)', borderRadius: 'var(--radius-card)' }"
       >
         <div class="font-display text-[16px] font-semibold">正在使用「克制理性」润色</div>
         <div class="mt-1 text-[12px] opacity-70">
