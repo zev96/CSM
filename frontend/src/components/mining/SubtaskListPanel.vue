@@ -68,7 +68,7 @@ function pillFor(v: Video): { label: string; bg: string; fg: string } {
   if (v.already_commented) {
     return { label: "已完成", bg: "rgba(122,155,94,0.18)", fg: "#3a7d44" };
   }
-  return { label: "待评论", bg: "var(--yellow-soft)", fg: "#a07a18" };
+  return { label: "待评论", bg: "var(--yellow-soft)", fg: "var(--yellow-deep)" };
 }
 
 // 下拉选项 —— 按用户要求把状态 + 平台都从胶囊 pivot 改成 FormSelect。

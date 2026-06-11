@@ -40,9 +40,9 @@ onMounted(async () => {
 });
 
 function deltaStyle(d: number | null) {
-  if (d === null) return { background: "var(--yellow-soft)", color: "#7a5400" }; // 新进
-  if (d > 0) return { background: "#dde7d2", color: "#4d6b2f" };
-  if (d < 0) return { background: "#f3d3cd", color: "#a3382a" };
+  if (d === null) return { background: "var(--yellow-soft)", color: "var(--yellow-deep)" }; // 新进
+  if (d > 0) return { background: "var(--green-soft)", color: "var(--green-deep)" };
+  if (d < 0) return { background: "var(--red-soft)", color: "var(--red-deep)" };
   return { background: "rgba(var(--ink-rgb),0.06)", color: "var(--ink-2)" };
 }
 function deltaText(d: number | null) {

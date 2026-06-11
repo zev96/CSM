@@ -144,7 +144,7 @@ const ts = computed(() => {
         <span v-if="ts" class="font-mono">{{ ts }}</span>
         <span v-if="comment.source === 'ai_suggested'"
           class="inline-flex items-center gap-1"
-          style="color: #7a5400;"
+          style="color: var(--yellow-deep);"
         >
           <span style="margin: 0 2px;">·</span>
           <Icon name="wand" :size="9"/> AI

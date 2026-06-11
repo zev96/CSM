@@ -279,7 +279,7 @@ function onSubmit() {
           style="background: rgba(245,192,66,0.10); border: 1px solid rgba(245,192,66,0.36); border-radius: 12px;"
         >
           <span
-            style="width: 26px; height: 26px; border-radius: 8px; background: var(--yellow-soft); color: #7a5400; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;"
+            style="width: 26px; height: 26px; border-radius: 8px; background: var(--yellow-soft); color: var(--yellow-deep); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;"
           ><Icon name="info" :size="13"/></span>
           <div class="text-[11.5px] leading-snug" style="color: var(--ink-2)">
             预计抓取 <b class="font-display" style="color: var(--ink)">{{ total }}</b> 条视频，约需

@@ -208,7 +208,7 @@ async function onDeleteVideo() {
 // ── Pill props per state ──────────────────────────────────────────────
 const pillStyle = computed(() => {
   if (cardState.value === "todo") {
-    return { bg: "var(--yellow-soft)", fg: "#a07a18", border: "transparent" };
+    return { bg: "var(--yellow-soft)", fg: "var(--yellow-deep)", border: "transparent" };
   }
   if (cardState.value === "drafting") {
     return { bg: "var(--primary-soft)", fg: "var(--primary-deep)", border: "transparent" };

@@ -170,9 +170,9 @@ onMounted(async () => {
         class="inline-flex h-5 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
         :style="
           deltaPct > 0
-            ? { background: '#dde7d2', color: '#4d6b2f' }
+            ? { background: 'var(--green-soft)', color: 'var(--green-deep)' }
             : deltaPct < 0
-              ? { background: '#f3d3cd', color: '#a3382a' }
+              ? { background: 'var(--red-soft)', color: 'var(--red-deep)' }
               : { background: 'rgba(var(--ink-rgb),0.06)', color: 'var(--ink-2)' }
         "
       >
