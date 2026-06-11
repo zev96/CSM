@@ -21,6 +21,7 @@
       (function () {
         try {
           var pref = "system";
+          // key must match STORAGE_KEY in src/composables/useTweaks.ts
           var raw = localStorage.getItem("csm.tweaks.v1");
           if (raw) { var p = JSON.parse(raw); if (p && p.theme) pref = p.theme; }
           var dark =

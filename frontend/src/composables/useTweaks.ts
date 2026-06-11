@@ -59,7 +59,9 @@ function load() {
     if (parsed.radius) state.radius = parsed.radius;
     if (parsed.density) state.density = parsed.density;
     if (parsed.primary) state.primary = parsed.primary;
-    if (parsed.theme) state.theme = parsed.theme;
+    if (parsed.theme === "system" || parsed.theme === "light" || parsed.theme === "dark") {
+      state.theme = parsed.theme;
+    }
   } catch {
     /* ignore corrupt storage */
   }
