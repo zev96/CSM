@@ -53,6 +53,47 @@
   --frosted-border: rgba(255, 255, 255, 0.65);
 }
 
+/* ── 暗色主题（暖咖 Espresso）──────────────────────────────────────
+   只覆盖语义 token；--line/-2、--scroll-thumb/-hover 基于 --ink-rgb，
+   翻 --ink-rgb 即自动跟随，无需在此重设。图表(canvas)颜色见 ②b。 */
+body[data-theme="dark"] {
+  /* 表面 */
+  --bg-outer: #14110d;
+  --bg-inner: #1b1713;
+  --card: #262019;
+  --card-2: #2f2820;
+  --card-white: #312a21;
+  /* 文字 */
+  --ink: #f3ede0;
+  --ink-2: #c9c0ad;
+  --ink-3: #968d7b;
+  --ink-4: #6e6657;
+  /* rgb 三元：ink 翻成浅纸色 → 所有 rgba(var(--ink-rgb),α) 边框/overlay/滚动条/--line 自动变浅 */
+  --ink-rgb: 245, 237, 224;
+  /* 主色（略提亮；deep = 暗色 hover 更亮） */
+  --primary: #f0732f;
+  --primary-soft: #3a2a1c;
+  --primary-deep: #f78a4f;
+  /* 语义色（底深、文字提亮以保对比） */
+  --yellow: #f0c14d;
+  --yellow-soft: #3a3320;
+  --yellow-deep: #f0c14d;
+  --green: #8fae6f;
+  --green-rgb: 143, 174, 111;
+  --green-soft: #2a3320;
+  --green-deep: #a8c489;
+  --red: #e06a58;
+  --red-rgb: 224, 106, 88;
+  --red-soft: #3a2420;
+  --red-deep: #f0a094;
+  /* 重按钮/重卡：反相成浅色 */
+  --dark: #f3ede0;
+  --dark-2: #e6dccb;
+  /* 磨砂玻璃（离散重设） */
+  --frosted-bg: rgba(38, 32, 25, 0.55);
+  --frosted-border: rgba(245, 237, 224, 0.08);
+}
+
 html,
 body,
 #app {
