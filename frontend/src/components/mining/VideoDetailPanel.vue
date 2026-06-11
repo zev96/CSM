@@ -273,7 +273,7 @@ const pillLabel = computed(() => {
               background: 'var(--card-white)',
               border: '1px solid var(--line-2)',
               borderRadius: '10px',
-              boxShadow: '0 10px 30px -8px rgba(28,26,23,0.25)',
+              boxShadow: '0 10px 30px -8px rgba(var(--ink-rgb),0.25)',
               padding: '4px',
             }"
             @click.stop

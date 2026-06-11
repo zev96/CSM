@@ -108,7 +108,7 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
         <li
           v-for="t in tray.runningTasks"
           :key="t.key"
-          class="cursor-pointer px-4 py-3 hover:bg-[rgba(28,26,23,0.04)]"
+          class="cursor-pointer px-4 py-3 hover:bg-[rgba(var(--ink-rgb),0.04)]"
           :style="{ borderBottom: '1px solid var(--line)' }"
           @click="gotoTask(t)"
         >
@@ -165,7 +165,7 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
         <li
           v-for="f in tray.recentFinished"
           :key="`fin-${f.key}-${f.finishedAt}`"
-          class="flex cursor-pointer items-center gap-2.5 px-4 py-2.5 hover:bg-[rgba(28,26,23,0.04)]"
+          class="flex cursor-pointer items-center gap-2.5 px-4 py-2.5 hover:bg-[rgba(var(--ink-rgb),0.04)]"
           :style="{ borderBottom: '1px solid var(--line)', opacity: 0.75 }"
           @click="gotoTask(f)"
         >
@@ -200,7 +200,7 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .tray-cancel:hover {
-  background: rgba(28, 26, 23, 0.06);
+  background: rgba(var(--ink-rgb), 0.06);
   color: var(--red);
 }
 .tray-cancel:disabled {

@@ -131,7 +131,7 @@ function gotoSettings() {
         <li
           v-for="item in n.items.value"
           :key="item.id"
-          class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-[rgba(28,26,23,0.04)]"
+          class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-[rgba(var(--ink-rgb),0.04)]"
           :style="{
             borderBottom: '1px solid var(--line)',
             opacity: item.read ? 0.65 : 1,

@@ -49,7 +49,7 @@ const band = () => props.metric?.status_band;
             :style="{ fontSize: '24px', fontWeight: 700, color: bandColor(band()), marginTop: '4px', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }"
           >{{ metric ? pct(metric.soc) : "—" }}</div>
           <div :style="{ marginTop: '9px' }">
-            <div :style="{ height: '5px', borderRadius: '999px', background: 'rgba(28,26,23,.08)', overflow: 'hidden' }">
+            <div :style="{ height: '5px', borderRadius: '999px', background: 'rgba(var(--ink-rgb),.08)', overflow: 'hidden' }">
               <div :style="{ width: `${Math.max(0, Math.min(1, soc())) * 100}%`, height: '100%', background: bandColor(band()), borderRadius: '999px' }" />
             </div>
           </div>
@@ -64,7 +64,7 @@ const band = () => props.metric?.status_band;
             :style="{ fontSize: '24px', fontWeight: 700, color: 'var(--primary)', marginTop: '4px', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }"
           >{{ metric ? pct(metric.first_rank_rate) : "—" }}</div>
           <div :style="{ marginTop: '9px' }">
-            <div :style="{ height: '5px', borderRadius: '999px', background: 'rgba(28,26,23,.08)', overflow: 'hidden' }">
+            <div :style="{ height: '5px', borderRadius: '999px', background: 'rgba(var(--ink-rgb),.08)', overflow: 'hidden' }">
               <div :style="{ width: `${Math.max(0, Math.min(1, metric?.first_rank_rate ?? 0)) * 100}%`, height: '100%', background: 'var(--primary)', borderRadius: '999px' }" />
             </div>
           </div>

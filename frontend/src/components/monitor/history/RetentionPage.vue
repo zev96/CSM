@@ -173,7 +173,7 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
             :style="{
               background: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? 'rgba(122,155,94,0.15)'
                 : fmtDelta(p.rate_today, p.rate_prev).tone === 'down' ? 'rgba(216,90,72,0.12)'
-                : 'rgba(28,26,23,0.05)',
+                : 'rgba(var(--ink-rgb),0.05)',
               color: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? '#5e7848'
                 : fmtDelta(p.rate_today, p.rate_prev).tone === 'down' ? 'var(--red)'
                 : 'var(--ink-3)',
@@ -277,7 +277,7 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
             padding: '11px 12px',
             fontSize: '12px',
             borderRadius: '8px',
-            borderTop: '1px solid rgba(28,26,23,0.06)',
+            borderTop: '1px solid rgba(var(--ink-rgb),0.06)',
           }"
           @mouseenter="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
           @mouseleave="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'transparent')"

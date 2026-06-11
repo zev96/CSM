@@ -128,7 +128,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocumentClick)
         background: 'var(--card-2)',
         border: '1px solid var(--line)',
         borderRadius: 'var(--radius-inner)',
-        boxShadow: '0 6px 18px rgba(28,26,23,0.10)',
+        boxShadow: '0 6px 18px rgba(var(--ink-rgb),0.10)',
         maxHeight: '280px',
         overflowY: 'auto',
         padding: '4px',

@@ -160,7 +160,7 @@ function takeoff() {
         borderRadius: 'var(--radius-pill)',
         padding: '6px',
         paddingLeft: '18px',
-        boxShadow: '0 4px 14px rgba(28,26,23,0.06), 0 1px 3px rgba(28,26,23,0.04)',
+        boxShadow: '0 4px 14px rgba(var(--ink-rgb),0.06), 0 1px 3px rgba(var(--ink-rgb),0.04)',
       }"
     >
       <Icon name="search" :size="16" class="opacity-60" />
@@ -205,7 +205,7 @@ function takeoff() {
               fontSize: '12px',
               color: 'var(--ink-2)',
               cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(28,26,23,0.04), 0 1px 2px rgba(28,26,23,0.03)',
+              boxShadow: '0 2px 6px rgba(var(--ink-rgb),0.04), 0 1px 2px rgba(var(--ink-rgb),0.03)',
             }"
           >
             <span :style="{ color: 'var(--ink-3)' }">模板</span>
@@ -243,7 +243,7 @@ function takeoff() {
               fontSize: '12px',
               color: 'var(--ink-2)',
               cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(28,26,23,0.04), 0 1px 2px rgba(28,26,23,0.03)',
+              boxShadow: '0 2px 6px rgba(var(--ink-rgb),0.04), 0 1px 2px rgba(var(--ink-rgb),0.03)',
             }"
           >
             <span :style="{ color: 'var(--ink-3)' }">风格</span>

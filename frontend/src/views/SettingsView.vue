@@ -898,7 +898,7 @@ async function saveAccountEdit() {
               color: 'var(--ink)',
             }"
             @click="section = g.k"
-            @mouseenter="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.04)' }"
+            @mouseenter="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.04)' }"
             @mouseleave="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
           >
             <!-- 选中态左侧 3px 橙竖条（仅选中时出） -->
@@ -2030,7 +2030,7 @@ async function saveAccountEdit() {
       <div
         v-if="excludeDomainsModalOpen"
         class="fixed inset-0 z-40 flex items-center justify-center"
-        :style="{ background: 'rgba(28,26,23,0.4)' }"
+        :style="{ background: 'rgba(var(--ink-rgb),0.4)' }"
         @click.self="excludeDomainsModalOpen = false"
       >
         <div

@@ -39,7 +39,7 @@ function onAction(t: Toast, ev: Event) {
           background: TONES[t.tone].bg,
           color: TONES[t.tone].fg,
           borderRadius: '999px',
-          boxShadow: '0 12px 30px -10px rgba(28,26,23,0.4)',
+          boxShadow: '0 12px 30px -10px rgba(var(--ink-rgb),0.4)',
         }"
         role="status"
         @click="dismiss(t.id)"

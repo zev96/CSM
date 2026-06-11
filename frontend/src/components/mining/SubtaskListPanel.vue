@@ -187,7 +187,7 @@ const totalCount = computed(() => props.videos.length);
             marginBottom: '4px',
           }"
           @click="emit('select-video', v.id)"
-          @mouseenter="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.04)' }"
+          @mouseenter="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.04)' }"
           @mouseleave="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
         >
           <!-- checkbox -->

@@ -11,7 +11,7 @@ defineProps<{
 <template>
   <button
     :title="title"
-    class="relative inline-flex items-center justify-center transition hover:bg-[rgba(28,26,23,0.05)]"
+    class="relative inline-flex items-center justify-center transition hover:bg-[rgba(var(--ink-rgb),0.05)]"
     :style="{
       width: '36px',
       height: '36px',

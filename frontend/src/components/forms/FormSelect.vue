@@ -159,7 +159,7 @@ watch(
         background: 'var(--card)',
         border: '1px solid var(--line)',
         borderRadius: 'var(--radius-inner)',
-        boxShadow: '0 6px 18px rgba(28,26,23,0.10)',
+        boxShadow: '0 6px 18px rgba(var(--ink-rgb),0.10)',
         padding: '4px',
         zIndex: 9999,
       }"

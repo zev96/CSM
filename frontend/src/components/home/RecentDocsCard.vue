@@ -84,7 +84,7 @@ function chipStyle(status: Status) {
   if (status === "已发布") return { background: "#dde7d2", color: "#4d6b2f" };
   if (status === "草稿")
     return { background: "var(--yellow-soft)", color: "#7a5400" };
-  return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
+  return { background: "rgba(var(--ink-rgb),0.06)", color: "var(--ink-2)" };
 }
 
 /**

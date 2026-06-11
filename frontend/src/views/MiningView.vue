@@ -428,7 +428,7 @@ onMounted(async () => {
             color: '#fbf7ec',
             borderRadius: '999px',
             padding: '5px 5px 5px 14px',
-            boxShadow: '0 14px 30px -10px rgba(28,26,23,0.5)',
+            boxShadow: '0 14px 30px -10px rgba(var(--ink-rgb),0.5)',
             maxWidth: '95%',
           }"
         >

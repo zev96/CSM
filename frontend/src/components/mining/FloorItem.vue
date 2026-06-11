@@ -152,7 +152,7 @@ const ts = computed(() => {
         <div class="ml-auto flex items-center" style="gap: 2px;">
           <button
             type="button"
-            class="inline-flex items-center gap-1 transition hover:bg-[rgba(28,26,23,0.05)]"
+            class="inline-flex items-center gap-1 transition hover:bg-[rgba(var(--ink-rgb),0.05)]"
             :style="{
               height: '20px',
               padding: '0 7px',
