@@ -15,6 +15,25 @@
     />
   </head>
   <body data-density="cozy" data-radius="medium">
+    <script>
+      // FOUC 防闪：首屏渲染前依据已存偏好 / 系统设置写 data-theme。
+      // 与 useTweaks 的 csm.tweaks.v1 同源；useTweaks 挂载后会再 apply 一次（幂等）。
+      (function () {
+        try {
+          var pref = "system";
+          var raw = localStorage.getItem("csm.tweaks.v1");
+          if (raw) { var p = JSON.parse(raw); if (p && p.theme) pref = p.theme; }
+          var dark =
+            pref === "dark" ||
+            (pref === "system" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.body.dataset.theme = dark ? "dark" : "light";
+        } catch (e) {
+          document.body.dataset.theme = "light";
+        }
+      })();
+    </script>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
