@@ -22,6 +22,8 @@ import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
+import SplitPane from "@/components/ui/SplitPane.vue";
+import Dropdown from "@/components/ui/Dropdown.vue";
 // Sparkline 已下线 —— 统一改用 LineChart 跟 BaiduRankingPage 总任务图一致。
 import LineChart from "./history/LineChart.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
@@ -819,8 +821,9 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
       </div>
     </div>
 
-    <!-- table + detail -->
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
+    <!-- table + detail — SplitPane: 左定宽 340px，右 1fr -->
+    <SplitPane>
+      <template #left>
       <!--
         table card —— min-h-0 + overflow-hidden 把任务列表的滚动锁在卡片内，
         否则任务行过多时 grid 项会撑爆页面。
@@ -943,36 +946,34 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           <div class="text-center">操作</div>
         </div>
 
-        <!-- L1 批次列头 —— 3 列（与批次行同 1.7fr .6fr 1.1fr） -->
+        <!-- L1 批次列头 —— 3 列（与批次行同 1.5fr .9fr 1.1fr） -->
         <div
           v-else-if="openBatchName == null"
           class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
           :style="{
-            gridTemplateColumns: '1.7fr .6fr 1.1fr',
+            gridTemplateColumns: '1.5fr .9fr 1.1fr',
             letterSpacing: '1.2px',
             color: 'var(--ink-3)',
             borderBottom: '1px solid var(--line)',
           }"
         >
           <div>任务名字</div>
-          <div class="text-center">问题数</div>
+          <div class="text-center">状态</div>
           <div class="text-center">操作</div>
         </div>
 
-        <!-- L2 子任务列头 —— 5 列（与子任务行同 1.6fr .7fr .7fr .7fr 1fr），「类型」替换为「浏览量」 -->
+        <!-- L2 子任务列头 —— 3 列（与子任务行同 1.5fr .9fr 1.1fr） -->
         <div
           v-else
           class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
           :style="{
-            gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+            gridTemplateColumns: '1.5fr .9fr 1.1fr',
             letterSpacing: '1.2px',
             color: 'var(--ink-3)',
             borderBottom: '1px solid var(--line)',
           }"
         >
           <div>问题名字</div>
-          <div class="text-center">浏览量</div>
-          <div class="text-center">卡位</div>
           <div class="text-center">变化</div>
           <div class="text-center">操作</div>
         </div>
@@ -1054,7 +1055,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             :key="b.name"
             class="grid cursor-pointer items-center transition"
             :style="{
-              gridTemplateColumns: '1.7fr .6fr 1.1fr',
+              gridTemplateColumns: '1.5fr .9fr 1.1fr',
               background: selectedBatchName === b.name ? 'var(--card-2)' : 'transparent',
               borderBottom: i < batches.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
@@ -1064,48 +1065,54 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             @mouseenter="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
             @mouseleave="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
           >
-            <!--
-              批次名是「点击进 L2」的彩色热区（跟 CommentMonitorModule 的
-              批次名链接同款 primary-deep 色）；整行点击只把右卡详情定位到
-              这条批次（selectedBatchName），不导航。@click.stop 防止点名字
-              时又触发行的 select。
-            -->
-            <button
-              type="button"
-              class="truncate text-left text-[13px] font-medium"
-              :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
-              title="查看该批次的问题列表"
-              @click.stop="openBatchName = b.name"
-            >{{ b.name }}</button>
-            <div class="text-center font-display text-[13px] font-bold">{{ b.tasks.length }}</div>
-            <div class="flex items-center justify-center gap-1">
+            <!-- Col 1: 批次名（钻入 L2）+ 副标题（问题数 · 品牌） -->
+            <div class="min-w-0">
               <button
                 type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--primary-deep)', cursor: 'pointer' }"
-                title="启动批次内所有子任务"
-                @click.stop="startBatch(b)"
+                class="truncate text-left text-[13px] font-semibold"
+                :style="{ color: selectedBatchName === b.name ? 'var(--primary-deep)' : 'var(--ink)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', maxWidth: '100%' }"
+                title="查看该批次的问题列表"
+                @click.stop="openBatchName = b.name"
+              >{{ b.name }}</button>
+              <div class="truncate text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                {{ b.tasks.length }} 个问题 · 品牌 {{ b.tasks[0]?.config?.target_brand || '—' }}
+              </div>
+            </div>
+            <!-- Col 2: 状态 Pill —— 批次内有任务运行中 → 进行中，否则 → 就绪 -->
+            <div class="flex items-center justify-center">
+              <Pill
+                v-if="b.tasks.some((t) => runningTaskIds[t.id])"
+                tone="ok"
+              >进行中</Pill>
+              <Pill v-else tone="info">就绪</Pill>
+            </div>
+            <!-- Col 3: ⋯ Dropdown -->
+            <div class="flex items-center justify-center">
+              <Dropdown
+                :items="[
+                  { key: 'run', label: '启动批次', icon: 'play' },
+                  { key: 'edit', label: '编辑批次', icon: 'edit' },
+                  { key: 'delete', label: '删除批次', icon: 'trash', tone: 'danger' },
+                ]"
+                align="right"
+                @select="(key) => {
+                  if (key === 'run') startBatch(b);
+                  else if (key === 'edit') editBatch(b);
+                  else if (key === 'delete') deleteBatch(b);
+                }"
               >
-                <Icon name="play" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
-                title="编辑批次共享设置"
-                @click.stop="editBatch(b)"
-              >
-                <Icon name="edit" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
-                title="删除整个批次"
-                @click.stop="deleteBatch(b)"
-              >
-                <Icon name="trash" :size="13" />
-              </button>
+                <template #trigger>
+                  <button
+                    type="button"
+                    class="inline-flex h-7 w-7 items-center justify-center"
+                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                    title="更多操作"
+                    @click.stop
+                  >
+                    <Icon name="more" :size="14" />
+                  </button>
+                </template>
+              </Dropdown>
             </div>
           </div>
         </template>
@@ -1118,13 +1125,13 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           question_visit_count）。卡位 / 变化 / 操作 cell 原样保留。
         -->
         <template v-else>
-          <!-- L2 列头（「类型」→「浏览量」）和返回条均已上移到滚动区外，只让行滚动 -->
+          <!-- L2 列头和返回条均已上移到滚动区外，只让行滚动 -->
           <div
             v-for="(t, i) in currentBatchTasks"
             :key="t.id"
             class="grid cursor-pointer items-center transition"
             :style="{
-              gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+              gridTemplateColumns: '1.5fr .9fr 1.1fr',
               background: selectedTaskId === t.id ? 'var(--card-2)' : 'transparent',
               borderBottom: i < currentBatchTasks.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
@@ -1132,33 +1139,21 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             }"
             @click="selectedTaskId = t.id"
           >
-            <div class="truncate text-[13px] font-medium">{{ subtaskTitle(t) }}</div>
-            <!-- 浏览量：knowledge 问题「被浏览」数（万 / 亿单位）；缺失 — -->
-            <div class="text-center text-[12px]" :style="{ color: 'var(--ink-2)' }">
-              {{ formatVisitCount(taskSnapshots[t.id]?.latest?.question_visit_count) }}
+            <!-- Col 1: 问题名 + 副标题（浏览量 · 卡位） -->
+            <div class="min-w-0">
+              <div
+                class="truncate text-[13px] font-semibold"
+                :style="{ color: selectedTaskId === t.id ? 'var(--primary-deep)' : 'var(--ink)' }"
+              >{{ subtaskTitle(t) }}</div>
+              <div class="truncate text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                {{ formatVisitCount(taskSnapshots[t.id]?.latest?.question_visit_count) }} 浏览 · 卡位 {{ taskSnapshots[t.id]?.latest?.matched_count ?? 0 }}
+              </div>
             </div>
             <!--
-              卡位：matched_count 单值（不再 X/N 分母 + 最高#N 副标）。
-              跟右卡「卡位数量」语义保持一致。命中 0 → "前 N 以外"红字。
+              Col 2: 变化 Pill —— 命中数 delta（latest vs prev）。
+              +N = 多一条占位（ok），-N = 少一条（warn），持平（info）。
             -->
-            <div class="text-center font-display text-[13px] font-bold">
-              <template v-if="taskSnapshots[t.id]?.latest">
-                <template v-if="taskSnapshots[t.id]!.latest!.matched_count > 0">
-                  <span>{{ taskSnapshots[t.id]!.latest!.matched_count }}</span>
-                </template>
-                <span
-                  v-else
-                  :style="{ color: 'var(--red, #d85a48)', fontSize: '12px', fontWeight: 'normal' }"
-                >前 {{ taskSnapshots[t.id]!.latest!.alert_top_n }} 以外</span>
-              </template>
-              <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
-            </div>
-            <!--
-              变化：用命中数 delta 而不是 rank delta —— 用户的心智模型
-              是"我们家这次有几条上榜、上次有几条"。+1 = 多一条占位，
-              -1 = 少一条；持平不显 pill。
-            -->
-            <div class="text-center">
+            <div class="flex items-center justify-center">
               <template v-if="taskSnapshots[t.id]?.latest && taskSnapshots[t.id]?.prev">
                 <template
                   v-if="taskSnapshots[t.id]!.latest!.matched_count - taskSnapshots[t.id]!.prev!.matched_count > 0"
@@ -1178,73 +1173,46 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 </template>
                 <Pill v-else tone="info">持平</Pill>
               </template>
-              <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+              <span v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</span>
             </div>
-            <!--
-              操作 cell —— 状态列已移除（卡位 / 变化 已经反映上榜状态）。
-              三个 icon 居中：
-                ▶ 立刻监测（监测中 → ⏹ stop, 点击发取消）  /  ✎ 编辑  /  🗑 删除
-              running 状态由 monitorStatus store 提供，跨页面导航不丢。
-            -->
-            <div class="flex items-center justify-center gap-1">
-              <button
-                v-if="runningTaskIds[t.id]"
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--red, #d85a48)',
-                  cursor: 'pointer',
+            <!-- Col 3: ⋯ Dropdown（运行中 → 第一项为停止，否则为立刻监测） -->
+            <div class="flex items-center justify-center">
+              <Dropdown
+                :items="[
+                  runningTaskIds[t.id]
+                    ? { key: 'stop', label: '停止', icon: 'x' }
+                    : { key: 'run', label: '立刻监测', icon: 'play' },
+                  { key: 'edit', label: '编辑任务', icon: 'edit' },
+                  { key: 'delete', label: '删除任务', icon: 'trash', tone: 'danger' },
+                ]"
+                align="right"
+                @select="(key) => {
+                  if (key === 'run') emit('run-task', t.id);
+                  else if (key === 'stop') emit('cancel-task', t.id);
+                  else if (key === 'edit') emit('edit-task', t);
+                  else if (key === 'delete') emit('delete-task', t.id);
                 }"
-                title="停止监测"
-                @click.stop="emit('cancel-task', t.id)"
               >
-                <Icon name="x" :size="13" />
-              </button>
-              <button
-                v-else
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--primary-deep)',
-                  cursor: 'pointer',
-                }"
-                title="立刻监测"
-                @click.stop="emit('run-task', t.id)"
-              >
-                <Icon name="play" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--ink-3)',
-                }"
-                title="编辑任务（目标关键词 / Top-N / 计划）"
-                @click.stop="emit('edit-task', t)"
-              >
-                <Icon name="edit" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--ink-3)',
-                }"
-                title="删除任务"
-                @click.stop="emit('delete-task', t.id)"
-              >
-                <Icon name="trash" :size="13" />
-              </button>
+                <template #trigger>
+                  <button
+                    type="button"
+                    class="inline-flex h-7 w-7 items-center justify-center"
+                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                    title="更多操作"
+                    @click.stop
+                  >
+                    <Icon name="more" :size="14" />
+                  </button>
+                </template>
+              </Dropdown>
             </div>
           </div>
         </template>
         </div>
       </section>
+      </template>
 
+      <template #right>
       <!-- detail card —— min-h-0 + overflow-hidden；滚动锁在子区块（前N答案 / L1属性区） -->
       <section
         class="flex h-full min-h-0 flex-col overflow-hidden"
@@ -1688,6 +1656,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           </template>
         </template>
       </section>
-    </div>
+      </template>
+    </SplitPane>
   </div>
 </template>
