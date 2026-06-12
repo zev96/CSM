@@ -39,6 +39,7 @@ import {
 import {
   type TaskSnapshotPair,
 } from "@/utils/monitor-snapshot";
+import { batchZhihuKpis } from "@/utils/monitor-zhihu-kpi";
 import {
   type Task,
   type HeroAlert,
@@ -184,6 +185,17 @@ const selectedBatchBrand = computed<string>(() => {
   const first = selectedBatch.value?.tasks[0];
   const brand = first?.config?.target_brand;
   return typeof brand === "string" && brand.trim() ? brand : "";
+});
+
+// L1 右卡 KPI 汇总 —— 由批次所有子任务的最新快照聚合，纯客户端。
+const selectedBatchKpis = computed(() => {
+  const b = selectedBatch.value;
+  if (!b) return null;
+  const snaps = b.tasks
+    .map((t) => props.taskSnapshots[t.id]?.latest)
+    .filter((s): s is NonNullable<typeof s> => !!s)
+    .map((s) => ({ matched_count: s.matched_count ?? 0, rank: s.rank ?? -1 }));
+  return batchZhihuKpis(snaps);
 });
 
 // 批次列表变化时把 selectedBatchName 收敛到一个有效值（默认第一条）——
@@ -1598,60 +1610,174 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           </div>
 
           <template v-else>
-            <!-- 标题：批次名 + 「任务详情」eyebrow -->
+            <!-- 标题：批次名 + 「批次汇总」eyebrow -->
             <div class="mb-3 flex-shrink-0">
               <div class="font-display text-[14px] font-semibold">{{ selectedBatch.name }}</div>
               <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                任务详情
+                批次汇总
               </div>
             </div>
 
-            <!-- 属性区（滚动）—— 问题数量 / 目标品牌；无趋势图 -->
+            <!-- 滚动区：KPI 四联 + 问题概览表 + 导出/定时 -->
             <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-              <div>
-                <div
-                  class="mb-1 text-[10.5px] uppercase"
-                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
-                >问题数量</div>
-                <div class="font-display text-[18px] font-bold">{{ selectedBatch.tasks.length }}</div>
-              </div>
-              <div>
-                <div
-                  class="mb-1 text-[10.5px] uppercase"
-                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
-                >目标品牌</div>
-                <div class="text-[13px] font-medium">{{ selectedBatchBrand || '—' }}</div>
-              </div>
-            </div>
 
-            <!-- 底部 pinned：导出数据 / 定时监测 -->
-            <div class="flex flex-shrink-0 gap-2 pt-4">
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                  borderRadius: '8px',
-                  color: 'var(--ink-2)',
-                  cursor: 'pointer',
-                }"
-                @click="exportBatchCsv(selectedBatch)"
-              >导出数据</button>
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--primary)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                }"
-                @click="scheduleBatch(selectedBatch)"
-              >定时监测</button>
+              <!-- KPI 四联 —— 与 L2 二联 同款 card 样式 -->
+              <div class="grid grid-cols-2 gap-3">
+                <!-- 问题数 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">问题数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    {{ selectedBatch.tasks.length }}
+                  </div>
+                </div>
+
+                <!-- 目标品牌 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">目标品牌</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '16px' }">
+                    {{ selectedBatchBrand || '—' }}
+                  </div>
+                </div>
+
+                <!-- 命中问题数 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">命中问题数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="selectedBatchKpis">
+                      {{ selectedBatchKpis.hitQuestions }}<span :style="{ color: 'var(--ink-3)', fontSize: '13px' }">/{{ selectedBatchKpis.total }}</span>
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                  </div>
+                </div>
+
+                <!-- 平均卡位 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">平均卡位</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="selectedBatchKpis?.avgRank != null">
+                      第 {{ selectedBatchKpis.avgRank }} 名
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">—</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 问题概览速查表 -->
+              <div>
+                <div
+                  class="mb-2 text-[10.5px] uppercase"
+                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
+                >问题概览</div>
+                <div
+                  :style="{
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                    overflow: 'hidden',
+                  }"
+                >
+                  <!-- 表头 -->
+                  <div
+                    class="grid text-[10.5px]"
+                    :style="{
+                      gridTemplateColumns: '1fr 48px 64px',
+                      padding: '5px 10px',
+                      background: 'var(--card-2)',
+                      color: 'var(--ink-3)',
+                      borderBottom: '1px solid var(--line)',
+                    }"
+                  >
+                    <span>问题名</span>
+                    <span :style="{ textAlign: 'right' }">卡位</span>
+                    <span :style="{ textAlign: 'right' }">最高排名</span>
+                  </div>
+                  <!-- 每行 -->
+                  <div
+                    v-for="t in selectedBatch.tasks"
+                    :key="t.id"
+                    class="grid text-[11.5px]"
+                    :style="{
+                      gridTemplateColumns: '1fr 48px 64px',
+                      padding: '6px 10px',
+                      borderBottom: '1px solid var(--line)',
+                      color: 'var(--ink-2)',
+                    }"
+                  >
+                    <span
+                      class="truncate pr-2"
+                      :title="subtaskTitle(t)"
+                      :style="{ color: 'var(--ink)' }"
+                    >{{ subtaskTitle(t) }}</span>
+                    <span :style="{ textAlign: 'right', color: 'var(--ink-2)' }">
+                      {{ props.taskSnapshots[t.id]?.latest?.matched_count ?? 0 }}
+                    </span>
+                    <span :style="{ textAlign: 'right', color: 'var(--ink-2)' }">
+                      <template v-if="props.taskSnapshots[t.id]?.latest && (props.taskSnapshots[t.id]!.latest!.rank ?? -1) > 0">
+                        第 {{ props.taskSnapshots[t.id]!.latest!.rank }} 名
+                      </template>
+                      <span v-else :style="{ color: 'var(--ink-3)', fontSize: '10.5px' }">未进榜</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 导出数据 / 定时监测 -->
+              <div class="flex flex-shrink-0 gap-2">
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: '8px',
+                    color: 'var(--ink-2)',
+                    cursor: 'pointer',
+                  }"
+                  @click="exportBatchCsv(selectedBatch)"
+                >导出数据</button>
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--primary)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                  }"
+                  @click="scheduleBatch(selectedBatch)"
+                >定时监测</button>
+              </div>
+
             </div>
           </template>
         </template>
