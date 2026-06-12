@@ -532,6 +532,14 @@ const selectedTopN = computed<number>(() => {
   return 10;
 });
 
+// L2 详情面板宽屏判断：≥640px 时趋势图和答案列表并排。
+// matchMedia 驱动，避免 CSS-only 方案在 SSR 或测试环境出问题。
+const l2Wide = ref(typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches);
+if (typeof window !== "undefined") {
+  const mq = window.matchMedia("(min-width: 640px)");
+  mq.addEventListener("change", (e) => { l2Wide.value = e.matches; });
+}
+
 watch(selectedTaskId, async (id) => {
   if (id != null && id > 0) await loadResults(id);
 });
@@ -1443,21 +1451,22 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             </div>
 
             <!--
-              KPI 二联：卡位数量 / 最高排名
-              - 卡位数量 = 前 N 条答案里包含目标品牌词的条数（单值，不再 N/M）
-              - 最高排名 = result.rank（自家最高排到第几名）；命中 0 → 「未上榜」
-              - 检查频率已移除 —— 用户通过编辑任务设置定时。
+              KPI 五联：当前卡位 / 较上次变化 / 最高排名 / 浏览量 / 自家命中数
+              注：当前卡位（#1）与自家命中数（#5）均来自 matched_count，
+              数值相同——设计§4.3.1 要求五联，保留全部，QA 时可视需要合并为四联。
             -->
-            <div class="mt-3 grid flex-shrink-0 grid-cols-2 gap-3">
+            <div class="mt-3 flex-shrink-0" :style="{ display: 'flex', flexWrap: 'wrap', gap: '8px' }">
+              <!-- #1 当前卡位 -->
               <div
                 :style="{
+                  flex: '1 1 80px',
                   padding: '12px',
                   borderRadius: '12px',
                   background: 'var(--card-2)',
                   border: '1px solid var(--line)',
                 }"
               >
-                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">卡位数量</div>
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">当前卡位</div>
                 <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
                   <template v-if="taskSnapshots[selectedTask.id]?.latest">
                     <template v-if="taskSnapshots[selectedTask.id]!.latest!.matched_count > 0">
@@ -1471,8 +1480,44 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                   <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
                 </div>
               </div>
+
+              <!-- #2 较上次变化：latest.matched_count − prev.matched_count -->
               <div
                 :style="{
+                  flex: '1 1 80px',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                }"
+              >
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">较上次变化</div>
+                <div class="font-display mt-1 font-bold" :style="{ fontSize: '18px' }">
+                  <template v-if="taskSnapshots[selectedTask.id]?.latest && taskSnapshots[selectedTask.id]?.prev">
+                    <Pill
+                      v-if="taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count > 0"
+                      tone="ok"
+                    >
+                      <Icon name="arrowUp" :size="10" />
+                      +{{ taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count }}
+                    </Pill>
+                    <Pill
+                      v-else-if="taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count < 0"
+                      tone="warn"
+                    >
+                      <Icon name="arrowDown" :size="10" />
+                      {{ taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count }}
+                    </Pill>
+                    <Pill v-else tone="info">持平</Pill>
+                  </template>
+                  <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">—</span>
+                </div>
+              </div>
+
+              <!-- #3 最高排名 -->
+              <div
+                :style="{
+                  flex: '1 1 80px',
                   padding: '12px',
                   borderRadius: '12px',
                   background: 'var(--card-2)',
@@ -1491,102 +1536,132 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                   <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
                 </div>
               </div>
-            </div>
 
-            <!--
-              14 天卡位趋势：Y 轴 = matched_count（卡位数），越高越好。
-              之前的 Y 轴 = rank（越低越好）容易误读，跟新 KPI「卡位数量」
-              语义保持一致。
-            -->
-            <!--
-              真实数据：跟 BaiduRankingPage 总任务图组件一致（LineChart），
-              永远默认显示 14 天 frame —— sparkBuckets 是 14 个 calendar
-              bucket，没数据的天为 null，chart.js spanGaps=false 画 gap。
-              不再用 v-if 拦数据空场景（用户即使没数据也能看到完整时间轴）。
-            -->
-            <div class="mt-5 flex-shrink-0">
-              <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
-              <!--
-                Y 轴上限锁 selectedTopN —— 命中条数的容量上限是 Top-N，
-                让趋势相对"满格"显示。chart.js auto-scale 在低基数（命中
-                0-2 条）时会把数据顶到天花板，视觉夸张，不直观。
-              -->
-              <LineChart
-                :labels="sparkChartLabels"
-                :series="[
-                  {
-                    label: '卡位数量',
-                    color: 'var(--primary-deep, #c9521f)',
-                    data: sparkPoints,
-                  },
-                ]"
-                :y-max="selectedTopN"
-              />
-            </div>
-
-            <!--
-              前 N 条答案 —— 从 taskResults[0].metric.answers 取全部。
-              每条左侧带排名 #N，命中目标品牌的行用 primary-soft 背景 +
-              橙色描边高亮，右侧角标"自家"。让用户一眼看出"前 N 条里
-              我占了哪几位"——这是用户描述的核心需求。
-            -->
-            <div class="mt-4 min-h-0 flex-1 overflow-y-auto">
-              <div class="mb-2 flex items-center justify-between">
-                <div class="text-[12px] font-semibold">
-                  前
-                  {{ taskSnapshots[selectedTask.id]?.latest?.alert_top_n ?? topAnswersForSelectedTask.length }}
-                  条答案
-                </div>
-                <div
-                  v-if="taskSnapshots[selectedTask.id]?.latest"
-                  class="text-[11px]"
-                  :style="{ color: 'var(--ink-3)' }"
-                >
-                  自家命中
-                  <span :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">
-                    {{ taskSnapshots[selectedTask.id]!.latest!.matched_count }}
-                  </span>
-                  条
+              <!-- #4 浏览量 -->
+              <div
+                :style="{
+                  flex: '1 1 80px',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                }"
+              >
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">浏览量</div>
+                <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                  <template v-if="taskSnapshots[selectedTask.id]?.latest">
+                    {{ formatVisitCount(taskSnapshots[selectedTask.id]!.latest!.question_visit_count) }}
+                  </template>
+                  <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
                 </div>
               </div>
-              <template v-if="topAnswersForSelectedTask.length">
-                <div
-                  v-for="(x, i) in topAnswersForSelectedTask"
-                  :key="i"
-                  class="mb-1.5 flex items-center gap-3"
-                  :style="{
-                    padding: '10px',
-                    borderRadius: '10px',
-                    background: x.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
-                    border: '1px solid '
-                      + (x.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
-                  }"
-                >
-                  <span
-                    class="font-display text-[13px] font-bold"
-                    :style="{
-                      width: '22px',
-                      color: x.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
-                    }"
-                  >#{{ x.rank }}</span>
-                  <div class="min-w-0 flex-1">
-                    <div class="truncate text-[12.5px] font-medium">
-                      {{ x.content_preview || "（无摘要）" }}
-                    </div>
-                    <div class="flex items-center gap-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                      <span>{{ x.author || "—" }}</span>
-                      <span v-if="x.voteup_count">· 👍 {{ x.voteup_count }}</span>
-                      <span
-                        v-if="x.matches_brand"
-                        class="ml-auto"
-                        :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
-                      >自家</span>
-                    </div>
+
+              <!-- #5 自家命中数（= matched_count，与#1数值相同，保留作语义区分） -->
+              <div
+                :style="{
+                  flex: '1 1 80px',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                }"
+              >
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">自家命中数</div>
+                <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                  <template v-if="taskSnapshots[selectedTask.id]?.latest">
+                    <span :style="{ color: 'var(--primary-deep)' }">
+                      {{ taskSnapshots[selectedTask.id]!.latest!.matched_count }}
+                    </span>
+                  </template>
+                  <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                </div>
+              </div>
+            </div>
+
+            <!--
+              趋势（左）+ 答案列表（右）并排
+              - 宽屏：2 列 gridTemplateColumns 1fr / 1.05fr
+              - 窄屏（< 640px）：单列堆叠
+              趋势 chart 和答案列表 data binding 保持不变。
+            -->
+            <div
+              class="mt-4 min-h-0 flex-1"
+              :style="{
+                display: 'grid',
+                gridTemplateColumns: l2Wide ? '1fr 1.05fr' : '1fr',
+                gap: '16px',
+                alignItems: 'start',
+              }"
+            >
+              <!-- 左：7 天卡位趋势 -->
+              <div class="flex-shrink-0">
+                <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
+                <!--
+                  Y 轴上限锁 selectedTopN —— 命中条数的容量上限是 Top-N，
+                  让趋势相对"满格"显示。chart.js auto-scale 在低基数（命中
+                  0-2 条）时会把数据顶到天花板，视觉夸张，不直观。
+                -->
+                <LineChart
+                  :labels="sparkChartLabels"
+                  :series="[
+                    {
+                      label: '卡位数量',
+                      color: 'var(--primary-deep, #c9521f)',
+                      data: sparkPoints,
+                    },
+                  ]"
+                  :y-max="selectedTopN"
+                />
+              </div>
+
+              <!-- 右：前 N 条答案 -->
+              <div class="overflow-y-auto" :style="{ maxHeight: l2Wide ? '360px' : 'none' }">
+                <div class="mb-2 flex items-center justify-between">
+                  <div class="text-[12px] font-semibold">
+                    前
+                    {{ taskSnapshots[selectedTask.id]?.latest?.alert_top_n ?? topAnswersForSelectedTask.length }}
+                    条答案
                   </div>
                 </div>
-              </template>
-              <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
-                暂无快照数据 —— 跑一次「立刻监测」，下方将列出当前榜上的前 N 个答案，命中目标品牌的会高亮。
+                <template v-if="topAnswersForSelectedTask.length">
+                  <div
+                    v-for="(x, i) in topAnswersForSelectedTask"
+                    :key="i"
+                    class="mb-1.5 flex items-center gap-3"
+                    :style="{
+                      padding: '10px',
+                      borderRadius: '10px',
+                      background: x.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
+                      border: '1px solid '
+                        + (x.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
+                    }"
+                  >
+                    <span
+                      class="font-display text-[13px] font-bold"
+                      :style="{
+                        width: '22px',
+                        color: x.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
+                      }"
+                    >#{{ x.rank }}</span>
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate text-[12.5px] font-medium">
+                        {{ x.content_preview || "（无摘要）" }}
+                      </div>
+                      <div class="flex items-center gap-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                        <span>{{ x.author || "—" }}</span>
+                        <span v-if="x.voteup_count">· 👍 {{ x.voteup_count }}</span>
+                        <span
+                          v-if="x.matches_brand"
+                          class="ml-auto"
+                          :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
+                        >自家</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
+                  暂无快照数据 —— 跑一次「立刻监测」，下方将列出当前榜上的前 N 个答案，命中目标品牌的会高亮。
+                </div>
               </div>
             </div>
           </template>
