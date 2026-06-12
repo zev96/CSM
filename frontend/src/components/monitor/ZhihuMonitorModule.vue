@@ -1455,11 +1455,8 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               </div>
             </div>
 
-            <!--
-              KPI 五联：当前卡位 / 较上次变化 / 最高排名 / 浏览量 / 自家命中数
-              注：当前卡位（#1）与自家命中数（#5）均来自 matched_count，
-              数值相同——设计§4.3.1 要求五联，保留全部，QA 时可视需要合并为四联。
-            -->
+            <!-- KPI 四联：当前卡位 / 较上次变化 / 最高排名 / 浏览量
+                 （自家命中数 = 当前卡位 matched_count 同值，QA 已确认去重合并） -->
             <div class="mt-3 flex-shrink-0" :style="{ display: 'flex', flexWrap: 'wrap', gap: '8px' }">
               <!-- #1 当前卡位 -->
               <div
@@ -1556,27 +1553,6 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
                   <template v-if="taskSnapshots[selectedTask.id]?.latest">
                     {{ formatVisitCount(taskSnapshots[selectedTask.id]!.latest!.question_visit_count) }}
-                  </template>
-                  <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
-                </div>
-              </div>
-
-              <!-- #5 自家命中数（= matched_count，与#1数值相同，保留作语义区分） -->
-              <div
-                :style="{
-                  flex: '1 1 80px',
-                  padding: '12px',
-                  borderRadius: '12px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                }"
-              >
-                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">自家命中数</div>
-                <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
-                  <template v-if="taskSnapshots[selectedTask.id]?.latest">
-                    <span :style="{ color: 'var(--primary-deep)' }">
-                      {{ taskSnapshots[selectedTask.id]!.latest!.matched_count }}
-                    </span>
                   </template>
                   <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
                 </div>
