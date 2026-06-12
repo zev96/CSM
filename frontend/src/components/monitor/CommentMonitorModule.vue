@@ -116,7 +116,7 @@ const commentAlertIdx = ref(0);
 // 平台 chip 计数清零 —— V1 设计稿示例任务已清空，发布前保留空状态。
 const PLATFORMS: Array<{ k: CommentPlatform; l: string; color: string; count: number }> = [
   { k: "bilibili", l: "B 站", color: "#ee6a2a", count: 0 },
-  { k: "douyin", l: "抖音", color: "#1e1c19", count: 0 },
+  { k: "douyin", l: "抖音", color: "var(--ink)", count: 0 },
   { k: "kuaishou", l: "快手", color: "#f5c042", count: 0 },
 ];
 

@@ -96,10 +96,10 @@ const chartLabels = computed(() =>
 const chartSeries = computed(() => {
   if (!data.value) return [];
   // 按用户要求把"命中率"折线从蓝色 #2563eb 改成应用主色调橙色 #ee6a2a。
-  // "异动关键词数" 保持黑色 #1e1c19 作为双轴对比。
+  // "异动关键词数" 走 var(--ink) 让暗色主题自动反色。
   return [
     { label: "命中率 %", color: "#ee6a2a", data: data.value.daily_series.map((d) => Math.round(d.avg_match_rate * 100)) },
-    { label: "异动关键词数", color: "#1e1c19", data: data.value.daily_series.map((d) => d.changed_count) },
+    { label: "异动关键词数", color: "var(--ink)", data: data.value.daily_series.map((d) => d.changed_count) },
   ];
 });
 
@@ -208,7 +208,7 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
         <!-- 图例小点：命中率改为主色调橙色（#ee6a2a），跟折线一致 -->
         <div class="flex gap-3 text-[11px]" :style="{ color: 'var(--ink-2)' }">
           <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#ee6a2a', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />命中率 %</span>
-          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#1e1c19', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动关键词数</span>
+          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'var(--ink)', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动关键词数</span>
         </div>
       </div>
       <LineChart :labels="chartLabels" :series="chartSeries" dual-axis />

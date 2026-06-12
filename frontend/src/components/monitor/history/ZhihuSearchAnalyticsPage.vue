@@ -91,7 +91,7 @@ const chartSeries = computed(() => {
   if (!data.value) return [];
   return [
     { label: "占有率 %", color: "#ee6a2a", data: data.value.daily_series.map((d) => Math.round(d.avg_match_rate * 100)) },
-    { label: "异动关键词数", color: "#1e1c19", data: data.value.daily_series.map((d) => d.changed_count) },
+    { label: "异动关键词数", color: "var(--ink)", data: data.value.daily_series.map((d) => d.changed_count) },
   ];
 });
 
@@ -197,7 +197,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
         <div class="text-[12.5px] font-semibold">占有率与异动趋势</div>
         <div class="flex gap-3 text-[11px]" :style="{ color: 'var(--ink-2)' }">
           <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#ee6a2a', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />占有率 %</span>
-          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#1e1c19', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动关键词数</span>
+          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'var(--ink)', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动关键词数</span>
         </div>
       </div>
       <LineChart :labels="chartLabels" :series="chartSeries" dual-axis />
