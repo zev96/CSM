@@ -57,18 +57,18 @@ const eventFilter = ref<"all" | PlatformKey>("all");
 
 const PLATFORM_COLOR: Record<PlatformKey, string> = {
   bilibili_comment: "#ee6a2a",
-  douyin_comment: "#1e1c19",
+  douyin_comment: "var(--ink)", // 抖音黑：走 ink token，暗色翻白避免折线/图例点隐形
   kuaishou_comment: "#f5c042",
 };
 const PLATFORM_CHIP_BG: Record<PlatformKey, string> = {
   bilibili_comment: "rgba(238,106,42,0.15)",
-  douyin_comment: "rgba(30,28,25,0.10)",
+  douyin_comment: "rgba(var(--ink-rgb),0.10)",
   kuaishou_comment: "rgba(245,192,66,0.18)",
 };
 const PLATFORM_CHIP_FG: Record<PlatformKey, string> = {
-  bilibili_comment: "#c9521f",
-  douyin_comment: "#1c1a17",
-  kuaishou_comment: "#8a6810",
+  bilibili_comment: "var(--primary-deep)",
+  douyin_comment: "var(--ink)",
+  kuaishou_comment: "var(--yellow-deep)",
 };
 
 async function load() {
@@ -174,7 +174,7 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
               background: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? 'rgba(122,155,94,0.15)'
                 : fmtDelta(p.rate_today, p.rate_prev).tone === 'down' ? 'rgba(216,90,72,0.12)'
                 : 'rgba(var(--ink-rgb),0.05)',
-              color: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? '#5e7848'
+              color: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? 'var(--green-deep)'
                 : fmtDelta(p.rate_today, p.rate_prev).tone === 'down' ? 'var(--red)'
                 : 'var(--ink-3)',
             }"

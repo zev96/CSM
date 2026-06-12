@@ -61,7 +61,7 @@ const meta = () => META[props.platform];
     </div>
     <div
       class="text-[10.5px] mt-2 flex items-center gap-1"
-      :style="{ color: loggedIn ? '#4d6b2f' : 'var(--red)' }"
+      :style="{ color: loggedIn ? 'var(--green-deep)' : 'var(--red)' }"
     >
       <template v-if="loggedIn">
         <Icon name="check" :size="10"/> 已登录

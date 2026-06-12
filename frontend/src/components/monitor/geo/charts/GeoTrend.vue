@@ -219,7 +219,7 @@ const yLabels = [
           cursor: 'pointer', fontFamily: 'inherit',
           border: `1px solid ${metric === m.k ? 'transparent' : 'var(--line)'}`,
           background: metric === m.k ? 'var(--ink)' : 'var(--card)',
-          color: metric === m.k ? '#fff' : 'var(--ink-2)',
+          color: metric === m.k ? 'var(--card)' : 'var(--ink-2)',
         }"
         @click="metric = m.k as 'soc' | 'first'"
       >{{ m.t }}</button>

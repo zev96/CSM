@@ -428,7 +428,7 @@ onMounted(async () => {
             color: 'var(--card)',
             borderRadius: '999px',
             padding: '5px 5px 5px 14px',
-            boxShadow: '0 14px 30px -10px rgba(var(--ink-rgb),0.5)',
+            boxShadow: '0 14px 30px -10px rgba(var(--shadow-rgb),0.5)',
             maxWidth: '95%',
           }"
         >

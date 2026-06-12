@@ -166,7 +166,7 @@ function label(cell: PlatformVM | null): string {
             :style="{
               fontSize: '9.5px', fontWeight: 600, padding: '1px 5px', borderRadius: '999px',
               fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
-              color: row.scoreDelta > 0 ? '#5e7848' : 'var(--red)',
+              color: row.scoreDelta > 0 ? 'var(--green-deep)' : 'var(--red)',
               background: row.scoreDelta > 0 ? 'rgba(122,155,94,.15)' : 'rgba(216,90,72,.12)',
             }"
           >{{ row.scoreDelta > 0 ? "↑" : "↓" }}{{ Math.abs(row.scoreDelta) }}</span>

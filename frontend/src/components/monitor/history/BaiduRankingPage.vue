@@ -1717,7 +1717,7 @@ defineExpose({ reload: loadTasks, selectTask });
               <div
                 v-if="currentKeyword.fetch_error"
                 class="text-[11.5px] mb-3 px-3 py-2 rounded"
-                :style="{ background: 'rgba(239, 68, 68, 0.08)', color: '#b91c1c', borderLeft: '3px solid #b91c1c' }"
+                :style="{ background: 'rgba(239, 68, 68, 0.08)', color: 'var(--red-deep)', borderLeft: '3px solid var(--red-deep)' }"
               >
                 抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}
               </div>

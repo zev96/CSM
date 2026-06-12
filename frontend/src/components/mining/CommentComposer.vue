@@ -539,7 +539,7 @@ function onTextareaKeydown(e: KeyboardEvent) {
           padding: '0',
           borderRadius: '999px',
           background: 'rgba(245,192,66,0.18)',
-          color: isSuggesting ? 'var(--ink-4)' : '#7a5400',
+          color: isSuggesting ? 'var(--ink-4)' : 'var(--yellow-deep)',
           border: '1px solid rgba(245,192,66,0.36)',
           cursor: isSuggesting ? 'wait' : 'pointer',
         }"

@@ -243,7 +243,7 @@ const matrixDenom = denom;
             fontFamily: 'inherit',
             border: `1px solid ${tab === x.k ? 'transparent' : 'var(--line)'}`,
             background: tab === x.k ? 'var(--ink)' : 'var(--card)',
-            color: tab === x.k ? '#fff' : 'var(--ink-2)',
+            color: tab === x.k ? 'var(--card)' : 'var(--ink-2)',
           }"
           @click="tab = x.k"
         >{{ x.t }}</button>

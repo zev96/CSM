@@ -91,7 +91,7 @@ const chartSeries = computed(() => {
   if (!data.value) return [];
   return [
     { label: "占有率 %", color: "#ee6a2a", data: data.value.daily_series.map((d) => Math.round(d.avg_share * 100)) },
-    { label: "异动问题数", color: "#1e1c19", data: data.value.daily_series.map((d) => d.changed_count) },
+    { label: "异动问题数", color: "var(--ink)", data: data.value.daily_series.map((d) => d.changed_count) },
   ];
 });
 
@@ -161,7 +161,7 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
               background: fmtDeltaPts(data.kpis.avg_share_today, data.kpis.avg_share_prev).tone === 'down' ? 'rgba(216,90,72,0.12)' :
                           fmtDeltaPts(data.kpis.avg_share_today, data.kpis.avg_share_prev).tone === 'up'   ? 'rgba(122,155,94,0.15)' : 'rgba(var(--ink-rgb),0.05)',
               color: fmtDeltaPts(data.kpis.avg_share_today, data.kpis.avg_share_prev).tone === 'down' ? 'var(--red)' :
-                     fmtDeltaPts(data.kpis.avg_share_today, data.kpis.avg_share_prev).tone === 'up'   ? '#5e7848' : 'var(--ink-3)',
+                     fmtDeltaPts(data.kpis.avg_share_today, data.kpis.avg_share_prev).tone === 'up'   ? 'var(--green-deep)' : 'var(--ink-3)',
             }"
           >{{ fmtDeltaPts(data.kpis.avg_share_today, data.kpis.avg_share_prev).text }}</span>
         </div>
@@ -180,7 +180,7 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
           <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
             <span :style="{ color: 'var(--red)' }">↓ {{ data.kpis.changed_down }}</span>
             <span class="mx-1">·</span>
-            <span :style="{ color: '#5e7848' }">↑ {{ data.kpis.changed_up }}</span>
+            <span :style="{ color: 'var(--green-deep)' }">↑ {{ data.kpis.changed_up }}</span>
           </div>
         </div>
         <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">近 {{ range === "1d" ? "1 天" : range === "7d" ? "7 天" : "30 天" }}累计</div>
@@ -197,7 +197,7 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
         <div class="text-[12.5px] font-semibold">占有率与异动趋势</div>
         <div class="flex gap-3 text-[11px]" :style="{ color: 'var(--ink-2)' }">
           <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#ee6a2a', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />占有率 %</span>
-          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'#1e1c19', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动问题数</span>
+          <span><span :style="{ display:'inline-block', width:'8px', height:'8px', background:'var(--ink)', borderRadius:'50%', marginRight:'5px', verticalAlign:'middle' }" />异动问题数</span>
         </div>
       </div>
       <LineChart :labels="chartLabels" :series="chartSeries" dual-axis />
@@ -284,7 +284,7 @@ function rankChangeText(q: Question): { text: string; tone: "up" | "down" | "fla
           <!-- 状态：上下箭头（up 绿 / down 橙 / 其他黑 -） -->
           <div class="text-center font-bold text-[14px]"
             :style="{
-              color: rankChangeText(q).tone === 'up' ? '#5e7848'
+              color: rankChangeText(q).tone === 'up' ? 'var(--green-deep)'
                 : rankChangeText(q).tone === 'down' ? 'var(--primary, #ee6a2a)'
                 : 'var(--ink, #1c1a17)',
             }"

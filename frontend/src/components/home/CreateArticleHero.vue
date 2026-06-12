@@ -153,14 +153,14 @@ function takeoff() {
       :style="{
         maxWidth: '460px',
         marginTop: '20px',
-        background: 'rgba(255, 255, 255, 0.65)',
+        background: 'var(--frosted-bg)',
         backdropFilter: 'blur(14px) saturate(140%)',
         WebkitBackdropFilter: 'blur(14px) saturate(140%)',
-        border: '1px solid rgba(255, 255, 255, 0.65)',
+        border: '1px solid var(--frosted-border)',
         borderRadius: 'var(--radius-pill)',
         padding: '6px',
         paddingLeft: '18px',
-        boxShadow: '0 4px 14px rgba(var(--ink-rgb),0.06), 0 1px 3px rgba(var(--ink-rgb),0.04)',
+        boxShadow: '0 4px 14px rgba(var(--shadow-rgb),0.06), 0 1px 3px rgba(var(--shadow-rgb),0.04)',
       }"
     >
       <Icon name="search" :size="16" class="opacity-60" />
@@ -197,15 +197,15 @@ function takeoff() {
             :style="{
               height: '32px',
               padding: '0 12px',
-              background: 'rgba(255, 255, 255, 0.55)',
+              background: 'var(--frosted-bg)',
               backdropFilter: 'blur(12px) saturate(140%)',
               WebkitBackdropFilter: 'blur(12px) saturate(140%)',
-              border: '1px solid rgba(255, 255, 255, 0.65)',
+              border: '1px solid var(--frosted-border)',
               borderRadius: 'var(--radius-pill)',
               fontSize: '12px',
               color: 'var(--ink-2)',
               cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(var(--ink-rgb),0.04), 0 1px 2px rgba(var(--ink-rgb),0.03)',
+              boxShadow: '0 2px 6px rgba(var(--shadow-rgb),0.04), 0 1px 2px rgba(var(--shadow-rgb),0.03)',
             }"
           >
             <span :style="{ color: 'var(--ink-3)' }">模板</span>
@@ -235,15 +235,15 @@ function takeoff() {
             :style="{
               height: '32px',
               padding: '0 12px',
-              background: 'rgba(255, 255, 255, 0.55)',
+              background: 'var(--frosted-bg)',
               backdropFilter: 'blur(12px) saturate(140%)',
               WebkitBackdropFilter: 'blur(12px) saturate(140%)',
-              border: '1px solid rgba(255, 255, 255, 0.65)',
+              border: '1px solid var(--frosted-border)',
               borderRadius: 'var(--radius-pill)',
               fontSize: '12px',
               color: 'var(--ink-2)',
               cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(var(--ink-rgb),0.04), 0 1px 2px rgba(var(--ink-rgb),0.03)',
+              boxShadow: '0 2px 6px rgba(var(--shadow-rgb),0.04), 0 1px 2px rgba(var(--shadow-rgb),0.03)',
             }"
           >
             <span :style="{ color: 'var(--ink-3)' }">风格</span>

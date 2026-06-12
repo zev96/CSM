@@ -142,15 +142,15 @@ const STATUS_LABEL: Record<DerivedStatus, string> = {
 
 const STATUS_TONE: Record<DerivedStatus, { bg: string; fg: string }> = {
   pending: { bg: "rgba(var(--ink-rgb),0.08)", fg: "var(--ink-3)" },
-  running: { bg: "rgba(238,106,42,0.16)", fg: "#b34d12" },
+  running: { bg: "rgba(238,106,42,0.16)", fg: "var(--primary-deep)" },
   // 需验证：紫色 — 跟 抓取中 / 失败 / 进行中 都拉开（用户一眼能区分"轮到我操作了"）
-  captcha_waiting: { bg: "rgba(124,77,180,0.18)", fg: "#5a3e8c" },
-  failed: { bg: "rgba(196,68,57,0.16)", fg: "var(--red)" },
+  captcha_waiting: { bg: "rgba(124,77,180,0.18)", fg: "var(--purple-deep)" },
+  failed: { bg: "rgba(196,68,57,0.16)", fg: "var(--red-deep)" },
   // 进行中：黄色（暖告知"等用户操作"，跟 抓取中 的橙红区分开）
-  in_progress: { bg: "rgba(245,192,66,0.20)", fg: "#7a5400" },
+  in_progress: { bg: "rgba(245,192,66,0.20)", fg: "var(--yellow-deep)" },
   // 已完成：绿色，跟旧 done 同色
-  fully_completed: { bg: "rgba(96,138,72,0.18)", fg: "#4d6b2f" },
-  done_empty: { bg: "rgba(96,138,72,0.18)", fg: "#4d6b2f" },
+  fully_completed: { bg: "rgba(96,138,72,0.18)", fg: "var(--green-deep)" },
+  done_empty: { bg: "rgba(96,138,72,0.18)", fg: "var(--green-deep)" },
 };
 
 const derivedStatus = computed<DerivedStatus>(() => {
@@ -375,7 +375,7 @@ const keywordShort = computed(() => {
             background: 'var(--card-white)',
             border: '1px solid var(--line-2)',
             borderRadius: '10px',
-            boxShadow: '0 10px 30px -8px rgba(var(--ink-rgb),0.25)',
+            boxShadow: '0 10px 30px -8px rgba(var(--shadow-rgb),0.25)',
             padding: '4px',
             zIndex: 9999,
           }"

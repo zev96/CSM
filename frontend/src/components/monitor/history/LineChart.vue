@@ -7,7 +7,7 @@
  *     :labels="['5/8','5/9','5/10',...]"
  *     :series="[
  *       { label:'B 站', color:'#ee6a2a', data:[80,75,72,...] },
- *       { label:'抖音', color:'#1e1c19', data:[90,90,88,...] },
+ *       { label:'抖音', color:'var(--ink)', data:[90,90,88,...] },
  *     ]"
  *     :y-axis-formatter="(v) => `${v}%`"
  *   />
@@ -21,6 +21,7 @@
  */
 import { computed } from "vue";
 import { Line } from "vue-chartjs";
+import { useChartTheme } from "@/composables/useChartTheme";
 import {
   Chart,
   LineController,
@@ -52,6 +53,8 @@ interface Series {
   data: (number | null)[];
 }
 
+const { theme, resolveColor } = useChartTheme();
+
 const props = defineProps<{
   labels: string[];
   series: Series[];
@@ -76,41 +79,48 @@ const props = defineProps<{
   padding?: number;
 }>();
 
-const data = computed(() => ({
-  labels: props.labels,
-  datasets: props.series.map((s, i) => ({
-    label: s.label,
-    borderColor: s.color,
-    backgroundColor: s.color + "20",  // 12% alpha 填充
-    data: s.data,
-    borderWidth: 2.2,
-    tension: 0.25,
-    pointRadius: props.pointRadius ?? 0,
-    pointHoverRadius: Math.max(4, (props.pointRadius ?? 0) + 1),
-    pointBackgroundColor: s.color,
-    pointBorderColor: "#fbf7ec",
-    pointBorderWidth: props.pointRadius ? 1 : 0,
-    // 常显圆点时关闭裁剪 —— chart.js 默认把数据集裁到 chartArea，导致正好
-    // 落在 100%（轴顶）的点被切成半圆。配合 layout.padding 留白即可完整显示。
-    clip: props.pointRadius ? (false as const) : undefined,
-    fill: false,
-    yAxisID: props.dualAxis && i === 1 ? "y1" : "y",
-  })),
-}));
+const data = computed(() => {
+  const t = theme.value; // track theme so datasets recompute on flip
+  return {
+    labels: props.labels,
+    datasets: props.series.map((s, i) => {
+      const c = resolveColor(s.color);
+      return {
+        label: s.label,
+        borderColor: c,
+        backgroundColor: c + "20", // 12% alpha fill
+        data: s.data,
+        borderWidth: 2.2,
+        tension: 0.25,
+        pointRadius: props.pointRadius ?? 0,
+        pointHoverRadius: Math.max(4, (props.pointRadius ?? 0) + 1),
+        pointBackgroundColor: c,
+        pointBorderColor: t.pointBorder,
+        pointBorderWidth: props.pointRadius ? 1 : 0,
+        // 常显圆点时关闭裁剪 —— chart.js 默认把数据集裁到 chartArea，导致正好
+        // 落在 100%（轴顶）的点被切成半圆。配合 layout.padding 留白即可完整显示。
+        clip: props.pointRadius ? (false as const) : undefined,
+        fill: false,
+        yAxisID: props.dualAxis && i === 1 ? "y1" : "y",
+      };
+    }),
+  };
+});
 
 const options = computed<any>(() => {
+  const t = theme.value;
   const base = {
     responsive: true,
     maintainAspectRatio: false,
     layout: { padding: props.padding ?? 0 },
     interaction: { mode: "index", intersect: false },
     plugins: {
-      legend: { display: false },  // 外部 legend 由父组件绘，更可控
+      legend: { display: false }, // 外部 legend 由父组件绘，更可控
       tooltip: {
-        backgroundColor: "#1c1a17",
-        titleColor: "#fbf7ec",
-        bodyColor: "#fbf7ec",
-        borderColor: "rgba(255,255,255,0.1)",
+        backgroundColor: t.tooltipBg,
+        titleColor: t.tooltipFg,
+        bodyColor: t.tooltipFg,
+        borderColor: t.tooltipBorder,
         borderWidth: 1,
         padding: 10,
         boxPadding: 4,
@@ -121,16 +131,16 @@ const options = computed<any>(() => {
     },
     scales: {
       x: {
-        grid: { color: "rgba(28,26,23,0.05)" },
-        ticks: { color: "#7a7569", font: { size: 10 } },
+        grid: { color: t.grid },
+        ticks: { color: t.tick, font: { size: 10 } },
       },
       y: {
         beginAtZero: true,
         // yMax 显式 set 时强制上限（百分比固定 0-100 是典型场景）
         ...(typeof props.yMax === "number" ? { max: props.yMax } : {}),
-        grid: { color: "rgba(28,26,23,0.05)" },
+        grid: { color: t.grid },
         ticks: {
-          color: props.dualAxis ? props.series[0]?.color || "#7a7569" : "#7a7569",
+          color: props.dualAxis ? resolveColor(props.series[0]?.color || "var(--ink-3)") : t.tick,
           font: { size: 10 },
           callback: props.yAxisFormatter
             ? function (this: any, v: any) { return props.yAxisFormatter!(Number(v)); }
@@ -145,7 +155,7 @@ const options = computed<any>(() => {
       beginAtZero: true,
       grid: { drawOnChartArea: false },
       ticks: {
-        color: props.series[1]?.color || "#7a7569",
+        color: resolveColor(props.series[1]?.color || "var(--ink-3)"),
         font: { size: 10 },
       },
     };
