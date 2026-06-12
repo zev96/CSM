@@ -126,6 +126,11 @@ onMounted(async () => {
     /* sidecar 没起来时 store.start() 内部会静默 —— 走 ready 之后 hydrate 兜底 */
   }
   configReady.value = true;
+  // 启动后静默检查更新：有新版本自动弹 UpdateAvailableModal；已「跳过」的版本不弹。
+  // fire-and-forget —— 不阻塞 UI；检查失败静默（仅设置页手动检查才提示）。
+  import("./composables/useUpdateFlow")
+    .then(({ runUpdateCheck }) => runUpdateCheck({ silent: true }))
+    .catch(() => {});
 });
 </script>
 
