@@ -45,6 +45,7 @@
   --red-soft: #f3d3cd;
   --red-deep: #a3382a;
   --yellow-deep: #a07a18;
+  --purple-deep: #5a3e8c;
 
   /* ── chrome（滚动条 / 磨砂玻璃）—— 借 --ink-rgb 自动随主题翻 ── */
   --scroll-thumb: rgba(var(--ink-rgb), 0.18);
@@ -86,6 +87,7 @@ body[data-theme="dark"] {
   --red-rgb: 224, 106, 88;
   --red-soft: #3a2420;
   --red-deep: #f0a094;
+  --purple-deep: #c4a9e8;
   /* 重按钮/重卡：反相成浅色 */
   --dark: #f3ede0;
   --dark-2: #e6dccb;
