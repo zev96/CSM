@@ -17,7 +17,7 @@
  * 改成 defineExpose 让父组件的 goToZhihuTask 仍能从模块外驱动选中态，
  * 以及让父组件的 SSE finished 事件回调能通知模块刷新 taskResults。
  */
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
@@ -537,10 +537,12 @@ const selectedTopN = computed<number>(() => {
 const l2Wide = ref(typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches);
 let l2Mq: MediaQueryList | null = null;
 const onL2MqChange = (e: MediaQueryListEvent) => { l2Wide.value = e.matches; };
-if (typeof window !== "undefined") {
+onMounted(() => {
+  if (typeof window === "undefined") return;
   l2Mq = window.matchMedia("(min-width: 640px)");
+  l2Wide.value = l2Mq.matches;
   l2Mq.addEventListener("change", onL2MqChange);
-}
+});
 onBeforeUnmount(() => l2Mq?.removeEventListener("change", onL2MqChange));
 
 watch(selectedTaskId, async (id) => {
