@@ -30,7 +30,7 @@ const ARC = Math.PI * R;
 const ARC_PATH = `M 10 ${R + 10} A ${R} ${R} 0 0 1 ${R * 2 + 10} ${R + 10}`;
 const dash = computed(() => `${(pct.value / 100) * ARC} ${ARC}`);
 const arcColor = computed(() =>
-  pct.value >= 50 ? "var(--green)" : pct.value >= 20 ? "#e8a04a" : "var(--red)",
+  pct.value >= 50 ? "var(--green)" : pct.value >= 20 ? "var(--yellow)" : "var(--red)",
 );
 
 onMounted(async () => {
@@ -69,7 +69,7 @@ onMounted(async () => {
 
     <div class="flex min-h-0 flex-1 flex-col items-center justify-center">
       <svg :viewBox="`0 0 ${R * 2 + 20} ${R + 30}`" :style="{ width: '100%', maxWidth: 'clamp(150px, 84cqh, 380px)' }">
-        <path :d="ARC_PATH" fill="none" stroke="rgba(28,26,23,0.08)" :stroke-width="12" stroke-linecap="round" />
+        <path :d="ARC_PATH" fill="none" stroke="rgba(var(--ink-rgb),0.08)" :stroke-width="12" stroke-linecap="round" />
         <path
           :d="ARC_PATH"
           fill="none"
@@ -94,7 +94,7 @@ onMounted(async () => {
             ? { background: 'var(--green-soft)', color: 'var(--green-deep)' }
             : deltaPct < 0
               ? { background: 'var(--red-soft)', color: 'var(--red-deep)' }
-              : { background: 'rgba(28,26,23,0.06)', color: 'var(--ink-2)' }
+              : { background: 'rgba(var(--ink-rgb),0.06)', color: 'var(--ink-2)' }
         "
       >
         <Icon v-if="deltaPct > 0" name="arrowUp" :size="9" />
@@ -107,12 +107,12 @@ onMounted(async () => {
 
 <style scoped>
 .trend-detail {
-  background: rgba(28, 26, 23, 0.04);
+  background: rgba(var(--ink-rgb), 0.04);
   color: var(--ink-2);
-  border: 1px solid rgba(28, 26, 23, 0.06);
+  border: 1px solid rgba(var(--ink-rgb), 0.06);
   transition: background-color 0.12s ease;
 }
 .trend-detail:hover {
-  background: rgba(28, 26, 23, 0.08);
+  background: rgba(var(--ink-rgb), 0.08);
 }
 </style>
