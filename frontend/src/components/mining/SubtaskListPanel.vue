@@ -66,7 +66,7 @@ function titleShort(title: string): string {
 // record 上的字段，永远准确；细节（共 N 层）放到右栏面板里看。
 function pillFor(v: Video): { label: string; bg: string; fg: string } {
   if (v.already_commented) {
-    return { label: "已完成", bg: "rgba(122,155,94,0.18)", fg: "#3a7d44" };
+    return { label: "已完成", bg: "rgba(122,155,94,0.18)", fg: "var(--green-deep)" };
   }
   return { label: "待评论", bg: "var(--yellow-soft)", fg: "var(--yellow-deep)" };
 }

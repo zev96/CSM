@@ -422,7 +422,7 @@ watch(keywordResults, (kws) => {
             </div>
 
             <!-- 状态提示 -->
-            <div v-if="currentKeyword.fetch_error" class="text-[11.5px] mb-2 px-3 py-2 rounded" :style="{ background: 'rgba(239,68,68,0.08)', color: '#b91c1c', borderLeft: '3px solid #b91c1c' }">抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}</div>
+            <div v-if="currentKeyword.fetch_error" class="text-[11.5px] mb-2 px-3 py-2 rounded" :style="{ background: 'rgba(239,68,68,0.08)', color: 'var(--red-deep)', borderLeft: '3px solid var(--red-deep)' }">抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}</div>
             <div v-else-if="currentKeyword.empty_reason" class="text-[11.5px] mb-2" :style="{ color: 'var(--ink-3)' }">知乎无结果：{{ currentKeyword.empty_reason }}</div>
 
             <!-- 前 10 排名列表（固定高度滚动卡片）-->

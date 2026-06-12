@@ -213,7 +213,7 @@ const pillStyle = computed(() => {
   if (cardState.value === "drafting") {
     return { bg: "var(--primary-soft)", fg: "var(--primary-deep)", border: "transparent" };
   }
-  return { bg: "rgba(122,155,94,0.18)", fg: "#3a7d44", border: "transparent" };
+  return { bg: "rgba(122,155,94,0.18)", fg: "var(--green-deep)", border: "transparent" };
 });
 const pillLabel = computed(() => {
   if (cardState.value === "todo") return "待评论";
@@ -435,7 +435,7 @@ const pillLabel = computed(() => {
       <span style="width: 22px; height: 22px; border-radius: 999px; background: var(--green); color: #fff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;">
         <Icon name="check" :size="12" />
       </span>
-      <span style="font-size: 12.5px; color: #3a7d44;">
+      <span style="font-size: 12.5px; color: var(--green-deep);">
         这条已经搞定 · 共 {{ comments.length }} 层。需要补盖楼或编辑？
       </span>
       <button
@@ -445,7 +445,7 @@ const pillLabel = computed(() => {
         :style="{
           height: '28px', padding: '0 12px', borderRadius: '999px',
           fontSize: '11.5px', fontWeight: 600,
-          background: '#3a7d44', color: '#fff', border: '1px solid #3a7d44',
+          background: 'var(--green)', color: '#fff', border: '1px solid var(--green)',
           cursor: bulkBusy ? 'wait' : 'pointer',
         }"
         @click="onResumeDrafting"
