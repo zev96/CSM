@@ -86,13 +86,13 @@ async function loadLookups() {
 
 // kind → icon name + display label + accent color。V1 的 KIND_META。
 const KIND_META: Record<string, { i: string; l: string; c: string }> = {
-  heading: { i: "tag" as any, l: "标题", c: "#1e1c19" },
-  paragraph: { i: "fileText", l: "段落", c: "#5a544c" },
-  numbered_list: { i: "sliders", l: "编号清单", c: "#5a544c" },
-  hero_brand: { i: "skills", l: "主推款", c: "#ee6a2a" },
-  competitor_pool: { i: "library", l: "产品池", c: "#ee6a2a" },
-  literal: { i: "copy", l: "原文照写", c: "#5a544c" },
-  test_framework: { i: "library", l: "测评框架", c: "#2e7d4d" },
+  heading: { i: "tag" as any, l: "标题", c: "var(--ink)" },
+  paragraph: { i: "fileText", l: "段落", c: "var(--ink-2)" },
+  numbered_list: { i: "sliders", l: "编号清单", c: "var(--ink-2)" },
+  hero_brand: { i: "skills", l: "主推款", c: "var(--primary)" },
+  competitor_pool: { i: "library", l: "产品池", c: "var(--primary)" },
+  literal: { i: "copy", l: "原文照写", c: "var(--ink-2)" },
+  test_framework: { i: "library", l: "测评框架", c: "var(--green-deep)" },
 };
 
 // 选中的左侧 slot
