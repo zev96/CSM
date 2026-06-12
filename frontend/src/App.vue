@@ -126,6 +126,15 @@ onMounted(async () => {
     /* sidecar 没起来时 store.start() 内部会静默 —— 走 ready 之后 hydrate 兜底 */
   }
   configReady.value = true;
+  // 启动后静默检查更新：有新版本自动弹 UpdateAvailableModal；已「跳过」的版本不弹。
+  // 仅在 sidecar 确实可达（configLoadOk）时检查 —— 否则 /api/updater/check 必 connection
+  // refused，白跑一趟。fire-and-forget 不阻塞 UI；.then 返回内层 Promise，故 runUpdateCheck
+  // 的 rejection 也会被 .catch 吞掉，检查失败对用户静默（仅设置页手动检查才提示）。
+  if (configLoadOk.value) {
+    import("./composables/useUpdateFlow")
+      .then(({ runUpdateCheck }) => runUpdateCheck({ silent: true }))
+      .catch(() => {});
+  }
 });
 </script>
 

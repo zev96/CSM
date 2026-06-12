@@ -14,54 +14,36 @@
 //! the standard right-click menu chrome (white bg, system font, system
 //! shadow). We can't paint it with the app's beige theme without giving
 //! up the native menu and building a custom transparent webview window
-//! at the cursor. For now we polish what we can within the native API:
-//! a disabled brand header, a separator, accelerator hints, and grouped
-//! items so the menu at least feels "designed" rather than the default
-//! 2-row stub.
+//! at the cursor. The menu is intentionally minimal: 显示主窗口 /
+//! separator / 退出 CSM.
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    // Disabled brand header — gives the menu a "title" so the user knows
-    // which app this menu belongs to. `enabled=false` greys it out so it's
-    // not click-able and reads as a label.
-    let header = MenuItem::with_id(
-        app,
-        "header",
-        "Content SEO Maker",
-        false,
-        None::<&str>,
-    )?;
-
-    // Show / hide the main window. Accelerator is a hint shown on the
-    // right side of the menu item — the actual key binding lives in the
-    // global shortcut layer (not wired yet; the hint is forward-looking).
+    // Show / hide the main window.
     let show_item = MenuItem::with_id(
         app,
         "show",
         "显示主窗口",
         true,
-        Some("Ctrl+Shift+C"),
+        None::<&str>,
     )?;
 
-    // Quit. Native menus on Windows render Alt+F4-style accelerator on
-    // the right; we use the more familiar Ctrl+Q which Office/Tauri apps
-    // commonly bind. Same caveat — global shortcut not wired yet.
+    // Quit.
     let quit_item = MenuItem::with_id(
         app,
         "quit",
         "退出 CSM",
         true,
-        Some("Ctrl+Q"),
+        None::<&str>,
     )?;
 
-    let sep1 = PredefinedMenuItem::separator(app)?;
-    let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep = PredefinedMenuItem::separator(app)?;
 
     let menu = Menu::with_items(
         app,
-        &[&header, &sep1, &show_item, &sep2, &quit_item],
+        &[&show_item, &sep, &quit_item],
     )?;
 
     let _tray = TrayIconBuilder::with_id("csm-tray")
@@ -83,8 +65,6 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                     app_clone.exit(0);
                 });
             }
-            // "header" is disabled so it shouldn't fire, but explicitly
-            // ignore it to avoid future warnings if Tauri changes that.
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

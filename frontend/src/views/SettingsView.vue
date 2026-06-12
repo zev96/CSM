@@ -566,119 +566,14 @@ onMounted(async () => {
   }
 });
 
-// 检查更新（完整闭环 prompt → downloading → ready → install_and_restart）：
-//   1. /api/updater/check 拿 has_update + info（含 expected_sha256）
-//   2. 没更新 / 出错 → toast
-//   3. 有更新 → updateAlert() 弹 prompt
-//   4. 用户点「立即更新」→ POST /api/updater/download 拿 job_id
-//      → 切 phase=downloading → subscribe SSE 喂进度
-//      → done 事件 → 切 phase=ready
-//      → error / 用户「取消下载」→ 切 phase=error 或关闭弹窗
-//   5. 用户点「立即重启」→ Tauri invoke install_and_restart
+// 检查更新：委托 useUpdateFlow.runUpdateCheck（手动模式 silent=false：有 toast 反馈、忽略「跳过此版本」）。
 const updaterChecking = ref(false);
 async function checkForUpdate() {
   if (updaterChecking.value) return;
   updaterChecking.value = true;
   try {
-    const { updaterCheck, updaterDownload, subscribe } = await import(
-      "@/api/client"
-    );
-    const {
-      updateAlert,
-      transitionToDownloading,
-      updateProgress,
-      transitionToReady,
-      transitionToError,
-    } = await import("@/composables/useUpdateAlert");
-    const r = await updaterCheck();
-    if (r.error) {
-      toast.warn(`更新检查未完成：${r.error}`);
-      return;
-    }
-    if (!r.has_update || !r.info) {
-      toast.info(`已是最新版本（${r.current_version}）`);
-      return;
-    }
-
-    const ctrl = updateAlert({
-      info: r.info,
-      currentVersion: r.current_version,
-    });
-    const decision = await ctrl.prompt;
-    if (decision !== "update") return;
-
-    // ── 触发下载 ──────────────────────────────────────────────
-    let job: { job_id: string; stream_url: string };
-    try {
-      job = await updaterDownload(r.info.zip_url, r.info.expected_sha256);
-    } catch (e: any) {
-      transitionToError(
-        `启动下载失败：${e?.response?.data?.detail ?? e?.message ?? e}`,
-      );
-      await ctrl.final;
-      return;
-    }
-
-    transitionToDownloading();
-
-    // SSE 订阅：tearDown 在 done / error / cancel 时调。
-    //
-    // ⚠ 关键：downloadedPath 必须**本地捕获**。不能在 invoke 时再读
-    // updateAlertState.targetPath —— resolveFinal("restart") 内部同步调
-    // closeAndReset() 会立刻把 state 全清掉（包括 targetPath = ""），等
-    // SettingsView 这边的 await ctrl.final 在 microtask 后醒过来时，state
-    // 已经是空的。本地变量不会被 reset 影响。
-    let resolved = false; // 防止 done + cancel 抢双 finalResolve
-    let downloadedPath = "";
-    const stop = subscribe(job.stream_url, {
-      progress: (d: any) => {
-        if (resolved) return;
-        updateProgress(d.done ?? 0, d.total ?? 0, d.percent ?? 0);
-      },
-      done: (d: any) => {
-        if (resolved) return;
-        resolved = true;
-        downloadedPath = d.target ?? "";
-        transitionToReady(downloadedPath);
-        stop();
-      },
-      error: (d: any) => {
-        if (resolved) return;
-        resolved = true;
-        transitionToError(d.error ?? "下载失败（未知原因）");
-        stop();
-      },
-    });
-
-    // 等用户在 ready / error / 取消下载 时做的二次决策
-    const finalChoice = await ctrl.final;
-    stop(); // 兜底：取消下载时 SSE 还没收到终止事件，主动断开
-
-    if (finalChoice === "restart") {
-      // dev 模式下 invoke 会失败 —— Tauri 把 "tauri" global 注入只在 release
-      // 或 tauri dev 启的 webview 里；纯浏览器跑 vite 拿不到。
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("install_and_restart", {
-          zipPath: downloadedPath,
-        });
-        // 走到这里说明 install_and_restart 没立刻 exit —— 不正常，给个 toast。
-        toast.info("正在准备安装更新…");
-      } catch (e: any) {
-        const msg = String(e?.message ?? e ?? "");
-        if (msg.includes("updater_not_found")) {
-          toast.warn(
-            "dev 环境下没有 updater.exe，无法测试安装重启流程。请打 release 包验证。",
-          );
-        } else {
-          toast.error(`启动安装失败：${msg}`);
-        }
-      }
-    }
-  } catch (e: any) {
-    toast.error(
-      `检查更新失败：${e?.response?.data?.detail ?? e?.message ?? e}`,
-    );
+    const { runUpdateCheck } = await import("@/composables/useUpdateFlow");
+    await runUpdateCheck({ silent: false });
   } finally {
     updaterChecking.value = false;
   }

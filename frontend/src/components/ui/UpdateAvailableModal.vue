@@ -29,6 +29,9 @@ import {
   resolveFinal,
 } from "@/composables/useUpdateAlert";
 
+function onPromptSkip() {
+  resolvePrompt("skip");
+}
 function onPromptCancel() {
   resolvePrompt("cancel");
 }
@@ -314,6 +317,7 @@ const fmtTotal = computed(() => fmtMB(updateAlertState.progress.total));
       </span>
 
       <template v-if="updateAlertState.phase === 'prompt'">
+        <Btn variant="ghost" small @click="onPromptSkip">跳过此版本</Btn>
         <Btn variant="ghost" small @click="onPromptCancel">取消</Btn>
         <Btn
           variant="solid"

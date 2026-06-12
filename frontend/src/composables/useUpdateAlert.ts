@@ -32,7 +32,7 @@ type UpdateInfo = NonNullable<UpdaterCheckResult["info"]>;
 export type UpdatePhase = "prompt" | "downloading" | "ready" | "error";
 
 /** prompt 阶段的决策。 */
-export type PromptChoice = "update" | "cancel";
+export type PromptChoice = "update" | "cancel" | "skip";
 
 /** ready / error 阶段的决策。 */
 export type FinalChoice = "restart" | "cancel";
@@ -107,8 +107,9 @@ export function resolvePrompt(value: PromptChoice) {
     c.promptResolve("update");
     return;
   }
-  // cancel：双 resolve，再清理
-  c.promptResolve("cancel");
+  // cancel / skip：都关闭弹窗 + 双 resolve（finalResolve 兜底，避免 awaitFinalChoice 永挂）。
+  // "skip" 的版本持久化由调用方（useUpdateFlow）在拿到 prompt 结果后处理。
+  c.promptResolve(value);
   c.finalResolve("cancel");
   closeAndReset();
 }
