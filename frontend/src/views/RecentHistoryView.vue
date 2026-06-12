@@ -287,7 +287,7 @@ onMounted(reload);
               height: '32px',
               borderRadius: '9px',
               background: 'var(--yellow-soft)',
-              color: '#7a5400',
+              color: 'var(--yellow-deep)',
             }"
           >
             <Icon name="fileText" :size="14" />

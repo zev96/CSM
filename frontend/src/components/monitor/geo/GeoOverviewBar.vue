@@ -35,7 +35,7 @@ function deltaTone(v: number) {
   return v > 0 ? "up" : v < 0 ? "down" : "flat";
 }
 const deltaStyle = (v: number) => ({
-  color: v > 0 ? "#5e7848" : v < 0 ? "var(--red)" : "var(--ink-3)",
+  color: v > 0 ? "var(--green-deep)" : v < 0 ? "var(--red)" : "var(--ink-3)",
   background: v > 0 ? "rgba(122,155,94,.15)" : v < 0 ? "rgba(216,90,72,.12)" : "rgba(var(--ink-rgb),.05)",
 });
 const socDeltaText = computed(() => {

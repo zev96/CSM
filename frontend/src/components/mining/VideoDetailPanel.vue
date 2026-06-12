@@ -373,17 +373,17 @@ const pillLabel = computed(() => {
       }"
     >
       <div class="flex items-center gap-1.5 flex-shrink-0">
-        <span style="width: 18px; height: 18px; border-radius: 5px; background: var(--dark); color: var(--yellow); display: inline-flex; align-items: center; justify-content: center;">
+        <span style="width: 18px; height: 18px; border-radius: 5px; background: var(--yellow-soft); color: var(--yellow-deep); display: inline-flex; align-items: center; justify-content: center;">
           <Icon name="spark" :size="11" />
         </span>
-        <span class="text-[11px] font-semibold tracking-wide" style="color: #7a5400">AI 速览</span>
+        <span class="text-[11px] font-semibold tracking-wide" style="color: var(--yellow-deep)">AI 速览</span>
         <button
           v-if="v.ai_summary && !summaryLoading"
           type="button"
           class="ml-auto inline-flex items-center justify-center transition hover:bg-[rgba(122,84,0,0.12)]"
           :style="{
             width: '22px', height: '22px', borderRadius: '999px',
-            color: '#7a5400', cursor: 'pointer',
+            color: 'var(--yellow-deep)', cursor: 'pointer',
           }"
           title="重新生成"
           @click="triggerSummarize(true)"

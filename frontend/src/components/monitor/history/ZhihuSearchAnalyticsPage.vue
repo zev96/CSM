@@ -161,7 +161,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
               background: fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'down' ? 'rgba(216,90,72,0.12)' :
                           fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? 'rgba(122,155,94,0.15)' : 'rgba(var(--ink-rgb),0.05)',
               color: fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'down' ? 'var(--red)' :
-                     fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? '#5e7848' : 'var(--ink-3)',
+                     fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? 'var(--green-deep)' : 'var(--ink-3)',
             }"
           >{{ fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).text }}</span>
         </div>
@@ -180,7 +180,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
           <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
             <span :style="{ color: 'var(--red)' }">↓ {{ data.kpis.changed_down }}</span>
             <span class="mx-1">·</span>
-            <span :style="{ color: '#5e7848' }">↑ {{ data.kpis.changed_up }}</span>
+            <span :style="{ color: 'var(--green-deep)' }">↑ {{ data.kpis.changed_up }}</span>
           </div>
         </div>
         <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">近 {{ range === "1d" ? "1 天" : range === "7d" ? "7 天" : "30 天" }}累计</div>
@@ -284,7 +284,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
           <!-- 状态：上下箭头（up 绿 / down 橙 / 其他黑 -） -->
           <div class="text-center font-bold text-[14px]"
             :style="{
-              color: rankChangeText(q).tone === 'up' ? '#5e7848'
+              color: rankChangeText(q).tone === 'up' ? 'var(--green-deep)'
                 : rankChangeText(q).tone === 'down' ? 'var(--primary, #ee6a2a)'
                 : 'var(--ink, #1c1a17)',
             }"

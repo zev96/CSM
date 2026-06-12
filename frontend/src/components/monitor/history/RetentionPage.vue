@@ -174,7 +174,7 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
               background: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? 'rgba(122,155,94,0.15)'
                 : fmtDelta(p.rate_today, p.rate_prev).tone === 'down' ? 'rgba(216,90,72,0.12)'
                 : 'rgba(var(--ink-rgb),0.05)',
-              color: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? '#5e7848'
+              color: fmtDelta(p.rate_today, p.rate_prev).tone === 'up' ? 'var(--green-deep)'
                 : fmtDelta(p.rate_today, p.rate_prev).tone === 'down' ? 'var(--red)'
                 : 'var(--ink-3)',
             }"

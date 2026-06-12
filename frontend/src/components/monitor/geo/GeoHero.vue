@@ -88,7 +88,7 @@ const band = () => props.metric?.status_band;
       :style="{ marginTop: '12px', gap: '10px', padding: '10px 14px', borderRadius: '12px', background: 'var(--yellow-soft)', border: '1px solid rgba(245,192,66,.45)' }"
     >
       <span :style="{ width: '7px', height: '7px', borderRadius: '999px', background: 'var(--yellow)', flexShrink: 0 }" />
-      <span :style="{ fontSize: '12px', color: '#8a6a1a', lineHeight: 1.5 }">{{ conclusion }}</span>
+      <span :style="{ fontSize: '12px', color: 'var(--yellow-deep)', lineHeight: 1.5 }">{{ conclusion }}</span>
     </div>
   </div>
 </template>

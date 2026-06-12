@@ -167,7 +167,7 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
               background: fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'down' ? 'rgba(216,90,72,0.12)' :
                           fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? 'rgba(122,155,94,0.15)' : 'rgba(var(--ink-rgb),0.05)',
               color: fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'down' ? 'var(--red)' :
-                     fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? '#5e7848' : 'var(--ink-3)',
+                     fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? 'var(--green-deep)' : 'var(--ink-3)',
             }"
           >{{ fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).text }}</span>
         </div>
@@ -185,13 +185,13 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
           <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
             <span :style="{ color: 'var(--red)' }">↓ {{ data.kpis.changed_down }}</span>
             <span class="mx-1">·</span>
-            <span :style="{ color: '#5e7848' }">↑ {{ data.kpis.changed_up }}</span>
+            <span :style="{ color: 'var(--green-deep)' }">↑ {{ data.kpis.changed_up }}</span>
           </div>
         </div>
         <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
           近 {{ range === "1d" ? "1 天" : range === "7d" ? "7 天" : "30 天" }}累计
           <template v-if="data.kpis.captcha_count > 0">
-            <span class="ml-1" :style="{ color: '#c98a18' }">· 验证码 {{ data.kpis.captcha_count }}</span>
+            <span class="ml-1" :style="{ color: 'var(--yellow-deep)' }">· 验证码 {{ data.kpis.captcha_count }}</span>
           </template>
         </div>
       </div>
@@ -291,7 +291,7 @@ function rankChangeText(k: KeywordRow): { text: string; tone: "up" | "down" | "f
           </div>
           <div class="text-center font-bold text-[14px]"
             :style="{
-              color: rankChangeText(k).tone === 'up' ? '#5e7848'
+              color: rankChangeText(k).tone === 'up' ? 'var(--green-deep)'
                 : rankChangeText(k).tone === 'down' ? 'var(--primary, #ee6a2a)'
                 : 'var(--ink, #1c1a17)',
             }"
