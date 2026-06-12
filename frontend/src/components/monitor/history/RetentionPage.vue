@@ -57,7 +57,7 @@ const eventFilter = ref<"all" | PlatformKey>("all");
 
 const PLATFORM_COLOR: Record<PlatformKey, string> = {
   bilibili_comment: "#ee6a2a",
-  douyin_comment: "#1e1c19",
+  douyin_comment: "var(--ink)", // 抖音黑：走 ink token，暗色翻白避免折线/图例点隐形
   kuaishou_comment: "#f5c042",
 };
 const PLATFORM_CHIP_BG: Record<PlatformKey, string> = {
