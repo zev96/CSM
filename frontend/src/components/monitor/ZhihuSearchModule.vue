@@ -13,6 +13,8 @@ import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 import Pill from "@/components/ui/Pill.vue";
 import Icon from "@/components/ui/Icon.vue";
+import SplitPane from "@/components/ui/SplitPane.vue";
+import Dropdown from "@/components/ui/Dropdown.vue";
 import LineChart from "./history/LineChart.vue";
 import AddTaskModal from "./AddTaskModal.vue";
 import { zhihuSearchTaskStatus } from "@/utils/zhihuSearchStatus";
@@ -243,219 +245,258 @@ watch(keywordResults, (kws) => {
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-4">
 
-    <!-- ═══ L1: 落地页 selectedId===null ═══ -->
-    <template v-if="selectedId === null">
-      <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
+    <!-- ═══ 单一 SplitPane：#left 按 selectedId 切换 L1/L2；#right 同理 ═══ -->
+    <SplitPane>
+      <template #left>
+        <section class="flex h-full min-h-0 flex-col overflow-hidden" :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)', padding: '22px' }">
 
-        <!-- 左卡：监测任务 -->
-        <section class="flex min-h-0 min-w-0 flex-col" :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)', padding: '22px' }">
-          <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
-            <div class="font-display text-[14px] font-semibold">监测任务</div>
-            <button type="button" class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium" :style="{ background: 'var(--primary)', color: '#fff', borderRadius: '999px' }" @click="openAdd">
-              <Icon name="plus" :size="12" /><span>新增任务</span>
-            </button>
-          </div>
-          <div class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.6fr .85fr .85fr 1fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
-            <div>任务名字</div><div class="text-center">变化</div><div class="text-center">状态</div><div class="text-center">操作</div>
-          </div>
-          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div v-if="loadFailed" class="py-10 text-center text-[12px]" :style="{ color: 'var(--red, #d85a48)' }">
-              任务列表加载失败。<button type="button" class="underline" @click="loadTasks()">重试</button>
+          <!-- ── L1 左：监测任务列表 ── -->
+          <template v-if="selectedId === null">
+            <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
+              <div class="font-display text-[14px] font-semibold">监测任务</div>
+              <button type="button" class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium" :style="{ background: 'var(--primary)', color: '#fff', borderRadius: '999px' }" @click="openAdd">
+                <Icon name="plus" :size="12" /><span>新增任务</span>
+              </button>
             </div>
-            <div v-else-if="!tasks.length" class="flex flex-1 flex-col items-center justify-center gap-1 py-16">
-              <div class="text-[13px] font-medium" :style="{ color: 'var(--ink-2)' }">暂无知乎搜索任务</div>
-              <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">点击右上「新增任务」开始监测</div>
+            <!-- L1 列头：3 列 -->
+            <div class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
+              <div>任务名字</div><div class="text-center">状态</div><div class="text-center">操作</div>
             </div>
-            <template v-else>
-              <div v-for="(t, i) in tasks" :key="t.id" class="grid cursor-pointer items-center transition"
-                :style="{ gridTemplateColumns: '1.6fr .85fr .85fr 1fr', background: previewId === t.id ? 'var(--card-2)' : 'transparent', borderBottom: i < tasks.length - 1 ? '1px solid var(--line)' : 'none', padding: '14px 8px', borderRadius: '10px' }"
-                @mouseenter="(e) => { previewId = t.id; (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
-                @mouseleave="(e) => { if (previewId !== t.id) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
-                @click="previewId = t.id">
-                <div class="min-w-0">
-                  <button type="button" class="truncate text-[13px] font-medium text-left w-full" :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }" @click.stop="enterDetail(t.id)">{{ t.name }}</button>
-                  <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-                    {{ t.config?.search_keywords?.length ?? 0 }} 个关键词<template v-if="t.config?.target_brand"> · 品牌 {{ t.config.target_brand }}</template>
+            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <div v-if="loadFailed" class="py-10 text-center text-[12px]" :style="{ color: 'var(--red, #d85a48)' }">
+                任务列表加载失败。<button type="button" class="underline" @click="loadTasks()">重试</button>
+              </div>
+              <div v-else-if="!tasks.length" class="flex flex-1 flex-col items-center justify-center gap-1 py-16">
+                <div class="text-[13px] font-medium" :style="{ color: 'var(--ink-2)' }">暂无知乎搜索任务</div>
+                <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">点击右上「新增任务」开始监测</div>
+              </div>
+              <template v-else>
+                <!-- L1 任务行：3 列，Col1=名字+副标题，Col2=状态，Col3=⋯菜单 -->
+                <div v-for="(t, i) in tasks" :key="t.id" class="grid cursor-pointer items-center transition"
+                  :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', background: previewId === t.id ? 'var(--card-2)' : 'transparent', borderBottom: i < tasks.length - 1 ? '1px solid var(--line)' : 'none', padding: '14px 8px', borderRadius: '10px' }"
+                  @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
+                  @mouseleave="(e) => { if (previewId !== t.id) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
+                  @click="previewId = t.id">
+                  <!-- Col 1: 任务名（钻入）+ 副标题 -->
+                  <div class="min-w-0">
+                    <button type="button" class="truncate text-[13px] font-medium text-left w-full" :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }" @click.stop="enterDetail(t.id)">{{ t.name }}</button>
+                    <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
+                      {{ t.config?.search_keywords?.length ?? 0 }} 个关键词 · 品牌 {{ t.config?.target_brand || '—' }}
+                    </div>
                   </div>
-                </div>
-                <div class="text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
-                <div class="flex flex-col items-center gap-1">
-                  <template v-if="isRunning(t.id)">
-                    <div class="text-[11.5px] font-medium" :style="{ color: 'var(--primary-deep)' }">{{ taskProgress[t.id]?.current ?? 0 }} / {{ taskProgress[t.id]?.total ?? (t.config?.search_keywords?.length ?? 0) }}</div>
-                    <div :style="{ width: '80%', height: '4px', background: 'var(--card-2)', borderRadius: '999px', overflow: 'hidden' }">
-                      <div :style="{ height: '100%', width: (taskProgress[t.id]?.total ? Math.min(100, Math.round((taskProgress[t.id]!.current / Math.max(1, taskProgress[t.id]!.total)) * 100)) : 0) + '%', background: 'var(--primary-deep)', transition: 'width 0.3s ease' }" />
-                    </div>
-                  </template>
-                  <Pill v-else :tone="statusOf(t).tone">{{ statusOf(t).label }}</Pill>
-                </div>
-                <div class="flex items-center justify-center gap-1">
-                  <button v-if="isRunning(t.id)" type="button" class="inline-flex h-7 w-7 items-center justify-center" :style="{ borderRadius: '999px', color: 'var(--red, #d85a48)', cursor: 'pointer' }" title="停止监测" @click.stop="cancelTask(t.id)"><Icon name="x" :size="13" /></button>
-                  <button v-else type="button" class="inline-flex h-7 w-7 items-center justify-center" :style="{ borderRadius: '999px', color: 'var(--primary-deep)', cursor: 'pointer' }" title="立刻监测" @click.stop="runNowTask(t.id)"><Icon name="play" :size="13" /></button>
-                  <button type="button" class="inline-flex h-7 w-7 items-center justify-center" :style="{ borderRadius: '999px', color: 'var(--ink-3)' }" title="编辑任务" @click.stop="openEdit(t)"><Icon name="edit" :size="13" /></button>
-                  <button type="button" class="inline-flex h-7 w-7 items-center justify-center" :style="{ borderRadius: '999px', color: 'var(--ink-3)' }" title="删除任务" @click.stop="removeTask(t.id)"><Icon name="trash" :size="13" /></button>
-                </div>
-              </div>
-            </template>
-          </div>
-        </section>
-
-        <!-- 右卡：任务详情预览 -->
-        <section class="flex min-h-0 min-w-0 flex-col" :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)', padding: '22px' }">
-          <div v-if="!previewTask" class="flex flex-1 flex-col items-center justify-center text-center" :style="{ color: 'var(--ink-3)' }">
-            <div class="text-[14px] font-medium mb-1">暂无任务</div>
-            <div class="text-[11.5px]">点击左上「新增任务」开始监测</div>
-          </div>
-          <template v-else>
-            <div class="mb-3 flex-shrink-0">
-              <div class="font-display text-[14px] font-semibold">{{ previewTask.name }}</div>
-              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">任务详情</div>
-            </div>
-            <div class="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
-              <div>
-                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">关键词数量</div>
-                <div class="font-display text-[18px] font-bold">{{ previewTask.config?.search_keywords?.length ?? 0 }}</div>
-              </div>
-              <div>
-                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">目标品牌</div>
-                <div class="text-[13px] font-medium">{{ previewTask.config?.target_brand || '—' }}</div>
-              </div>
-            </div>
-            <div class="pt-4 flex-shrink-0 flex gap-2">
-              <button type="button" class="flex-1 text-[12.5px] font-medium" :style="{ padding: '9px 14px', background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '8px', color: 'var(--ink-2)', cursor: 'pointer' }" @click="exportPreviewCsv()">导出数据</button>
-              <button type="button" class="flex-1 text-[12.5px] font-medium" :style="{ padding: '9px 14px', background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }" @click="openSchedule()">定时监测</button>
-            </div>
-          </template>
-        </section>
-      </div>
-    </template>
-
-    <!-- ═══ L2: 二级关键词 selectedId!==null ═══ -->
-    <template v-else>
-      <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
-
-        <!-- 左卡：关键词列表 -->
-        <section class="flex min-h-0 min-w-0 flex-col" :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)', padding: '22px' }">
-          <div class="mb-3 flex-shrink-0 flex items-start gap-3">
-            <button type="button" class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center" :style="{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-2)', cursor: 'pointer' }" title="返回任务列表" @click="backToList()"><Icon name="arrowLeft" :size="14" /></button>
-            <div class="min-w-0 flex-1">
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">知乎搜索 · 关键词列表</div>
-              <div class="font-display text-[14px] font-semibold mt-0.5">{{ selectedTask?.name ?? '' }}</div>
-            </div>
-          </div>
-
-          <!-- 知乎特有状态条 -->
-          <div v-if="latestStatus === 'error'" class="mb-2 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--red, #d85a48)' }"><Pill tone="alert">鉴权失败</Pill>检查设置页知乎 Access Secret 或系统时钟。</div>
-          <div v-if="latestStatus === 'risk_control'" class="mb-2 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }"><Pill tone="warn">频率限制</Pill>被知乎频率/配额限制（30001），稍后重试。</div>
-          <div v-if="fulltextNoCookie" class="mb-2 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }"><Pill tone="warn">全文匹配未生效</Pill>已开启全文匹配但未配置知乎 Cookie，请到 Cookie 管理添加。</div>
-
-          <div class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.6fr .6fr .6fr .6fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
-            <div>关键词</div><div class="text-center">卡位</div><div class="text-center">首位</div><div class="text-center">状态</div>
-          </div>
-          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div v-if="!keywordResults.length" class="py-10 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">还没有结果，点右下「启动监测」。</div>
-            <div v-for="(kw, i) in keywordResults" :key="kw.keyword + '-' + i" class="grid items-center cursor-pointer transition"
-              :style="{ gridTemplateColumns: '1.6fr .6fr .6fr .6fr', borderBottom: i < keywordResults.length - 1 ? '1px solid var(--line)' : 'none', padding: '12px 8px', background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent' }"
-              @click="selectedKeywordIdx = i"
-              @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
-              @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }">
-              <div class="min-w-0"><div class="truncate text-[12.5px] font-medium" :style="{ color: 'var(--ink)' }">{{ kw.keyword }}</div></div>
-              <div class="text-center font-display text-[13px] font-bold" :style="{ color: kw.matched_count > 0 ? 'var(--primary-deep)' : 'var(--ink-3)' }">{{ kw.matched_count }}</div>
-              <div class="text-center text-[12.5px]" :style="{ color: kw.first_rank > 0 ? 'var(--ink)' : 'var(--ink-3)' }">{{ kw.first_rank > 0 ? '#' + kw.first_rank : '—' }}</div>
-              <div class="text-center">
-                <Pill v-if="kw.fetch_error" tone="alert">失败</Pill>
-                <Pill v-else-if="kw.first_rank > 0" tone="ok">命中</Pill>
-                <Pill v-else tone="info">未命中</Pill>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- 右卡：单关键词详情（镜像知乎问题右卡）-->
-        <section class="flex min-h-0 min-w-0 flex-col" :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)', padding: '22px' }">
-          <div v-if="!currentKeyword" class="flex flex-1 flex-col items-center justify-center text-center" :style="{ color: 'var(--ink-3)' }">
-            <div class="text-[14px] font-medium mb-1">选择左侧关键词</div>
-            <div class="text-[11.5px]">查看该关键词的卡位详情</div>
-          </div>
-          <template v-else>
-            <!-- 标题：关键词（搜索词）-->
-            <div class="mb-3 flex-shrink-0 flex items-start justify-between gap-2">
-              <div class="min-w-0">
-                <div class="font-display text-[14px] font-semibold truncate" :title="currentKeyword.keyword">{{ currentKeyword.keyword }}</div>
-                <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">关键词详情</div>
-              </div>
-              <a
-                :href="keywordSearchUrl(currentKeyword.keyword)"
-                target="_blank"
-                rel="noopener"
-                class="inline-flex flex-shrink-0 items-center gap-1 px-3 py-1.5 text-[11.5px]"
-                :style="{ background: 'var(--card-2)', color: 'var(--ink-2)', border: '1px solid var(--line)', borderRadius: '999px', textDecoration: 'none' }"
-                title="在浏览器打开该关键词的知乎搜索页"
-              >
-                <Icon name="external" :size="12" />
-                <span>知乎搜索页</span>
-              </a>
-            </div>
-
-            <!-- KPI：卡位数量 / 最高排名 -->
-            <div class="mb-4 grid flex-shrink-0 grid-cols-2 gap-3">
-              <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '12px', border: '1px solid var(--line)' }">
-                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">卡位数量</div>
-                <div class="font-display mt-1 font-bold text-[20px]">
-                  <template v-if="currentKeyword.matched_count > 0">{{ currentKeyword.matched_count }}</template>
-                  <span v-else :style="{ color: 'var(--red, #d85a48)', fontSize: '14px' }">前 10 以外</span>
-                </div>
-              </div>
-              <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '12px', border: '1px solid var(--line)' }">
-                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">最高排名</div>
-                <div class="font-display mt-1 font-bold text-[20px]">
-                  <template v-if="currentKeyword.first_rank > 0">第 {{ currentKeyword.first_rank }} 名</template>
-                  <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">未上榜</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- 最近 7 天卡位趋势 -->
-            <div class="mb-4 flex-shrink-0">
-              <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
-              <LineChart v-if="hasSelectedKwTrend" :labels="selectedKwTrendLabels" :series="[{ label: '卡位数量', color: 'var(--primary-deep, #c9521f)', data: selectedKwTrendData }]" :y-max="10" />
-              <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">无历史数据 —— 跑几次「启动监测」后会成线。</div>
-            </div>
-
-            <!-- 状态提示 -->
-            <div v-if="currentKeyword.fetch_error" class="text-[11.5px] mb-2 px-3 py-2 rounded" :style="{ background: 'rgba(239,68,68,0.08)', color: 'var(--red-deep)', borderLeft: '3px solid var(--red-deep)' }">抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}</div>
-            <div v-else-if="currentKeyword.empty_reason" class="text-[11.5px] mb-2" :style="{ color: 'var(--ink-3)' }">知乎无结果：{{ currentKeyword.empty_reason }}</div>
-
-            <!-- 前 10 排名列表（固定高度滚动卡片）-->
-            <div class="min-h-0 flex-1 overflow-y-auto">
-              <div class="mb-2 flex items-center justify-between">
-                <div class="text-[12px] font-semibold">前 10 结果</div>
-                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">自家命中 <span :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">{{ currentKeyword.matched_count }}</span> 条</div>
-              </div>
-              <template v-if="currentKeyword.results.length">
-                <div v-for="r in currentKeyword.results" :key="r.rank" class="mb-1.5 flex items-start gap-3" :style="{ padding: '10px', borderRadius: '10px', background: r.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)', border: '1px solid ' + (r.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)') }">
-                  <span class="font-display text-[13px] font-bold flex-shrink-0" :style="{ width: '24px', color: r.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)' }">#{{ r.rank }}</span>
-                  <div class="min-w-0 flex-1">
-                    <a :href="r.url" target="_blank" rel="noopener" class="block truncate text-[12.5px] font-medium hover:underline" :style="{ color: 'var(--ink)', textDecoration: 'none' }" :title="r.title">{{ r.title }}</a>
-                    <div class="mt-0.5 flex items-center gap-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                      <span class="flex-shrink-0 px-1.5 rounded" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">{{ (r.content_type || '').toLowerCase() === 'article' ? '专栏' : (r.content_type || '').toLowerCase() === 'answer' ? '回答' : (r.content_type || '其他') }}</span>
-                      <span class="truncate">{{ r.author_name || '—' }}</span>
-                      <span v-if="r.voteup_count" class="flex-shrink-0">▲ {{ r.voteup_count }}</span>
-                      <span v-if="r.matches_brand" class="ml-auto flex-shrink-0" :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">自家<template v-if="r.matched_field === 'fulltext'"> · 正文</template></span>
-                    </div>
+                  <!-- Col 2: 状态 Pill（运行中显示进度条） -->
+                  <div class="flex flex-col items-center gap-1">
+                    <template v-if="isRunning(t.id)">
+                      <div class="text-[11.5px] font-medium" :style="{ color: 'var(--primary-deep)' }">{{ taskProgress[t.id]?.current ?? 0 }} / {{ taskProgress[t.id]?.total ?? (t.config?.search_keywords?.length ?? 0) }}</div>
+                      <div :style="{ width: '80%', height: '4px', background: 'var(--card-2)', borderRadius: '999px', overflow: 'hidden' }">
+                        <div :style="{ height: '100%', width: (taskProgress[t.id]?.total ? Math.min(100, Math.round((taskProgress[t.id]!.current / Math.max(1, taskProgress[t.id]!.total)) * 100)) : 0) + '%', background: 'var(--primary-deep)', transition: 'width 0.3s ease' }" />
+                      </div>
+                    </template>
+                    <Pill v-else :tone="statusOf(t).tone">{{ statusOf(t).label }}</Pill>
+                  </div>
+                  <!-- Col 3: ⋯ Dropdown -->
+                  <div class="flex items-center justify-center">
+                    <Dropdown
+                      :items="[
+                        isRunning(t.id)
+                          ? { key: 'stop', label: '停止监测', icon: 'x' }
+                          : { key: 'run', label: '立刻监测', icon: 'play' },
+                        { key: 'edit', label: '编辑任务', icon: 'edit' },
+                        { key: 'delete', label: '删除任务', icon: 'trash', tone: 'danger' },
+                      ]"
+                      align="right"
+                      @select="(key) => {
+                        if (key === 'run') runNowTask(t.id);
+                        else if (key === 'stop') cancelTask(t.id);
+                        else if (key === 'edit') openEdit(t);
+                        else if (key === 'delete') removeTask(t.id);
+                      }"
+                    >
+                      <template #trigger>
+                        <button
+                          type="button"
+                          class="inline-flex h-7 w-7 items-center justify-center"
+                          :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                          title="更多操作"
+                          @click.stop
+                        >
+                          <Icon name="more" :size="15" />
+                        </button>
+                      </template>
+                    </Dropdown>
                   </div>
                 </div>
               </template>
-              <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">还没有结果，点下方「启动监测」。</div>
-            </div>
-
-            <!-- 底部：启动监测 -->
-            <div class="mt-4 flex-shrink-0">
-              <button type="button" class="w-full font-medium text-[14px]" :disabled="isRunning(selectedId!)" :style="{ padding: '12px 24px', borderRadius: '10px', background: isRunning(selectedId!) ? 'var(--card-2)' : 'var(--primary-deep)', color: isRunning(selectedId!) ? 'var(--ink-3)' : '#fff', cursor: isRunning(selectedId!) ? 'not-allowed' : 'pointer', border: 'none' }" @click="runNowTask(selectedId!)">{{ isRunning(selectedId!) ? '监测中…' : '▶ 启动监测' }}</button>
             </div>
           </template>
+
+          <!-- ── L2 左：面包屑 + 3 状态条 + 关键词列表 ── -->
+          <template v-else>
+            <!-- 面包屑 -->
+            <div class="mb-3 flex-shrink-0 flex items-start gap-3">
+              <button type="button" class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center" :style="{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-2)', cursor: 'pointer' }" title="返回任务列表" @click="backToList()"><Icon name="arrowLeft" :size="14" /></button>
+              <div class="min-w-0 flex-1">
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">知乎搜索 · 关键词列表</div>
+                <div class="font-display text-[14px] font-semibold mt-0.5">{{ selectedTask?.name ?? '' }}</div>
+              </div>
+            </div>
+
+            <!-- 知乎特有状态条（3 条全部保留） -->
+            <div v-if="latestStatus === 'error'" class="mb-2 flex-shrink-0 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--red, #d85a48)' }"><Pill tone="alert">鉴权失败</Pill>检查设置页知乎 Access Secret 或系统时钟。</div>
+            <div v-if="latestStatus === 'risk_control'" class="mb-2 flex-shrink-0 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }"><Pill tone="warn">频率限制</Pill>被知乎频率/配额限制（30001），稍后重试。</div>
+            <div v-if="fulltextNoCookie" class="mb-2 flex-shrink-0 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }"><Pill tone="warn">全文匹配未生效</Pill>已开启全文匹配但未配置知乎 Cookie，请到 Cookie 管理添加。</div>
+
+            <!-- L2 列头：2 列 -->
+            <div class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.6fr 1fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
+              <div>关键词</div><div class="text-center">状态</div>
+            </div>
+            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <div v-if="!keywordResults.length" class="py-10 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">还没有结果，点右下「启动监测」。</div>
+              <!-- L2 关键词行：2 列，只读（无操作菜单） -->
+              <div v-for="(kw, i) in keywordResults" :key="kw.keyword + '-' + i" class="grid items-center cursor-pointer transition"
+                :style="{ gridTemplateColumns: '1.6fr 1fr', borderBottom: i < keywordResults.length - 1 ? '1px solid var(--line)' : 'none', padding: '12px 8px', background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent' }"
+                @click="selectedKeywordIdx = i"
+                @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
+                @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }">
+                <!-- Col 1: 关键词 + 副标题（卡位 · 首位） -->
+                <div class="min-w-0">
+                  <div class="truncate text-[12.5px] font-medium" :style="{ color: 'var(--ink)' }">{{ kw.keyword }}</div>
+                  <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
+                    卡位 {{ kw.matched_count }} · 首位 {{ kw.first_rank > 0 ? '#' + kw.first_rank : '—' }}
+                  </div>
+                </div>
+                <!-- Col 2: 状态 Pill -->
+                <div class="text-center">
+                  <Pill v-if="kw.fetch_error" tone="alert">失败</Pill>
+                  <Pill v-else-if="kw.first_rank > 0" tone="ok">命中</Pill>
+                  <Pill v-else tone="info">未命中</Pill>
+                </div>
+              </div>
+            </div>
+          </template>
+
         </section>
-      </div>
-    </template>
+      </template>
+
+      <template #right>
+        <section class="flex h-full min-h-0 flex-col overflow-hidden" :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)', padding: '22px' }">
+
+          <!-- ── L1 右：任务详情预览 ── -->
+          <template v-if="selectedId === null">
+            <div v-if="!previewTask" class="flex flex-1 flex-col items-center justify-center text-center" :style="{ color: 'var(--ink-3)' }">
+              <div class="text-[14px] font-medium mb-1">暂无任务</div>
+              <div class="text-[11.5px]">点击左上「新增任务」开始监测</div>
+            </div>
+            <template v-else>
+              <div class="mb-3 flex-shrink-0">
+                <div class="font-display text-[14px] font-semibold">{{ previewTask.name }}</div>
+                <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">任务详情</div>
+              </div>
+              <div class="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
+                <div>
+                  <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">关键词数量</div>
+                  <div class="font-display text-[18px] font-bold">{{ previewTask.config?.search_keywords?.length ?? 0 }}</div>
+                </div>
+                <div>
+                  <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">目标品牌</div>
+                  <div class="text-[13px] font-medium">{{ previewTask.config?.target_brand || '—' }}</div>
+                </div>
+              </div>
+              <div class="pt-4 flex-shrink-0 flex gap-2">
+                <button type="button" class="flex-1 text-[12.5px] font-medium" :style="{ padding: '9px 14px', background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '8px', color: 'var(--ink-2)', cursor: 'pointer' }" @click="exportPreviewCsv()">导出数据</button>
+                <button type="button" class="flex-1 text-[12.5px] font-medium" :style="{ padding: '9px 14px', background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }" @click="openSchedule()">定时监测</button>
+              </div>
+            </template>
+          </template>
+
+          <!-- ── L2 右：单关键词详情（镜像知乎问题右卡，原样 re-parent）── -->
+          <template v-else>
+            <div v-if="!currentKeyword" class="flex flex-1 flex-col items-center justify-center text-center" :style="{ color: 'var(--ink-3)' }">
+              <div class="text-[14px] font-medium mb-1">选择左侧关键词</div>
+              <div class="text-[11.5px]">查看该关键词的卡位详情</div>
+            </div>
+            <template v-else>
+              <!-- 标题：关键词（搜索词）-->
+              <div class="mb-3 flex-shrink-0 flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="font-display text-[14px] font-semibold truncate" :title="currentKeyword.keyword">{{ currentKeyword.keyword }}</div>
+                  <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">关键词详情</div>
+                </div>
+                <a
+                  :href="keywordSearchUrl(currentKeyword.keyword)"
+                  target="_blank"
+                  rel="noopener"
+                  class="inline-flex flex-shrink-0 items-center gap-1 px-3 py-1.5 text-[11.5px]"
+                  :style="{ background: 'var(--card-2)', color: 'var(--ink-2)', border: '1px solid var(--line)', borderRadius: '999px', textDecoration: 'none' }"
+                  title="在浏览器打开该关键词的知乎搜索页"
+                >
+                  <Icon name="external" :size="12" />
+                  <span>知乎搜索页</span>
+                </a>
+              </div>
+
+              <!-- KPI：卡位数量 / 最高排名 -->
+              <div class="mb-4 grid flex-shrink-0 grid-cols-2 gap-3">
+                <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '12px', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">卡位数量</div>
+                  <div class="font-display mt-1 font-bold text-[20px]">
+                    <template v-if="currentKeyword.matched_count > 0">{{ currentKeyword.matched_count }}</template>
+                    <span v-else :style="{ color: 'var(--red, #d85a48)', fontSize: '14px' }">前 10 以外</span>
+                  </div>
+                </div>
+                <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '12px', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">最高排名</div>
+                  <div class="font-display mt-1 font-bold text-[20px]">
+                    <template v-if="currentKeyword.first_rank > 0">第 {{ currentKeyword.first_rank }} 名</template>
+                    <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">未上榜</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 最近 7 天卡位趋势 -->
+              <div class="mb-4 flex-shrink-0">
+                <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
+                <LineChart v-if="hasSelectedKwTrend" :labels="selectedKwTrendLabels" :series="[{ label: '卡位数量', color: 'var(--primary-deep, #c9521f)', data: selectedKwTrendData }]" :y-max="10" />
+                <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">无历史数据 —— 跑几次「启动监测」后会成线。</div>
+              </div>
+
+              <!-- 状态提示 -->
+              <div v-if="currentKeyword.fetch_error" class="text-[11.5px] mb-2 px-3 py-2 rounded" :style="{ background: 'rgba(239,68,68,0.08)', color: 'var(--red-deep)', borderLeft: '3px solid var(--red-deep)' }">抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}</div>
+              <div v-else-if="currentKeyword.empty_reason" class="text-[11.5px] mb-2" :style="{ color: 'var(--ink-3)' }">知乎无结果：{{ currentKeyword.empty_reason }}</div>
+
+              <!-- 前 10 排名列表（固定高度滚动卡片）-->
+              <div class="min-h-0 flex-1 overflow-y-auto">
+                <div class="mb-2 flex items-center justify-between">
+                  <div class="text-[12px] font-semibold">前 10 结果</div>
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">自家命中 <span :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">{{ currentKeyword.matched_count }}</span> 条</div>
+                </div>
+                <template v-if="currentKeyword.results.length">
+                  <div v-for="r in currentKeyword.results" :key="r.rank" class="mb-1.5 flex items-start gap-3" :style="{ padding: '10px', borderRadius: '10px', background: r.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)', border: '1px solid ' + (r.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)') }">
+                    <span class="font-display text-[13px] font-bold flex-shrink-0" :style="{ width: '24px', color: r.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)' }">#{{ r.rank }}</span>
+                    <div class="min-w-0 flex-1">
+                      <a :href="r.url" target="_blank" rel="noopener" class="block truncate text-[12.5px] font-medium hover:underline" :style="{ color: 'var(--ink)', textDecoration: 'none' }" :title="r.title">{{ r.title }}</a>
+                      <div class="mt-0.5 flex items-center gap-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                        <span class="flex-shrink-0 px-1.5 rounded" :style="{ background: 'var(--card)', border: '1px solid var(--line)' }">{{ (r.content_type || '').toLowerCase() === 'article' ? '专栏' : (r.content_type || '').toLowerCase() === 'answer' ? '回答' : (r.content_type || '其他') }}</span>
+                        <span class="truncate">{{ r.author_name || '—' }}</span>
+                        <span v-if="r.voteup_count" class="flex-shrink-0">▲ {{ r.voteup_count }}</span>
+                        <span v-if="r.matches_brand" class="ml-auto flex-shrink-0" :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">自家<template v-if="r.matched_field === 'fulltext'"> · 正文</template></span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">还没有结果，点下方「启动监测」。</div>
+              </div>
+
+              <!-- 底部：启动监测 -->
+              <div class="mt-4 flex-shrink-0">
+                <button type="button" class="w-full font-medium text-[14px]" :disabled="isRunning(selectedId!)" :style="{ padding: '12px 24px', borderRadius: '10px', background: isRunning(selectedId!) ? 'var(--card-2)' : 'var(--primary-deep)', color: isRunning(selectedId!) ? 'var(--ink-3)' : '#fff', cursor: isRunning(selectedId!) ? 'not-allowed' : 'pointer', border: 'none' }" @click="runNowTask(selectedId!)">{{ isRunning(selectedId!) ? '监测中…' : '▶ 启动监测' }}</button>
+              </div>
+            </template>
+          </template>
+
+        </section>
+      </template>
+    </SplitPane>
 
     <AddTaskModal v-model:open="showModal" :default-type="'zhihu_search' as any" :editing-task="editingTask as any" @created="onTaskSaved" @updated="onTaskSaved" />
   </div>
