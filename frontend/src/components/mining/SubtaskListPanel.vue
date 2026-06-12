@@ -68,7 +68,7 @@ function pillFor(v: Video): { label: string; bg: string; fg: string } {
   if (v.already_commented) {
     return { label: "已完成", bg: "rgba(122,155,94,0.18)", fg: "#3a7d44" };
   }
-  return { label: "待评论", bg: "var(--yellow-soft)", fg: "#a07a18" };
+  return { label: "待评论", bg: "var(--yellow-soft)", fg: "var(--yellow-deep)" };
 }
 
 // 下拉选项 —— 按用户要求把状态 + 平台都从胶囊 pivot 改成 FormSelect。
@@ -187,7 +187,7 @@ const totalCount = computed(() => props.videos.length);
             marginBottom: '4px',
           }"
           @click="emit('select-video', v.id)"
-          @mouseenter="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.04)' }"
+          @mouseenter="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.04)' }"
           @mouseleave="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
         >
           <!-- checkbox -->

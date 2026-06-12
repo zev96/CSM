@@ -36,7 +36,7 @@ function deltaTone(v: number) {
 }
 const deltaStyle = (v: number) => ({
   color: v > 0 ? "#5e7848" : v < 0 ? "var(--red)" : "var(--ink-3)",
-  background: v > 0 ? "rgba(122,155,94,.15)" : v < 0 ? "rgba(216,90,72,.12)" : "rgba(28,26,23,.05)",
+  background: v > 0 ? "rgba(122,155,94,.15)" : v < 0 ? "rgba(216,90,72,.12)" : "rgba(var(--ink-rgb),.05)",
 });
 const socDeltaText = computed(() => {
   const pp = Math.round(props.socDelta * 100);
@@ -76,7 +76,7 @@ const sentDeltaText = computed(() => {
         </div>
       </div>
       <!-- stacked bar -->
-      <div class="flex" :style="{ height: '10px', borderRadius: '999px', overflow: 'hidden', background: 'rgba(28,26,23,.06)' }">
+      <div class="flex" :style="{ height: '10px', borderRadius: '999px', overflow: 'hidden', background: 'rgba(var(--ink-rgb),.06)' }">
         <div
           v-for="s in segs"
           :key="s.key"

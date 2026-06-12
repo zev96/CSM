@@ -952,7 +952,7 @@ defineExpose({ reload: loadTasks, selectTask });
         class="relative overflow-hidden flex-shrink-0"
         :style="{
           background: 'var(--dark)',
-          color: '#fbf7ec',
+          color: 'var(--card)',
           borderRadius: 'var(--radius-card)',
           padding: '26px 28px',
         }"

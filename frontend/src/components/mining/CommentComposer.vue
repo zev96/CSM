@@ -481,7 +481,7 @@ function onTextareaKeydown(e: KeyboardEvent) {
             top: '-4px', right: '-4px',
             width: '16px', height: '16px',
             borderRadius: '999px',
-            background: 'var(--dark)', color: '#fff',
+            background: 'var(--dark)', color: 'var(--card-white)',
             border: '1px solid var(--card)',
             cursor: 'pointer',
           }"
@@ -582,7 +582,7 @@ function onTextareaKeydown(e: KeyboardEvent) {
           fontSize: '11.5px',
           fontWeight: 600,
           background: canComplete ? 'var(--dark)' : 'var(--card-2)',
-          color: canComplete ? '#fff' : 'var(--ink-4)',
+          color: canComplete ? 'var(--card-white)' : 'var(--ink-4)',
           border: '1px solid ' + (canComplete ? 'var(--dark)' : 'var(--line)'),
           cursor: (!canComplete || completeBusy) ? 'not-allowed' : 'pointer',
         }"

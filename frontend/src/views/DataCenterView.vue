@@ -121,7 +121,7 @@ function goToBaiduTask(_payload: { taskId: number }) {
             padding: '0 16px',
             borderRadius: '999px',
             background: historySubtab === t.k ? 'var(--dark)' : 'transparent',
-            color: historySubtab === t.k ? '#fbf7ec' : 'var(--ink-3)',
+            color: historySubtab === t.k ? 'var(--card)' : 'var(--ink-3)',
             fontSize: '12.5px',
             fontWeight: 500,
             transition: 'background .15s, color .15s',

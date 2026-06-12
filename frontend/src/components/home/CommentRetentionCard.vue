@@ -170,10 +170,10 @@ onMounted(async () => {
         class="inline-flex h-5 items-center gap-0.5 rounded-full px-2 text-[10.5px] font-medium"
         :style="
           deltaPct > 0
-            ? { background: '#dde7d2', color: '#4d6b2f' }
+            ? { background: 'var(--green-soft)', color: 'var(--green-deep)' }
             : deltaPct < 0
-              ? { background: '#f3d3cd', color: '#a3382a' }
-              : { background: 'rgba(28,26,23,0.06)', color: 'var(--ink-2)' }
+              ? { background: 'var(--red-soft)', color: 'var(--red-deep)' }
+              : { background: 'rgba(var(--ink-rgb),0.06)', color: 'var(--ink-2)' }
         "
       >
         <Icon v-if="deltaPct > 0" name="arrowUp" :size="9" />
@@ -210,7 +210,7 @@ onMounted(async () => {
           class="rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors"
           :style="
             activeKey === k
-              ? { background: 'rgba(28,26,23,0.06)', color: 'var(--ink)' }
+              ? { background: 'rgba(var(--ink-rgb),0.06)', color: 'var(--ink)' }
               : { background: 'transparent', color: 'var(--ink-3)' }
           "
           @click="activeKey = k"
@@ -224,12 +224,12 @@ onMounted(async () => {
 
 <style scoped>
 .trend-detail {
-  background: rgba(28, 26, 23, 0.04);
+  background: rgba(var(--ink-rgb), 0.04);
   color: var(--ink-2);
-  border: 1px solid rgba(28, 26, 23, 0.06);
+  border: 1px solid rgba(var(--ink-rgb), 0.06);
   transition: background-color 0.12s ease;
 }
 .trend-detail:hover {
-  background: rgba(28, 26, 23, 0.08);
+  background: rgba(var(--ink-rgb), 0.08);
 }
 </style>

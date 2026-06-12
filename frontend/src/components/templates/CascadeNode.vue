@@ -126,9 +126,9 @@ function onClick() {
  */
 .cascade-row:hover {
   background: var(--dark) !important;
-  color: #fbf7ec !important;
+  color: var(--card) !important;
 }
 .cascade-row:hover :deep(svg) {
-  color: #fbf7ec !important;
+  color: var(--card) !important;
 }
 </style>

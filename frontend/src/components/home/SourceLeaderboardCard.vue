@@ -40,10 +40,10 @@ onMounted(async () => {
 });
 
 function deltaStyle(d: number | null) {
-  if (d === null) return { background: "var(--yellow-soft)", color: "#7a5400" }; // 新进
-  if (d > 0) return { background: "#dde7d2", color: "#4d6b2f" };
-  if (d < 0) return { background: "#f3d3cd", color: "#a3382a" };
-  return { background: "rgba(28,26,23,0.06)", color: "var(--ink-2)" };
+  if (d === null) return { background: "var(--yellow-soft)", color: "var(--yellow-deep)" }; // 新进
+  if (d > 0) return { background: "var(--green-soft)", color: "var(--green-deep)" };
+  if (d < 0) return { background: "var(--red-soft)", color: "var(--red-deep)" };
+  return { background: "rgba(var(--ink-rgb),0.06)", color: "var(--ink-2)" };
 }
 function deltaText(d: number | null) {
   return d === null ? "新" : d === 0 ? "—" : String(Math.abs(d));
@@ -103,12 +103,12 @@ function deltaText(d: number | null) {
 
 <style scoped>
 .trend-detail {
-  background: rgba(28, 26, 23, 0.04);
+  background: rgba(var(--ink-rgb), 0.04);
   color: var(--ink-2);
-  border: 1px solid rgba(28, 26, 23, 0.06);
+  border: 1px solid rgba(var(--ink-rgb), 0.06);
   transition: background-color 0.12s ease;
 }
 .trend-detail:hover {
-  background: rgba(28, 26, 23, 0.08);
+  background: rgba(var(--ink-rgb), 0.08);
 }
 </style>

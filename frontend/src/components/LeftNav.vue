@@ -129,10 +129,10 @@ function go(key: string) {
             WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
             border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
             boxShadow: active === item.key
-              ? '0 6px 16px -2px rgba(28,26,23,0.12), 0 2px 6px rgba(28,26,23,0.06)'
+              ? '0 6px 16px -2px rgba(var(--ink-rgb),0.12), 0 2px 6px rgba(var(--ink-rgb),0.06)'
               : 'none',
           }"
-          @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
+          @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.05)' }"
           @mouseleave="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
           @click="go(item.key)"
         >
@@ -170,9 +170,9 @@ function go(key: string) {
             height: '44px',
             borderRadius: '14px',
             color: tray.runningCount > 0 ? 'var(--primary)' : 'var(--ink-2)',
-            background: trayOpen ? 'rgba(28,26,23,0.05)' : 'transparent',
+            background: trayOpen ? 'rgba(var(--ink-rgb),0.05)' : 'transparent',
           }"
-          @mouseenter="(e) => { if (!trayOpen) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
+          @mouseenter="(e) => { if (!trayOpen) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.05)' }"
           @mouseleave="(e) => { if (!trayOpen) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
           @click="toggleTray"
         >
@@ -196,9 +196,9 @@ function go(key: string) {
             height: '44px',
             borderRadius: '14px',
             color: 'var(--ink-2)',
-            background: notifOpen ? 'rgba(28,26,23,0.05)' : 'transparent',
+            background: notifOpen ? 'rgba(var(--ink-rgb),0.05)' : 'transparent',
           }"
-          @mouseenter="(e) => { if (!notifOpen) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
+          @mouseenter="(e) => { if (!notifOpen) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.05)' }"
           @mouseleave="(e) => { if (!notifOpen) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
           @click="toggleNotif"
         >
@@ -234,10 +234,10 @@ function go(key: string) {
           WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
           border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
           boxShadow: active === item.key
-            ? '0 6px 16px -2px rgba(28,26,23,0.12), 0 2px 6px rgba(28,26,23,0.06)'
+            ? '0 6px 16px -2px rgba(var(--ink-rgb),0.12), 0 2px 6px rgba(var(--ink-rgb),0.06)'
             : 'none',
         }"
-        @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.05)' }"
+        @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.05)' }"
         @mouseleave="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
         @click="go(item.key)"
       >

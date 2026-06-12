@@ -159,7 +159,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
             class="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-medium"
             :style="{
               background: fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'down' ? 'rgba(216,90,72,0.12)' :
-                          fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? 'rgba(122,155,94,0.15)' : 'rgba(28,26,23,0.05)',
+                          fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? 'rgba(122,155,94,0.15)' : 'rgba(var(--ink-rgb),0.05)',
               color: fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'down' ? 'var(--red)' :
                      fmtDeltaPts(data.kpis.avg_match_rate_today, data.kpis.avg_match_rate_prev).tone === 'up'   ? '#5e7848' : 'var(--ink-3)',
             }"
@@ -264,7 +264,7 @@ function rankChangeText(q: KeywordRow): { text: string; tone: "up" | "down" | "f
             padding: '11px 12px',
             fontSize: '12px',
             borderRadius: '8px',
-            borderTop: '1px solid rgba(28,26,23,0.06)',
+            borderTop: '1px solid rgba(var(--ink-rgb),0.06)',
           }"
           @mouseenter="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
           @mouseleave="(ev) => ((ev.currentTarget as HTMLElement).style.background = 'transparent')"

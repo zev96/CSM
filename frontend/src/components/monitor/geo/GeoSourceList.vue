@@ -38,7 +38,7 @@ function rate(b: BoardRow): number {
           gridTemplateColumns: '20px minmax(0, 1fr) 56px minmax(92px, 1.5fr) 72px',
           gap: '10px',
           padding: '8px 0',
-          borderBottom: i < board.length - 1 ? '1px solid rgba(28,26,23,0.05)' : 'none',
+          borderBottom: i < board.length - 1 ? '1px solid rgba(var(--ink-rgb),0.05)' : 'none',
         }"
       >
         <!-- 序号 -->
@@ -56,7 +56,7 @@ function rate(b: BoardRow): number {
         <!-- 引用率 + 细条 -->
         <div :style="{ minWidth: 0 }">
           <div :style="{ fontSize: '9.5px', color: 'var(--ink-3)', marginBottom: '3px' }">引用率 {{ rate(b) }}%</div>
-          <div :style="{ height: '5px', borderRadius: '999px', background: 'rgba(28,26,23,.06)', overflow: 'hidden' }">
+          <div :style="{ height: '5px', borderRadius: '999px', background: 'rgba(var(--ink-rgb),.06)', overflow: 'hidden' }">
             <div :style="{ width: rate(b) + '%', height: '100%', background: SRC_COLORS[i % SRC_COLORS.length], borderRadius: '999px' }" />
           </div>
         </div>

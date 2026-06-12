@@ -122,7 +122,7 @@ function label(cell: PlatformVM | null): string {
         :title="`查看「${row.keyword}」各平台原文`"
         :style="{
           gridTemplateColumns: cols, gap: '8px', padding: '9px 10px',
-          borderBottom: '1px solid rgba(28,26,23,0.05)',
+          borderBottom: '1px solid rgba(var(--ink-rgb),0.05)',
         }"
         @click="openRow(row.keyword)"
         @keydown.enter.prevent="openRow(row.keyword)"
@@ -185,10 +185,10 @@ function label(cell: PlatformVM | null): string {
   border-radius: 8px;
 }
 .geo-kw-row:hover {
-  background: rgba(28, 26, 23, 0.035);
+  background: rgba(var(--ink-rgb), 0.035);
 }
 .geo-kw-row:focus-visible {
   outline: none;
-  background: rgba(28, 26, 23, 0.05);
+  background: rgba(var(--ink-rgb), 0.05);
 }
 </style>

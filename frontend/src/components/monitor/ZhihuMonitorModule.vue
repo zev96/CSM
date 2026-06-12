@@ -699,7 +699,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         class="relative overflow-hidden"
         :style="{
           background: 'var(--dark)',
-          color: '#fbf7ec',
+          color: 'var(--card)',
           borderRadius: 'var(--radius-card)',
           padding: '26px 28px',
           zIndex: 1,

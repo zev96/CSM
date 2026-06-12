@@ -208,7 +208,7 @@ async function onDeleteVideo() {
 // ── Pill props per state ──────────────────────────────────────────────
 const pillStyle = computed(() => {
   if (cardState.value === "todo") {
-    return { bg: "var(--yellow-soft)", fg: "#a07a18", border: "transparent" };
+    return { bg: "var(--yellow-soft)", fg: "var(--yellow-deep)", border: "transparent" };
   }
   if (cardState.value === "drafting") {
     return { bg: "var(--primary-soft)", fg: "var(--primary-deep)", border: "transparent" };
@@ -273,7 +273,7 @@ const pillLabel = computed(() => {
               background: 'var(--card-white)',
               border: '1px solid var(--line-2)',
               borderRadius: '10px',
-              boxShadow: '0 10px 30px -8px rgba(28,26,23,0.25)',
+              boxShadow: '0 10px 30px -8px rgba(var(--ink-rgb),0.25)',
               padding: '4px',
             }"
             @click.stop

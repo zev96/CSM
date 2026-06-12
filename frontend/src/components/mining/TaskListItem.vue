@@ -141,7 +141,7 @@ const STATUS_LABEL: Record<DerivedStatus, string> = {
 };
 
 const STATUS_TONE: Record<DerivedStatus, { bg: string; fg: string }> = {
-  pending: { bg: "rgba(28,26,23,0.08)", fg: "var(--ink-3)" },
+  pending: { bg: "rgba(var(--ink-rgb),0.08)", fg: "var(--ink-3)" },
   running: { bg: "rgba(238,106,42,0.16)", fg: "#b34d12" },
   // 需验证：紫色 — 跟 抓取中 / 失败 / 进行中 都拉开（用户一眼能区分"轮到我操作了"）
   captcha_waiting: { bg: "rgba(124,77,180,0.18)", fg: "#5a3e8c" },
@@ -375,7 +375,7 @@ const keywordShort = computed(() => {
             background: 'var(--card-white)',
             border: '1px solid var(--line-2)',
             borderRadius: '10px',
-            boxShadow: '0 10px 30px -8px rgba(28,26,23,0.25)',
+            boxShadow: '0 10px 30px -8px rgba(var(--ink-rgb),0.25)',
             padding: '4px',
             zIndex: 9999,
           }"
@@ -460,7 +460,7 @@ const keywordShort = computed(() => {
       :style="{
         marginTop: '10px',
         height: '3px',
-        background: 'rgba(28,26,23,0.08)',
+        background: 'rgba(var(--ink-rgb),0.08)',
         borderRadius: '999px',
         overflow: 'hidden',
       }"

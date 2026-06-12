@@ -228,7 +228,7 @@ function close() {
         class="inline-flex items-center gap-1.5"
         :style="{
           background: taskNamePrefix.trim() ? 'var(--dark)' : 'var(--card-2)',
-          color: taskNamePrefix.trim() ? '#fff' : 'var(--ink-3)',
+          color: taskNamePrefix.trim() ? 'var(--card-white)' : 'var(--ink-3)',
           padding: '7px 18px',
           fontSize: '12.5px',
           fontWeight: 500,

@@ -733,7 +733,7 @@ function insertKeyword(field: "text") {
               background: 'var(--card-2)',
               border: '1px solid var(--line)',
               borderRadius: 'var(--radius-inner)',
-              boxShadow: '0 6px 18px rgba(28,26,23,0.10)',
+              boxShadow: '0 6px 18px rgba(var(--ink-rgb),0.10)',
             }"
             @click.stop
           >
@@ -805,9 +805,9 @@ function insertKeyword(field: "text") {
  */
 .link-row:hover {
   background: var(--dark) !important;
-  color: #fbf7ec !important;
+  color: var(--card) !important;
 }
 .link-row:hover :deep(svg) {
-  color: #fbf7ec !important;
+  color: var(--card) !important;
 }
 </style>

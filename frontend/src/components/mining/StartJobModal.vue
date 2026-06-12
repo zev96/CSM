@@ -226,7 +226,7 @@ function onSubmit() {
                 :style="{
                   flex: 1, height: '28px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 500,
                   background: sort === s ? 'var(--dark)' : 'transparent',
-                  color: sort === s ? '#fbf7ec' : 'var(--ink-2)',
+                  color: sort === s ? 'var(--card)' : 'var(--ink-2)',
                   border: 'none', cursor: 'pointer',
                 }"
               >{{ s }}</button>
@@ -241,7 +241,7 @@ function onSubmit() {
                 :style="{
                   flex: 1, height: '28px', borderRadius: '999px', fontSize: '11px', fontWeight: 500,
                   background: range === s ? 'var(--dark)' : 'transparent',
-                  color: range === s ? '#fbf7ec' : 'var(--ink-2)',
+                  color: range === s ? 'var(--card)' : 'var(--ink-2)',
                   border: 'none', cursor: 'pointer',
                   whiteSpace: 'nowrap', padding: '0 4px',
                 }"
@@ -279,7 +279,7 @@ function onSubmit() {
           style="background: rgba(245,192,66,0.10); border: 1px solid rgba(245,192,66,0.36); border-radius: 12px;"
         >
           <span
-            style="width: 26px; height: 26px; border-radius: 8px; background: var(--yellow-soft); color: #7a5400; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;"
+            style="width: 26px; height: 26px; border-radius: 8px; background: var(--yellow-soft); color: var(--yellow-deep); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;"
           ><Icon name="info" :size="13"/></span>
           <div class="text-[11.5px] leading-snug" style="color: var(--ink-2)">
             预计抓取 <b class="font-display" style="color: var(--ink)">{{ total }}</b> 条视频，约需

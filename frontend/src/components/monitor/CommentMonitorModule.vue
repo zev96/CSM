@@ -560,7 +560,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
       class="relative overflow-hidden"
       :style="{
         background: 'var(--dark)',
-        color: '#fbf7ec',
+        color: 'var(--card)',
         borderRadius: 'var(--radius-card)',
         padding: '26px 28px',
         zIndex: 1,
@@ -700,7 +700,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             padding: '0 16px',
             borderRadius: '999px',
             background: commentSubtab === p.k ? 'var(--dark)' : 'transparent',
-            color: commentSubtab === p.k ? '#fbf7ec' : 'var(--ink-3)',
+            color: commentSubtab === p.k ? 'var(--card)' : 'var(--ink-3)',
             fontSize: '12.5px',
             fontWeight: 500,
             gap: '8px',

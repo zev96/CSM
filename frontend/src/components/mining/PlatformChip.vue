@@ -26,8 +26,8 @@ const h = () => (props.size === "sm" ? 22 : 26);
       background: 'rgba(255,255,255,0.92)',
       color: m().dark,
       fontSize: size === 'sm' ? '11px' : '12px',
-      boxShadow: '0 1px 2px rgba(28,26,23,0.08)',
-      border: '1px solid rgba(28,26,23,0.04)',
+      boxShadow: '0 1px 2px rgba(var(--ink-rgb),0.08)',
+      border: '1px solid rgba(var(--ink-rgb),0.04)',
     }"
   >
     <span

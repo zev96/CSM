@@ -31,6 +31,7 @@ import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection
 import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
 
+import { useTweaks } from "@/composables/useTweaks";
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
@@ -316,8 +317,8 @@ watch(
 // 注：language / checkUpdates / exportFrontmatter / exportDedupReport /
 // imageHandling / preferredSkillId / hookStrength / density / autoVaultRefs /
 // sentenceMaxLen / monitorFreq / monitorBrowser 都已随 UI 移除而清理。
+const tweaks = useTweaks();
 const localUI = reactive({
-  theme: "system",
   autoStart: false,
   filenameTemplate: "{date}-{title}-{seq}",
 });
@@ -898,7 +899,7 @@ async function saveAccountEdit() {
               color: 'var(--ink)',
             }"
             @click="section = g.k"
-            @mouseenter="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'rgba(28,26,23,0.04)' }"
+            @mouseenter="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.04)' }"
             @mouseleave="(e) => { if (section !== g.k) (e.currentTarget as HTMLElement).style.background = 'transparent' }"
           >
             <!-- 选中态左侧 3px 橙竖条（仅选中时出） -->
@@ -955,7 +956,7 @@ async function saveAccountEdit() {
           <template v-if="section === 'general'">
             <SettingsRow label="主题" hint="界面配色 — 跟随系统/明亮/暗色">
               <FormSelect
-                v-model="localUI.theme"
+                v-model="tweaks.state.theme"
                 :options="[
                   { label: '跟随系统', value: 'system' },
                   { label: '明亮', value: 'light' },
@@ -1318,7 +1319,7 @@ async function saveAccountEdit() {
                       fontSize: '11.5px',
                       background:
                         (get('concurrency') ?? 3) === n ? 'var(--dark)' : 'transparent',
-                      color: (get('concurrency') ?? 3) === n ? '#fbf7ec' : 'var(--ink-3)',
+                      color: (get('concurrency') ?? 3) === n ? 'var(--card)' : 'var(--ink-3)',
                       cursor: 'pointer',
                     }"
                     @click="setField('concurrency', n)"
@@ -2030,7 +2031,7 @@ async function saveAccountEdit() {
       <div
         v-if="excludeDomainsModalOpen"
         class="fixed inset-0 z-40 flex items-center justify-center"
-        :style="{ background: 'rgba(28,26,23,0.4)' }"
+        :style="{ background: 'rgba(var(--ink-rgb),0.4)' }"
         @click.self="excludeDomainsModalOpen = false"
       >
         <div
