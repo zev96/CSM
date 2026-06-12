@@ -514,8 +514,8 @@ watch(keywordResults, (kws) => {
                 </a>
               </div>
 
-              <!-- KPI：卡位数量 / 最高排名 -->
-              <div class="mb-4 grid flex-shrink-0 grid-cols-2 gap-3">
+              <!-- KPI：卡位数量 / 最高排名 / 自家命中数 -->
+              <div class="mb-4 grid flex-shrink-0 grid-cols-3 gap-3">
                 <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '12px', border: '1px solid var(--line)' }">
                   <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">卡位数量</div>
                   <div class="font-display mt-1 font-bold text-[20px]">
@@ -526,8 +526,15 @@ watch(keywordResults, (kws) => {
                 <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '12px', border: '1px solid var(--line)' }">
                   <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">最高排名</div>
                   <div class="font-display mt-1 font-bold text-[20px]">
-                    <template v-if="currentKeyword.first_rank > 0">第 {{ currentKeyword.first_rank }} 名</template>
+                    <template v-if="currentKeyword.first_rank > 0">#{{ currentKeyword.first_rank }}</template>
                     <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">未上榜</span>
+                  </div>
+                </div>
+                <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '12px', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">自家命中数</div>
+                  <div class="font-display mt-1 font-bold text-[20px]">
+                    <template v-if="currentKeyword.matched_count > 0">{{ currentKeyword.matched_count }}</template>
+                    <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">0</span>
                   </div>
                 </div>
               </div>
