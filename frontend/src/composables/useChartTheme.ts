@@ -26,7 +26,9 @@ export function buildChartTheme(readVar: Reader): ChartTheme {
     tick: readVar("--ink-3").trim() || "#7a7569",
     tooltipBg: readVar("--dark").trim() || "#1c1a17",
     tooltipFg: readVar("--card").trim() || "#fbf7ec",
-    tooltipBorder: `rgba(${inkRgb}, 0.1)`,
+    // fixed faint edge: the inverted tooltip BG always contrasts the chart, and an
+    // ink-rgb-derived border would equal the BG color (and vanish) in BOTH themes.
+    tooltipBorder: "rgba(255,255,255,0.1)",
     pointBorder: readVar("--card").trim() || "#fbf7ec",
     ink: readVar("--ink").trim() || "#1c1a17",
   };

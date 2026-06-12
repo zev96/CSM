@@ -20,10 +20,14 @@ const darkReader = (name: string): string =>
   })[name] ?? "";
 
 describe("buildChartTheme", () => {
-  it("composes grid/tooltip-border from --ink-rgb", () => {
+  it("composes grid from --ink-rgb", () => {
     expect(buildChartTheme(lightReader).grid).toBe("rgba(28, 26, 23, 0.05)");
     expect(buildChartTheme(darkReader).grid).toBe("rgba(245, 237, 224, 0.05)");
-    expect(buildChartTheme(darkReader).tooltipBorder).toBe("rgba(245, 237, 224, 0.1)");
+  });
+
+  it("uses a fixed faint tooltip border in both modes", () => {
+    expect(buildChartTheme(lightReader).tooltipBorder).toBe("rgba(255,255,255,0.1)");
+    expect(buildChartTheme(darkReader).tooltipBorder).toBe("rgba(255,255,255,0.1)");
   });
 
   it("reads direct tokens for tick/tooltip/point/ink", () => {
