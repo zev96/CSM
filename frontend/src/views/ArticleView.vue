@@ -1719,7 +1719,7 @@ const tabSectionLabel = computed(() => {
                       borderRadius: '50%',
                       background: '#7a9b5e',
                       border: '3px solid #fff',
-                      boxShadow: '0 1px 3px rgba(var(--ink-rgb),0.18)',
+                      boxShadow: '0 1px 3px rgba(var(--shadow-rgb),0.18)',
                     }"
                   />
                 </div>
@@ -2033,7 +2033,7 @@ const tabSectionLabel = computed(() => {
             background: 'var(--bg-inner)',
             border: '1px solid var(--line)',
             padding: '22px 22px 20px 22px',
-            boxShadow: '0 18px 50px rgba(var(--ink-rgb),0.18)',
+            boxShadow: '0 18px 50px rgba(var(--shadow-rgb),0.18)',
           }"
         >
           <div class="flex items-start justify-between mb-4">
@@ -2320,8 +2320,8 @@ const tabSectionLabel = computed(() => {
   background: #fbfaf6;
   transform: translateY(-2px);
   box-shadow:
-    0 6px 14px -2px rgba(var(--ink-rgb), 0.10),
-    0 2px 6px rgba(var(--ink-rgb), 0.05);
+    0 6px 14px -2px rgba(var(--shadow-rgb), 0.10),
+    0 2px 6px rgba(var(--shadow-rgb), 0.05);
 }
 
 /* 底部三按钮：默认透明深灰，hover/active 切到主色橙实心 + 阴影 + 微浮起 */
@@ -2342,7 +2342,7 @@ const tabSectionLabel = computed(() => {
   color: #ffffff;
   box-shadow:
     0 4px 12px -2px rgba(238, 106, 42, 0.40),
-    0 1px 3px rgba(var(--ink-rgb), 0.06);
+    0 1px 3px rgba(var(--shadow-rgb), 0.06);
   transform: translateY(-1px);
 }
 .qc-footer-btn:disabled {
@@ -2401,16 +2401,16 @@ const tabSectionLabel = computed(() => {
    */
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.65),
-    0 3px 10px -2px rgba(var(--ink-rgb), 0.07),
-    0 2px 5px rgba(var(--ink-rgb), 0.04);
+    0 3px 10px -2px rgba(var(--shadow-rgb), 0.07),
+    0 2px 5px rgba(var(--shadow-rgb), 0.04);
   transition: box-shadow 0.14s ease;
 }
 .right-rail :deep(section):hover {
   /* hover 同步减一档，跟默认态保持比例 */
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.65),
-    0 8px 20px -4px rgba(var(--ink-rgb), 0.10),
-    0 4px 8px rgba(var(--ink-rgb), 0.05);
+    0 8px 20px -4px rgba(var(--shadow-rgb), 0.10),
+    0 4px 8px rgba(var(--shadow-rgb), 0.05);
 }
 
 /*
@@ -2426,8 +2426,8 @@ const tabSectionLabel = computed(() => {
   padding: 14px;
   /* 默认就有轻微阴影 —— 让段落卡跟外层组装预览容器有视觉分层 */
   box-shadow:
-    0 2px 6px -1px rgba(var(--ink-rgb), 0.05),
-    0 1px 3px rgba(var(--ink-rgb), 0.04);
+    0 2px 6px -1px rgba(var(--shadow-rgb), 0.05),
+    0 1px 3px rgba(var(--shadow-rgb), 0.04);
   transition:
     background-color 0.14s ease,
     border-color 0.14s ease,
@@ -2438,8 +2438,8 @@ const tabSectionLabel = computed(() => {
 .assembly-block:hover {
   /* hover 明显浮起 —— 阴影加大 + 上移 2px */
   box-shadow:
-    0 10px 24px -4px rgba(var(--ink-rgb), 0.14),
-    0 4px 10px rgba(var(--ink-rgb), 0.06);
+    0 10px 24px -4px rgba(var(--shadow-rgb), 0.14),
+    0 4px 10px rgba(var(--shadow-rgb), 0.06);
   transform: translateY(-2px);
 }
 .assembly-block.selected {
@@ -2452,7 +2452,7 @@ const tabSectionLabel = computed(() => {
   border-color: rgba(238, 106, 42, 0.45);
   box-shadow:
     0 4px 14px -2px rgba(238, 106, 42, 0.20),
-    0 1px 4px rgba(var(--ink-rgb), 0.04);
+    0 1px 4px rgba(var(--shadow-rgb), 0.04);
 }
 /* selected 状态下 hover 不再额外 translate，避免重复浮起抖动 */
 .assembly-block.selected:hover {

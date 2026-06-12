@@ -319,7 +319,7 @@ onMounted(async () => {
           border: '1px solid var(--line)',
         }"
         @click="goEditTemplate(t)"
-        @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--line-2)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 6px 16px -8px rgba(var(--ink-rgb),0.18)'; }"
+        @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--line-2)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 6px 16px -8px rgba(var(--shadow-rgb),0.18)'; }"
         @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none'; }"
       >
         <!-- ⋯ 菜单按钮（右上角） -->
@@ -444,7 +444,7 @@ onMounted(async () => {
           border: '1px solid var(--line)',
         }"
         @click="goEditSkill(s)"
-        @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--line-2)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 6px 16px -8px rgba(var(--ink-rgb),0.18)'; }"
+        @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--line-2)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 6px 16px -8px rgba(var(--shadow-rgb),0.18)'; }"
         @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none'; }"
       >
         <button
@@ -521,7 +521,7 @@ onMounted(async () => {
           background: 'var(--card-white)',
           border: '1px solid var(--line-2)',
           borderRadius: '10px',
-          boxShadow: '0 10px 30px -8px rgba(var(--ink-rgb),0.25)',
+          boxShadow: '0 10px 30px -8px rgba(var(--shadow-rgb),0.25)',
           padding: '4px',
           zIndex: 9999,
         }"
@@ -580,7 +580,7 @@ onMounted(async () => {
           background: 'var(--card-white)',
           border: '1px solid var(--line-2)',
           borderRadius: '10px',
-          boxShadow: '0 10px 30px -8px rgba(var(--ink-rgb),0.25)',
+          boxShadow: '0 10px 30px -8px rgba(var(--shadow-rgb),0.25)',
           padding: '4px',
           zIndex: 9999,
         }"

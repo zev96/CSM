@@ -129,7 +129,7 @@ function go(key: string) {
             WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
             border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
             boxShadow: active === item.key
-              ? '0 6px 16px -2px rgba(var(--ink-rgb),0.12), 0 2px 6px rgba(var(--ink-rgb),0.06)'
+              ? '0 6px 16px -2px rgba(var(--shadow-rgb),0.12), 0 2px 6px rgba(var(--shadow-rgb),0.06)'
               : 'none',
           }"
           @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.05)' }"
@@ -234,7 +234,7 @@ function go(key: string) {
           WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
           border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
           boxShadow: active === item.key
-            ? '0 6px 16px -2px rgba(var(--ink-rgb),0.12), 0 2px 6px rgba(var(--ink-rgb),0.06)'
+            ? '0 6px 16px -2px rgba(var(--shadow-rgb),0.12), 0 2px 6px rgba(var(--shadow-rgb),0.06)'
             : 'none',
         }"
         @mouseenter="(e) => { if (active !== item.key) (e.currentTarget as HTMLElement).style.background = 'rgba(var(--ink-rgb),0.05)' }"

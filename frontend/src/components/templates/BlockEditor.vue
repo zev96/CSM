@@ -733,7 +733,7 @@ function insertKeyword(field: "text") {
               background: 'var(--card-2)',
               border: '1px solid var(--line)',
               borderRadius: 'var(--radius-inner)',
-              boxShadow: '0 6px 18px rgba(var(--ink-rgb),0.10)',
+              boxShadow: '0 6px 18px rgba(var(--shadow-rgb),0.10)',
             }"
             @click.stop
           >

@@ -36,6 +36,7 @@
      写法 rgba(var(--ink-rgb), α)。暗色(②)只翻这三个根值，所有
      ink/green/red 半透明色（边框/overlay/tint/滚动条）一键全翻。 */
   --ink-rgb: 28, 26, 23;
+  --shadow-rgb: 28, 26, 23;
   --green-rgb: 122, 155, 94;
   --red-rgb: 216, 90, 72;
 
@@ -71,6 +72,7 @@ body[data-theme="dark"] {
   --ink-4: #6e6657;
   /* rgb 三元：ink 翻成浅纸色 → 所有 rgba(var(--ink-rgb),α) 边框/overlay/滚动条/--line 自动变浅 */
   --ink-rgb: 245, 237, 224;
+  --shadow-rgb: 0, 0, 0;
   /* 主色（略提亮；deep = 暗色 hover 更亮） */
   --primary: #f0732f;
   --primary-soft: #3a2a1c;
@@ -388,6 +390,6 @@ body[data-radius="bold"] {
   border: 1px solid var(--frosted-border);
   border-radius: var(--radius-card);
   box-shadow:
-    0 1px 0 rgba(var(--ink-rgb), 0.03),
-    0 4px 14px rgba(var(--ink-rgb), 0.05);
+    0 1px 0 rgba(var(--shadow-rgb), 0.03),
+    0 4px 14px rgba(var(--shadow-rgb), 0.05);
 }
