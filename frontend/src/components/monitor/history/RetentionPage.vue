@@ -62,13 +62,13 @@ const PLATFORM_COLOR: Record<PlatformKey, string> = {
 };
 const PLATFORM_CHIP_BG: Record<PlatformKey, string> = {
   bilibili_comment: "rgba(238,106,42,0.15)",
-  douyin_comment: "rgba(30,28,25,0.10)",
+  douyin_comment: "rgba(var(--ink-rgb),0.10)",
   kuaishou_comment: "rgba(245,192,66,0.18)",
 };
 const PLATFORM_CHIP_FG: Record<PlatformKey, string> = {
-  bilibili_comment: "#c9521f",
-  douyin_comment: "#1c1a17",
-  kuaishou_comment: "#8a6810",
+  bilibili_comment: "var(--primary-deep)",
+  douyin_comment: "var(--ink)",
+  kuaishou_comment: "var(--yellow-deep)",
 };
 
 async function load() {
