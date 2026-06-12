@@ -32,3 +32,35 @@ export function batchZhihuKpis(snapshots: ZhihuKpiInput[]): ZhihuBatchKpis {
       : null;
   return { total, hitQuestions, avgRank, ownHits };
 }
+
+/**
+ * 知乎搜索「任务汇总」聚合 KPI —— 由该任务各关键词最新结果聚合。
+ *   - hitKeywords:   matched_count > 0 的关键词数（命中关键词数）
+ *   - total:         关键词总数
+ *   - bestFirstRank: 命中关键词中最好的首位（min first_rank, first_rank>0）；无则 null
+ *   - ownHits:       所有关键词 matched_count 之和（自家命中数）
+ */
+export interface ZhihuSearchKpiInput {
+  matched_count: number;
+  first_rank: number;
+}
+export interface ZhihuSearchKpis {
+  total: number;
+  hitKeywords: number;
+  bestFirstRank: number | null;
+  ownHits: number;
+}
+
+export function batchZhihuSearchKpis(keywords: ZhihuSearchKpiInput[]): ZhihuSearchKpis {
+  const total = keywords.length;
+  let hitKeywords = 0;
+  let ownHits = 0;
+  const firsts: number[] = [];
+  for (const k of keywords) {
+    if (k.matched_count > 0) hitKeywords++;
+    ownHits += k.matched_count;
+    if (k.first_rank > 0) firsts.push(k.first_rank);
+  }
+  const bestFirstRank = firsts.length > 0 ? Math.min(...firsts) : null;
+  return { total, hitKeywords, bestFirstRank, ownHits };
+}
