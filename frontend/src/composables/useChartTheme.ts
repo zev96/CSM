@@ -11,7 +11,7 @@ export interface ChartTheme {
   tick: string;         // axis tick labels
   tooltipBg: string;    // inverted tooltip surface (flips with --dark)
   tooltipFg: string;    // tooltip text (flips with --card)
-  tooltipBorder: string;
+  tooltipBorder: string; // subtle tooltip edge
   pointBorder: string;  // ring around data points = card bg ("cut-out" look)
   ink: string;          // resolved --ink — for "ink" series lines
 }

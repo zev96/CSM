@@ -49,4 +49,7 @@ describe("resolveColor", () => {
   it("passes through a literal hex untouched", () => {
     expect(resolveColor("#ee6a2a", darkReader)).toBe("#ee6a2a");
   });
+  it("returns the var() string unchanged when the token resolves empty", () => {
+    expect(resolveColor("var(--missing)", () => "")).toBe("var(--missing)");
+  });
 });
