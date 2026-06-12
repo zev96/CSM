@@ -17,11 +17,13 @@
  * 改成 defineExpose 让父组件的 goToZhihuTask 仍能从模块外驱动选中态，
  * 以及让父组件的 SSE finished 事件回调能通知模块刷新 taskResults。
  */
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
+import SplitPane from "@/components/ui/SplitPane.vue";
+import Dropdown from "@/components/ui/Dropdown.vue";
 // Sparkline 已下线 —— 统一改用 LineChart 跟 BaiduRankingPage 总任务图一致。
 import LineChart from "./history/LineChart.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
@@ -37,6 +39,7 @@ import {
 import {
   type TaskSnapshotPair,
 } from "@/utils/monitor-snapshot";
+import { batchZhihuKpis } from "@/utils/monitor-zhihu-kpi";
 import {
   type Task,
   type HeroAlert,
@@ -182,6 +185,17 @@ const selectedBatchBrand = computed<string>(() => {
   const first = selectedBatch.value?.tasks[0];
   const brand = first?.config?.target_brand;
   return typeof brand === "string" && brand.trim() ? brand : "";
+});
+
+// L1 右卡 KPI 汇总 —— 由批次所有子任务的最新快照聚合，纯客户端。
+const selectedBatchKpis = computed(() => {
+  const b = selectedBatch.value;
+  if (!b) return null;
+  const snaps = b.tasks
+    .map((t) => props.taskSnapshots[t.id]?.latest)
+    .filter((s): s is NonNullable<typeof s> => !!s)
+    .map((s) => ({ matched_count: s.matched_count ?? 0, rank: s.rank ?? -1 }));
+  return batchZhihuKpis(snaps);
 });
 
 // 批次列表变化时把 selectedBatchName 收敛到一个有效值（默认第一条）——
@@ -518,6 +532,19 @@ const selectedTopN = computed<number>(() => {
   return 10;
 });
 
+// L2 详情面板宽屏判断：≥640px 时趋势图和答案列表并排。
+// matchMedia 驱动，避免 CSS-only 方案在 SSR 或测试环境出问题。
+const l2Wide = ref(typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches);
+let l2Mq: MediaQueryList | null = null;
+const onL2MqChange = (e: MediaQueryListEvent) => { l2Wide.value = e.matches; };
+onMounted(() => {
+  if (typeof window === "undefined") return;
+  l2Mq = window.matchMedia("(min-width: 640px)");
+  l2Wide.value = l2Mq.matches;
+  l2Mq.addEventListener("change", onL2MqChange);
+});
+onBeforeUnmount(() => l2Mq?.removeEventListener("change", onL2MqChange));
+
 watch(selectedTaskId, async (id) => {
   if (id != null && id > 0) await loadResults(id);
 });
@@ -819,8 +846,9 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
       </div>
     </div>
 
-    <!-- table + detail -->
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
+    <!-- table + detail — SplitPane: 左定宽 340px，右 1fr -->
+    <SplitPane>
+      <template #left>
       <!--
         table card —— min-h-0 + overflow-hidden 把任务列表的滚动锁在卡片内，
         否则任务行过多时 grid 项会撑爆页面。
@@ -943,36 +971,34 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           <div class="text-center">操作</div>
         </div>
 
-        <!-- L1 批次列头 —— 3 列（与批次行同 1.7fr .6fr 1.1fr） -->
+        <!-- L1 批次列头 —— 3 列（与批次行同 1.5fr .9fr 1.1fr） -->
         <div
           v-else-if="openBatchName == null"
           class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
           :style="{
-            gridTemplateColumns: '1.7fr .6fr 1.1fr',
+            gridTemplateColumns: '1.5fr .9fr 1.1fr',
             letterSpacing: '1.2px',
             color: 'var(--ink-3)',
             borderBottom: '1px solid var(--line)',
           }"
         >
           <div>任务名字</div>
-          <div class="text-center">问题数</div>
+          <div class="text-center">状态</div>
           <div class="text-center">操作</div>
         </div>
 
-        <!-- L2 子任务列头 —— 5 列（与子任务行同 1.6fr .7fr .7fr .7fr 1fr），「类型」替换为「浏览量」 -->
+        <!-- L2 子任务列头 —— 3 列（与子任务行同 1.5fr .9fr 1.1fr） -->
         <div
           v-else
           class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
           :style="{
-            gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+            gridTemplateColumns: '1.5fr .9fr 1.1fr',
             letterSpacing: '1.2px',
             color: 'var(--ink-3)',
             borderBottom: '1px solid var(--line)',
           }"
         >
           <div>问题名字</div>
-          <div class="text-center">浏览量</div>
-          <div class="text-center">卡位</div>
           <div class="text-center">变化</div>
           <div class="text-center">操作</div>
         </div>
@@ -1054,7 +1080,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             :key="b.name"
             class="grid cursor-pointer items-center transition"
             :style="{
-              gridTemplateColumns: '1.7fr .6fr 1.1fr',
+              gridTemplateColumns: '1.5fr .9fr 1.1fr',
               background: selectedBatchName === b.name ? 'var(--card-2)' : 'transparent',
               borderBottom: i < batches.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
@@ -1064,48 +1090,54 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             @mouseenter="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
             @mouseleave="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
           >
-            <!--
-              批次名是「点击进 L2」的彩色热区（跟 CommentMonitorModule 的
-              批次名链接同款 primary-deep 色）；整行点击只把右卡详情定位到
-              这条批次（selectedBatchName），不导航。@click.stop 防止点名字
-              时又触发行的 select。
-            -->
-            <button
-              type="button"
-              class="truncate text-left text-[13px] font-medium"
-              :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
-              title="查看该批次的问题列表"
-              @click.stop="openBatchName = b.name"
-            >{{ b.name }}</button>
-            <div class="text-center font-display text-[13px] font-bold">{{ b.tasks.length }}</div>
-            <div class="flex items-center justify-center gap-1">
+            <!-- Col 1: 批次名（钻入 L2）+ 副标题（问题数 · 品牌） -->
+            <div class="min-w-0">
               <button
                 type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--primary-deep)', cursor: 'pointer' }"
-                title="启动批次内所有子任务"
-                @click.stop="startBatch(b)"
+                class="truncate text-left text-[13px] font-semibold"
+                :style="{ color: selectedBatchName === b.name ? 'var(--primary-deep)' : 'var(--ink)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', maxWidth: '100%' }"
+                title="查看该批次的问题列表"
+                @click.stop="openBatchName = b.name"
+              >{{ b.name }}</button>
+              <div class="truncate text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                {{ b.tasks.length }} 个问题 · 品牌 {{ b.tasks[0]?.config?.target_brand || '—' }}
+              </div>
+            </div>
+            <!-- Col 2: 状态 Pill —— 批次内有任务运行中 → 进行中，否则 → 就绪 -->
+            <div class="flex items-center justify-center">
+              <Pill
+                v-if="b.tasks.some((t) => runningTaskIds[t.id])"
+                tone="ok"
+              >进行中</Pill>
+              <Pill v-else tone="info">就绪</Pill>
+            </div>
+            <!-- Col 3: ⋯ Dropdown -->
+            <div class="flex items-center justify-center">
+              <Dropdown
+                :items="[
+                  { key: 'run', label: '启动批次', icon: 'play' },
+                  { key: 'edit', label: '编辑批次', icon: 'edit' },
+                  { key: 'delete', label: '删除批次', icon: 'trash', tone: 'danger' },
+                ]"
+                align="right"
+                @select="(key) => {
+                  if (key === 'run') startBatch(b);
+                  else if (key === 'edit') editBatch(b);
+                  else if (key === 'delete') deleteBatch(b);
+                }"
               >
-                <Icon name="play" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
-                title="编辑批次共享设置"
-                @click.stop="editBatch(b)"
-              >
-                <Icon name="edit" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
-                title="删除整个批次"
-                @click.stop="deleteBatch(b)"
-              >
-                <Icon name="trash" :size="13" />
-              </button>
+                <template #trigger>
+                  <button
+                    type="button"
+                    class="inline-flex h-7 w-7 items-center justify-center"
+                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                    title="更多操作"
+                    @click.stop
+                  >
+                    <Icon name="more" :size="14" />
+                  </button>
+                </template>
+              </Dropdown>
             </div>
           </div>
         </template>
@@ -1118,13 +1150,13 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           question_visit_count）。卡位 / 变化 / 操作 cell 原样保留。
         -->
         <template v-else>
-          <!-- L2 列头（「类型」→「浏览量」）和返回条均已上移到滚动区外，只让行滚动 -->
+          <!-- L2 列头和返回条均已上移到滚动区外，只让行滚动 -->
           <div
             v-for="(t, i) in currentBatchTasks"
             :key="t.id"
             class="grid cursor-pointer items-center transition"
             :style="{
-              gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
+              gridTemplateColumns: '1.5fr .9fr 1.1fr',
               background: selectedTaskId === t.id ? 'var(--card-2)' : 'transparent',
               borderBottom: i < currentBatchTasks.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
@@ -1132,33 +1164,21 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             }"
             @click="selectedTaskId = t.id"
           >
-            <div class="truncate text-[13px] font-medium">{{ subtaskTitle(t) }}</div>
-            <!-- 浏览量：knowledge 问题「被浏览」数（万 / 亿单位）；缺失 — -->
-            <div class="text-center text-[12px]" :style="{ color: 'var(--ink-2)' }">
-              {{ formatVisitCount(taskSnapshots[t.id]?.latest?.question_visit_count) }}
+            <!-- Col 1: 问题名 + 副标题（浏览量 · 卡位） -->
+            <div class="min-w-0">
+              <div
+                class="truncate text-[13px] font-semibold"
+                :style="{ color: selectedTaskId === t.id ? 'var(--primary-deep)' : 'var(--ink)' }"
+              >{{ subtaskTitle(t) }}</div>
+              <div class="truncate text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                {{ formatVisitCount(taskSnapshots[t.id]?.latest?.question_visit_count) }} 浏览 · 卡位 {{ taskSnapshots[t.id]?.latest?.matched_count ?? 0 }}
+              </div>
             </div>
             <!--
-              卡位：matched_count 单值（不再 X/N 分母 + 最高#N 副标）。
-              跟右卡「卡位数量」语义保持一致。命中 0 → "前 N 以外"红字。
+              Col 2: 变化 Pill —— 命中数 delta（latest vs prev）。
+              +N = 多一条占位（ok），-N = 少一条（warn），持平（info）。
             -->
-            <div class="text-center font-display text-[13px] font-bold">
-              <template v-if="taskSnapshots[t.id]?.latest">
-                <template v-if="taskSnapshots[t.id]!.latest!.matched_count > 0">
-                  <span>{{ taskSnapshots[t.id]!.latest!.matched_count }}</span>
-                </template>
-                <span
-                  v-else
-                  :style="{ color: 'var(--red, #d85a48)', fontSize: '12px', fontWeight: 'normal' }"
-                >前 {{ taskSnapshots[t.id]!.latest!.alert_top_n }} 以外</span>
-              </template>
-              <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
-            </div>
-            <!--
-              变化：用命中数 delta 而不是 rank delta —— 用户的心智模型
-              是"我们家这次有几条上榜、上次有几条"。+1 = 多一条占位，
-              -1 = 少一条；持平不显 pill。
-            -->
-            <div class="text-center">
+            <div class="flex items-center justify-center">
               <template v-if="taskSnapshots[t.id]?.latest && taskSnapshots[t.id]?.prev">
                 <template
                   v-if="taskSnapshots[t.id]!.latest!.matched_count - taskSnapshots[t.id]!.prev!.matched_count > 0"
@@ -1178,73 +1198,46 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 </template>
                 <Pill v-else tone="info">持平</Pill>
               </template>
-              <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+              <span v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</span>
             </div>
-            <!--
-              操作 cell —— 状态列已移除（卡位 / 变化 已经反映上榜状态）。
-              三个 icon 居中：
-                ▶ 立刻监测（监测中 → ⏹ stop, 点击发取消）  /  ✎ 编辑  /  🗑 删除
-              running 状态由 monitorStatus store 提供，跨页面导航不丢。
-            -->
-            <div class="flex items-center justify-center gap-1">
-              <button
-                v-if="runningTaskIds[t.id]"
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--red, #d85a48)',
-                  cursor: 'pointer',
+            <!-- Col 3: ⋯ Dropdown（运行中 → 第一项为停止，否则为立刻监测） -->
+            <div class="flex items-center justify-center">
+              <Dropdown
+                :items="[
+                  runningTaskIds[t.id]
+                    ? { key: 'stop', label: '停止', icon: 'x' }
+                    : { key: 'run', label: '立刻监测', icon: 'play' },
+                  { key: 'edit', label: '编辑任务', icon: 'edit' },
+                  { key: 'delete', label: '删除任务', icon: 'trash', tone: 'danger' },
+                ]"
+                align="right"
+                @select="(key) => {
+                  if (key === 'run') emit('run-task', t.id);
+                  else if (key === 'stop') emit('cancel-task', t.id);
+                  else if (key === 'edit') emit('edit-task', t);
+                  else if (key === 'delete') emit('delete-task', t.id);
                 }"
-                title="停止监测"
-                @click.stop="emit('cancel-task', t.id)"
               >
-                <Icon name="x" :size="13" />
-              </button>
-              <button
-                v-else
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--primary-deep)',
-                  cursor: 'pointer',
-                }"
-                title="立刻监测"
-                @click.stop="emit('run-task', t.id)"
-              >
-                <Icon name="play" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--ink-3)',
-                }"
-                title="编辑任务（目标关键词 / Top-N / 计划）"
-                @click.stop="emit('edit-task', t)"
-              >
-                <Icon name="edit" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{
-                  borderRadius: '999px',
-                  color: 'var(--ink-3)',
-                }"
-                title="删除任务"
-                @click.stop="emit('delete-task', t.id)"
-              >
-                <Icon name="trash" :size="13" />
-              </button>
+                <template #trigger>
+                  <button
+                    type="button"
+                    class="inline-flex h-7 w-7 items-center justify-center"
+                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                    title="更多操作"
+                    @click.stop
+                  >
+                    <Icon name="more" :size="14" />
+                  </button>
+                </template>
+              </Dropdown>
             </div>
           </div>
         </template>
         </div>
       </section>
+      </template>
 
+      <template #right>
       <!-- detail card —— min-h-0 + overflow-hidden；滚动锁在子区块（前N答案 / L1属性区） -->
       <section
         class="flex h-full min-h-0 flex-col overflow-hidden"
@@ -1463,21 +1456,22 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             </div>
 
             <!--
-              KPI 二联：卡位数量 / 最高排名
-              - 卡位数量 = 前 N 条答案里包含目标品牌词的条数（单值，不再 N/M）
-              - 最高排名 = result.rank（自家最高排到第几名）；命中 0 → 「未上榜」
-              - 检查频率已移除 —— 用户通过编辑任务设置定时。
+              KPI 五联：当前卡位 / 较上次变化 / 最高排名 / 浏览量 / 自家命中数
+              注：当前卡位（#1）与自家命中数（#5）均来自 matched_count，
+              数值相同——设计§4.3.1 要求五联，保留全部，QA 时可视需要合并为四联。
             -->
-            <div class="mt-3 grid flex-shrink-0 grid-cols-2 gap-3">
+            <div class="mt-3 flex-shrink-0" :style="{ display: 'flex', flexWrap: 'wrap', gap: '8px' }">
+              <!-- #1 当前卡位 -->
               <div
                 :style="{
+                  flex: '1 1 80px',
                   padding: '12px',
                   borderRadius: '12px',
                   background: 'var(--card-2)',
                   border: '1px solid var(--line)',
                 }"
               >
-                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">卡位数量</div>
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">当前卡位</div>
                 <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
                   <template v-if="taskSnapshots[selectedTask.id]?.latest">
                     <template v-if="taskSnapshots[selectedTask.id]!.latest!.matched_count > 0">
@@ -1491,8 +1485,44 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                   <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
                 </div>
               </div>
+
+              <!-- #2 较上次变化：latest.matched_count − prev.matched_count -->
               <div
                 :style="{
+                  flex: '1 1 80px',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                }"
+              >
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">较上次变化</div>
+                <div class="font-display mt-1 font-bold" :style="{ fontSize: '18px' }">
+                  <template v-if="taskSnapshots[selectedTask.id]?.latest && taskSnapshots[selectedTask.id]?.prev">
+                    <Pill
+                      v-if="taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count > 0"
+                      tone="ok"
+                    >
+                      <Icon name="arrowUp" :size="10" />
+                      +{{ taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count }}
+                    </Pill>
+                    <Pill
+                      v-else-if="taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count < 0"
+                      tone="warn"
+                    >
+                      <Icon name="arrowDown" :size="10" />
+                      {{ taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count }}
+                    </Pill>
+                    <Pill v-else tone="info">持平</Pill>
+                  </template>
+                  <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">—</span>
+                </div>
+              </div>
+
+              <!-- #3 最高排名 -->
+              <div
+                :style="{
+                  flex: '1 1 80px',
                   padding: '12px',
                   borderRadius: '12px',
                   background: 'var(--card-2)',
@@ -1511,102 +1541,132 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                   <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
                 </div>
               </div>
-            </div>
 
-            <!--
-              14 天卡位趋势：Y 轴 = matched_count（卡位数），越高越好。
-              之前的 Y 轴 = rank（越低越好）容易误读，跟新 KPI「卡位数量」
-              语义保持一致。
-            -->
-            <!--
-              真实数据：跟 BaiduRankingPage 总任务图组件一致（LineChart），
-              永远默认显示 14 天 frame —— sparkBuckets 是 14 个 calendar
-              bucket，没数据的天为 null，chart.js spanGaps=false 画 gap。
-              不再用 v-if 拦数据空场景（用户即使没数据也能看到完整时间轴）。
-            -->
-            <div class="mt-5 flex-shrink-0">
-              <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
-              <!--
-                Y 轴上限锁 selectedTopN —— 命中条数的容量上限是 Top-N，
-                让趋势相对"满格"显示。chart.js auto-scale 在低基数（命中
-                0-2 条）时会把数据顶到天花板，视觉夸张，不直观。
-              -->
-              <LineChart
-                :labels="sparkChartLabels"
-                :series="[
-                  {
-                    label: '卡位数量',
-                    color: 'var(--primary-deep, #c9521f)',
-                    data: sparkPoints,
-                  },
-                ]"
-                :y-max="selectedTopN"
-              />
-            </div>
-
-            <!--
-              前 N 条答案 —— 从 taskResults[0].metric.answers 取全部。
-              每条左侧带排名 #N，命中目标品牌的行用 primary-soft 背景 +
-              橙色描边高亮，右侧角标"自家"。让用户一眼看出"前 N 条里
-              我占了哪几位"——这是用户描述的核心需求。
-            -->
-            <div class="mt-4 min-h-0 flex-1 overflow-y-auto">
-              <div class="mb-2 flex items-center justify-between">
-                <div class="text-[12px] font-semibold">
-                  前
-                  {{ taskSnapshots[selectedTask.id]?.latest?.alert_top_n ?? topAnswersForSelectedTask.length }}
-                  条答案
-                </div>
-                <div
-                  v-if="taskSnapshots[selectedTask.id]?.latest"
-                  class="text-[11px]"
-                  :style="{ color: 'var(--ink-3)' }"
-                >
-                  自家命中
-                  <span :style="{ color: 'var(--primary-deep)', fontWeight: 600 }">
-                    {{ taskSnapshots[selectedTask.id]!.latest!.matched_count }}
-                  </span>
-                  条
+              <!-- #4 浏览量 -->
+              <div
+                :style="{
+                  flex: '1 1 80px',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                }"
+              >
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">浏览量</div>
+                <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                  <template v-if="taskSnapshots[selectedTask.id]?.latest">
+                    {{ formatVisitCount(taskSnapshots[selectedTask.id]!.latest!.question_visit_count) }}
+                  </template>
+                  <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
                 </div>
               </div>
-              <template v-if="topAnswersForSelectedTask.length">
-                <div
-                  v-for="(x, i) in topAnswersForSelectedTask"
-                  :key="i"
-                  class="mb-1.5 flex items-center gap-3"
-                  :style="{
-                    padding: '10px',
-                    borderRadius: '10px',
-                    background: x.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
-                    border: '1px solid '
-                      + (x.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
-                  }"
-                >
-                  <span
-                    class="font-display text-[13px] font-bold"
-                    :style="{
-                      width: '22px',
-                      color: x.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
-                    }"
-                  >#{{ x.rank }}</span>
-                  <div class="min-w-0 flex-1">
-                    <div class="truncate text-[12.5px] font-medium">
-                      {{ x.content_preview || "（无摘要）" }}
-                    </div>
-                    <div class="flex items-center gap-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                      <span>{{ x.author || "—" }}</span>
-                      <span v-if="x.voteup_count">· 👍 {{ x.voteup_count }}</span>
-                      <span
-                        v-if="x.matches_brand"
-                        class="ml-auto"
-                        :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
-                      >自家</span>
-                    </div>
+
+              <!-- #5 自家命中数（= matched_count，与#1数值相同，保留作语义区分） -->
+              <div
+                :style="{
+                  flex: '1 1 80px',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                }"
+              >
+                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">自家命中数</div>
+                <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                  <template v-if="taskSnapshots[selectedTask.id]?.latest">
+                    <span :style="{ color: 'var(--primary-deep)' }">
+                      {{ taskSnapshots[selectedTask.id]!.latest!.matched_count }}
+                    </span>
+                  </template>
+                  <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                </div>
+              </div>
+            </div>
+
+            <!--
+              趋势（左）+ 答案列表（右）并排
+              - 宽屏：2 列 gridTemplateColumns 1fr / 1.05fr
+              - 窄屏（< 640px）：单列堆叠
+              趋势 chart 和答案列表 data binding 保持不变。
+            -->
+            <div
+              class="mt-4 min-h-0 flex-1"
+              :style="{
+                display: 'grid',
+                gridTemplateColumns: l2Wide ? '1fr 1.05fr' : '1fr',
+                gap: '16px',
+                alignItems: 'start',
+              }"
+            >
+              <!-- 左：7 天卡位趋势 -->
+              <div class="flex-shrink-0">
+                <div class="mb-2 text-[12px] font-semibold">最近 7 天卡位趋势</div>
+                <!--
+                  Y 轴上限锁 selectedTopN —— 命中条数的容量上限是 Top-N，
+                  让趋势相对"满格"显示。chart.js auto-scale 在低基数（命中
+                  0-2 条）时会把数据顶到天花板，视觉夸张，不直观。
+                -->
+                <LineChart
+                  :labels="sparkChartLabels"
+                  :series="[
+                    {
+                      label: '卡位数量',
+                      color: 'var(--primary-deep, #c9521f)',
+                      data: sparkPoints,
+                    },
+                  ]"
+                  :y-max="selectedTopN"
+                />
+              </div>
+
+              <!-- 右：前 N 条答案 -->
+              <div class="overflow-y-auto" :style="{ maxHeight: l2Wide ? '360px' : 'none' }">
+                <div class="mb-2 flex items-center justify-between">
+                  <div class="text-[12px] font-semibold">
+                    前
+                    {{ taskSnapshots[selectedTask.id]?.latest?.alert_top_n ?? topAnswersForSelectedTask.length }}
+                    条答案
                   </div>
                 </div>
-              </template>
-              <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
-                暂无快照数据 —— 跑一次「立刻监测」，下方将列出当前榜上的前 N 个答案，命中目标品牌的会高亮。
+                <template v-if="topAnswersForSelectedTask.length">
+                  <div
+                    v-for="(x, i) in topAnswersForSelectedTask"
+                    :key="i"
+                    class="mb-1.5 flex items-center gap-3"
+                    :style="{
+                      padding: '10px',
+                      borderRadius: '10px',
+                      background: x.matches_brand ? 'var(--primary-soft)' : 'var(--card-2)',
+                      border: '1px solid '
+                        + (x.matches_brand ? 'rgba(238,106,42,0.3)' : 'var(--line)'),
+                    }"
+                  >
+                    <span
+                      class="font-display text-[13px] font-bold"
+                      :style="{
+                        width: '22px',
+                        color: x.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)',
+                      }"
+                    >#{{ x.rank }}</span>
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate text-[12.5px] font-medium">
+                        {{ x.content_preview || "（无摘要）" }}
+                      </div>
+                      <div class="flex items-center gap-2 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                        <span>{{ x.author || "—" }}</span>
+                        <span v-if="x.voteup_count">· 👍 {{ x.voteup_count }}</span>
+                        <span
+                          v-if="x.matches_brand"
+                          class="ml-auto"
+                          :style="{ color: 'var(--primary-deep)', fontWeight: 600 }"
+                        >自家</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
+                  暂无快照数据 —— 跑一次「立刻监测」，下方将列出当前榜上的前 N 个答案，命中目标品牌的会高亮。
+                </div>
               </div>
             </div>
           </template>
@@ -1630,64 +1690,179 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           </div>
 
           <template v-else>
-            <!-- 标题：批次名 + 「任务详情」eyebrow -->
+            <!-- 标题：批次名 + 「批次汇总」eyebrow -->
             <div class="mb-3 flex-shrink-0">
               <div class="font-display text-[14px] font-semibold">{{ selectedBatch.name }}</div>
               <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                任务详情
+                批次汇总
               </div>
             </div>
 
-            <!-- 属性区（滚动）—— 问题数量 / 目标品牌；无趋势图 -->
+            <!-- 滚动区：KPI 四联 + 问题概览表 + 导出/定时 -->
             <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-              <div>
-                <div
-                  class="mb-1 text-[10.5px] uppercase"
-                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
-                >问题数量</div>
-                <div class="font-display text-[18px] font-bold">{{ selectedBatch.tasks.length }}</div>
-              </div>
-              <div>
-                <div
-                  class="mb-1 text-[10.5px] uppercase"
-                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
-                >目标品牌</div>
-                <div class="text-[13px] font-medium">{{ selectedBatchBrand || '—' }}</div>
-              </div>
-            </div>
 
-            <!-- 底部 pinned：导出数据 / 定时监测 -->
-            <div class="flex flex-shrink-0 gap-2 pt-4">
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                  borderRadius: '8px',
-                  color: 'var(--ink-2)',
-                  cursor: 'pointer',
-                }"
-                @click="exportBatchCsv(selectedBatch)"
-              >导出数据</button>
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--primary)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                }"
-                @click="scheduleBatch(selectedBatch)"
-              >定时监测</button>
+              <!-- KPI 四联 —— 与 L2 二联 同款 card 样式 -->
+              <div class="grid grid-cols-2 gap-3">
+                <!-- 问题数 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">问题数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    {{ selectedBatch.tasks.length }}
+                  </div>
+                </div>
+
+                <!-- 目标品牌 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">目标品牌</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '16px' }">
+                    {{ selectedBatchBrand || '—' }}
+                  </div>
+                </div>
+
+                <!-- 命中问题数 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">命中问题数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="selectedBatchKpis">
+                      {{ selectedBatchKpis.hitQuestions }}<span :style="{ color: 'var(--ink-3)', fontSize: '13px' }">/{{ selectedBatchKpis.total }}</span>
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                  </div>
+                </div>
+
+                <!-- 平均卡位 -->
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">平均卡位</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="selectedBatchKpis?.avgRank != null">
+                      第 {{ selectedBatchKpis.avgRank }} 名
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">—</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 问题概览速查表 -->
+              <div>
+                <div
+                  class="mb-2 text-[10.5px] uppercase"
+                  :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }"
+                >问题概览</div>
+                <div
+                  :style="{
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                    overflow: 'hidden',
+                  }"
+                >
+                  <!-- 表头 -->
+                  <div
+                    class="grid text-[10.5px]"
+                    :style="{
+                      gridTemplateColumns: '1fr 48px 64px',
+                      padding: '5px 10px',
+                      background: 'var(--card-2)',
+                      color: 'var(--ink-3)',
+                      borderBottom: '1px solid var(--line)',
+                    }"
+                  >
+                    <span>问题名</span>
+                    <span :style="{ textAlign: 'right' }">卡位</span>
+                    <span :style="{ textAlign: 'right' }">最高排名</span>
+                  </div>
+                  <!-- 每行 -->
+                  <div
+                    v-for="t in selectedBatch.tasks"
+                    :key="t.id"
+                    class="grid text-[11.5px]"
+                    :style="{
+                      gridTemplateColumns: '1fr 48px 64px',
+                      padding: '6px 10px',
+                      borderBottom: '1px solid var(--line)',
+                      color: 'var(--ink-2)',
+                    }"
+                  >
+                    <span
+                      class="truncate pr-2"
+                      :title="subtaskTitle(t)"
+                      :style="{ color: 'var(--ink)' }"
+                    >{{ subtaskTitle(t) }}</span>
+                    <span :style="{ textAlign: 'right', color: 'var(--ink-2)' }">
+                      {{ props.taskSnapshots[t.id]?.latest?.matched_count ?? 0 }}
+                    </span>
+                    <span :style="{ textAlign: 'right', color: 'var(--ink-2)' }">
+                      <template v-if="props.taskSnapshots[t.id]?.latest && (props.taskSnapshots[t.id]!.latest!.rank ?? -1) > 0">
+                        第 {{ props.taskSnapshots[t.id]!.latest!.rank }} 名
+                      </template>
+                      <span v-else :style="{ color: 'var(--ink-3)', fontSize: '10.5px' }">未进榜</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 导出数据 / 定时监测 -->
+              <div class="flex flex-shrink-0 gap-2">
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: '8px',
+                    color: 'var(--ink-2)',
+                    cursor: 'pointer',
+                  }"
+                  @click="exportBatchCsv(selectedBatch)"
+                >导出数据</button>
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--primary)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                  }"
+                  @click="scheduleBatch(selectedBatch)"
+                >定时监测</button>
+              </div>
+
             </div>
           </template>
         </template>
       </section>
-    </div>
+      </template>
+    </SplitPane>
   </div>
 </template>
