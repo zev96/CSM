@@ -9,6 +9,7 @@
  * → 这里把该版本号写入 localStorage；下次**静默**检查若 latest==skipped 则不弹。
  * 用户在设置页**手动**检查时无视 skip（主动要看就让他看）。
  */
+import type { UpdaterCheckResult } from "@/api/client";
 import { useToast } from "./useToast";
 
 const SKIP_KEY = "csm.update.skip.v1";
@@ -49,7 +50,7 @@ export async function runUpdateCheck(opts: { silent?: boolean } = {}): Promise<v
       transitionToError,
     } = await import("./useUpdateAlert");
 
-    let r;
+    let r: UpdaterCheckResult;
     try {
       r = await updaterCheck();
     } catch (e: any) {
@@ -142,6 +143,8 @@ export async function runUpdateCheck(opts: { silent?: boolean } = {}): Promise<v
       }
     }
   } catch (e: any) {
+    // 即使 silent 也留 console 痕迹，方便排查（如动态 import 失败这种静默不弹的场景）。
+    console.error("[useUpdateFlow] 更新检查未预期出错:", e);
     if (!silent) {
       toast.error(`检查更新失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
     }
