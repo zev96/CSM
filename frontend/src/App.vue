@@ -127,10 +127,14 @@ onMounted(async () => {
   }
   configReady.value = true;
   // 启动后静默检查更新：有新版本自动弹 UpdateAvailableModal；已「跳过」的版本不弹。
-  // fire-and-forget —— 不阻塞 UI；检查失败静默（仅设置页手动检查才提示）。
-  import("./composables/useUpdateFlow")
-    .then(({ runUpdateCheck }) => runUpdateCheck({ silent: true }))
-    .catch(() => {});
+  // 仅在 sidecar 确实可达（configLoadOk）时检查 —— 否则 /api/updater/check 必 connection
+  // refused，白跑一趟。fire-and-forget 不阻塞 UI；.then 返回内层 Promise，故 runUpdateCheck
+  // 的 rejection 也会被 .catch 吞掉，检查失败对用户静默（仅设置页手动检查才提示）。
+  if (configLoadOk.value) {
+    import("./composables/useUpdateFlow")
+      .then(({ runUpdateCheck }) => runUpdateCheck({ silent: true }))
+      .catch(() => {});
+  }
 });
 </script>
 
