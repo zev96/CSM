@@ -496,15 +496,6 @@ const _sparkPoints = computed<number[]>(() =>
 );
 void _sparkPoints; // suppress unused warning
 
-// Level 2 任务汇总卡的 14 天日历窗口 —— 跟 Level 1 同套聚合逻辑。
-const levelTwoCalendarBuckets = computed(() =>
-  bucketByCalendarDay(chronoHistory.value, 14),
-);
-
-// sparkLabels 已下线 —— Level 2 改用 LineChart，labels 直接来自
-// levelTwoCalendarBuckets.map(b => b.label)，1:1 对齐 data points，
-// chart.js 自动按宽度抽稀 tick，不再需要前端预先抽 5 条 anchor。
-
 // Get ideal_rank from selected task config (default 5)
 const idealRank = computed<number>(() => {
   const v = (selectedTask.value?.config as any)?.ideal_rank;
@@ -532,24 +523,6 @@ const placedCountPrev = computed<number>(() => {
 });
 void placedCountPrev; // suppress unused warning
 
-// Sparkline: 卡位 count (not matched_keywords) over last 14 days
-// 按本地日历日聚合 —— 同一天多次跑取最后一次，缺失天用 0 占位（Sparkline
-// 的 points: number[] 不接受 null）。跟 sparkLabels 的 14 天 bucket 对齐。
-//
-// keywords ?? [] 的保护：风控触发时后端会写一份 status="risk_control" 的
-// breakpoint result（metric 只含 last_resumed_keyword + captcha_signal_* 字段，
-// 没有 keywords 数组），sparkline 在 14 天窗口里遍历到这条 record 时
-// undefined.filter 会让整个 Level 2 render crash 白屏。
-const sparkPointsPlaced = computed<number[]>(() =>
-  levelTwoCalendarBuckets.value.map((b) => {
-    if (!b.record?.metric) return 0;
-    return (b.record.metric.keywords ?? []).filter(
-      (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
-    ).length;
-  }),
-);
-void sparkPointsPlaced; // suppress unused — kept for potential future L2 use
-
 // Currently selected keyword's details for the right panel detail section
 // selectedKeywordIdx 现在指向 keywordRows（合并源）的索引——未跑的关键词
 // row.result 是 null，KPI 卡也跟着显示 0/选择关键词，跟原"未选中"语义一致。
@@ -574,7 +547,6 @@ const selectedKwTrend = computed<Array<{ iso: string; label: string; v: number |
   const name = currentKeyword.value?.keyword;
   if (!name) return out;
   // 同一日历日有多次跑取最后一次（chronoHistory 已按时间正序）
-  const seen = new Set<string>();
   for (const r of chronoHistory.value) {
     const d = new Date(r.checked_at);
     if (Number.isNaN(d.getTime())) continue;
@@ -582,10 +554,9 @@ const selectedKwTrend = computed<Array<{ iso: string; label: string; v: number |
     const kw = (r.metric?.keywords ?? []).find((k) => k.keyword === name);
     if (kw) {
       const slot = out.find((x) => x.iso === iso);
-      if (slot) { slot.v = Number(kw.default_matched_count) || 0; seen.add(iso); }
+      if (slot) slot.v = Number(kw.default_matched_count) || 0;
     }
   }
-  void seen;
   return out;
 });
 const selectedKwTrendLabels = computed(() => selectedKwTrend.value.map((b) => b.label));
