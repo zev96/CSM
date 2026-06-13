@@ -548,6 +548,7 @@ const sparkPointsPlaced = computed<number[]>(() =>
     ).length;
   }),
 );
+void sparkPointsPlaced; // suppress unused — kept for potential future L2 use
 
 // Currently selected keyword's details for the right panel detail section
 // selectedKeywordIdx 现在指向 keywordRows（合并源）的索引——未跑的关键词
@@ -557,6 +558,39 @@ const currentKeyword = computed<BaiduPerKeyword | null>(() => {
   const row = keywordRows.value[selectedKeywordIdx.value];
   return row?.result ?? null;
 });
+
+// ── Level 2 per-keyword 14-day trend (D10) ──────────────────────
+// 用选中关键词的 default_matched_count（默认搜索自家命中数）随时间变化画趋势线。
+// 数据源：chronoHistory（已按时间正序），跟 levelTwoCalendarBuckets 同源。
+// 必须在 currentKeyword 之后定义（引用 currentKeyword.value）。
+const selectedKwTrend = computed<Array<{ iso: string; label: string; v: number | null }>>(() => {
+  const out: Array<{ iso: string; label: string; v: number | null }> = [];
+  const now = new Date();
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    out.push({ iso, label: String(d.getDate()), v: null });
+  }
+  const name = currentKeyword.value?.keyword;
+  if (!name) return out;
+  // 同一日历日有多次跑取最后一次（chronoHistory 已按时间正序）
+  const seen = new Set<string>();
+  for (const r of chronoHistory.value) {
+    const d = new Date(r.checked_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const kw = (r.metric?.keywords ?? []).find((k) => k.keyword === name);
+    if (kw) {
+      const slot = out.find((x) => x.iso === iso);
+      if (slot) { slot.v = Number(kw.default_matched_count) || 0; seen.add(iso); }
+    }
+  }
+  void seen;
+  return out;
+});
+const selectedKwTrendLabels = computed(() => selectedKwTrend.value.map((b) => b.label));
+const selectedKwTrendData = computed(() => selectedKwTrend.value.map((b) => b.v));
+const hasSelectedKwTrend = computed(() => selectedKwTrend.value.some((b) => b.v !== null));
 
 /**
  * Name of currently selected keyword. Resolves to either:
@@ -1592,49 +1626,59 @@ defineExpose({ reload: loadTasks, selectTask });
             加载中…
           </div>
 
-          <!-- KPI 二联：默认搜索卡位 / 最新资讯卡位 -->
-          <div class="mb-4 grid flex-shrink-0 grid-cols-2 gap-3">
+          <!-- KPI 三联：默认搜索卡位 / 最新资讯卡位 / 最佳排名 -->
+          <div class="mb-4 grid flex-shrink-0 grid-cols-3 gap-3">
             <!-- KPI 1: 默认搜索卡位 = 自家在默认搜索的命中总数 -->
             <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
-              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">默认搜索卡位</div>
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">默认卡位</div>
               <div class="font-display text-[20px] font-bold">{{ currentKeyword ? currentKeyword.default_matched_count : 0 }}</div>
               <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">
-                <template v-if="currentKeyword">关键词：{{ currentKeyword.keyword }}</template>
+                <template v-if="currentKeyword">默认搜索命中</template>
                 <template v-else>选择左侧关键词查看</template>
               </div>
             </div>
 
-            <!-- KPI 2: 最新资讯卡位 = 自家在最新资讯的命中总数；无资讯块时显示「无」 -->
+            <!-- KPI 2: 最新资讯卡位 = 自家在最新资讯的命中总数；无资讯块时显示「—」 -->
             <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
-              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最新资讯卡位</div>
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">资讯卡位</div>
               <div class="font-display text-[20px] font-bold">
                 <template v-if="!currentKeyword">0</template>
-                <template v-else-if="!currentKeyword.news_present">无</template>
+                <template v-else-if="!currentKeyword.news_present">—</template>
                 <template v-else>{{ (currentKeyword.news_results ?? []).filter(r => r.matches_brand).length }}</template>
               </div>
               <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">
-                <template v-if="!currentKeyword || !currentKeyword.news_present">该关键词无最新资讯</template>
+                <template v-if="!currentKeyword || !currentKeyword.news_present">无最新资讯区</template>
                 <template v-else>资讯区命中</template>
               </div>
+            </div>
+
+            <!-- KPI 3: 最佳排名 = 默认/资讯中最小的正排名位次 -->
+            <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最佳排名</div>
+              <div class="font-display text-[20px] font-bold">
+                <template v-if="!currentKeyword">—</template>
+                <template v-else-if="[currentKeyword.default_first_rank, currentKeyword.news_first_rank].filter(x => x > 0).length === 0">未上榜</template>
+                <template v-else>#{{ Math.min(...[currentKeyword.default_first_rank, currentKeyword.news_first_rank].filter(x => x > 0)) }}</template>
+              </div>
+              <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">默认/资讯最高位</div>
             </div>
           </div>
 
           <!--
-            Level 2 趋势图 —— 用户要求跟 Level 1 总任务图一样默认显示。
-            统一用 LineChart（替代原 Sparkline），数据走 levelTwoCalendarBuckets
-            的 14 天 bucket scaffold —— 缺失天数据为 null，chart.js 自动画 gap。
-            label 已经在 bucketByCalendarDay 里改成日期-only (e.g. "10")。
+            Level 2 趋势图 —— 选中关键词的默认搜索卡位数 14 天变化。
+            数据源：selectedKwTrendLabels / selectedKwTrendData（按日历日聚合，
+            同 levelTwoCalendarBuckets 同源于 chronoHistory）。
           -->
           <div class="mb-4 flex-shrink-0">
-            <div class="text-[12.5px] font-semibold mb-2">最近 14 天关键词卡位趋势</div>
+            <div class="text-[12.5px] font-semibold mb-2">最近 14 天默认卡位趋势</div>
             <LineChart
-              v-if="levelTwoCalendarBuckets.length >= 2"
-              :labels="levelTwoCalendarBuckets.map((b) => b.label)"
+              v-if="hasSelectedKwTrend"
+              :labels="selectedKwTrendLabels"
               :series="[
                 {
-                  label: '理想卡位关键词数',
+                  label: '默认卡位数',
                   color: '#ee6a2a',
-                  data: levelTwoCalendarBuckets.map((b, i) => (b.record ? sparkPointsPlaced[i] : null)),
+                  data: selectedKwTrendData,
                 },
               ]"
             />
@@ -1666,77 +1710,88 @@ defineExpose({ reload: loadTasks, selectTask });
                 抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}
               </div>
 
-              <!-- 默认搜索排名 -->
+              <!-- 默认搜索排名 + 最新资讯排名 并排 (D2) -->
               <div
-                class="mb-3 rounded"
-                :style="{ background: 'var(--card-2)', borderLeft: '3px solid var(--primary)', padding: '10px 12px' }"
+                :style="{
+                  display: 'grid',
+                  gridTemplateColumns: currentKeyword.news_present ? '1fr 1fr' : '1fr',
+                  gap: '12px',
+                  alignItems: 'start',
+                }"
               >
-                <div class="text-[12px] font-semibold mb-2">默认搜索排名</div>
-                <div v-if="currentKeyword.default_results.length === 0" class="text-[11px] py-2" :style="{ color: 'var(--ink-3)' }">
-                  无默认搜索结果
+                <!-- 左列：默认搜索排名 -->
+                <div
+                  class="rounded"
+                  :style="{ background: 'var(--card-2)', borderLeft: '3px solid var(--primary)', padding: '10px 12px' }"
+                >
+                  <div class="text-[12px] font-semibold mb-2">默认搜索排名</div>
+                  <div v-if="currentKeyword.default_results.length === 0" class="text-[11px] py-2" :style="{ color: 'var(--ink-3)' }">
+                    无默认搜索结果
+                  </div>
+                  <div v-else class="flex flex-col gap-1">
+                    <a
+                      v-for="r in currentKeyword.default_results"
+                      :key="r.url"
+                      :href="r.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
+                      :style="{
+                        background: r.matches_brand ? 'rgba(238, 106, 42, 0.10)' : 'transparent',
+                        border: r.matches_brand ? '1px solid rgba(238, 106, 42, 0.3)' : 'none',
+                        textDecoration: 'none',
+                        color: 'inherit',
+                      }"
+                    >
+                      <div class="flex items-baseline gap-2">
+                        <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)' }">
+                          #{{ r.rank }}
+                        </span>
+                        <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
+                        <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: 'var(--primary-deep)', color: '#fff' }">
+                          自家
+                        </span>
+                      </div>
+                    </a>
+                  </div>
                 </div>
-                <div v-else class="flex flex-col gap-1">
-                  <a
-                    v-for="r in currentKeyword.default_results"
-                    :key="r.url"
-                    :href="r.url"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
-                    :style="{
-                      background: r.matches_brand ? 'rgba(238, 106, 42, 0.10)' : 'transparent',
-                      border: r.matches_brand ? '1px solid rgba(238, 106, 42, 0.3)' : 'none',
-                      textDecoration: 'none',
-                      color: 'inherit',
-                    }"
-                  >
-                    <div class="flex items-baseline gap-2">
-                      <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)' }">
-                        #{{ r.rank }}
-                      </span>
-                      <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
-                      <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: 'var(--primary-deep)', color: '#fff' }">
-                        自家
-                      </span>
-                    </div>
-                  </a>
-                </div>
-              </div>
 
-              <!-- 最新资讯排名 (only if news_present) -->
-              <div
-                v-if="currentKeyword.news_present"
-                class="mb-3 rounded"
-                :style="{ background: 'rgba(79, 124, 255, 0.06)', borderLeft: '3px solid #4f7cff', padding: '10px 12px' }"
-              >
-                <div class="text-[12px] font-semibold mb-2">最新资讯排名</div>
-                <div class="flex flex-col gap-1">
-                  <a
-                    v-for="r in (currentKeyword.news_results ?? [])"
-                    :key="r.url"
-                    :href="r.url"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
-                    :style="{
-                      background: r.matches_brand ? 'rgba(79, 124, 255, 0.12)' : 'transparent',
-                      border: r.matches_brand ? '1px solid rgba(79, 124, 255, 0.3)' : 'none',
-                      textDecoration: 'none',
-                      color: 'inherit',
-                    }"
-                  >
-                    <div class="flex items-baseline gap-2">
-                      <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? '#4f7cff' : 'var(--ink-2)' }">
-                        #{{ r.rank }}
-                      </span>
-                      <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
-                      <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: '#4f7cff', color: '#fff' }">
-                        自家
-                      </span>
-                    </div>
-                  </a>
+                <!-- 右列：最新资讯排名 (only if news_present) -->
+                <div
+                  v-if="currentKeyword.news_present"
+                  class="rounded"
+                  :style="{ background: 'rgba(79, 124, 255, 0.06)', borderLeft: '3px solid #4f7cff', padding: '10px 12px' }"
+                >
+                  <div class="text-[12px] font-semibold mb-2">最新资讯排名</div>
+                  <div class="flex flex-col gap-1">
+                    <a
+                      v-for="r in (currentKeyword.news_results ?? [])"
+                      :key="r.url"
+                      :href="r.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
+                      :style="{
+                        background: r.matches_brand ? 'rgba(79, 124, 255, 0.12)' : 'transparent',
+                        border: r.matches_brand ? '1px solid rgba(79, 124, 255, 0.3)' : 'none',
+                        textDecoration: 'none',
+                        color: 'inherit',
+                      }"
+                    >
+                      <div class="flex items-baseline gap-2">
+                        <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? '#4f7cff' : 'var(--ink-2)' }">
+                          #{{ r.rank }}
+                        </span>
+                        <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
+                        <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: '#4f7cff', color: '#fff' }">
+                          自家
+                        </span>
+                      </div>
+                    </a>
+                  </div>
                 </div>
-              </div>
+
+              </div><!-- end grid wrapper -->
             </template>
           </div>
 
