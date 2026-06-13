@@ -64,3 +64,35 @@ export function batchZhihuSearchKpis(keywords: ZhihuSearchKpiInput[]): ZhihuSear
   const bestFirstRank = firsts.length > 0 ? Math.min(...firsts) : null;
   return { total, hitKeywords, bestFirstRank, ownHits };
 }
+
+/**
+ * 百度排名「任务汇总」聚合 KPI —— 默认搜索 + 最新资讯双榜。
+ *   - hitKeywords: 默认或资讯任一命中(>0)的关键词数
+ *   - bestDefaultRank: 默认榜最佳首位(min default_first_rank>0)；无则 null
+ *   - ownHits: 所有关键词 default_matched_count + news_matched_count 之和
+ * news_matched_count 由调用方从 news_results.filter(r=>r.matches_brand).length 派生（无资讯传 0）。
+ */
+export interface BaiduKpiInput {
+  default_matched_count: number;
+  default_first_rank: number;
+  news_matched_count: number;
+}
+export interface BaiduBatchKpis {
+  total: number;
+  hitKeywords: number;
+  bestDefaultRank: number | null;
+  ownHits: number;
+}
+export function batchBaiduKpis(keywords: BaiduKpiInput[]): BaiduBatchKpis {
+  const total = keywords.length;
+  let hitKeywords = 0;
+  let ownHits = 0;
+  const defaults: number[] = [];
+  for (const k of keywords) {
+    if (k.default_matched_count > 0 || k.news_matched_count > 0) hitKeywords++;
+    ownHits += k.default_matched_count + k.news_matched_count;
+    if (k.default_first_rank > 0) defaults.push(k.default_first_rank);
+  }
+  const bestDefaultRank = defaults.length > 0 ? Math.min(...defaults) : null;
+  return { total, hitKeywords, bestDefaultRank, ownHits };
+}

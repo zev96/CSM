@@ -12,9 +12,12 @@ import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 import { subscribe } from "@/api/client";
+import { batchBaiduKpis } from "@/utils/monitor-zhihu-kpi";
 // Sparkline 已下线 —— BaiduRankingPage 内所有图表统一用 LineChart。
 import Pill from "@/components/ui/Pill.vue";
 import Icon from "@/components/ui/Icon.vue";
+import SplitPane from "@/components/ui/SplitPane.vue";
+import Dropdown from "@/components/ui/Dropdown.vue";
 import LineChart from "./LineChart.vue";
 import AlertDetailModal from "@/components/monitor/AlertDetailModal.vue";
 
@@ -152,6 +155,18 @@ const previewHistory = computed<ResultItem[]>(() => {
   const t = previewTask.value;
   if (!t) return [];
   return taskHistories.value[t.id] ?? [];
+});
+
+// L1 右卡 KPI 四联 —— 聚合最新一次 metric.keywords 数据
+const previewKpis = computed(() => {
+  const t = previewTask.value;
+  if (!t) return null;
+  const kws = (taskHistories.value[t.id]?.[0]?.metric?.keywords ?? []) as any[];
+  return batchBaiduKpis(kws.map((k) => ({
+    default_matched_count: k.default_matched_count ?? 0,
+    default_first_rank: k.default_first_rank ?? 0,
+    news_matched_count: (k.news_results ?? []).filter((r: any) => r.matches_brand).length,
+  })));
 });
 
 // preview task 的 ideal_rank（与 Level 2 同一字段，默认 5）
@@ -481,15 +496,6 @@ const _sparkPoints = computed<number[]>(() =>
 );
 void _sparkPoints; // suppress unused warning
 
-// Level 2 任务汇总卡的 14 天日历窗口 —— 跟 Level 1 同套聚合逻辑。
-const levelTwoCalendarBuckets = computed(() =>
-  bucketByCalendarDay(chronoHistory.value, 14),
-);
-
-// sparkLabels 已下线 —— Level 2 改用 LineChart，labels 直接来自
-// levelTwoCalendarBuckets.map(b => b.label)，1:1 对齐 data points，
-// chart.js 自动按宽度抽稀 tick，不再需要前端预先抽 5 条 anchor。
-
 // Get ideal_rank from selected task config (default 5)
 const idealRank = computed<number>(() => {
   const v = (selectedTask.value?.config as any)?.ideal_rank;
@@ -517,23 +523,6 @@ const placedCountPrev = computed<number>(() => {
 });
 void placedCountPrev; // suppress unused warning
 
-// Sparkline: 卡位 count (not matched_keywords) over last 14 days
-// 按本地日历日聚合 —— 同一天多次跑取最后一次，缺失天用 0 占位（Sparkline
-// 的 points: number[] 不接受 null）。跟 sparkLabels 的 14 天 bucket 对齐。
-//
-// keywords ?? [] 的保护：风控触发时后端会写一份 status="risk_control" 的
-// breakpoint result（metric 只含 last_resumed_keyword + captcha_signal_* 字段，
-// 没有 keywords 数组），sparkline 在 14 天窗口里遍历到这条 record 时
-// undefined.filter 会让整个 Level 2 render crash 白屏。
-const sparkPointsPlaced = computed<number[]>(() =>
-  levelTwoCalendarBuckets.value.map((b) => {
-    if (!b.record?.metric) return 0;
-    return (b.record.metric.keywords ?? []).filter(
-      (kw) => kw.default_first_rank > 0 && kw.default_first_rank <= idealRank.value,
-    ).length;
-  }),
-);
-
 // Currently selected keyword's details for the right panel detail section
 // selectedKeywordIdx 现在指向 keywordRows（合并源）的索引——未跑的关键词
 // row.result 是 null，KPI 卡也跟着显示 0/选择关键词，跟原"未选中"语义一致。
@@ -542,6 +531,37 @@ const currentKeyword = computed<BaiduPerKeyword | null>(() => {
   const row = keywordRows.value[selectedKeywordIdx.value];
   return row?.result ?? null;
 });
+
+// ── Level 2 per-keyword 14-day trend (D10) ──────────────────────
+// 用选中关键词的 default_matched_count（默认搜索自家命中数）随时间变化画趋势线。
+// 数据源：chronoHistory（已按时间正序）。
+// 必须在 currentKeyword 之后定义（引用 currentKeyword.value）。
+const selectedKwTrend = computed<Array<{ iso: string; label: string; v: number | null }>>(() => {
+  const out: Array<{ iso: string; label: string; v: number | null }> = [];
+  const now = new Date();
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    out.push({ iso, label: String(d.getDate()), v: null });
+  }
+  const name = currentKeyword.value?.keyword;
+  if (!name) return out;
+  // 同一日历日有多次跑取最后一次（chronoHistory 已按时间正序）
+  for (const r of chronoHistory.value) {
+    const d = new Date(r.checked_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const kw = (r.metric?.keywords ?? []).find((k) => k.keyword === name);
+    if (kw) {
+      const slot = out.find((x) => x.iso === iso);
+      if (slot) slot.v = Number(kw.default_matched_count) || 0;
+    }
+  }
+  return out;
+});
+const selectedKwTrendLabels = computed(() => selectedKwTrend.value.map((b) => b.label));
+const selectedKwTrendData = computed(() => selectedKwTrend.value.map((b) => b.v));
+const hasSelectedKwTrend = computed(() => selectedKwTrend.value.some((b) => b.v !== null));
 
 /**
  * Name of currently selected keyword. Resolves to either:
@@ -936,169 +956,169 @@ defineExpose({ reload: loadTasks, selectTask });
   <div class="flex min-h-0 flex-1 flex-col gap-4">
 
     <!-- ═══════════════════════════════════════════════════════════
-         LEVEL 1: 默认落地页 —— selectedId === null
-         两卡并列：左=任务表，右=占位提示
+         告警 hero —— 仅 Level 1 时显示，位于 SplitPane 之外。
+         触发：任务状态 = 警报（理想率 < 70%）。多条命中时可翻页。
+         百度特有：进入 Level 2（selectedId != null）后自动收起。
     ════════════════════════════════════════════════════════════════ -->
-    <template v-if="selectedId === null">
-
-      <!--
-        紧急告警 hero —— 完全对齐 MonitorView 的知乎/评论告警 hero：
-        padding 26/28、双 blur blob、28px 双行主标题、橙底「起一篇救场」
-        按钮。三种告警卡片的高度和视觉层级现在统一。
-        触发：任务状态 = 警报（理想率 < 70%）。多条命中时可翻页。
-      -->
+    <div
+      v-if="selectedId === null && currentBaiduAlert"
+      class="relative overflow-hidden flex-shrink-0"
+      :style="{
+        background: 'var(--dark)',
+        color: 'var(--card)',
+        borderRadius: 'var(--radius-card)',
+        padding: '26px 28px',
+      }"
+    >
       <div
-        v-if="currentBaiduAlert"
-        class="relative overflow-hidden flex-shrink-0"
+        aria-hidden="true"
         :style="{
-          background: 'var(--dark)',
-          color: 'var(--card)',
-          borderRadius: 'var(--radius-card)',
-          padding: '26px 28px',
+          position: 'absolute',
+          top: '-50px', left: '20px',
+          width: '240px', height: '240px',
+          background: 'radial-gradient(circle, rgba(216,90,72,0.5), transparent 65%)',
+          filter: 'blur(12px)',
+          pointerEvents: 'none',
         }"
-      >
-        <div
-          aria-hidden="true"
-          :style="{
-            position: 'absolute',
-            top: '-50px', left: '20px',
-            width: '240px', height: '240px',
-            background: 'radial-gradient(circle, rgba(216,90,72,0.5), transparent 65%)',
-            filter: 'blur(12px)',
-            pointerEvents: 'none',
-          }"
-        />
-        <div
-          aria-hidden="true"
-          :style="{
-            position: 'absolute',
-            top: '60px', left: '400px',
-            width: '220px', height: '220px',
-            background: 'radial-gradient(circle, rgba(238,106,42,0.4), transparent 65%)',
-            filter: 'blur(12px)',
-            pointerEvents: 'none',
-          }"
-        />
-        <div class="relative flex items-center justify-between gap-6">
-          <div class="min-w-0">
-            <div
-              class="flex items-center gap-2 text-[11px] uppercase"
-              :style="{ letterSpacing: '1.5px', color: 'rgba(255,255,255,0.5)' }"
-            >
-              <span>{{ baiduAlerts.length }} 个紧急告警</span>
-              <span
-                v-if="baiduAlerts.length > 1"
-                :style="{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0' }"
-              >· {{ baiduAlertIdx + 1 }} / {{ baiduAlerts.length }}</span>
-            </div>
-            <div
-              class="font-display mt-2 font-bold"
-              :style="{ fontSize: '28px', letterSpacing: '-0.5px', lineHeight: '1.25' }"
-            >
-              「{{ currentBaiduAlert.taskName }}」<br />
-              <span :style="{ color: 'var(--primary)' }">{{ currentBaiduAlert.missingCurrent }} 个关键词未达理想卡位</span>
-            </div>
-            <div class="mt-2 text-[12.5px]" :style="{ color: 'rgba(255,255,255,0.6)' }">
-              <template v-if="currentBaiduAlert.missingPrev !== null">
-                上次未达 {{ currentBaiduAlert.missingPrev }} 条 · 变化
-                <span
-                  :style="{
-                    color: currentBaiduAlert.missingDelta > 0
-                      ? 'var(--red, #d85a48)'
-                      : currentBaiduAlert.missingDelta < 0
-                        ? 'var(--green, #6c9b5d)'
-                        : 'rgba(255,255,255,0.6)',
-                  }"
-                >{{ currentBaiduAlert.missingDelta > 0 ? '+' : '' }}{{ currentBaiduAlert.missingDelta }}</span>
-              </template>
-              <template v-else>首次抓取</template>
-            </div>
+      />
+      <div
+        aria-hidden="true"
+        :style="{
+          position: 'absolute',
+          top: '60px', left: '400px',
+          width: '220px', height: '220px',
+          background: 'radial-gradient(circle, rgba(238,106,42,0.4), transparent 65%)',
+          filter: 'blur(12px)',
+          pointerEvents: 'none',
+        }"
+      />
+      <div class="relative flex items-center justify-between gap-6">
+        <div class="min-w-0">
+          <div
+            class="flex items-center gap-2 text-[11px] uppercase"
+            :style="{ letterSpacing: '1.5px', color: 'rgba(255,255,255,0.5)' }"
+          >
+            <span>{{ baiduAlerts.length }} 个紧急告警</span>
+            <span
+              v-if="baiduAlerts.length > 1"
+              :style="{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0' }"
+            >· {{ baiduAlertIdx + 1 }} / {{ baiduAlerts.length }}</span>
           </div>
-          <div class="flex flex-shrink-0 items-center gap-2">
-            <!-- 翻页箭头 (only when 2+ alerts) -->
-            <template v-if="baiduAlerts.length > 1">
-              <button
-                type="button"
-                title="上一条告警"
-                class="inline-flex items-center justify-center"
+          <div
+            class="font-display mt-2 font-bold"
+            :style="{ fontSize: '28px', letterSpacing: '-0.5px', lineHeight: '1.25' }"
+          >
+            「{{ currentBaiduAlert.taskName }}」<br />
+            <span :style="{ color: 'var(--primary)' }">{{ currentBaiduAlert.missingCurrent }} 个关键词未达理想卡位</span>
+          </div>
+          <div class="mt-2 text-[12.5px]" :style="{ color: 'rgba(255,255,255,0.6)' }">
+            <template v-if="currentBaiduAlert.missingPrev !== null">
+              上次未达 {{ currentBaiduAlert.missingPrev }} 条 · 变化
+              <span
                 :style="{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '999px',
-                  background: 'rgba(255,255,255,0.08)',
-                  color: '#fbf7ec',
-                  border: '1px solid rgba(255,255,255,0.12)',
+                  color: currentBaiduAlert.missingDelta > 0
+                    ? 'var(--red, #d85a48)'
+                    : currentBaiduAlert.missingDelta < 0
+                      ? 'var(--green, #6c9b5d)'
+                      : 'rgba(255,255,255,0.6)',
                 }"
-                @click="cycleBaiduAlert(-1)"
-              >
-                <Icon name="arrowLeft" :size="14" />
-              </button>
-              <button
-                type="button"
-                title="下一条告警"
-                class="inline-flex items-center justify-center"
-                :style="{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '999px',
-                  background: 'rgba(255,255,255,0.08)',
-                  color: '#fbf7ec',
-                  border: '1px solid rgba(255,255,255,0.12)',
-                }"
-                @click="cycleBaiduAlert(1)"
-              >
-                <Icon name="arrowRight" :size="14" />
-              </button>
-              <span :style="{ width: '6px' }" />
+              >{{ currentBaiduAlert.missingDelta > 0 ? '+' : '' }}{{ currentBaiduAlert.missingDelta }}</span>
             </template>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
-              :style="{
-                background: 'rgba(255,255,255,0.08)',
-                color: '#fbf7ec',
-                borderRadius: '999px',
-                border: '1px solid rgba(255,255,255,0.12)',
-              }"
-              @click="openBaiduAlertModal()"
-            >
-              <Icon name="fileText" :size="14" />
-              <span>查看报告</span>
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
-              :style="{
-                background: 'var(--primary)',
-                color: '#fff',
-                borderRadius: '999px',
-              }"
-              @click="router.push({ name: 'article' })"
-            >
-              <Icon name="edit" :size="14" />
-              <span>新建文章补救</span>
-            </button>
+            <template v-else>首次抓取</template>
           </div>
         </div>
+        <div class="flex flex-shrink-0 items-center gap-2">
+          <!-- 翻页箭头 (only when 2+ alerts) -->
+          <template v-if="baiduAlerts.length > 1">
+            <button
+              type="button"
+              title="上一条告警"
+              class="inline-flex items-center justify-center"
+              :style="{
+                width: '32px',
+                height: '32px',
+                borderRadius: '999px',
+                background: 'rgba(255,255,255,0.08)',
+                color: '#fbf7ec',
+                border: '1px solid rgba(255,255,255,0.12)',
+              }"
+              @click="cycleBaiduAlert(-1)"
+            >
+              <Icon name="arrowLeft" :size="14" />
+            </button>
+            <button
+              type="button"
+              title="下一条告警"
+              class="inline-flex items-center justify-center"
+              :style="{
+                width: '32px',
+                height: '32px',
+                borderRadius: '999px',
+                background: 'rgba(255,255,255,0.08)',
+                color: '#fbf7ec',
+                border: '1px solid rgba(255,255,255,0.12)',
+              }"
+              @click="cycleBaiduAlert(1)"
+            >
+              <Icon name="arrowRight" :size="14" />
+            </button>
+            <span :style="{ width: '6px' }" />
+          </template>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
+            :style="{
+              background: 'rgba(255,255,255,0.08)',
+              color: '#fbf7ec',
+              borderRadius: '999px',
+              border: '1px solid rgba(255,255,255,0.12)',
+            }"
+            @click="openBaiduAlertModal()"
+          >
+            <Icon name="fileText" :size="14" />
+            <span>查看报告</span>
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
+            :style="{
+              background: 'var(--primary)',
+              color: '#fff',
+              borderRadius: '999px',
+            }"
+            @click="router.push({ name: 'article' })"
+          >
+            <Icon name="edit" :size="14" />
+            <span>新建文章补救</span>
+          </button>
+        </div>
       </div>
+    </div>
 
-      <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
+    <!-- ═══════════════════════════════════════════════════════════
+         单 SplitPane —— L1/L2 共享壳；#left/#right 按 selectedId 切换
+    ════════════════════════════════════════════════════════════════ -->
+    <SplitPane left-width="340px" gap="18px">
 
-        <!-- ── 左卡：监测任务表 ───────────────────────────────── -->
+      <!-- ────────────────── LEFT SLOT ────────────────── -->
+      <template #left>
+
+        <!-- ── L1 左卡：监测任务表 ─── -->
         <section
+          v-if="selectedId === null"
           class="flex min-h-0 flex-col"
           :style="{
             background: 'var(--card)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--radius-card)',
             padding: '22px',
+            height: '100%',
           }"
         >
-          <!-- Card header -->
+          <!-- Card header: 批量导入 + 新增任务 -->
           <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
             <div class="min-w-0">
               <div class="font-display text-[14px] font-semibold">监测任务</div>
-              <!-- 「任务列表」subtitle 已按用户要求移除（与其他监测页保持一致） -->
             </div>
             <div class="flex flex-shrink-0 gap-2">
               <button
@@ -1132,57 +1152,38 @@ defineExpose({ reload: loadTasks, selectTask });
           </div>
 
           <!--
-            Header row —— 固定在滚动区**外**（flex-shrink-0 sibling），只让
-            下方数据行滚动；grid-template-columns 必须与行一致。
-            4 列均匀分布的视觉权重：任务名最宽（1.6fr），变化/状态/操作各占
-            接近的 ~0.85fr，让 3 个非主列读起来等高均衡；操作列 header 居中
-            以对齐下方按钮组。
+            L1 列头：3 列 1.5fr .9fr 1.1fr（任务名 / 状态 / 操作）。
+            「变化」列已移除（一律显示"—"，无实质信息）。
           -->
           <div
             class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
             :style="{
-              gridTemplateColumns: '1.6fr .85fr .85fr 1fr',
+              gridTemplateColumns: '1.5fr .9fr 1.1fr',
               letterSpacing: '1.2px',
               color: 'var(--ink-3)',
               borderBottom: '1px solid var(--line)',
             }"
           >
             <div>任务名字</div>
-            <div class="text-center">变化</div>
             <div class="text-center">状态</div>
             <div class="text-center">操作</div>
           </div>
 
-          <!-- Table: fills remaining height（只含数据行，列头已上移到滚动区外） -->
+          <!-- Table rows -->
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <!-- Loading state -->
-            <div
-              v-if="loadingTasks"
-              class="py-10 text-center text-[12px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              加载中…
-            </div>
-
-            <!-- Empty state -->
-            <div
-              v-else-if="tasks.length === 0"
-              class="flex flex-1 flex-col items-center justify-center gap-1 py-16"
-            >
+            <div v-if="loadingTasks" class="py-10 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">加载中…</div>
+            <div v-else-if="tasks.length === 0" class="flex flex-1 flex-col items-center justify-center gap-1 py-16">
               <div class="text-[13px] font-medium" :style="{ color: 'var(--ink-2)' }">暂无百度排名任务</div>
-              <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                点击右上「+ 新增任务」开始监测
-              </div>
+              <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">点击右上「+ 新增任务」开始监测</div>
             </div>
-
-            <!-- Task rows -->
             <template v-else>
+              <!-- L1 任务行：3 列，Col1=名字+副标题，Col2=状态，Col3=⋯菜单 -->
               <div
                 v-for="(t, i) in tasks"
                 :key="t.id"
                 class="grid cursor-pointer items-center transition"
                 :style="{
-                  gridTemplateColumns: '1.6fr .85fr .85fr 1fr',
+                  gridTemplateColumns: '1.5fr .9fr 1.1fr',
                   background: previewId === t.id ? 'var(--card-2)' : 'transparent',
                   borderBottom: i < tasks.length - 1 ? '1px solid var(--line)' : 'none',
                   padding: '14px 8px',
@@ -1192,11 +1193,7 @@ defineExpose({ reload: loadTasks, selectTask });
                 @mouseleave="(e) => { if (previewId !== t.id) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
                 @click="previewId = t.id"
               >
-                <!--
-                  任务名字 + N关键词·品牌
-                  任务名字本身是「点击进 Level 2」的热区；整行点击只是
-                  把右卡预览定位到这条任务（previewId）。
-                -->
+                <!-- Col 1: 任务名（钻入）+ 副标题 -->
                 <div class="min-w-0">
                   <button
                     type="button"
@@ -1204,229 +1201,79 @@ defineExpose({ reload: loadTasks, selectTask });
                     :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
                     @click.stop="enterDetail(t.id)"
                   >{{ t.name }}</button>
-                  <div
-                    class="truncate text-[11px] mt-0.5"
-                    :style="{ color: 'var(--ink-3)' }"
-                  >
+                  <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
                     {{ t.config.search_keywords?.length ?? 0 }} 个关键词
-                    <template v-if="t.config.target_brand">
-                      · 品牌 {{ t.config.target_brand }}
-                    </template>
+                    <template v-if="t.config.target_brand">· 品牌 {{ t.config.target_brand }}</template>
                   </div>
                 </div>
 
-                <!-- 变化：无历史，一律"—" -->
-                <div class="text-center" :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
-
-                <!--
-                  状态：跑动中显示「N / M」+ 进度条；空闲时显示 70% 理想率 pill。
-                  进度条 = 当前完成的关键词数 / 总关键词数；居中对齐 column。
-                  waiting_chrome_close: 显示倒计时 banner（native-Chrome 模式）。
-                -->
+                <!-- Col 2: 状态（运行中显示进度条） -->
                 <div class="flex flex-col items-center gap-1">
                   <template v-if="isRunning(t.id)">
                     <div class="text-[11.5px] font-medium" :style="{ color: 'var(--primary-deep)' }">
                       {{ taskProgress[t.id]?.current ?? 0 }} / {{ taskProgress[t.id]?.total ?? (t.config.search_keywords?.length ?? 0) }}
                     </div>
-                    <!-- Thin orange progress bar; width = current/total% -->
-                    <div
-                      :style="{
-                        width: '80%',
-                        height: '4px',
-                        background: 'var(--card-2)',
-                        borderRadius: '999px',
-                        overflow: 'hidden',
-                      }"
-                    >
-                      <div
-                        :style="{
-                          height: '100%',
-                          width: (taskProgress[t.id]?.total
-                            ? Math.min(100, Math.round((taskProgress[t.id]!.current / Math.max(1, taskProgress[t.id]!.total)) * 100))
-                            : 0) + '%',
-                          background: 'var(--primary-deep)',
-                          transition: 'width 0.3s ease',
-                        }"
-                      />
+                    <div :style="{ width: '80%', height: '4px', background: 'var(--card-2)', borderRadius: '999px', overflow: 'hidden' }">
+                      <div :style="{
+                        height: '100%',
+                        width: (taskProgress[t.id]?.total ? Math.min(100, Math.round((taskProgress[t.id]!.current / Math.max(1, taskProgress[t.id]!.total)) * 100)) : 0) + '%',
+                        background: 'var(--primary-deep)',
+                        transition: 'width 0.3s ease',
+                      }" />
                     </div>
                   </template>
                   <Pill v-else :tone="taskOverallStatus(t).tone">{{ taskOverallStatus(t).statusLabel }}</Pill>
                 </div>
 
-                <!--
-                  操作 cell —— justify-center 与 header「操作」居中对齐；
-                  ▶ 立刻监测 / ✎ 编辑 / 🗑 删除 三个图标按钮。
-                  跑动中：play 图标变 ⏹ stop，点击调 store.cancel() 协作
-                  停止后端的 SERP 循环；后端会在下一个关键词边界 raise
-                  _CancelledFetch → SSE failed → store 清状态 → 按钮回到
-                  play 形态。
-                -->
-                <div class="flex items-center justify-center gap-1">
-                  <button
-                    v-if="isRunning(t.id)"
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{
-                      borderRadius: '999px',
-                      color: 'var(--red, #d85a48)',
-                      cursor: 'pointer',
+                <!-- Col 3: ⋯ Dropdown（run/stop/edit/delete） -->
+                <div class="flex items-center justify-center">
+                  <Dropdown
+                    :items="[
+                      isRunning(t.id)
+                        ? { key: 'stop', label: '停止监测', icon: 'x' }
+                        : { key: 'run', label: '立刻监测', icon: 'play' },
+                      { key: 'edit', label: '编辑任务', icon: 'edit' },
+                      { key: 'delete', label: '删除任务', icon: 'trash', tone: 'danger' },
+                    ]"
+                    align="right"
+                    @select="(key) => {
+                      if (key === 'run') runNowTask(t.id);
+                      else if (key === 'stop') cancelTask(t.id);
+                      else if (key === 'edit') openEdit(t);
+                      else if (key === 'delete') deleteTask(t);
                     }"
-                    title="停止监测"
-                    @click.stop="cancelTask(t.id)"
                   >
-                    <Icon name="x" :size="13" />
-                  </button>
-                  <button
-                    v-else
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{
-                      borderRadius: '999px',
-                      color: 'var(--primary-deep)',
-                      cursor: 'pointer',
-                    }"
-                    title="立刻监测"
-                    @click.stop="runNowTask(t.id)"
-                  >
-                    <Icon name="play" :size="13" />
-                  </button>
-                  <button
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{ borderRadius: '999px', color: 'var(--ink-3)' }"
-                    title="编辑任务"
-                    @click.stop="openEdit(t)"
-                  >
-                    <Icon name="edit" :size="13" />
-                  </button>
-                  <button
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{ borderRadius: '999px', color: 'var(--ink-3)' }"
-                    title="删除任务"
-                    @click.stop="deleteTask(t)"
-                  >
-                    <Icon name="trash" :size="13" />
-                  </button>
+                    <template #trigger>
+                      <button
+                        type="button"
+                        class="inline-flex h-7 w-7 items-center justify-center"
+                        :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                        title="更多操作"
+                        @click.stop
+                      >
+                        <Icon name="more" :size="15" />
+                      </button>
+                    </template>
+                  </Dropdown>
                 </div>
               </div>
             </template>
           </div>
         </section>
 
-        <!-- ── 右卡：任务详情（含底部 导出/定时 按钮） ───────────── -->
+        <!-- ── L2 左卡：关键词列表 ─── -->
         <section
+          v-else
           class="flex min-h-0 flex-col"
           :style="{
             background: 'var(--card)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--radius-card)',
             padding: '22px',
+            height: '100%',
           }"
         >
-          <!-- 没有任务时：占位 -->
-          <div
-            v-if="!previewTask"
-            class="flex flex-1 flex-col items-center justify-center text-center"
-            :style="{ color: 'var(--ink-3)' }"
-          >
-            <div class="text-[14px] font-medium mb-1">暂无任务</div>
-            <div class="text-[11.5px]">点击左上「+ 新增任务」开始监测</div>
-          </div>
-
-          <!-- 有任务：属性预览 -->
-          <template v-else>
-            <!-- 标题：previewTask 的名字 -->
-            <div class="mb-3 flex-shrink-0">
-              <div class="font-display text-[14px] font-semibold">{{ previewTask.name }}</div>
-              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                任务详情
-              </div>
-            </div>
-
-            <!-- 属性表 (滚动区) -->
-            <div class="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
-              <!-- 目标品牌 -->
-              <div>
-                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">目标品牌</div>
-                <div class="text-[13px] font-medium">{{ previewTask.config.target_brand || '—' }}</div>
-              </div>
-
-              <!--
-                14 天关键词趋势 —— 满足理想卡位的关键词数量随时间变化。
-                复用历史报告的 LineChart（chart.js v4，平滑张力 0.25，
-                带 x/y 轴 + 鼠标 hover tooltip），比纯 SVG sparkline 更丝滑。
-                数据点 < 2 时给文字占位（chart.js 单点会画不出曲线）。
-              -->
-              <div>
-                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最近 14 天关键词趋势</div>
-                <LineChart
-                  v-if="previewSparkPoints.length >= 2"
-                  :labels="previewChartLabels"
-                  :series="previewChartSeries"
-                />
-                <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
-                  无历史数据 —— 跑几次「立刻监测」后会成线。
-                </div>
-              </div>
-              <!-- 搜索关键词列表已按需求移除 —— 关键词通过 Level 2 查看。 -->
-            </div>
-
-            <!-- 底部按钮：导出数据 / 定时监测 (pinned at bottom of right card) -->
-            <div class="pt-4 flex-shrink-0 flex gap-2">
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                  borderRadius: '8px',
-                  color: 'var(--ink-2)',
-                  cursor: 'pointer',
-                }"
-                @click="exportPreviewCsv()"
-              >导出数据</button>
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--primary)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                }"
-                @click="openScheduleEditor()"
-              >定时监测</button>
-            </div>
-          </template>
-        </section>
-
-      </div>
-    </template>
-
-    <!-- ═══════════════════════════════════════════════════════════
-         LEVEL 2: drill-down —— selectedId !== null
-         顶部返回 + 任务信息 + 双卡（关键词列表 + 任务汇总）
-    ════════════════════════════════════════════════════════════════ -->
-    <template v-else>
-
-      <!-- 双卡 -->
-      <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
-
-        <!-- ── 左卡：关键词列表 ──────────────────────────────── -->
-        <section
-          class="flex min-h-0 flex-col"
-          :style="{
-            background: 'var(--card)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-card)',
-            padding: '22px',
-          }"
-        >
-          <!-- Card header with back button INSIDE (B站 style — 简洁版) -->
+          <!-- 面包屑：← 返回 + 任务名 + 关键词数徽章 -->
           <div class="mb-3 flex-shrink-0 flex items-start gap-3">
             <button
               type="button"
@@ -1444,14 +1291,10 @@ defineExpose({ reload: loadTasks, selectTask });
               <Icon name="arrowLeft" :size="14" />
             </button>
             <div class="min-w-0 flex-1">
-              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                百度排名 · 关键词列表
-              </div>
-              <div class="font-display text-[14px] font-semibold mt-0.5">
-                {{ selectedTask?.name ?? '' }}
-              </div>
+              <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">百度排名 · 关键词列表</div>
+              <div class="font-display text-[14px] font-semibold mt-0.5">{{ selectedTask?.name ?? '' }}</div>
             </div>
-            <!-- 右上角徽章：N 个关键词（仿 B 站「5 条」） -->
+            <!-- 关键词数徽章 -->
             <div
               class="flex-shrink-0 text-[11px] px-2.5 py-1"
               :style="{
@@ -1490,13 +1333,7 @@ defineExpose({ reload: loadTasks, selectTask });
           >
             <template v-if="riskControlMeta.layer === 'auth'">
               百度账号未登录或已过期。请到设置页重新登录后点「启动监测」从断点继续抓取。
-              <a
-                href="#"
-                class="ml-2 underline"
-                @click.prevent="router.push({ name: 'settings' })"
-              >
-                前往设置
-              </a>
+              <a href="#" class="ml-2 underline" @click.prevent="router.push({ name: 'settings' })">前往设置</a>
             </template>
             <template v-else>
               上次抓取被百度风控拦截
@@ -1508,54 +1345,33 @@ defineExpose({ reload: loadTasks, selectTask });
             </template>
           </div>
 
-          <!-- 关键词表：单一渲染源 keywordRows，以 config.search_keywords 为基准的 93 行，
-               按 keyword 名从 latestMetric.keywords 查结果填充；未匹配的渲染「未跑」。 -->
           <!--
-            Header row —— 固定在滚动区**外**（flex-shrink-0 sibling），只让
-            下方数据行滚动；grid-template-columns 必须与行一致。
+            L2 列头：2 列 1.6fr 1fr（关键词 / 状态）。
+            数字列（默认卡位/资讯卡位）移入关键词 Col1 副标题；只读，无操作菜单。
           -->
           <div
             class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
             :style="{
-              gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
+              gridTemplateColumns: '1.6fr 1fr',
               letterSpacing: '1.2px',
               color: 'var(--ink-3)',
               borderBottom: '1px solid var(--line)',
             }"
           >
             <div>关键词</div>
-            <div class="text-center">默认卡位</div>
-            <div class="text-center">资讯卡位</div>
             <div class="text-center">状态</div>
           </div>
 
-          <!-- Table（只含数据行，列头已上移到滚动区外） -->
+          <!-- Keyword rows (read-only, no ⋯ menu) -->
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <!-- Loading -->
-            <div
-              v-if="loadingHistory"
-              class="py-10 text-center text-[12px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              加载中…
-            </div>
-
-            <!-- Empty state -->
-            <div
-              v-if="keywordRows.length === 0"
-              class="py-10 text-center text-[12px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              此任务未配置搜索关键词
-            </div>
-
-            <!-- Keyword rows -->
+            <div v-if="loadingHistory" class="py-10 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">加载中…</div>
+            <div v-if="keywordRows.length === 0" class="py-10 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">此任务未配置搜索关键词</div>
             <div
               v-for="(row, i) in keywordRows"
               :key="row.keyword + '-' + i"
               class="grid items-center cursor-pointer transition"
               :style="{
-                gridTemplateColumns: '1.6fr .5fr .5fr .5fr',
+                gridTemplateColumns: '1.6fr 1fr',
                 borderBottom: i < keywordRows.length - 1 ? '1px solid var(--line)' : 'none',
                 padding: '12px 8px',
                 background: selectedKeywordIdx === i ? 'var(--card-2)' : 'transparent',
@@ -1564,46 +1380,18 @@ defineExpose({ reload: loadTasks, selectTask });
               @mouseenter="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
               @mouseleave="(e) => { if (selectedKeywordIdx !== i) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
             >
-              <!-- 关键词 -->
+              <!-- Col 1: 关键词 + 副标题（默认卡位 · 首位） -->
               <div class="min-w-0">
-                <div
-                  class="truncate text-[12.5px] font-medium"
-                  :style="{ color: 'var(--ink)' }"
-                >{{ row.keyword }}</div>
+                <div class="truncate text-[12.5px] font-medium" :style="{ color: 'var(--ink)' }">{{ row.keyword }}</div>
+                <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
+                  <template v-if="row.result">
+                    默认卡位 {{ row.result.default_matched_count }} · 首位 {{ row.result.default_first_rank > 0 ? '#' + row.result.default_first_rank : '—' }}
+                  </template>
+                  <template v-else>未跑</template>
+                </div>
               </div>
 
-              <!-- 默认卡位 -->
-              <div class="text-center">
-                <template v-if="row.result">
-                  <div
-                    class="font-display text-[13px] font-bold"
-                    :style="{ color: row.result.default_matched_count > 0 ? 'var(--primary-deep)' : 'var(--ink-3)' }"
-                  >
-                    {{ row.result.default_matched_count }}
-                  </div>
-                </template>
-                <div v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
-              </div>
-
-              <!-- 资讯卡位 -->
-              <div class="text-center">
-                <template v-if="row.result && row.result.news_present">
-                  <div
-                    class="font-display text-[13px] font-bold"
-                    :style="{ color: (row.result.news_results ?? []).filter(r => r.matches_brand).length > 0 ? '#4f7cff' : 'var(--ink-3)' }"
-                  >
-                    {{ (row.result.news_results ?? []).filter(r => r.matches_brand).length }}
-                  </div>
-                </template>
-                <div v-else-if="row.result && !row.result.news_present" class="font-display text-[13px] font-bold" :style="{ color: 'var(--ink-3)' }">无</div>
-                <div v-else :style="{ color: 'var(--ink-3)', fontSize: '12px' }">—</div>
-              </div>
-
-              <!--
-                状态 ＝ 是否达到任务设置的「理想卡位（数量）」。
-                总卡位 ＝ 默认搜索命中 ＋ 最新资讯命中（无资讯块时只算默认）。
-                ≥ idealRank → 理想，否则 → 未理想；抓取失败单独标记；未跑（row.result === null）显示「未跑」。
-              -->
+              <!-- Col 2: 状态 Pill（理想 / 未理想 / 未跑 / 抓取失败） -->
               <div class="text-center">
                 <template v-if="!row.result">
                   <Pill tone="info">未跑</Pill>
@@ -1621,21 +1409,182 @@ defineExpose({ reload: loadTasks, selectTask });
           </div>
         </section>
 
-        <!-- ── 右卡：任务汇总 ─────────────────────────────────── -->
+      </template>
+
+      <!-- ────────────────── RIGHT SLOT ────────────────── -->
+      <template #right>
+
+        <!-- ── L1 右卡：任务汇总（KPI 四联 + 14 天趋势 + 关键词速览 + 导出/定时） ─── -->
         <section
+          v-if="selectedId === null"
+          class="flex min-h-0 flex-col"
+          :style="{
+            background: 'var(--card)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-card)',
+            padding: '22px',
+            height: '100%',
+          }"
+        >
+          <!-- 没有任务时：占位 -->
+          <div
+            v-if="!previewTask"
+            class="flex flex-1 flex-col items-center justify-center text-center"
+            :style="{ color: 'var(--ink-3)' }"
+          >
+            <div class="text-[14px] font-medium mb-1">暂无任务</div>
+            <div class="text-[11.5px]">点击左上「+ 新增任务」开始监测</div>
+          </div>
+
+          <!-- 有任务：KPI 汇总 -->
+          <template v-else>
+            <!-- 标题 -->
+            <div class="mb-3 flex-shrink-0">
+              <div class="font-display text-[14px] font-semibold">{{ previewTask.name }}</div>
+              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">任务汇总</div>
+            </div>
+
+            <!-- 滚动区 -->
+            <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+
+              <!-- KPI 四联 -->
+              <div class="grid grid-cols-2 gap-3">
+                <!-- 关键词数 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">关键词数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    {{ previewTask.config?.search_keywords?.length ?? previewKpis?.total ?? 0 }}
+                  </div>
+                </div>
+                <!-- 目标品牌 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">目标品牌</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '16px' }">
+                    {{ previewTask.config?.target_brand || '—' }}
+                  </div>
+                </div>
+                <!-- 命中关键词数 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">命中关键词数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="previewKpis">
+                      {{ previewKpis.hitKeywords }}<span :style="{ color: 'var(--ink-3)', fontSize: '13px' }">/{{ previewKpis.total }}</span>
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                  </div>
+                </div>
+                <!-- 最佳排名 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">最佳排名</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="previewKpis?.bestDefaultRank != null">
+                      #{{ previewKpis.bestDefaultRank }}
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">—</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 14 天关键词趋势（理想卡位关键词数） -->
+              <div>
+                <div class="mb-2 text-[10.5px] uppercase" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最近 14 天关键词趋势</div>
+                <LineChart
+                  v-if="previewSparkPoints.length >= 2"
+                  :labels="previewChartLabels"
+                  :series="previewChartSeries"
+                />
+                <div v-else class="text-[11.5px] italic" :style="{ color: 'var(--ink-3)' }">
+                  无历史数据 —— 跑几次「立刻监测」后会成线。
+                </div>
+              </div>
+
+              <!-- 关键词速览表 -->
+              <div>
+                <div class="mb-2 text-[10.5px] uppercase" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">关键词速览</div>
+                <div :style="{ borderRadius: '10px', border: '1px solid var(--line)', overflow: 'hidden' }">
+                  <!-- 表头 -->
+                  <div
+                    class="grid text-[10.5px]"
+                    :style="{ gridTemplateColumns: '1fr 44px 52px', padding: '5px 10px', background: 'var(--card-2)', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }"
+                  >
+                    <span>关键词</span>
+                    <span :style="{ textAlign: 'right' }">默认卡位</span>
+                    <span :style="{ textAlign: 'right' }">默认首位</span>
+                  </div>
+                  <!-- 空态 -->
+                  <div
+                    v-if="!(taskHistories[previewTask.id]?.[0]?.metric?.keywords ?? []).length"
+                    class="text-[11.5px] italic"
+                    :style="{ padding: '8px 10px', color: 'var(--ink-3)' }"
+                  >尚无检测数据</div>
+                  <!-- 数据行 -->
+                  <div
+                    v-for="kw in (taskHistories[previewTask.id]?.[0]?.metric?.keywords ?? [])"
+                    :key="kw.keyword"
+                    class="grid text-[11.5px]"
+                    :style="{ gridTemplateColumns: '1fr 44px 52px', padding: '6px 10px', borderBottom: '1px solid var(--line)', color: 'var(--ink-2)' }"
+                  >
+                    <span class="truncate pr-2" :title="kw.keyword" :style="{ color: 'var(--ink)' }">{{ kw.keyword }}</span>
+                    <span :style="{ textAlign: 'right' }">{{ kw.default_matched_count }}</span>
+                    <span :style="{ textAlign: 'right' }">
+                      <template v-if="kw.default_first_rank > 0">#{{ kw.default_first_rank }}</template>
+                      <span v-else :style="{ color: 'var(--ink-3)', fontSize: '10.5px' }">—</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 导出数据 / 定时监测 -->
+              <div class="flex flex-shrink-0 gap-2">
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: '8px',
+                    color: 'var(--ink-2)',
+                    cursor: 'pointer',
+                  }"
+                  @click="exportPreviewCsv()"
+                >导出数据</button>
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--primary)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                  }"
+                  @click="openScheduleEditor()"
+                >定时监测</button>
+              </div>
+
+            </div>
+          </template>
+        </section>
+
+        <!-- ── L2 右卡：任务汇总 ─── -->
+        <section
+          v-else
           class="flex min-h-0 flex-col overflow-y-auto"
           :style="{
             background: 'var(--card)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--radius-card)',
             padding: '22px',
+            height: '100%',
           }"
         >
           <!-- Card header -->
           <div class="mb-3 flex-shrink-0">
-            <div class="font-display text-[14px] font-semibold">任务汇总</div>
+            <div class="font-display text-[14px] font-semibold">关键词排名详情</div>
             <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              全部关键词的命中趋势 + 排名详情
+              选中关键词的卡位趋势 + 默认/资讯排名
             </div>
           </div>
 
@@ -1648,49 +1597,58 @@ defineExpose({ reload: loadTasks, selectTask });
             加载中…
           </div>
 
-          <!-- KPI 二联：默认搜索卡位 / 最新资讯卡位 -->
-          <div class="mb-4 grid flex-shrink-0 grid-cols-2 gap-3">
+          <!-- KPI 三联：默认搜索卡位 / 最新资讯卡位 / 最佳排名 -->
+          <div class="mb-4 grid flex-shrink-0 grid-cols-3 gap-3">
             <!-- KPI 1: 默认搜索卡位 = 自家在默认搜索的命中总数 -->
             <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
-              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">默认搜索卡位</div>
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">默认卡位</div>
               <div class="font-display text-[20px] font-bold">{{ currentKeyword ? currentKeyword.default_matched_count : 0 }}</div>
               <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">
-                <template v-if="currentKeyword">关键词：{{ currentKeyword.keyword }}</template>
+                <template v-if="currentKeyword">默认搜索命中</template>
                 <template v-else>选择左侧关键词查看</template>
               </div>
             </div>
 
-            <!-- KPI 2: 最新资讯卡位 = 自家在最新资讯的命中总数；无资讯块时显示「无」 -->
+            <!-- KPI 2: 最新资讯卡位 = 自家在最新资讯的命中总数；无资讯块时显示「—」 -->
             <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
-              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最新资讯卡位</div>
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">资讯卡位</div>
               <div class="font-display text-[20px] font-bold">
                 <template v-if="!currentKeyword">0</template>
-                <template v-else-if="!currentKeyword.news_present">无</template>
+                <template v-else-if="!currentKeyword.news_present">—</template>
                 <template v-else>{{ (currentKeyword.news_results ?? []).filter(r => r.matches_brand).length }}</template>
               </div>
               <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">
-                <template v-if="!currentKeyword || !currentKeyword.news_present">该关键词无最新资讯</template>
+                <template v-if="!currentKeyword || !currentKeyword.news_present">无最新资讯区</template>
                 <template v-else>资讯区命中</template>
               </div>
+            </div>
+
+            <!-- KPI 3: 最佳排名 = 默认/资讯中最小的正排名位次 -->
+            <div class="rounded-lg" :style="{ background: 'var(--card-2)', padding: '14px' }">
+              <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最佳排名</div>
+              <div class="font-display text-[20px] font-bold">
+                <template v-if="!currentKeyword">—</template>
+                <template v-else-if="[currentKeyword.default_first_rank, currentKeyword.news_first_rank].filter(x => x > 0).length === 0">未上榜</template>
+                <template v-else>#{{ Math.min(...[currentKeyword.default_first_rank, currentKeyword.news_first_rank].filter(x => x > 0)) }}</template>
+              </div>
+              <div class="text-[10.5px] mt-1" :style="{ color: 'var(--ink-3)' }">默认/资讯最高位</div>
             </div>
           </div>
 
           <!--
-            Level 2 趋势图 —— 用户要求跟 Level 1 总任务图一样默认显示。
-            统一用 LineChart（替代原 Sparkline），数据走 levelTwoCalendarBuckets
-            的 14 天 bucket scaffold —— 缺失天数据为 null，chart.js 自动画 gap。
-            label 已经在 bucketByCalendarDay 里改成日期-only (e.g. "10")。
+            Level 2 趋势图 —— 选中关键词的默认搜索卡位数 14 天变化。
+            数据源：selectedKwTrendLabels / selectedKwTrendData（按日历日聚合，源于 chronoHistory）。
           -->
           <div class="mb-4 flex-shrink-0">
-            <div class="text-[12.5px] font-semibold mb-2">最近 14 天关键词卡位趋势</div>
+            <div class="text-[12.5px] font-semibold mb-2">最近 14 天默认卡位趋势</div>
             <LineChart
-              v-if="levelTwoCalendarBuckets.length >= 2"
-              :labels="levelTwoCalendarBuckets.map((b) => b.label)"
+              v-if="hasSelectedKwTrend"
+              :labels="selectedKwTrendLabels"
               :series="[
                 {
-                  label: '理想卡位关键词数',
+                  label: '默认卡位数',
                   color: '#ee6a2a',
-                  data: levelTwoCalendarBuckets.map((b, i) => (b.record ? sparkPointsPlaced[i] : null)),
+                  data: selectedKwTrendData,
                 },
               ]"
             />
@@ -1722,77 +1680,88 @@ defineExpose({ reload: loadTasks, selectTask });
                 抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}
               </div>
 
-              <!-- 默认搜索排名 -->
+              <!-- 默认搜索排名 + 最新资讯排名 并排 (D2) -->
               <div
-                class="mb-3 rounded"
-                :style="{ background: 'var(--card-2)', borderLeft: '3px solid var(--primary)', padding: '10px 12px' }"
+                :style="{
+                  display: 'grid',
+                  gridTemplateColumns: currentKeyword.news_present ? '1fr 1fr' : '1fr',
+                  gap: '12px',
+                  alignItems: 'start',
+                }"
               >
-                <div class="text-[12px] font-semibold mb-2">默认搜索排名</div>
-                <div v-if="currentKeyword.default_results.length === 0" class="text-[11px] py-2" :style="{ color: 'var(--ink-3)' }">
-                  无默认搜索结果
+                <!-- 左列：默认搜索排名 -->
+                <div
+                  class="rounded"
+                  :style="{ background: 'var(--card-2)', borderLeft: '3px solid var(--primary)', padding: '10px 12px' }"
+                >
+                  <div class="text-[12px] font-semibold mb-2">默认搜索排名</div>
+                  <div v-if="currentKeyword.default_results.length === 0" class="text-[11px] py-2" :style="{ color: 'var(--ink-3)' }">
+                    无默认搜索结果
+                  </div>
+                  <div v-else class="flex flex-col gap-1">
+                    <a
+                      v-for="r in currentKeyword.default_results"
+                      :key="r.url"
+                      :href="r.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
+                      :style="{
+                        background: r.matches_brand ? 'rgba(238, 106, 42, 0.10)' : 'transparent',
+                        border: r.matches_brand ? '1px solid rgba(238, 106, 42, 0.3)' : 'none',
+                        textDecoration: 'none',
+                        color: 'inherit',
+                      }"
+                    >
+                      <div class="flex items-baseline gap-2">
+                        <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)' }">
+                          #{{ r.rank }}
+                        </span>
+                        <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
+                        <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: 'var(--primary-deep)', color: '#fff' }">
+                          自家
+                        </span>
+                      </div>
+                    </a>
+                  </div>
                 </div>
-                <div v-else class="flex flex-col gap-1">
-                  <a
-                    v-for="r in currentKeyword.default_results"
-                    :key="r.url"
-                    :href="r.url"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
-                    :style="{
-                      background: r.matches_brand ? 'rgba(238, 106, 42, 0.10)' : 'transparent',
-                      border: r.matches_brand ? '1px solid rgba(238, 106, 42, 0.3)' : 'none',
-                      textDecoration: 'none',
-                      color: 'inherit',
-                    }"
-                  >
-                    <div class="flex items-baseline gap-2">
-                      <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? 'var(--primary-deep)' : 'var(--ink-2)' }">
-                        #{{ r.rank }}
-                      </span>
-                      <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
-                      <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: 'var(--primary-deep)', color: '#fff' }">
-                        自家
-                      </span>
-                    </div>
-                  </a>
-                </div>
-              </div>
 
-              <!-- 最新资讯排名 (only if news_present) -->
-              <div
-                v-if="currentKeyword.news_present"
-                class="mb-3 rounded"
-                :style="{ background: 'rgba(79, 124, 255, 0.06)', borderLeft: '3px solid #4f7cff', padding: '10px 12px' }"
-              >
-                <div class="text-[12px] font-semibold mb-2">最新资讯排名</div>
-                <div class="flex flex-col gap-1">
-                  <a
-                    v-for="r in (currentKeyword.news_results ?? [])"
-                    :key="r.url"
-                    :href="r.url"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
-                    :style="{
-                      background: r.matches_brand ? 'rgba(79, 124, 255, 0.12)' : 'transparent',
-                      border: r.matches_brand ? '1px solid rgba(79, 124, 255, 0.3)' : 'none',
-                      textDecoration: 'none',
-                      color: 'inherit',
-                    }"
-                  >
-                    <div class="flex items-baseline gap-2">
-                      <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? '#4f7cff' : 'var(--ink-2)' }">
-                        #{{ r.rank }}
-                      </span>
-                      <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
-                      <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: '#4f7cff', color: '#fff' }">
-                        自家
-                      </span>
-                    </div>
-                  </a>
+                <!-- 右列：最新资讯排名 (only if news_present) -->
+                <div
+                  v-if="currentKeyword.news_present"
+                  class="rounded"
+                  :style="{ background: 'rgba(79, 124, 255, 0.06)', borderLeft: '3px solid #4f7cff', padding: '10px 12px' }"
+                >
+                  <div class="text-[12px] font-semibold mb-2">最新资讯排名</div>
+                  <div class="flex flex-col gap-1">
+                    <a
+                      v-for="r in (currentKeyword.news_results ?? [])"
+                      :key="r.url"
+                      :href="r.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-[11.5px] py-1.5 px-2 rounded block transition-opacity hover:opacity-80"
+                      :style="{
+                        background: r.matches_brand ? 'rgba(79, 124, 255, 0.12)' : 'transparent',
+                        border: r.matches_brand ? '1px solid rgba(79, 124, 255, 0.3)' : 'none',
+                        textDecoration: 'none',
+                        color: 'inherit',
+                      }"
+                    >
+                      <div class="flex items-baseline gap-2">
+                        <span class="font-display font-bold flex-shrink-0" :style="{ color: r.matches_brand ? '#4f7cff' : 'var(--ink-2)' }">
+                          #{{ r.rank }}
+                        </span>
+                        <span class="truncate flex-1">{{ r.title || '(无标题)' }}</span>
+                        <span v-if="r.matches_brand" class="text-[10.5px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" :style="{ background: '#4f7cff', color: '#fff' }">
+                          自家
+                        </span>
+                      </div>
+                    </a>
+                  </div>
                 </div>
-              </div>
+
+              </div><!-- end grid wrapper -->
             </template>
           </div>
 
@@ -1818,8 +1787,8 @@ defineExpose({ reload: loadTasks, selectTask });
           </div>
         </section>
 
-      </div>
-    </template>
+      </template>
+    </SplitPane>
 
     <!-- 紧急告警详情 modal — 复用 AlertDetailModal 的 baidu_alert 分支 -->
     <AlertDetailModal
