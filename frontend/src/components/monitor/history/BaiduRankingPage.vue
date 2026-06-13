@@ -12,6 +12,7 @@ import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 import { subscribe } from "@/api/client";
+import { batchBaiduKpis } from "@/utils/monitor-zhihu-kpi";
 // Sparkline 已下线 —— BaiduRankingPage 内所有图表统一用 LineChart。
 import Pill from "@/components/ui/Pill.vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -154,6 +155,18 @@ const previewHistory = computed<ResultItem[]>(() => {
   const t = previewTask.value;
   if (!t) return [];
   return taskHistories.value[t.id] ?? [];
+});
+
+// L1 右卡 KPI 四联 —— 聚合最新一次 metric.keywords 数据
+const previewKpis = computed(() => {
+  const t = previewTask.value;
+  if (!t) return null;
+  const kws = (taskHistories.value[t.id]?.[0]?.metric?.keywords ?? []) as any[];
+  return batchBaiduKpis(kws.map((k) => ({
+    default_matched_count: k.default_matched_count ?? 0,
+    default_first_rank: k.default_first_rank ?? 0,
+    news_matched_count: (k.news_results ?? []).filter((r: any) => r.matches_brand).length,
+  })));
 });
 
 // preview task 的 ideal_rank（与 Level 2 同一字段，默认 5）
@@ -1396,7 +1409,7 @@ defineExpose({ reload: loadTasks, selectTask });
       <!-- ────────────────── RIGHT SLOT ────────────────── -->
       <template #right>
 
-        <!-- ── L1 右卡：任务详情（含底部 导出/定时 按钮） ─── -->
+        <!-- ── L1 右卡：任务汇总（KPI 四联 + 14 天趋势 + 关键词速览 + 导出/定时） ─── -->
         <section
           v-if="selectedId === null"
           class="flex min-h-0 flex-col"
@@ -1418,32 +1431,58 @@ defineExpose({ reload: loadTasks, selectTask });
             <div class="text-[11.5px]">点击左上「+ 新增任务」开始监测</div>
           </div>
 
-          <!-- 有任务：属性预览 -->
+          <!-- 有任务：KPI 汇总 -->
           <template v-else>
-            <!-- 标题：previewTask 的名字 -->
+            <!-- 标题 -->
             <div class="mb-3 flex-shrink-0">
               <div class="font-display text-[14px] font-semibold">{{ previewTask.name }}</div>
-              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                任务详情
-              </div>
+              <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">任务汇总</div>
             </div>
 
-            <!-- 属性表 (滚动区) -->
-            <div class="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
-              <!-- 目标品牌 -->
-              <div>
-                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">目标品牌</div>
-                <div class="text-[13px] font-medium">{{ previewTask.config.target_brand || '—' }}</div>
+            <!-- 滚动区 -->
+            <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+
+              <!-- KPI 四联 -->
+              <div class="grid grid-cols-2 gap-3">
+                <!-- 关键词数 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">关键词数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    {{ previewTask.config?.search_keywords?.length ?? previewKpis?.total ?? 0 }}
+                  </div>
+                </div>
+                <!-- 目标品牌 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">目标品牌</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '16px' }">
+                    {{ previewTask.config?.target_brand || '—' }}
+                  </div>
+                </div>
+                <!-- 命中关键词数 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">命中关键词数</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="previewKpis">
+                      {{ previewKpis.hitKeywords }}<span :style="{ color: 'var(--ink-3)', fontSize: '13px' }">/{{ previewKpis.total }}</span>
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)' }">—</span>
+                  </div>
+                </div>
+                <!-- 最佳排名 -->
+                <div :style="{ padding: '12px', borderRadius: '12px', background: 'var(--card-2)', border: '1px solid var(--line)' }">
+                  <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">最佳排名</div>
+                  <div class="font-display mt-1 font-bold" :style="{ fontSize: '20px' }">
+                    <template v-if="previewKpis?.bestDefaultRank != null">
+                      #{{ previewKpis.bestDefaultRank }}
+                    </template>
+                    <span v-else :style="{ color: 'var(--ink-3)', fontSize: '14px' }">—</span>
+                  </div>
+                </div>
               </div>
 
-              <!--
-                14 天关键词趋势 —— 满足理想卡位的关键词数量随时间变化。
-                复用历史报告的 LineChart（chart.js v4，平滑张力 0.25，
-                带 x/y 轴 + 鼠标 hover tooltip），比纯 SVG sparkline 更丝滑。
-                数据点 < 2 时给文字占位（chart.js 单点会画不出曲线）。
-              -->
+              <!-- 14 天关键词趋势（理想卡位关键词数） -->
               <div>
-                <div class="text-[10.5px] uppercase mb-1" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最近 14 天关键词趋势</div>
+                <div class="mb-2 text-[10.5px] uppercase" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">最近 14 天关键词趋势</div>
                 <LineChart
                   v-if="previewSparkPoints.length >= 2"
                   :labels="previewChartLabels"
@@ -1453,37 +1492,73 @@ defineExpose({ reload: loadTasks, selectTask });
                   无历史数据 —— 跑几次「立刻监测」后会成线。
                 </div>
               </div>
-              <!-- 搜索关键词列表已按需求移除 —— 关键词通过 Level 2 查看。 -->
-            </div>
 
-            <!-- 底部按钮：导出数据 / 定时监测 (pinned at bottom of right card) -->
-            <div class="pt-4 flex-shrink-0 flex gap-2">
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                  borderRadius: '8px',
-                  color: 'var(--ink-2)',
-                  cursor: 'pointer',
-                }"
-                @click="exportPreviewCsv()"
-              >导出数据</button>
-              <button
-                type="button"
-                class="flex-1 text-[12.5px] font-medium"
-                :style="{
-                  padding: '9px 14px',
-                  background: 'var(--primary)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                }"
-                @click="openScheduleEditor()"
-              >定时监测</button>
+              <!-- 关键词速览表 -->
+              <div>
+                <div class="mb-2 text-[10.5px] uppercase" :style="{ color: 'var(--ink-3)', letterSpacing: '1px' }">关键词速览</div>
+                <div :style="{ borderRadius: '10px', border: '1px solid var(--line)', overflow: 'hidden' }">
+                  <!-- 表头 -->
+                  <div
+                    class="grid text-[10.5px]"
+                    :style="{ gridTemplateColumns: '1fr 44px 52px', padding: '5px 10px', background: 'var(--card-2)', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }"
+                  >
+                    <span>关键词</span>
+                    <span :style="{ textAlign: 'right' }">默认卡位</span>
+                    <span :style="{ textAlign: 'right' }">默认首位</span>
+                  </div>
+                  <!-- 空态 -->
+                  <div
+                    v-if="!(taskHistories[previewTask.id]?.[0]?.metric?.keywords ?? []).length"
+                    class="text-[11.5px] italic"
+                    :style="{ padding: '8px 10px', color: 'var(--ink-3)' }"
+                  >尚无检测数据</div>
+                  <!-- 数据行 -->
+                  <div
+                    v-for="kw in (taskHistories[previewTask.id]?.[0]?.metric?.keywords ?? [])"
+                    :key="kw.keyword"
+                    class="grid text-[11.5px]"
+                    :style="{ gridTemplateColumns: '1fr 44px 52px', padding: '6px 10px', borderBottom: '1px solid var(--line)', color: 'var(--ink-2)' }"
+                  >
+                    <span class="truncate pr-2" :title="kw.keyword" :style="{ color: 'var(--ink)' }">{{ kw.keyword }}</span>
+                    <span :style="{ textAlign: 'right' }">{{ kw.default_matched_count }}</span>
+                    <span :style="{ textAlign: 'right' }">
+                      <template v-if="kw.default_first_rank > 0">#{{ kw.default_first_rank }}</template>
+                      <span v-else :style="{ color: 'var(--ink-3)', fontSize: '10.5px' }">—</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 导出数据 / 定时监测 -->
+              <div class="flex flex-shrink-0 gap-2">
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: '8px',
+                    color: 'var(--ink-2)',
+                    cursor: 'pointer',
+                  }"
+                  @click="exportPreviewCsv()"
+                >导出数据</button>
+                <button
+                  type="button"
+                  class="flex-1 text-[12.5px] font-medium"
+                  :style="{
+                    padding: '9px 14px',
+                    background: 'var(--primary)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                  }"
+                  @click="openScheduleEditor()"
+                >定时监测</button>
+              </div>
+
             </div>
           </template>
         </section>
