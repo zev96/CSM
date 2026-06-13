@@ -534,7 +534,7 @@ const currentKeyword = computed<BaiduPerKeyword | null>(() => {
 
 // ── Level 2 per-keyword 14-day trend (D10) ──────────────────────
 // 用选中关键词的 default_matched_count（默认搜索自家命中数）随时间变化画趋势线。
-// 数据源：chronoHistory（已按时间正序），跟 levelTwoCalendarBuckets 同源。
+// 数据源：chronoHistory（已按时间正序）。
 // 必须在 currentKeyword 之后定义（引用 currentKeyword.value）。
 const selectedKwTrend = computed<Array<{ iso: string; label: string; v: number | null }>>(() => {
   const out: Array<{ iso: string; label: string; v: number | null }> = [];
@@ -1582,9 +1582,9 @@ defineExpose({ reload: loadTasks, selectTask });
         >
           <!-- Card header -->
           <div class="mb-3 flex-shrink-0">
-            <div class="font-display text-[14px] font-semibold">任务汇总</div>
+            <div class="font-display text-[14px] font-semibold">关键词排名详情</div>
             <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              全部关键词的命中趋势 + 排名详情
+              选中关键词的卡位趋势 + 默认/资讯排名
             </div>
           </div>
 
@@ -1637,8 +1637,7 @@ defineExpose({ reload: loadTasks, selectTask });
 
           <!--
             Level 2 趋势图 —— 选中关键词的默认搜索卡位数 14 天变化。
-            数据源：selectedKwTrendLabels / selectedKwTrendData（按日历日聚合，
-            同 levelTwoCalendarBuckets 同源于 chronoHistory）。
+            数据源：selectedKwTrendLabels / selectedKwTrendData（按日历日聚合，源于 chronoHistory）。
           -->
           <div class="mb-4 flex-shrink-0">
             <div class="text-[12.5px] font-semibold mb-2">最近 14 天默认卡位趋势</div>
