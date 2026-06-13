@@ -3,8 +3,8 @@
 直接运行：
     python scripts/clear_account.py
 
-脚本会自动定位 settings.json（与 csm_gui.app._default_config_dir 的逻辑一致），
-保留其它所有设置（vault_root / api_keys / 等等），只把 user_name / user_product
+脚本会探测若干候选路径来定位 settings.json，保留其它所有设置
+（vault_root / api_keys / 等等），只把 user_name / user_product
 置空。脚本会先打印一份备份到 stdout，方便你万一改完想撤回。
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-# 确保项目根在 sys.path 里 — 让脚本可以直接 import csm_gui。
+# 确保项目根在 sys.path 里（历史遗留；本脚本现已不依赖项目内模块）。
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -22,16 +22,14 @@ if str(ROOT) not in sys.path:
 def _candidate_settings_paths() -> list[Path]:
     """Return every plausible CSM settings.json path on this machine.
 
-    The Qt ``QStandardPaths.AppConfigLocation`` lookup depends on
-    ``QApplication.applicationName()`` — and that varies between contexts:
+    历史上老 PyQt6 客户端的配置目录随启动方式不同而不同（Qt 的
+    ``QStandardPaths.AppConfigLocation`` 依赖 ``applicationName()``）：
 
-    * 源码启动 (``python main.py``)        → ``…/AppData/Local/python/CSM``
-    * 打包后的 ``CSM.exe``                 → ``…/AppData/Local/CSM/CSM`` 或类似
-    * 不带 QApplication 的脚本             → ``…/AppData/Local/CSM``
+    * 源码启动        → ``…/AppData/Local/python/CSM``
+    * 打包后的 exe    → ``…/AppData/Local/CSM/CSM`` 或类似
+    * 无 QApplication → ``…/AppData/Local/CSM``
 
-    We therefore probe **all** of them rather than trusting a single
-    resolver. Returns existing files first, but always includes the
-    canonical Qt-resolved path for transparency.
+    老栈已移除，这里把所有已知历史候选路径都探一遍即可。
     """
     home = Path.home()
     appdata_local = Path.home() / "AppData" / "Local"
@@ -42,21 +40,6 @@ def _candidate_settings_paths() -> list[Path]:
         appdata_local / "CSM" / "settings.json",
         home / ".csm" / "settings.json",
     ]
-
-    # Also ask Qt directly via a real QApplication — matches the running
-    # app's resolution exactly.
-    try:
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import QStandardPaths
-        if QApplication.instance() is None:
-            QApplication([])
-        loc = QStandardPaths.writableLocation(
-            QStandardPaths.StandardLocation.AppConfigLocation
-        )
-        if loc:
-            candidates.append(Path(loc) / "CSM" / "settings.json")
-    except Exception:
-        pass
 
     # Dedupe while preserving order.
     seen: set[str] = set()

@@ -45,32 +45,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = [
-    "PyQt6>=6.4,<6.6",
-    "PyQt6-Fluent-Widgets[full]>=1.5",
-]
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.12",
     "pytest-cov>=5.0",
-    "pytest-qt>=4.4",
 ]
 
 [project.scripts]
 csm = "csm_core.__main__:cli"
-csm-gui = "csm_gui.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["csm_core*", "csm_gui*"]
-
-[tool.setuptools.package-data]
-# Ship the bundled OPPO Sans TTF with the csm_gui package so installs
-# (including wheel / editable-install / pyinstaller) pick it up.
-csm_gui = ["assets/fonts/*.ttf"]
+include = ["csm_core*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -81,4 +70,4 @@ markers = [
 ]
 
 [tool.setuptools.dynamic]
-version = { attr = "csm_gui._version.__version__" }
+version = { attr = "csm_core.__version__" }
