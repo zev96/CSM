@@ -1069,10 +1069,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <div class="mb-3 flex flex-shrink-0 items-start justify-between gap-2">
                 <div class="min-w-0">
-                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                    <template v-if="selectedVideo.rank > 0">视频 #{{ selectedVideo.rank }} 详情</template>
-                    <template v-else>视频详情（评论未找到）</template>
-                  </div>
+                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">单视频详情</div>
                   <div
                     class="font-display mt-0.5 font-bold"
                     :title="selectedVideo.title"
@@ -1098,11 +1095,11 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
               </div>
 
               <!-- 状态 / 排名 KPI -->
-              <div class="mb-4 mt-3 grid grid-cols-3 gap-2 flex-shrink-0">
+              <div class="mb-4 mt-3 grid grid-cols-3 gap-3 flex-shrink-0">
                 <div
                   :style="{
-                    padding: '10px 12px',
-                    borderRadius: '10px',
+                    padding: '12px',
+                    borderRadius: '12px',
                     background: 'var(--card-2)',
                     border: '1px solid var(--line)',
                   }"
@@ -1123,8 +1120,8 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 </div>
                 <div
                   :style="{
-                    padding: '10px 12px',
-                    borderRadius: '10px',
+                    padding: '12px',
+                    borderRadius: '12px',
                     background: 'var(--card-2)',
                     border: '1px solid var(--line)',
                   }"
@@ -1138,8 +1135,8 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 </div>
                 <div
                   :style="{
-                    padding: '10px 12px',
-                    borderRadius: '10px',
+                    padding: '12px',
+                    borderRadius: '12px',
                     background: 'var(--card-2)',
                     border: '1px solid var(--line)',
                   }"
@@ -1254,7 +1251,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
           <template v-else>
             <div class="flex-shrink-0">
               <div class="font-display text-[14px] font-semibold">
-                {{ selectedCommentTaskId ? "任务汇总" : "留存趋势" }}
+                {{ selectedCommentTaskId ? "任务留存汇总" : "全部留存汇总" }}
               </div>
               <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
                 {{ selectedCommentTaskId ? "点左侧视频名查看单条评论详情" : "近 7 天" }}
