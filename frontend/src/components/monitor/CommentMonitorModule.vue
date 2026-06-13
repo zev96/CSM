@@ -24,6 +24,8 @@ import Spinner from "@/components/ui/Spinner.vue";
 // Sparkline 已下线 —— 留存趋势图改用 LineChart 跟 BaiduRankingPage 总任务图一致。
 import LineChart from "./history/LineChart.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
+import SplitPane from "@/components/ui/SplitPane.vue";
+import Dropdown from "@/components/ui/Dropdown.vue";
 
 import ProgressBar from "@/components/ui/ProgressBar.vue";
 import { useMonitorStatus } from "@/stores/monitorStatus";
@@ -509,20 +511,22 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
 
 <template>
   <!--
-    Root：必须是 `flex min-h-0 flex-1 flex-col`，理由——
-      MonitorView root 是 flex column + h-full；本模块作为它的子项要
-      "占满剩余高度 + 让内部 flex-1 子链生效"。原本用 `space-y-6` 裸
-      <div> 不是 flex 容器、也没 flex-1，导致下面 `grid min-h-0 flex-1`
-      跟 grid 里的 section 都按内容自然撑开 —— 视频列表多了就把整个
-      MonitorView 顶过 viewport，触发 App.vue 第 190 行
-      `<div class="min-h-0 flex-1 overflow-y-auto">` 的兜底滚动，
-      滚动条落到窗口最右（不是视频列表区域内）。
-    flex-1 占满 + min-h-0 解锁子级收缩 + gap-24 替代原 space-y-6 间距。
+    Root：flex min-h-0 flex-1 flex-col —— 占满 MonitorView 剩余高度。
+    布局：
+      ① hero（L1 时 + 有告警才显示；L2/L3 时收起，镜像百度模式）
+      ② SplitPane（left=340px 定宽左栏 + right 自适应右栏）
+         #left:
+           - 顶部：平台 tabs pill group + 新增/批量导入 按钮
+           - 内容：L1 = 任务列表；L2 = 面包屑 + 视频列表；L3 = 同 L2
+         #right:
+           - v-if selectedVideo → L3 单视频详情（re-parent，内容不改）
+           - v-else             → 留存汇总（re-parent，内容不改）
   -->
-  <div class="flex min-h-0 flex-1 flex-col" :style="{ gap: '24px' }">
-    <!-- alert hero (stacked when commentAlerts.length > 1) -->
+  <div class="flex min-h-0 flex-1 flex-col" :style="{ gap: '18px' }">
+
+    <!-- ① alert hero — 仅 L1（selectedCommentTaskId===null）且有告警时显示 -->
     <div
-      v-if="commentAlerts.length > 0 && currentCommentAlert"
+      v-if="selectedCommentTaskId === null && commentAlerts.length > 0 && currentCommentAlert"
       class="relative flex-shrink-0"
       :style="{ paddingBottom: commentAlerts.length > 1 ? '14px' : '0' }"
     >
@@ -556,427 +560,393 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
           zIndex: 0,
         }"
       />
-    <div
-      class="relative overflow-hidden"
-      :style="{
-        background: 'var(--dark)',
-        color: 'var(--card)',
-        borderRadius: 'var(--radius-card)',
-        padding: '26px 28px',
-        zIndex: 1,
-      }"
-    >
       <div
-        aria-hidden="true"
+        class="relative overflow-hidden"
         :style="{
-          position: 'absolute',
-          top: '-50px', left: '20px',
-          width: '240px', height: '240px',
-          background: 'radial-gradient(circle, rgba(216,90,72,0.5), transparent 65%)',
-          filter: 'blur(12px)',
-          pointerEvents: 'none',
+          background: 'var(--dark)',
+          color: 'var(--card)',
+          borderRadius: 'var(--radius-card)',
+          padding: '26px 28px',
+          zIndex: 1,
         }"
-      />
-      <div
-        aria-hidden="true"
-        :style="{
-          position: 'absolute',
-          top: '60px', left: '400px',
-          width: '220px', height: '220px',
-          background: 'radial-gradient(circle, rgba(238,106,42,0.4), transparent 65%)',
-          filter: 'blur(12px)',
-          pointerEvents: 'none',
-        }"
-      />
-      <div class="relative flex items-center justify-between gap-6">
-        <div class="min-w-0">
-          <div
-            class="flex items-center gap-2 text-[11px] uppercase"
-            :style="{ letterSpacing: '1.5px', color: 'rgba(255,255,255,0.5)' }"
-          >
-            <span>{{ commentAlerts.length }} 个紧急告警 · B 站</span>
-            <span
-              v-if="commentAlerts.length > 1"
-              :style="{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0' }"
-            >· {{ commentAlertIdx + 1 }} / {{ commentAlerts.length }}</span>
+      >
+        <div
+          aria-hidden="true"
+          :style="{
+            position: 'absolute',
+            top: '-50px', left: '20px',
+            width: '240px', height: '240px',
+            background: 'radial-gradient(circle, rgba(216,90,72,0.5), transparent 65%)',
+            filter: 'blur(12px)',
+            pointerEvents: 'none',
+          }"
+        />
+        <div
+          aria-hidden="true"
+          :style="{
+            position: 'absolute',
+            top: '60px', left: '400px',
+            width: '220px', height: '220px',
+            background: 'radial-gradient(circle, rgba(238,106,42,0.4), transparent 65%)',
+            filter: 'blur(12px)',
+            pointerEvents: 'none',
+          }"
+        />
+        <div class="relative flex items-center justify-between gap-6">
+          <div class="min-w-0">
+            <div
+              class="flex items-center gap-2 text-[11px] uppercase"
+              :style="{ letterSpacing: '1.5px', color: 'rgba(255,255,255,0.5)' }"
+            >
+              <span>{{ commentAlerts.length }} 个紧急告警 · B 站</span>
+              <span
+                v-if="commentAlerts.length > 1"
+                :style="{ color: 'rgba(255,255,255,0.4)', letterSpacing: '0' }"
+              >· {{ commentAlertIdx + 1 }} / {{ commentAlerts.length }}</span>
+            </div>
+            <div
+              class="font-display mt-2 font-bold"
+              :style="{ fontSize: '28px', letterSpacing: '-0.5px', lineHeight: '1.25' }"
+            >
+              「{{ currentCommentAlert.keyword }}」<br />
+              <span :style="{ color: 'var(--primary)' }">{{ currentCommentAlert.headline }}</span>
+            </div>
+            <div class="mt-2 text-[12.5px]" :style="{ color: 'rgba(255,255,255,0.6)' }">
+              {{ currentCommentAlert.subtitle }}
+            </div>
           </div>
-          <div
-            class="font-display mt-2 font-bold"
-            :style="{ fontSize: '28px', letterSpacing: '-0.5px', lineHeight: '1.25' }"
-          >
-            「{{ currentCommentAlert.keyword }}」<br />
-            <span :style="{ color: 'var(--primary)' }">{{ currentCommentAlert.headline }}</span>
-          </div>
-          <div class="mt-2 text-[12.5px]" :style="{ color: 'rgba(255,255,255,0.6)' }">
-            {{ currentCommentAlert.subtitle }}
-          </div>
-        </div>
-        <div class="flex flex-shrink-0 items-center gap-2">
-          <template v-if="commentAlerts.length > 1">
+          <div class="flex flex-shrink-0 items-center gap-2">
+            <template v-if="commentAlerts.length > 1">
+              <button
+                type="button"
+                title="上一条告警"
+                class="inline-flex items-center justify-center"
+                :style="{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '999px',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: '#fbf7ec',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                }"
+                @click="cycleAlert('comment', -1)"
+              >
+                <Icon name="arrowLeft" :size="14" />
+              </button>
+              <button
+                type="button"
+                title="下一条告警"
+                class="inline-flex items-center justify-center"
+                :style="{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '999px',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: '#fbf7ec',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                }"
+                @click="cycleAlert('comment', 1)"
+              >
+                <Icon name="arrowRight" :size="14" />
+              </button>
+              <span :style="{ width: '6px' }" />
+            </template>
             <button
               type="button"
-              title="上一条告警"
-              class="inline-flex items-center justify-center"
+              class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
               :style="{
-                width: '32px',
-                height: '32px',
-                borderRadius: '999px',
                 background: 'rgba(255,255,255,0.08)',
                 color: '#fbf7ec',
+                borderRadius: '999px',
                 border: '1px solid rgba(255,255,255,0.12)',
               }"
-              @click="cycleAlert('comment', -1)"
+              @click="openCommentAlert(currentCommentAlert)"
             >
-              <Icon name="arrowLeft" :size="14" />
+              <Icon name="fileText" :size="14" />
+              <span>查看报告</span>
             </button>
             <button
               type="button"
-              title="下一条告警"
-              class="inline-flex items-center justify-center"
+              class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
               :style="{
-                width: '32px',
-                height: '32px',
+                background: 'var(--primary)',
+                color: '#fff',
                 borderRadius: '999px',
-                background: 'rgba(255,255,255,0.08)',
-                color: '#fbf7ec',
-                border: '1px solid rgba(255,255,255,0.12)',
               }"
-              @click="cycleAlert('comment', 1)"
+              @click="emit('alert-action', 'repost')"
             >
-              <Icon name="arrowRight" :size="14" />
+              <Icon name="refresh" :size="14" />
+              <span>补发评论</span>
             </button>
-            <span :style="{ width: '6px' }" />
-          </template>
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
-            :style="{
-              background: 'rgba(255,255,255,0.08)',
-              color: '#fbf7ec',
-              borderRadius: '999px',
-              border: '1px solid rgba(255,255,255,0.12)',
-            }"
-            @click="openCommentAlert(currentCommentAlert)"
-          >
-            <Icon name="fileText" :size="14" />
-            <span>查看报告</span>
-          </button>
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
-            :style="{
-              background: 'var(--primary)',
-              color: '#fff',
-              borderRadius: '999px',
-            }"
-            @click="emit('alert-action', 'repost')"
-          >
-            <Icon name="refresh" :size="14" />
-            <span>补发评论</span>
-          </button>
+          </div>
         </div>
       </div>
-    </div>
     </div><!-- /alert hero stack wrapper -->
 
-    <!-- platform sub-pivot -->
-    <div class="flex flex-shrink-0 items-center justify-between">
-      <div
-        class="flex items-center"
-        :style="{
-          background: 'var(--card)',
-          borderRadius: '999px',
-          padding: '4px',
-          border: '1px solid var(--line)',
-        }"
-      >
-        <button
-          v-for="p in PLATFORMS"
-          :key="p.k"
-          type="button"
-          class="inline-flex items-center"
-          :style="{
-            height: '32px',
-            padding: '0 16px',
-            borderRadius: '999px',
-            background: commentSubtab === p.k ? 'var(--dark)' : 'transparent',
-            color: commentSubtab === p.k ? 'var(--card)' : 'var(--ink-3)',
-            fontSize: '12.5px',
-            fontWeight: 500,
-            gap: '8px',
-            transition: 'background .15s, color .15s',
-          }"
-          @click="emit('update:commentSubtab', p.k)"
-        >
-          <span
-            :style="{
-              width: '6px',
-              height: '6px',
-              borderRadius: '50%',
-              background: p.color,
-              boxShadow: commentSubtab === p.k ? '0 0 0 2px rgba(255,255,255,0.15)' : 'none',
-            }"
-          />
-          <span>{{ p.l }}</span>
-        </button>
-      </div>
-      <!--
-        评论平台只保留批量导入：每天要监测的视频链接通常很多，
-        一条一条用 modal 加效率太低。单条的「新增任务」按钮在评论
-        tab 下隐藏，统一走批量入口（用户决定）。Cookie 入口删除：
-        池子在「设置 → 监测中心 → Cookie 管理」统一配置，
-        在工作页再开一个等同重复。
-      -->
-      <div class="flex flex-shrink-0 gap-2">
-        <button
-          type="button"
-          class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium"
-          :style="{
-            background: 'var(--primary)',
-            color: '#fff',
-            borderRadius: '999px',
-          }"
-          @click="emit('import-batch')"
-        >
-          <Icon name="folder" :size="12" />
-          <span>批量导入</span>
-        </button>
-      </div>
-    </div>
+    <!-- ② SplitPane —— 左 340px 固定，右自适应 -->
+    <SplitPane left-width="340px" gap="18px">
 
-    <!-- comment platform body -->
-    <!--
-      空态：示例已清 & 没真实任务 ⇒ commentRows 必为空。统一一个分支
-      覆盖 demo 空态 + 真实空态，文案不变。
-    -->
-    <template v-if="commentRows.length === 0">
-      <div
-        class="flex min-h-0 flex-1 flex-col items-center justify-center text-center"
-        :style="{
-          background: 'var(--card)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--radius-card)',
-          padding: '60px 30px',
-        }"
-      >
-        <span
-          class="inline-flex items-center justify-center"
-          :style="{
-            width: '54px',
-            height: '54px',
-            borderRadius: '16px',
-            background: 'var(--card-2)',
-            color: 'var(--ink-3)',
-          }"
-        >
-          <Icon name="radar" :size="22" />
-        </span>
+      <!-- ── #left ── -->
+      <template #left>
         <div
-          class="font-display mt-4 font-bold"
-          :style="{ fontSize: '18px' }"
-        >
-          {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} 还没有监测任务
-        </div>
-        <div
-          class="mt-1.5 max-w-[400px] text-[12.5px]"
-          :style="{ color: 'var(--ink-3)' }"
-        >
-          把 {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} 上要监控的视频/帖子链接加进来，CSM 会定时抓取评论留存情况。
-        </div>
-        <button
-          type="button"
-          class="mt-5 inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
-          :style="{
-            background: 'var(--primary)',
-            color: '#fff',
-            borderRadius: '999px',
-          }"
-          @click="emit('add-task')"
-        >
-          <Icon name="plus" :size="14" />
-          <span>添加 {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} 监控</span>
-        </button>
-      </div>
-    </template>
-
-    <!--
-      rich 三栏视图 —— demoMode 和真实数据共用同一段模板，数据来自
-      commentRows / videosByBatchId / retentionPoints / deletedComments。
-    -->
-    <template v-else>
-      <div class="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
-        <!--
-          ── 左列：一级 任务列表 / 二级 视频列表 ───────────────
-          min-h-0 + overflow-hidden 必须双层都加：grid 项的默认
-          min-height: auto 会让子内容把整行撑高，导致页面级出现滚动条。
-          内部的 `flex min-h-0 flex-1 overflow-y-auto` 才能把滚动锁在
-          视频列表区块里（用户截图里 40 条视频触发的问题）。
-        -->
-        <section
           class="flex h-full min-h-0 flex-col overflow-hidden"
           :style="{
             background: 'var(--card)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--radius-card)',
-            padding: '22px',
           }"
         >
-          <!-- L1 任务列表 -->
-          <template v-if="!selectedCommentTaskId">
-            <div class="mb-3 flex-shrink-0">
-              <div class="font-display text-[14px] font-semibold">
-                {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} · 评论监控
-              </div>
-              <!--
-                "评论留存率 = 当前可见数 / 历史峰值" subtitle 按用户要求移除 ——
-                B 站/抖音/快手三套各重复一句太碎，KPI 列已经直观体现"留存"语义。
-              -->
-            </div>
-            <!-- 列头固定在滚动区**外**（flex-shrink-0 sibling），只让下方数据行滚动；grid-template-columns 必须与行一致 -->
+          <!-- 顶部：平台 tabs + 新增/批量导入 按钮 -->
+          <div
+            class="flex flex-shrink-0 items-center justify-between gap-2"
+            :style="{
+              padding: '12px 14px 10px',
+              borderBottom: '1px solid var(--line)',
+            }"
+          >
+            <!-- 平台 pill tabs -->
             <div
-              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+              class="flex items-center"
               :style="{
-                gridTemplateColumns: '1.6fr .7fr .7fr 1fr',
-                letterSpacing: '1.2px',
-                color: 'var(--ink-3)',
+                background: 'var(--card-2)',
+                borderRadius: '999px',
+                padding: '3px',
+                border: '1px solid var(--line)',
+              }"
+            >
+              <button
+                v-for="p in PLATFORMS"
+                :key="p.k"
+                type="button"
+                class="inline-flex items-center"
+                :style="{
+                  height: '26px',
+                  padding: '0 10px',
+                  borderRadius: '999px',
+                  background: commentSubtab === p.k ? 'var(--dark)' : 'transparent',
+                  color: commentSubtab === p.k ? 'var(--card)' : 'var(--ink-3)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  gap: '6px',
+                  transition: 'background .15s, color .15s',
+                }"
+                @click="emit('update:commentSubtab', p.k)"
+              >
+                <span
+                  :style="{
+                    width: '5px',
+                    height: '5px',
+                    borderRadius: '50%',
+                    background: p.color,
+                    flexShrink: '0',
+                  }"
+                />
+                <span>{{ p.l }}</span>
+              </button>
+            </div>
+            <!-- 新增 + 批量导入 -->
+            <div class="flex flex-shrink-0 gap-1.5">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 px-2.5 py-1 text-[11.5px] font-medium"
+                :style="{
+                  background: 'var(--card-2)',
+                  color: 'var(--ink-2)',
+                  borderRadius: '999px',
+                  border: '1px solid var(--line)',
+                }"
+                title="新增任务"
+                @click="emit('add-task')"
+              >
+                <Icon name="plus" :size="11" />
+                <span>新增</span>
+              </button>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 px-2.5 py-1 text-[11.5px] font-medium"
+                :style="{
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  borderRadius: '999px',
+                }"
+                title="批量导入"
+                @click="emit('import-batch')"
+              >
+                <Icon name="folder" :size="11" />
+                <span>批量导入</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- L1：任务列表 -->
+          <template v-if="!selectedCommentTaskId">
+            <!-- 空态 -->
+            <div
+              v-if="commentRows.length === 0"
+              class="flex flex-1 flex-col items-center justify-center text-center"
+              :style="{ padding: '32px 20px' }"
+            >
+              <span
+                class="inline-flex items-center justify-center"
+                :style="{
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '14px',
+                  background: 'var(--card-2)',
+                  color: 'var(--ink-3)',
+                }"
+              >
+                <Icon name="radar" :size="20" />
+              </span>
+              <div
+                class="font-display mt-3 font-bold"
+                :style="{ fontSize: '14px' }"
+              >{{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} 还没有监测任务</div>
+              <div
+                class="mt-1 text-[11.5px]"
+                :style="{ color: 'var(--ink-3)' }"
+              >批量导入视频链接开始监控</div>
+              <button
+                type="button"
+                class="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium"
+                :style="{
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  borderRadius: '999px',
+                }"
+                @click="emit('add-task')"
+              >
+                <Icon name="plus" :size="12" />
+                <span>添加监控</span>
+              </button>
+            </div>
+
+            <!-- 有数据：列头 + 行列表 -->
+            <template v-else>
+              <!-- 列头 -->
+              <div
+                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+                :style="{
+                  gridTemplateColumns: '1.5fr .9fr 1.1fr',
+                  letterSpacing: '1.2px',
+                  color: 'var(--ink-3)',
+                  borderBottom: '1px solid var(--line)',
+                  padding: '8px 14px',
+                }"
+              >
+                <div>任务名字</div><div class="text-center">留存</div><div class="text-right">操作</div>
+              </div>
+              <!-- 数据行 -->
+              <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" :style="{ padding: '0 6px' }">
+                <div
+                  v-for="(t, i) in commentRows"
+                  :key="t.id"
+                  class="grid cursor-pointer items-center"
+                  :style="{
+                    gridTemplateColumns: '1.5fr .9fr 1.1fr',
+                    borderBottom: i < commentRows.length - 1 ? '1px solid var(--line)' : 'none',
+                    padding: '11px 8px',
+                    borderRadius: '8px',
+                    transition: 'background .12s',
+                  }"
+                  @click="openCommentDetail(t.id)"
+                  @mouseenter="(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
+                  @mouseleave="(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')"
+                >
+                  <!-- Col 1: 任务名 + 子标题 -->
+                  <div class="min-w-0">
+                    <div
+                      class="truncate text-[13px] font-medium"
+                      :style="{ color: 'var(--primary-deep)' }"
+                    >{{ t.kw }}</div>
+                    <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
+                      {{ t.retained }}/{{ t.total }} 留存 · {{ (videosByBatchId[t.id] ?? []).length }} 条视频
+                    </div>
+                  </div>
+                  <!-- Col 2: 留存 pill -->
+                  <div class="flex flex-col items-center gap-1">
+                    <Pill :tone="t.status">
+                      {{ t.retained }}/{{ t.total }}
+                    </Pill>
+                    <div
+                      :style="{
+                        height: '3px',
+                        background: 'var(--line)',
+                        borderRadius: '999px',
+                        width: '52px',
+                      }"
+                    >
+                      <div
+                        :style="{
+                          width: t.total > 0 ? `${(t.retained / t.total) * 100}%` : '0%',
+                          height: '100%',
+                          background: t.retained < t.total ? 'var(--red, #d85a48)' : 'var(--green, #6c9b5d)',
+                          borderRadius: '999px',
+                        }"
+                      />
+                    </div>
+                  </div>
+                  <!-- Col 3: ⋯ Dropdown -->
+                  <div class="flex items-center justify-end" @click.stop>
+                    <Dropdown
+                      v-if="!demoMode"
+                      :items="[
+                        batchRunState(t.id).disabled
+                          ? { key: 'stop', label: '停止监测', icon: 'x' }
+                          : { key: 'run', label: '立刻监测', icon: 'play' },
+                        { key: 'edit', label: '编辑批次', icon: 'edit' },
+                        { key: 'delete', label: '删除批次', icon: 'trash', tone: 'danger' },
+                      ]"
+                      align="right"
+                      :min-width="140"
+                      @select="(k) => {
+                        if (k === 'run') emit('run-batch', t.id);
+                        else if (k === 'stop') emit('cancel-batch', t.id);
+                        else if (k === 'edit') emit('edit-batch', t.id);
+                        else if (k === 'delete') emit('delete-batch', t.id);
+                      }"
+                    >
+                      <template #trigger>
+                        <button
+                          type="button"
+                          class="inline-flex h-7 w-7 items-center justify-center"
+                          :style="{
+                            borderRadius: '999px',
+                            color: 'var(--ink-3)',
+                            background: 'transparent',
+                            border: '1px solid transparent',
+                            transition: 'background .12s, border-color .12s',
+                          }"
+                          title="更多操作"
+                          @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; }"
+                          @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }"
+                        >
+                          <Icon name="more" :size="14" />
+                        </button>
+                      </template>
+                    </Dropdown>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </template>
+
+          <!-- L2：面包屑 + 视频列表 -->
+          <template v-else>
+            <!-- 面包屑 -->
+            <div
+              class="flex flex-shrink-0 items-center gap-2"
+              :style="{
+                padding: '10px 14px',
                 borderBottom: '1px solid var(--line)',
               }"
             >
-              <div>任务名字</div><div class="text-center">留存</div><div class="text-center">变化</div><div class="text-center">操作</div>
-            </div>
-            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-              <div
-                v-for="(t, i) in commentRows"
-                :key="t.id"
-                class="grid cursor-pointer items-center transition"
-                :style="{
-                  gridTemplateColumns: '1.6fr .7fr .7fr 1fr',
-                  borderBottom: i < commentRows.length - 1 ? '1px solid var(--line)' : 'none',
-                  padding: '14px 8px',
-                  borderRadius: '10px',
-                }"
-                @click="openCommentDetail(t.id)"
-                @mouseenter="(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
-                @mouseleave="(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')"
-              >
-                <div class="min-w-0">
-                  <div
-                    class="truncate text-[13px] font-medium"
-                    :style="{ color: 'var(--primary-deep)' }"
-                  >{{ t.kw }}</div>
-                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                    {{ t.lastChecked }} · {{ (videosByBatchId[t.id] ?? []).length }} 条视频
-                  </div>
-                </div>
-                <div class="text-center">
-                  <div class="font-display text-[13px] font-bold">
-                    {{ t.retained }}/{{ t.total }}
-                  </div>
-                  <div
-                    :style="{
-                      height: '3px',
-                      background: 'var(--line)',
-                      borderRadius: '999px',
-                      marginTop: '4px',
-                      marginLeft: 'auto',
-                      marginRight: 'auto',
-                      width: '60px',
-                    }"
-                  >
-                    <div
-                      :style="{
-                        width: `${(t.retained / t.total) * 100}%`,
-                        height: '100%',
-                        background: t.retained < t.total ? 'var(--red, #d85a48)' : 'var(--green, #6c9b5d)',
-                        borderRadius: '999px',
-                      }"
-                    />
-                  </div>
-                </div>
-                <div class="text-center">
-                  <Pill v-if="t.delta < 0" tone="alert">
-                    <Icon name="arrowDown" :size="10" />{{ t.delta }}
-                  </Pill>
-                  <Pill v-else-if="t.delta > 0" tone="ok">
-                    <Icon name="arrowUp" :size="10" />+{{ t.delta }}
-                  </Pill>
-                  <Pill v-else tone="info">持平</Pill>
-                </div>
-                <!--
-                  操作 cell —— 已移除「正常 / 关注 / 评论丢失」pill（用户反馈
-                  没用信号都从「留存」列直观看出）。三个 icon 按钮：
-                    ▶ 批量立刻监测  /  ✎ 编辑批次  /  🗑 删除批次
-                  统一居中对齐到 column header 「操作」。
-                -->
-                <div class="flex items-center justify-center gap-1">
-                  <button
-                    v-if="!demoMode && batchRunState(t.id).disabled"
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{
-                      borderRadius: '999px',
-                      color: 'var(--red, #d85a48)',
-                      cursor: 'pointer',
-                    }"
-                    :title="`停止批次（${batchRunState(t.id).label}）`"
-                    @click.stop="emit('cancel-batch', t.id)"
-                  >
-                    <Icon name="x" :size="13" />
-                  </button>
-                  <button
-                    v-else-if="!demoMode"
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{
-                      borderRadius: '999px',
-                      color: 'var(--primary-deep)',
-                      cursor: 'pointer',
-                    }"
-                    :title="`批量立刻监测（共 ${tasks.filter((x) => parseBatchName(x.name) === t.id).length} 条）`"
-                    @click.stop="emit('run-batch', t.id)"
-                  >
-                    <Icon name="play" :size="13" />
-                  </button>
-                  <button
-                    v-if="!demoMode"
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{
-                      borderRadius: '999px',
-                      color: 'var(--ink-3)',
-                    }"
-                    title="编辑批次"
-                    @click.stop="emit('edit-batch', t.id)"
-                  >
-                    <Icon name="edit" :size="13" />
-                  </button>
-                  <button
-                    v-if="!demoMode"
-                    type="button"
-                    class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{
-                      borderRadius: '999px',
-                      color: 'var(--ink-3)',
-                    }"
-                    title="删除批次"
-                    @click.stop="emit('delete-batch', t.id)"
-                  >
-                    <Icon name="trash" :size="13" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </template>
-
-          <!-- L2 视频列表（点任务名进来） -->
-          <template v-else>
-            <div class="mb-3 flex flex-shrink-0 items-center gap-3">
               <button
                 type="button"
                 class="inline-flex flex-shrink-0 items-center justify-center"
                 :style="{
-                  width: '28px',
-                  height: '28px',
+                  width: '26px',
+                  height: '26px',
                   borderRadius: '999px',
                   background: 'var(--card-2)',
                   border: '1px solid var(--line)',
@@ -985,48 +955,52 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 title="返回任务列表"
                 @click="backToCommentList"
               >
-                <Icon name="arrowLeft" :size="13" />
+                <Icon name="arrowLeft" :size="12" />
               </button>
-              <div class="min-w-0">
-                <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                  {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} · 视频列表
-                </div>
-                <div class="font-display truncate text-[14px] font-semibold">
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
                   {{ selectedCommentRow?.kw }}
+                </div>
+                <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
+                  {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} · 视频列表
                 </div>
               </div>
               <span
-                class="ml-auto flex-shrink-0 rounded-full text-[10.5px]"
+                class="flex-shrink-0 rounded-full text-[10.5px]"
                 :style="{
                   background: 'var(--card-2)',
                   color: 'var(--ink-3)',
                   padding: '2px 8px',
+                  border: '1px solid var(--line)',
                 }"
               >{{ selectedTaskVideos.length }} 条</span>
             </div>
-            <!-- 列头固定在滚动区**外**（flex-shrink-0 sibling），只让下方数据行滚动；grid-template-columns 必须与行一致 -->
+            <!-- 视频列表列头 -->
             <div
-              class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+              class="grid flex-shrink-0 items-center text-[11px] uppercase"
               :style="{
                 gridTemplateColumns: '1.8fr .6fr .6fr',
                 letterSpacing: '1.2px',
                 color: 'var(--ink-3)',
                 borderBottom: '1px solid var(--line)',
+                padding: '8px 14px',
               }"
             >
-              <div>视频名字</div><div class="text-center">评论排名</div><div class="text-center">状态</div>
+              <div>视频名字</div><div class="text-center">排名</div><div class="text-center">状态</div>
             </div>
-            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <!-- 视频行 -->
+            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" :style="{ padding: '0 6px' }">
               <div
                 v-for="(v, i) in selectedTaskVideos"
                 :key="v.id"
-                class="grid cursor-pointer items-center transition"
+                class="grid cursor-pointer items-center"
                 :style="{
                   gridTemplateColumns: '1.8fr .6fr .6fr',
                   borderBottom: i < selectedTaskVideos.length - 1 ? '1px solid var(--line)' : 'none',
-                  padding: '14px 8px',
-                  borderRadius: '10px',
+                  padding: '11px 8px',
+                  borderRadius: '8px',
                   background: selectedVideoId === v.id ? 'var(--card-2)' : 'transparent',
+                  transition: 'background .12s',
                 }"
                 @click="selectVideo(v.id)"
                 @mouseenter="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
@@ -1052,7 +1026,6 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                   />
                 </div>
                 <div class="text-center">
-                  <!-- rank=0 (即 backend rank=-1) = 未在前 scrape_top_n 条命中，显示 "无" 与右侧 "未找到" pill 语义对齐 -->
                   <span
                     v-if="v.rank > 0"
                     class="font-display text-[14px] font-bold"
@@ -1072,14 +1045,12 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
               </div>
             </div>
           </template>
-        </section>
+        </div>
+      </template>
 
-        <!--
-          ── 右列：未选视频 → 留存汇总；已选视频 → 单视频详情 ──
-          同左列：min-h-0 把 grid 项的高度收紧到 row；overflow-y-auto
-          让本卡内容超出时自己滚，不传给页面。
-        -->
-        <section
+      <!-- ── #right ── -->
+      <template #right>
+        <div
           class="flex h-full min-h-0 flex-col overflow-hidden"
           :style="{
             background: 'var(--card)',
@@ -1095,180 +1066,177 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             section 自身 overflow-hidden 防止双层滚动条。
           -->
           <template v-if="selectedVideo">
-          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div class="mb-3 flex flex-shrink-0 items-start justify-between gap-2">
-              <div class="min-w-0">
-                <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                  <template v-if="selectedVideo.rank > 0">视频 #{{ selectedVideo.rank }} 详情</template>
-                  <template v-else>视频详情（评论未找到）</template>
+            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <div class="mb-3 flex flex-shrink-0 items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">单视频详情</div>
+                  <div
+                    class="font-display mt-0.5 font-bold"
+                    :title="selectedVideo.title"
+                    :style="{ fontSize: '15px', lineHeight: 1.35 }"
+                  >{{ selectedVideo.title }}</div>
                 </div>
-                <div
-                  class="font-display mt-0.5 font-bold"
-                  :title="selectedVideo.title"
-                  :style="{ fontSize: '15px', lineHeight: 1.35 }"
-                >{{ selectedVideo.title }}</div>
-              </div>
-              <button
-                type="button"
-                class="inline-flex flex-shrink-0 items-center justify-center"
-                :style="{
-                  width: '26px',
-                  height: '26px',
-                  borderRadius: '999px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                  color: 'var(--ink-2)',
-                }"
-                title="关闭详情"
-                @click="closeVideoDetail"
-              >
-                <Icon name="x" :size="13" />
-              </button>
-            </div>
-
-            <!-- 状态 / 排名 KPI -->
-            <div class="mb-4 mt-3 grid grid-cols-3 gap-2 flex-shrink-0">
-              <div
-                :style="{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                }"
-              >
-                <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">评论排名</div>
-                <div
-                  class="font-display mt-0.5 font-bold"
+                <button
+                  type="button"
+                  class="inline-flex flex-shrink-0 items-center justify-center"
                   :style="{
-                    fontSize: '18px',
-                    color: selectedVideo.rank > 0
-                      ? (selectedVideo.status === 'ok' ? 'var(--ink)' : 'var(--red, #d85a48)')
-                      : 'var(--red, #d85a48)',
+                    width: '26px',
+                    height: '26px',
+                    borderRadius: '999px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--ink-2)',
+                  }"
+                  title="关闭详情"
+                  @click="closeVideoDetail"
+                >
+                  <Icon name="x" :size="13" />
+                </button>
+              </div>
+
+              <!-- 状态 / 排名 KPI -->
+              <div class="mb-4 mt-3 grid grid-cols-3 gap-3 flex-shrink-0">
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
                   }"
                 >
-                  <template v-if="selectedVideo.rank > 0">#{{ selectedVideo.rank }}</template>
-                  <span v-else :style="{ fontSize: '14px' }">无</span>
+                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">评论排名</div>
+                  <div
+                    class="font-display mt-0.5 font-bold"
+                    :style="{
+                      fontSize: '18px',
+                      color: selectedVideo.rank > 0
+                        ? (selectedVideo.status === 'ok' ? 'var(--ink)' : 'var(--red, #d85a48)')
+                        : 'var(--red, #d85a48)',
+                    }"
+                  >
+                    <template v-if="selectedVideo.rank > 0">#{{ selectedVideo.rank }}</template>
+                    <span v-else :style="{ fontSize: '14px' }">无</span>
+                  </div>
                 </div>
-              </div>
-              <div
-                :style="{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                }"
-              >
-                <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">状态</div>
-                <div class="mt-1.5">
-                  <Pill v-if="selectedVideo.status === 'ok'" tone="ok">在显</Pill>
-                  <Pill v-else-if="selectedVideo.status === 'folded'" tone="warn">跌出理想</Pill>
-                  <Pill v-else tone="alert">未找到</Pill>
-                </div>
-              </div>
-              <div
-                :style="{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  background: 'var(--card-2)',
-                  border: '1px solid var(--line)',
-                }"
-              >
-                <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">总评论数</div>
                 <div
-                  class="font-display mt-0.5 font-bold"
-                  :style="{ fontSize: '18px' }"
-                >{{ selectedVideo.totalComments }}</div>
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">状态</div>
+                  <div class="mt-1.5">
+                    <Pill v-if="selectedVideo.status === 'ok'" tone="ok">在显</Pill>
+                    <Pill v-else-if="selectedVideo.status === 'folded'" tone="warn">跌出理想</Pill>
+                    <Pill v-else tone="alert">未找到</Pill>
+                  </div>
+                </div>
+                <div
+                  :style="{
+                    padding: '12px',
+                    borderRadius: '12px',
+                    background: 'var(--card-2)',
+                    border: '1px solid var(--line)',
+                  }"
+                >
+                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">总评论数</div>
+                  <div
+                    class="font-display mt-0.5 font-bold"
+                    :style="{ fontSize: '18px' }"
+                  >{{ selectedVideo.totalComments }}</div>
+                </div>
+              </div>
+
+              <!-- 我的评论原文 -->
+              <div class="mb-2 text-[12px] font-semibold flex-shrink-0">我的评论</div>
+              <div
+                class="flex-shrink-0"
+                :style="{
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  background:
+                    selectedVideo.status === 'deleted'
+                      ? 'rgba(216,90,72,0.07)'
+                      : selectedVideo.status === 'folded'
+                        ? 'rgba(245,192,66,0.08)'
+                        : 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                  fontSize: '12.5px',
+                  lineHeight: 1.6,
+                  color: 'var(--ink)',
+                }"
+              >「{{ selectedVideo.myComment }}」</div>
+              <div class="mt-1 flex-shrink-0 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
+                发布于 {{ selectedVideo.postedAt }}
+              </div>
+
+              <!-- 操作按钮 —— 真实数据下额外挂一个"立刻跑"，复用 zhihu 同款 SSE 触发流 -->
+              <div class="mt-5 flex flex-shrink-0 gap-2">
+                <a
+                  :href="selectedVideo.url"
+                  target="_blank"
+                  rel="noopener"
+                  class="inline-flex items-center gap-1.5 px-4 py-2 text-[12.5px]"
+                  :style="{
+                    background: 'transparent',
+                    color: 'var(--ink-2)',
+                    border: '1px solid var(--line)',
+                    borderRadius: '999px',
+                    textDecoration: 'none',
+                  }"
+                >
+                  <Icon name="external" :size="13" />
+                  <span>打开视频</span>
+                </a>
+                <button
+                  v-if="realTaskIdFromVideoId(selectedVideo.id)"
+                  type="button"
+                  class="inline-flex items-center gap-1.5 px-4 py-2 text-[12.5px]"
+                  :style="{
+                    background: 'transparent',
+                    color: runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]
+                      ? 'var(--ink-3)'
+                      : 'var(--primary-deep)',
+                    border: '1px solid ' + (runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]
+                      ? 'var(--line)'
+                      : 'rgba(238,106,42,0.3)'),
+                    borderRadius: '999px',
+                    cursor: runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0] ? 'not-allowed' : 'pointer',
+                  }"
+                  :disabled="!!runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]"
+                  @click="() => { const id = realTaskIdFromVideoId(selectedVideo!.id); if (id) emit('run-now', id); }"
+                >
+                  <Spinner
+                    v-if="runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]"
+                    :size="13"
+                  />
+                  <Icon v-else name="refresh" :size="13" />
+                  <span>{{ detailRunLabel(selectedVideo.id) }}</span>
+                </button>
+                <ProgressBar
+                  v-if="isVideoRunning(selectedVideo.id)"
+                  :value="videoProgressValue(selectedVideo.id)"
+                  :height="4"
+                  tone="primary"
+                  :style="{ alignSelf: 'center', flex: 1, minWidth: '80px' }"
+                />
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1.5 px-4 py-2 text-[12.5px] font-medium"
+                  :style="{
+                    background: 'var(--primary)',
+                    color: '#fff',
+                    borderRadius: '999px',
+                  }"
+                  @click="emit('alert-action', 'repost')"
+                >
+                  <Icon name="refresh" :size="13" />
+                  <span>补发评论</span>
+                </button>
               </div>
             </div>
-
-            <!-- 我的评论原文 -->
-            <div class="mb-2 text-[12px] font-semibold flex-shrink-0">我的评论</div>
-            <div
-              class="flex-shrink-0"
-              :style="{
-                padding: '12px 14px',
-                borderRadius: '10px',
-                background:
-                  selectedVideo.status === 'deleted'
-                    ? 'rgba(216,90,72,0.07)'
-                    : selectedVideo.status === 'folded'
-                      ? 'rgba(245,192,66,0.08)'
-                      : 'var(--card-2)',
-                border: '1px solid var(--line)',
-                fontSize: '12.5px',
-                lineHeight: 1.6,
-                color: 'var(--ink)',
-              }"
-            >「{{ selectedVideo.myComment }}」</div>
-            <div class="mt-1 flex-shrink-0 text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-              发布于 {{ selectedVideo.postedAt }}
-            </div>
-
-            <!-- 操作按钮 —— 真实数据下额外挂一个"立刻跑"，复用 zhihu 同款 SSE 触发流 -->
-            <div class="mt-5 flex flex-shrink-0 gap-2">
-              <a
-                :href="selectedVideo.url"
-                target="_blank"
-                rel="noopener"
-                class="inline-flex items-center gap-1.5 px-4 py-2 text-[12.5px]"
-                :style="{
-                  background: 'transparent',
-                  color: 'var(--ink-2)',
-                  border: '1px solid var(--line)',
-                  borderRadius: '999px',
-                  textDecoration: 'none',
-                }"
-              >
-                <Icon name="external" :size="13" />
-                <span>打开视频</span>
-              </a>
-              <button
-                v-if="realTaskIdFromVideoId(selectedVideo.id)"
-                type="button"
-                class="inline-flex items-center gap-1.5 px-4 py-2 text-[12.5px]"
-                :style="{
-                  background: 'transparent',
-                  color: runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]
-                    ? 'var(--ink-3)'
-                    : 'var(--primary-deep)',
-                  border: '1px solid ' + (runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]
-                    ? 'var(--line)'
-                    : 'rgba(238,106,42,0.3)'),
-                  borderRadius: '999px',
-                  cursor: runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0] ? 'not-allowed' : 'pointer',
-                }"
-                :disabled="!!runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]"
-                @click="() => { const id = realTaskIdFromVideoId(selectedVideo!.id); if (id) emit('run-now', id); }"
-              >
-                <Spinner
-                  v-if="runningTaskIds[realTaskIdFromVideoId(selectedVideo.id) || 0]"
-                  :size="13"
-                />
-                <Icon v-else name="refresh" :size="13" />
-                <span>{{ detailRunLabel(selectedVideo.id) }}</span>
-              </button>
-              <ProgressBar
-                v-if="isVideoRunning(selectedVideo.id)"
-                :value="videoProgressValue(selectedVideo.id)"
-                :height="4"
-                tone="primary"
-                :style="{ alignSelf: 'center', flex: 1, minWidth: '80px' }"
-              />
-              <button
-                type="button"
-                class="inline-flex items-center gap-1.5 px-4 py-2 text-[12.5px] font-medium"
-                :style="{
-                  background: 'var(--primary)',
-                  color: '#fff',
-                  borderRadius: '999px',
-                }"
-                @click="emit('alert-action', 'repost')"
-              >
-                <Icon name="refresh" :size="13" />
-                <span>补发评论</span>
-              </button>
-            </div>
-          </div>
           </template>
 
           <!--
@@ -1283,7 +1251,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
           <template v-else>
             <div class="flex-shrink-0">
               <div class="font-display text-[14px] font-semibold">
-                {{ selectedCommentTaskId ? "任务汇总" : "留存趋势" }}
+                {{ selectedCommentTaskId ? "任务留存汇总" : "全部留存汇总" }}
               </div>
               <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
                 {{ selectedCommentTaskId ? "点左侧视频名查看单条评论详情" : "近 7 天" }}
@@ -1392,15 +1360,10 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
               </div>
             </div>
           </template>
-        </section>
-      </div>
-    </template>
+        </div>
+      </template>
 
-    <!--
-      以前真实数据走的是一段 flat fallback list（只显任务名 + 状态 pill），
-      现在 rich 三栏视图既适配 demo 也适配真实，所以这个 fallback 整段删
-      掉。L3 单视频详情里需要的"立刻跑 / 状态 spinner"已经接到了选中
-      任务，详见 selectedVideo + selectedRealTaskId 流。
-    -->
+    </SplitPane>
+
   </div>
 </template>
