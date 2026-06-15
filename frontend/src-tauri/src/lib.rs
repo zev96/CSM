@@ -12,7 +12,7 @@ use tauri::{Manager, WindowEvent};
 /// 前端收到 `needs_captcha` SSE 时 invoke 本命令。
 #[tauri::command]
 fn request_window_attention(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::window::UserAttentionType;
+    use tauri::UserAttentionType;
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
