@@ -64,7 +64,7 @@ interface TaskItem {
   id: number;
   name: string;
   type: string;
-  config: { search_keywords: string[]; target_brand: string };
+  config: { search_keywords: string[]; target_brand: string; brand_aliases?: string[] };
   last_check_at: string | null;
   last_status: string | null;
   schedule_cron?: string;
@@ -1453,6 +1453,9 @@ defineExpose({ reload: loadTasks, selectTask });
                   <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">目标品牌</div>
                   <div class="font-display mt-1 font-bold" :style="{ fontSize: '16px' }">
                     {{ previewTask.config?.target_brand || '—' }}
+                  </div>
+                  <div v-if="previewTask.config?.brand_aliases?.length" class="mt-1 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+                    别名：{{ previewTask.config.brand_aliases.join('、') }}
                   </div>
                 </div>
                 <!-- 命中关键词数 -->
