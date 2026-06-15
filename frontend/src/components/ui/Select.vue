@@ -35,8 +35,10 @@ const props = withDefaults(
     disabled?: boolean;
     /** sm: 28px height / md: 32px (default) / lg: 36px */
     size?: "sm" | "md" | "lg";
+    /** 下拉最小宽度，默认 120px；窄容器（如评论页左栏工具栏）传更小值防溢出 */
+    minWidth?: string;
   }>(),
-  { size: "md", placeholder: "" },
+  { size: "md", placeholder: "", minWidth: "120px" },
 );
 
 const emit = defineEmits<{
@@ -78,7 +80,7 @@ function onChange(e: Event) {
         fontSize: '12.5px',
         fontFamily: 'inherit',
         cursor: disabled ? 'not-allowed' : 'pointer',
-        minWidth: '120px',
+        minWidth: props.minWidth,
       }"
       @change="onChange"
     >

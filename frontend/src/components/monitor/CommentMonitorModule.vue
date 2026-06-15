@@ -706,6 +706,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             <Select
               :model-value="commentSubtab"
               :options="PLATFORMS.map((p) => ({ value: p.k, label: p.l }))"
+              min-width="76px"
               @update:model-value="(v) => emit('update:commentSubtab', v)"
             />
             <!-- 批量导入（次） + 新建任务（主）—— 对齐知乎 #left header 按钮样式 -->
