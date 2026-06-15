@@ -75,6 +75,8 @@ const enabled = ref(true);
 const batchName = ref("");
 // 百度场景独有：整批共用的目标品牌词（一个 baidu_keyword 任务必带一个 brand）。
 const targetBrand = ref("");
+// 百度品牌别名（批次级，逗号分隔；命中任一别名也算自家）。
+const baiduAliasesText = ref("");
 // 二进制（xlsx / 图片）误传时记下的错误，给 UI 显示一条明确提示。
 const importError = ref<string | null>(null);
 
@@ -338,6 +340,7 @@ function close() {
   importError.value = null;
   batchName.value = "";
   targetBrand.value = "";
+  baiduAliasesText.value = "";
   progress.value = { done: 0, total: 0 };
 }
 
@@ -539,6 +542,7 @@ async function submitAll() {
           target_brand: brand,
           ideal_rank: topN.value,
           headless: true,
+          brand_aliases: baiduAliasesText.value.split(/[，,]/).map((s) => s.trim()).filter(Boolean),
         },
         schedule_cron: scheduleMode.value === "manual" ? "manual" : dailyTime.value,
         enabled: enabled.value,
@@ -693,6 +697,28 @@ async function submitAll() {
               :placeholder="isZhihu
                 ? '如：戴森（批次内所有问题共用此品牌词做排名监测）'
                 : '如：CEWEY（一个品牌词，命中该词的搜索结果会标「自家」）'"
+              class="bg-card-2 focus:bg-card-white outline-none transition-colors"
+              :style="{
+                flex: 1,
+                height: '34px',
+                border: '1px solid var(--line)',
+                borderRadius: '8px',
+                padding: '0 12px',
+                fontSize: '12.5px',
+                color: 'var(--ink)',
+              }"
+            >
+          </div>
+
+          <div v-if="isBaidu" class="flex items-center gap-2">
+            <label
+              class="text-[12px] font-medium"
+              :style="{ color: 'var(--ink-2)', minWidth: '60px' }"
+            >品牌别名</label>
+            <input
+              v-model="baiduAliasesText"
+              type="text"
+              placeholder="逗号分隔；命中任一别名也标「自家」（如：CEWEY，希喂）"
               class="bg-card-2 focus:bg-card-white outline-none transition-colors"
               :style="{
                 flex: 1,

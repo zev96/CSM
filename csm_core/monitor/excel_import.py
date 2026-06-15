@@ -71,6 +71,7 @@ _HEADERS = {
     "keyword": ["关键词", "品牌词", "自发评论", "评论文本", "keyword"],
     "top_n": ["topn", "top_n", "top n", "top-n", "范围"],
     "schedule": ["调度", "schedule", "时间", "定时"],
+    "brand_aliases": ["品牌别名", "别名", "brand_aliases"],
 }
 
 
@@ -218,6 +219,7 @@ def _row_to_task(row: list, header_idx: dict[str, int]) -> MonitorTask:
     keyword_raw = _cell(row, header_idx.get("keyword"))
     top_n_raw = _cell(row, header_idx.get("top_n"))
     schedule_raw = _cell(row, header_idx.get("schedule"))
+    aliases_raw = _cell(row, header_idx.get("brand_aliases"))
 
     type_norm = _normalize_header(type_raw)
     if not type_norm:
@@ -267,7 +269,11 @@ def _row_to_task(row: list, header_idx: dict[str, int]) -> MonitorTask:
             type=ttype,
             name=name,
             target_url=f"https://www.baidu.com/s?wd={_quote(keywords[0])}",
-            config={"search_keywords": keywords, "target_brand": brand},
+            config={
+                "search_keywords": keywords,
+                "target_brand": brand,
+                "brand_aliases": [a.strip() for a in str(aliases_raw or "").split("|") if a.strip()],
+            },
             schedule_cron=schedule,
             enabled=True,
         )
