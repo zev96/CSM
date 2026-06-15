@@ -956,7 +956,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         <!-- DEMO 列头 —— 5 列（与 demo 行同 1.6fr .7fr .7fr .7fr 1fr） -->
         <div
           v-if="demoMode"
-          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+          class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
           :style="{
             gridTemplateColumns: '1.6fr .7fr .7fr .7fr 1fr',
             letterSpacing: '1.2px',
@@ -974,7 +974,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         <!-- L1 批次列头 —— 3 列（与批次行同 1.5fr .9fr 1.1fr） -->
         <div
           v-else-if="openBatchName == null"
-          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+          class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
           :style="{
             gridTemplateColumns: '1.5fr .9fr 1.1fr',
             letterSpacing: '1.2px',
@@ -990,7 +990,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
         <!-- L2 子任务列头 —— 3 列（与子任务行同 1.5fr .9fr 1.1fr） -->
         <div
           v-else
-          class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+          class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
           :style="{
             gridTemplateColumns: '1.5fr .9fr 1.1fr',
             letterSpacing: '1.2px',
@@ -1042,11 +1042,11 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
               <div class="text-center">
                 <Pill v-if="t.delta > 0" tone="ok">
                   <Icon name="arrowUp" :size="10" />
-                  +{{ t.delta }}
+                  {{ t.delta }}
                 </Pill>
                 <Pill v-else-if="t.delta < 0 && t.delta > -10" tone="warn">
                   <Icon name="arrowDown" :size="10" />
-                  {{ t.delta }}
+                  {{ -t.delta }}
                 </Pill>
                 <Pill v-else-if="t.delta === 0" tone="info">持平</Pill>
                 <Pill v-else tone="alert">
@@ -1081,14 +1081,13 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             class="grid cursor-pointer items-center transition"
             :style="{
               gridTemplateColumns: '1.5fr .9fr 1.1fr',
-              background: selectedBatchName === b.name ? 'var(--card-2)' : 'transparent',
               borderBottom: i < batches.length - 1 ? '1px solid var(--line)' : 'none',
               padding: '14px 8px',
               borderRadius: '10px',
             }"
             @click="selectedBatchName = b.name"
-            @mouseenter="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
-            @mouseleave="(e) => { if (selectedBatchName !== b.name) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
+            @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
+            @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
           >
             <!-- Col 1: 批次名（钻入 L2）+ 副标题（问题数 · 品牌） -->
             <div class="min-w-0">
@@ -1099,9 +1098,6 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 title="查看该批次的问题列表"
                 @click.stop="openBatchName = b.name"
               >{{ b.name }}</button>
-              <div class="truncate text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                {{ b.tasks.length }} 个问题 · 品牌 {{ b.tasks[0]?.config?.target_brand || '—' }}
-              </div>
             </div>
             <!-- Col 2: 状态 Pill —— 批次内有任务运行中 → 进行中，否则 → 就绪 -->
             <div class="flex items-center justify-center">
@@ -1130,9 +1126,10 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                   <button
                     type="button"
                     class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: '1px solid transparent', cursor: 'pointer', transition: 'background .12s, border-color .12s' }"
                     title="更多操作"
-                    @click.stop
+                    @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; }"
+                    @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }"
                   >
                     <Icon name="more" :size="14" />
                   </button>
@@ -1170,9 +1167,6 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 class="truncate text-[13px] font-semibold"
                 :style="{ color: selectedTaskId === t.id ? 'var(--primary-deep)' : 'var(--ink)' }"
               >{{ subtaskTitle(t) }}</div>
-              <div class="truncate text-[11px]" :style="{ color: 'var(--ink-3)' }">
-                {{ formatVisitCount(taskSnapshots[t.id]?.latest?.question_visit_count) }} 浏览 · 卡位 {{ taskSnapshots[t.id]?.latest?.matched_count ?? 0 }}
-              </div>
             </div>
             <!--
               Col 2: 变化 Pill —— 命中数 delta（latest vs prev）。
@@ -1185,7 +1179,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 >
                   <Pill tone="ok">
                     <Icon name="arrowUp" :size="10" />
-                    +{{ taskSnapshots[t.id]!.latest!.matched_count - taskSnapshots[t.id]!.prev!.matched_count }}
+                    {{ taskSnapshots[t.id]!.latest!.matched_count - taskSnapshots[t.id]!.prev!.matched_count }}
                   </Pill>
                 </template>
                 <template
@@ -1193,7 +1187,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 >
                   <Pill tone="warn">
                     <Icon name="arrowDown" :size="10" />
-                    {{ taskSnapshots[t.id]!.latest!.matched_count - taskSnapshots[t.id]!.prev!.matched_count }}
+                    {{ -(taskSnapshots[t.id]!.latest!.matched_count - taskSnapshots[t.id]!.prev!.matched_count) }}
                   </Pill>
                 </template>
                 <Pill v-else tone="info">持平</Pill>
@@ -1222,9 +1216,10 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                   <button
                     type="button"
                     class="inline-flex h-7 w-7 items-center justify-center"
-                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: '1px solid transparent', cursor: 'pointer', transition: 'background .12s, border-color .12s' }"
                     title="更多操作"
-                    @click.stop
+                    @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; }"
+                    @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }"
                   >
                     <Icon name="more" :size="14" />
                   </button>
@@ -1501,14 +1496,14 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                       tone="ok"
                     >
                       <Icon name="arrowUp" :size="10" />
-                      +{{ taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count }}
+                      {{ taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count }}
                     </Pill>
                     <Pill
                       v-else-if="taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count < 0"
                       tone="warn"
                     >
                       <Icon name="arrowDown" :size="10" />
-                      {{ taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count }}
+                      {{ -(taskSnapshots[selectedTask.id]!.latest!.matched_count - taskSnapshots[selectedTask.id]!.prev!.matched_count) }}
                     </Pill>
                     <Pill v-else tone="info">持平</Pill>
                   </template>

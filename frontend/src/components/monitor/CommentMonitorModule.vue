@@ -26,6 +26,7 @@ import LineChart from "./history/LineChart.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 import SplitPane from "@/components/ui/SplitPane.vue";
 import Dropdown from "@/components/ui/Dropdown.vue";
+import Select from "@/components/ui/Select.vue";
 
 import ProgressBar from "@/components/ui/ProgressBar.vue";
 import { useMonitorStatus } from "@/stores/monitorStatus";
@@ -694,86 +695,49 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             background: 'var(--card)',
             border: '1px solid var(--line)',
             borderRadius: 'var(--radius-card)',
+            padding: '22px',
           }"
         >
-          <!-- 顶部：平台 tabs + 新增/批量导入 按钮 -->
+          <!-- 顶部：平台下拉 + 新增/批量导入（同一行）—— 对齐知乎 #left header：mb-3 纯间距、无分隔线，内边距统一交给 section 的 22px -->
           <div
-            class="flex flex-shrink-0 items-center justify-between gap-2"
-            :style="{
-              padding: '12px 14px 10px',
-              borderBottom: '1px solid var(--line)',
-            }"
+            class="mb-3 flex flex-shrink-0 items-center justify-between gap-3"
           >
-            <!-- 平台 pill tabs -->
-            <div
-              class="flex items-center"
-              :style="{
-                background: 'var(--card-2)',
-                borderRadius: '999px',
-                padding: '3px',
-                border: '1px solid var(--line)',
-              }"
-            >
-              <button
-                v-for="p in PLATFORMS"
-                :key="p.k"
-                type="button"
-                class="inline-flex items-center"
-                :style="{
-                  height: '26px',
-                  padding: '0 10px',
-                  borderRadius: '999px',
-                  background: commentSubtab === p.k ? 'var(--dark)' : 'transparent',
-                  color: commentSubtab === p.k ? 'var(--card)' : 'var(--ink-3)',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  gap: '6px',
-                  transition: 'background .15s, color .15s',
-                }"
-                @click="emit('update:commentSubtab', p.k)"
-              >
-                <span
-                  :style="{
-                    width: '5px',
-                    height: '5px',
-                    borderRadius: '50%',
-                    background: p.color,
-                    flexShrink: '0',
-                  }"
-                />
-                <span>{{ p.l }}</span>
-              </button>
-            </div>
-            <!-- 新增 + 批量导入 -->
-            <div class="flex flex-shrink-0 gap-1.5">
+            <!-- 平台下拉（与应用标准下拉控件 Select 一致）-->
+            <Select
+              :model-value="commentSubtab"
+              :options="PLATFORMS.map((p) => ({ value: p.k, label: p.l }))"
+              @update:model-value="(v) => emit('update:commentSubtab', v)"
+            />
+            <!-- 批量导入（次） + 新建任务（主）—— 对齐知乎 #left header 按钮样式 -->
+            <div class="flex flex-shrink-0 gap-2">
               <button
                 type="button"
-                class="inline-flex items-center gap-1 px-2.5 py-1 text-[11.5px] font-medium"
+                class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px]"
                 :style="{
-                  background: 'var(--card-2)',
+                  background: 'transparent',
                   color: 'var(--ink-2)',
-                  borderRadius: '999px',
                   border: '1px solid var(--line)',
-                }"
-                title="新增任务"
-                @click="emit('add-task')"
-              >
-                <Icon name="plus" :size="11" />
-                <span>新增</span>
-              </button>
-              <button
-                type="button"
-                class="inline-flex items-center gap-1 px-2.5 py-1 text-[11.5px] font-medium"
-                :style="{
-                  background: 'var(--primary)',
-                  color: '#fff',
                   borderRadius: '999px',
                 }"
                 title="批量导入"
                 @click="emit('import-batch')"
               >
-                <Icon name="folder" :size="11" />
+                <Icon name="folder" :size="12" />
                 <span>批量导入</span>
+              </button>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium"
+                :style="{
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  borderRadius: '999px',
+                }"
+                title="新建任务"
+                @click="emit('add-task')"
+              >
+                <Icon name="plus" :size="12" />
+                <span>新建任务</span>
               </button>
             </div>
           </div>
@@ -817,37 +781,35 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 @click="emit('add-task')"
               >
                 <Icon name="plus" :size="12" />
-                <span>添加监控</span>
+                <span>新建任务</span>
               </button>
             </div>
 
             <!-- 有数据：列头 + 行列表 -->
             <template v-else>
-              <!-- 列头 -->
+              <!-- 列头（横向内边距交给 px-2，与行的 11px 8px 对齐；对齐知乎 #left 列头不设 :style padding 覆盖）-->
               <div
-                class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+                class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
                 :style="{
                   gridTemplateColumns: '1.5fr .9fr 1.1fr',
                   letterSpacing: '1.2px',
                   color: 'var(--ink-3)',
                   borderBottom: '1px solid var(--line)',
-                  padding: '8px 14px',
                 }"
               >
                 <div>任务名字</div><div class="text-center">留存</div><div class="text-right">操作</div>
               </div>
-              <!-- 数据行 -->
-              <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" :style="{ padding: '0 6px' }">
+              <!-- 数据行（无横向内边距，靠 section 22px 提供卡内缩进）-->
+              <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
                 <div
                   v-for="(t, i) in commentRows"
                   :key="t.id"
-                  class="grid cursor-pointer items-center"
+                  class="grid cursor-pointer items-center transition"
                   :style="{
                     gridTemplateColumns: '1.5fr .9fr 1.1fr',
                     borderBottom: i < commentRows.length - 1 ? '1px solid var(--line)' : 'none',
-                    padding: '11px 8px',
-                    borderRadius: '8px',
-                    transition: 'background .12s',
+                    padding: '14px 8px',
+                    borderRadius: '10px',
                   }"
                   @click="openCommentDetail(t.id)"
                   @mouseenter="(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--card-2)')"
@@ -859,9 +821,6 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                       class="truncate text-[13px] font-medium"
                       :style="{ color: 'var(--primary-deep)' }"
                     >{{ t.kw }}</div>
-                    <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                      {{ t.retained }}/{{ t.total }} 留存 · {{ (videosByBatchId[t.id] ?? []).length }} 条视频
-                    </div>
                   </div>
                   <!-- Col 2: 留存 pill -->
                   <div class="flex flex-col items-center gap-1">
@@ -933,20 +892,16 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
 
           <!-- L2：面包屑 + 视频列表 -->
           <template v-else>
-            <!-- 面包屑 -->
+            <!-- 面包屑（对齐知乎 #left L2 返回条：mb-3 纯间距、无分隔线，横向内边距交给 section 22px）-->
             <div
-              class="flex flex-shrink-0 items-center gap-2"
-              :style="{
-                padding: '10px 14px',
-                borderBottom: '1px solid var(--line)',
-              }"
+              class="mb-3 flex flex-shrink-0 items-center gap-3"
             >
               <button
                 type="button"
                 class="inline-flex flex-shrink-0 items-center justify-center"
                 :style="{
-                  width: '26px',
-                  height: '26px',
+                  width: '28px',
+                  height: '28px',
                   borderRadius: '999px',
                   background: 'var(--card-2)',
                   border: '1px solid var(--line)',
@@ -955,7 +910,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 title="返回任务列表"
                 @click="backToCommentList"
               >
-                <Icon name="arrowLeft" :size="12" />
+                <Icon name="arrowLeft" :size="13" />
               </button>
               <div class="min-w-0 flex-1">
                 <div class="truncate text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
@@ -977,30 +932,28 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             </div>
             <!-- 视频列表列头 -->
             <div
-              class="grid flex-shrink-0 items-center text-[11px] uppercase"
+              class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
               :style="{
                 gridTemplateColumns: '1.8fr .6fr .6fr',
                 letterSpacing: '1.2px',
                 color: 'var(--ink-3)',
                 borderBottom: '1px solid var(--line)',
-                padding: '8px 14px',
               }"
             >
               <div>视频名字</div><div class="text-center">排名</div><div class="text-center">状态</div>
             </div>
-            <!-- 视频行 -->
-            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" :style="{ padding: '0 6px' }">
+            <!-- 视频行（无横向内边距，靠 section 22px 提供卡内缩进）-->
+            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <div
                 v-for="(v, i) in selectedTaskVideos"
                 :key="v.id"
-                class="grid cursor-pointer items-center"
+                class="grid cursor-pointer items-center transition"
                 :style="{
                   gridTemplateColumns: '1.8fr .6fr .6fr',
                   borderBottom: i < selectedTaskVideos.length - 1 ? '1px solid var(--line)' : 'none',
-                  padding: '11px 8px',
-                  borderRadius: '8px',
+                  padding: '14px 8px',
+                  borderRadius: '10px',
                   background: selectedVideoId === v.id ? 'var(--card-2)' : 'transparent',
-                  transition: 'background .12s',
                 }"
                 @click="selectVideo(v.id)"
                 @mouseenter="(e) => { if (selectedVideoId !== v.id) (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
@@ -1014,9 +967,6 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                       color: selectedVideoId === v.id ? 'var(--primary-deep)' : 'var(--ink)',
                     }"
                   >{{ truncate15(v.title) }}</div>
-                  <div class="mt-0.5 truncate text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                    {{ v.postedAt }}
-                  </div>
                   <ProgressBar
                     v-if="isVideoRunning(v.id)"
                     :value="videoProgressValue(v.id)"
