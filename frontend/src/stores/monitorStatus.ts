@@ -278,7 +278,14 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
       // task_id=0 是登录窗口场景的复用，不是任务验证码 —— 必须排除。
       if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, "captcha");
       const kw = typeof d.keyword === "string" ? d.keyword : "";
-      void _notify?.("CSM 百度监控", `需要人工解验证码（关键词：${kw}），点击浏览器窗口`);
+      // ① 系统桌面通知
+      void _notify?.("CSM 百度监控", `需要人工解验证码（关键词：${kw}），浏览器已弹出`);
+      // ② app 内醒目提醒（sticky，等用户处理；toast 已在 store init）
+      toast.warn(`需要人工解验证码（${kw}）—— 浏览器已弹到屏幕中央，请去操作`, { ttl: 0 });
+      // ③ 任务栏闪 + 尽力前置 app（best-effort，非 Tauri 环境静默跳过）
+      void import("@tauri-apps/api/core")
+        .then(({ invoke }) => invoke("request_window_attention"))
+        .catch(() => {});
     },
     waiting_chrome_close: (d: any) => {
       if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, "waiting_chrome");

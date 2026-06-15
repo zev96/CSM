@@ -8,6 +8,20 @@ mod updater;
 use sidecar::SidecarState;
 use tauri::{Manager, WindowEvent};
 
+/// 需人工处理（如百度验证码）时让主窗口在任务栏闪烁 + 尽力前置。
+/// 前端收到 `needs_captcha` SSE 时 invoke 本命令。
+#[tauri::command]
+fn request_window_attention(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::window::UserAttentionType;
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    win.request_user_attention(Some(UserAttentionType::Critical))
+        .map_err(|e| e.to_string())?;
+    let _ = win.set_focus(); // best-effort 前置；Windows 抢焦点受限时退化为任务栏闪
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -53,6 +67,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sidecar::get_sidecar,
             updater::install_and_restart,
+            request_window_attention,
         ])
         .on_window_event(|window, event| match event {
             // Intercept the X-button so closing the window minimises to
