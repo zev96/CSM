@@ -22,6 +22,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import ProgressBar from "@/components/ui/ProgressBar.vue";
+import Dropdown from "@/components/ui/Dropdown.vue";
 import AddTaskModal from "@/components/monitor/AddTaskModal.vue";
 import GeoKeywordDetail from "@/components/monitor/geo/GeoKeywordDetail.vue";
 import { useGeoKeywordDetail } from "@/components/monitor/geo/geoDetail";
@@ -390,42 +391,30 @@ onUnmounted(() => {
     <!-- ════════ 左：卡位任务列表（品牌 → 关键词）════════ -->
     <section
       class="flex h-full min-h-0 flex-col overflow-hidden"
-      :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)' }"
+      :style="{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 'var(--radius-card)', padding: '22px' }"
     >
       <!-- ── Level 1：扁平任务表（任务名/变化/状态/操作）；点行钻入 Level 2 ── -->
       <template v-if="drilledTaskId === null">
-      <!-- 头（不滚动）-->
+      <!-- 头（不滚动）—— 对齐知乎 #left header：mb-3 gap-3、标题 min-w-0、主按钮 px-3 py-1.5 -->
       <div
-        class="flex flex-shrink-0 items-center justify-between"
-        :style="{ gap: '12px', padding: '18px 20px 14px' }"
+        class="mb-3 flex flex-shrink-0 items-center justify-between gap-3"
       >
-        <div class="font-display" :style="{ fontSize: '14px', fontWeight: 600 }">监测任务</div>
-        <button
-          type="button"
-          class="inline-flex flex-shrink-0 items-center"
-          :style="{ gap: '5px', padding: '7px 13px', fontSize: '12px', fontWeight: 600, color: '#fff', background: 'var(--primary)', border: 'none', borderRadius: '999px', cursor: 'pointer', fontFamily: 'inherit' }"
-          @click="openAddTask"
-        >
-          <Icon name="plus" :size="12" />
-          <span>新建任务</span>
-        </button>
-      </div>
-
-      <!-- 搜索框（不滚动）-->
-      <div :style="{ padding: '0 16px 12px', flexShrink: 0 }">
-        <div
-          class="flex items-center"
-          :style="{ gap: '8px', padding: '9px 12px', borderRadius: '10px', background: 'var(--card-2)', border: '1px solid var(--line)' }"
-        >
-          <Icon name="search" :size="13" :stroke="1.8" :style="{ color: 'var(--ink-4)', flexShrink: 0 }" />
-          <input
-            v-model="search"
-            type="text"
-            placeholder="搜索品牌 / 关键词"
-            :style="{ flex: 1, minWidth: 0, fontSize: '12px', color: 'var(--ink-2)', background: 'transparent', border: 'none', outline: 'none', fontFamily: 'inherit' }"
-          />
+        <div class="min-w-0">
+          <div class="font-display text-[14px] font-semibold">监测任务</div>
+        </div>
+        <div class="flex flex-shrink-0 gap-2">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium"
+            :style="{ background: 'var(--primary)', color: '#fff', borderRadius: '999px', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }"
+            @click="openAddTask"
+          >
+            <Icon name="plus" :size="12" />
+            <span>新建任务</span>
+          </button>
         </div>
       </div>
+
 
       <!--
         Header row —— 固定在滚动区外（flex-shrink-0），对齐百度排名 L1：
@@ -433,13 +422,12 @@ onUnmounted(() => {
       -->
       <div
         v-if="!demoMode"
-        class="grid flex-shrink-0 items-center text-[11px] uppercase"
+        class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
         :style="{
           gridTemplateColumns: '1.5fr .9fr 1.1fr',
           letterSpacing: '1.2px',
           color: 'var(--ink-3)',
           borderBottom: '1px solid var(--line)',
-          padding: '8px 22px',
         }"
       >
         <div>任务名字</div>
@@ -448,7 +436,7 @@ onUnmounted(() => {
       </div>
 
       <!-- 列表区（可滚动，扁平表行）-->
-      <div class="geo-scroll min-h-0 flex-1 overflow-y-auto" :style="{ padding: '0 12px 12px' }">
+      <div class="geo-scroll min-h-0 flex-1 overflow-y-auto" :style="{ paddingBottom: '12px' }">
         <!-- 空态 -->
         <div
           v-if="demoMode"
@@ -471,7 +459,7 @@ onUnmounted(() => {
           -->
           <div
             class="geo-row grid cursor-pointer items-center"
-            :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', padding: '13px 10px', borderRadius: '10px', background: selectedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
+            :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', padding: '14px 8px', borderRadius: '10px', background: selectedTaskId === node.task.id ? 'var(--card-2)' : 'transparent' }"
             @click="enterTask(node.task)"
           >
             <!-- 任务名字 + N关键词·品牌 -->
@@ -481,9 +469,6 @@ onUnmounted(() => {
                 :style="{ fontSize: '13px', fontWeight: 600, color: selectedTaskId === node.task.id ? 'var(--primary-deep)' : 'var(--ink)' }"
                 :title="node.task.name"
               >{{ node.task.name }}</div>
-              <div class="truncate" :style="{ fontSize: '11px', color: 'var(--ink-3)', marginTop: '1px' }">
-                {{ node.keywords.length }} 个关键词<template v-if="node.brand"> · 品牌 {{ node.brand }}</template>
-              </div>
             </div>
 
             <!-- 状态：运行中显示 N / M + 细进度条；空闲显示药丸 -->
@@ -499,46 +484,37 @@ onUnmounted(() => {
               <Pill v-else :tone="statusTone(node.task)">{{ statusText(node.task) }}</Pill>
             </div>
 
-            <!-- 操作 icons（运行/编辑/删除）—— 照搬百度 L1 行图标样式 -->
-            <div class="flex items-center justify-center" :style="{ gap: '1px' }">
-              <button
-                v-if="isRunning(node.task.id)"
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--red, #d85a48)', background: 'transparent', border: 'none', cursor: 'pointer' }"
-                title="停止监测"
-                @click.stop="cancelTask(node.task.id)"
+            <!-- 操作：⋯ Dropdown（统一对齐知乎/百度/评论页）-->
+            <div class="flex items-center justify-center">
+              <Dropdown
+                :items="[
+                  isRunning(node.task.id)
+                    ? { key: 'stop', label: '停止监测', icon: 'x' }
+                    : { key: 'run', label: '立刻监测', icon: 'play' },
+                  { key: 'edit', label: '编辑任务', icon: 'edit' },
+                  { key: 'delete', label: '删除任务', icon: 'trash', tone: 'danger' },
+                ]"
+                align="right"
+                @select="(key) => {
+                  if (key === 'run') runNow(node.task.id);
+                  else if (key === 'stop') cancelTask(node.task.id);
+                  else if (key === 'edit') openEditTask(node.task);
+                  else if (key === 'delete') deleteTask(node.task.id);
+                }"
               >
-                <Icon name="x" :size="13" />
-              </button>
-              <button
-                v-else
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--primary-deep)', background: 'transparent', border: 'none', cursor: 'pointer' }"
-                title="立刻监测"
-                @click.stop="runNow(node.task.id)"
-              >
-                <Icon name="play" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer' }"
-                title="编辑任务"
-                @click.stop="openEditTask(node.task)"
-              >
-                <Icon name="edit" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-7 w-7 items-center justify-center"
-                :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: 'none', cursor: 'pointer' }"
-                title="删除任务"
-                @click.stop="deleteTask(node.task.id)"
-              >
-                <Icon name="trash" :size="13" />
-              </button>
+                <template #trigger>
+                  <button
+                    type="button"
+                    class="inline-flex h-7 w-7 items-center justify-center"
+                    :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: '1px solid transparent', cursor: 'pointer', transition: 'background .12s, border-color .12s' }"
+                    title="更多操作"
+                    @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; }"
+                    @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }"
+                  >
+                    <Icon name="more" :size="14" />
+                  </button>
+                </template>
+              </Dropdown>
             </div>
           </div>
         </div>
@@ -547,19 +523,18 @@ onUnmounted(() => {
 
       <!-- ── Level 2：钻入某任务后的关键词列表（带返回头）── -->
       <template v-else>
-        <!-- 头（不滚动）：圆形返回 + eyebrow + 任务名 + 关键词数徽章（对齐百度 L2）-->
+        <!-- 头（不滚动）：圆形返回 + eyebrow + 任务名 + 关键词数徽章（对齐知乎 #left L2 返回条）-->
         <div
-          class="flex flex-shrink-0 items-start"
-          :style="{ gap: '12px', padding: '18px 20px 14px' }"
+          class="mb-3 flex flex-shrink-0 items-center gap-3"
         >
           <button
             type="button"
-            class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center"
-            :style="{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'inherit' }"
+            class="inline-flex flex-shrink-0 items-center justify-center"
+            :style="{ width: '28px', height: '28px', background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-2)', cursor: 'pointer', fontFamily: 'inherit' }"
             title="返回任务列表"
             @click="backToTasks()"
           >
-            <Icon name="arrowLeft" :size="14" :stroke="1.8" />
+            <Icon name="arrowLeft" :size="13" />
           </button>
           <div v-if="drilledTask" class="min-w-0 flex-1">
             <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">AI 卡位 · 关键词列表</div>
@@ -577,7 +552,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 关键词列表（可滚动）：点选关键词 → 右栏详情 -->
-        <div class="geo-scroll min-h-0 flex-1 overflow-y-auto" :style="{ padding: '0 12px 12px' }">
+        <div class="geo-scroll min-h-0 flex-1 overflow-y-auto" :style="{ paddingBottom: '12px' }">
           <template v-if="drilledTask && keywordsOf(drilledTask).length">
             <div
               v-for="k in keywordsOf(drilledTask)"

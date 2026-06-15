@@ -1115,7 +1115,7 @@ defineExpose({ reload: loadTasks, selectTask });
             height: '100%',
           }"
         >
-          <!-- Card header: 批量导入 + 新增任务 -->
+          <!-- Card header: 批量导入 + 新建任务 -->
           <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
             <div class="min-w-0">
               <div class="font-display text-[14px] font-semibold">监测任务</div>
@@ -1146,7 +1146,7 @@ defineExpose({ reload: loadTasks, selectTask });
                 @click="emit('add-task')"
               >
                 <Icon name="plus" :size="12" />
-                <span>新增任务</span>
+                <span>新建任务</span>
               </button>
             </div>
           </div>
@@ -1156,7 +1156,7 @@ defineExpose({ reload: loadTasks, selectTask });
             「变化」列已移除（一律显示"—"，无实质信息）。
           -->
           <div
-            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+            class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
             :style="{
               gridTemplateColumns: '1.5fr .9fr 1.1fr',
               letterSpacing: '1.2px',
@@ -1174,7 +1174,7 @@ defineExpose({ reload: loadTasks, selectTask });
             <div v-if="loadingTasks" class="py-10 text-center text-[12px]" :style="{ color: 'var(--ink-3)' }">加载中…</div>
             <div v-else-if="tasks.length === 0" class="flex flex-1 flex-col items-center justify-center gap-1 py-16">
               <div class="text-[13px] font-medium" :style="{ color: 'var(--ink-2)' }">暂无百度排名任务</div>
-              <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">点击右上「+ 新增任务」开始监测</div>
+              <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">点击右上「新建任务」开始监测</div>
             </div>
             <template v-else>
               <!-- L1 任务行：3 列，Col1=名字+副标题，Col2=状态，Col3=⋯菜单 -->
@@ -1184,13 +1184,12 @@ defineExpose({ reload: loadTasks, selectTask });
                 class="grid cursor-pointer items-center transition"
                 :style="{
                   gridTemplateColumns: '1.5fr .9fr 1.1fr',
-                  background: previewId === t.id ? 'var(--card-2)' : 'transparent',
                   borderBottom: i < tasks.length - 1 ? '1px solid var(--line)' : 'none',
                   padding: '14px 8px',
                   borderRadius: '10px',
                 }"
                 @mouseenter="(e) => { previewId = t.id; (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
-                @mouseleave="(e) => { if (previewId !== t.id) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
+                @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
                 @click="previewId = t.id"
               >
                 <!-- Col 1: 任务名（钻入）+ 副标题 -->
@@ -1201,10 +1200,6 @@ defineExpose({ reload: loadTasks, selectTask });
                     :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }"
                     @click.stop="enterDetail(t.id)"
                   >{{ t.name }}</button>
-                  <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-                    {{ t.config.search_keywords?.length ?? 0 }} 个关键词
-                    <template v-if="t.config.target_brand">· 品牌 {{ t.config.target_brand }}</template>
-                  </div>
                 </div>
 
                 <!-- Col 2: 状态（运行中显示进度条） -->
@@ -1247,11 +1242,12 @@ defineExpose({ reload: loadTasks, selectTask });
                       <button
                         type="button"
                         class="inline-flex h-7 w-7 items-center justify-center"
-                        :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                        :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: '1px solid transparent', cursor: 'pointer', transition: 'background .12s, border-color .12s' }"
                         title="更多操作"
-                        @click.stop
+                        @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; }"
+                        @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }"
                       >
-                        <Icon name="more" :size="15" />
+                        <Icon name="more" :size="14" />
                       </button>
                     </template>
                   </Dropdown>
@@ -1274,11 +1270,13 @@ defineExpose({ reload: loadTasks, selectTask });
           }"
         >
           <!-- 面包屑：← 返回 + 任务名 + 关键词数徽章 -->
-          <div class="mb-3 flex-shrink-0 flex items-start gap-3">
+          <div class="mb-3 flex flex-shrink-0 items-center gap-3">
             <button
               type="button"
-              class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center"
+              class="inline-flex flex-shrink-0 items-center justify-center"
               :style="{
+                width: '28px',
+                height: '28px',
                 background: 'var(--card-2)',
                 border: '1px solid var(--line)',
                 borderRadius: '999px',
@@ -1288,7 +1286,7 @@ defineExpose({ reload: loadTasks, selectTask });
               title="返回任务列表"
               @click="backToList()"
             >
-              <Icon name="arrowLeft" :size="14" />
+              <Icon name="arrowLeft" :size="13" />
             </button>
             <div class="min-w-0 flex-1">
               <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">百度排名 · 关键词列表</div>
@@ -1350,7 +1348,7 @@ defineExpose({ reload: loadTasks, selectTask });
             数字列（默认卡位/资讯卡位）移入关键词 Col1 副标题；只读，无操作菜单。
           -->
           <div
-            class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase"
+            class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase"
             :style="{
               gridTemplateColumns: '1.6fr 1fr',
               letterSpacing: '1.2px',
@@ -1383,12 +1381,6 @@ defineExpose({ reload: loadTasks, selectTask });
               <!-- Col 1: 关键词 + 副标题（默认卡位 · 首位） -->
               <div class="min-w-0">
                 <div class="truncate text-[12.5px] font-medium" :style="{ color: 'var(--ink)' }">{{ row.keyword }}</div>
-                <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-                  <template v-if="row.result">
-                    默认卡位 {{ row.result.default_matched_count }} · 首位 {{ row.result.default_first_rank > 0 ? '#' + row.result.default_first_rank : '—' }}
-                  </template>
-                  <template v-else>未跑</template>
-                </div>
               </div>
 
               <!-- Col 2: 状态 Pill（理想 / 未理想 / 未跑 / 抓取失败） -->
@@ -1433,7 +1425,7 @@ defineExpose({ reload: loadTasks, selectTask });
             :style="{ color: 'var(--ink-3)' }"
           >
             <div class="text-[14px] font-medium mb-1">暂无任务</div>
-            <div class="text-[11.5px]">点击左上「+ 新增任务」开始监测</div>
+            <div class="text-[11.5px]">点击左上「新建任务」开始监测</div>
           </div>
 
           <!-- 有任务：KPI 汇总 -->
@@ -1680,11 +1672,11 @@ defineExpose({ reload: loadTasks, selectTask });
                 抓取失败：{{ currentKeyword.fetch_error.slice(0, 120) }}
               </div>
 
-              <!-- 默认搜索排名 + 最新资讯排名 并排 (D2) -->
+              <!-- 默认搜索排名 + 最新资讯排名 上下排列（窄栏避免横向溢出 → 侧拉条）-->
               <div
                 :style="{
                   display: 'grid',
-                  gridTemplateColumns: currentKeyword.news_present ? '1fr 1fr' : '1fr',
+                  gridTemplateColumns: '1fr',
                   gap: '12px',
                   alignItems: 'start',
                 }"

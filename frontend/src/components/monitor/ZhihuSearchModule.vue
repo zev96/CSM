@@ -260,13 +260,17 @@ watch(keywordResults, (kws) => {
           <!-- ── L1 左：监测任务列表 ── -->
           <template v-if="selectedId === null">
             <div class="mb-3 flex flex-shrink-0 items-center justify-between gap-3">
-              <div class="font-display text-[14px] font-semibold">监测任务</div>
-              <button type="button" class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium" :style="{ background: 'var(--primary)', color: '#fff', borderRadius: '999px' }" @click="openAdd">
-                <Icon name="plus" :size="12" /><span>新增任务</span>
-              </button>
+              <div class="min-w-0">
+                <div class="font-display text-[14px] font-semibold">监测任务</div>
+              </div>
+              <div class="flex flex-shrink-0 gap-2">
+                <button type="button" class="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium" :style="{ background: 'var(--primary)', color: '#fff', borderRadius: '999px' }" @click="openAdd">
+                  <Icon name="plus" :size="12" /><span>新建任务</span>
+                </button>
+              </div>
             </div>
             <!-- L1 列头：3 列 -->
-            <div class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
+            <div class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
               <div>任务名字</div><div class="text-center">状态</div><div class="text-center">操作</div>
             </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -275,21 +279,18 @@ watch(keywordResults, (kws) => {
               </div>
               <div v-else-if="!tasks.length" class="flex flex-1 flex-col items-center justify-center gap-1 py-16">
                 <div class="text-[13px] font-medium" :style="{ color: 'var(--ink-2)' }">暂无知乎搜索任务</div>
-                <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">点击右上「新增任务」开始监测</div>
+                <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">点击右上「新建任务」开始监测</div>
               </div>
               <template v-else>
                 <!-- L1 任务行：3 列，Col1=名字+副标题，Col2=状态，Col3=⋯菜单 -->
                 <div v-for="(t, i) in tasks" :key="t.id" class="grid cursor-pointer items-center transition"
-                  :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', background: previewId === t.id ? 'var(--card-2)' : 'transparent', borderBottom: i < tasks.length - 1 ? '1px solid var(--line)' : 'none', padding: '14px 8px', borderRadius: '10px' }"
+                  :style="{ gridTemplateColumns: '1.5fr .9fr 1.1fr', borderBottom: i < tasks.length - 1 ? '1px solid var(--line)' : 'none', padding: '14px 8px', borderRadius: '10px' }"
                   @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; }"
-                  @mouseleave="(e) => { if (previewId !== t.id) (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
+                  @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }"
                   @click="previewId = t.id">
                   <!-- Col 1: 任务名（钻入）+ 副标题 -->
                   <div class="min-w-0">
                     <button type="button" class="truncate text-[13px] font-medium text-left w-full" :style="{ color: 'var(--primary-deep)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }" @click.stop="enterDetail(t.id)">{{ t.name }}</button>
-                    <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-                      {{ t.config?.search_keywords?.length ?? 0 }} 个关键词 · 品牌 {{ t.config?.target_brand || '—' }}
-                    </div>
                   </div>
                   <!-- Col 2: 状态 Pill（运行中显示进度条） -->
                   <div class="flex flex-col items-center gap-1">
@@ -323,11 +324,12 @@ watch(keywordResults, (kws) => {
                         <button
                           type="button"
                           class="inline-flex h-7 w-7 items-center justify-center"
-                          :style="{ borderRadius: '999px', color: 'var(--ink-3)', cursor: 'pointer' }"
+                          :style="{ borderRadius: '999px', color: 'var(--ink-3)', background: 'transparent', border: '1px solid transparent', cursor: 'pointer', transition: 'background .12s, border-color .12s' }"
                           title="更多操作"
-                          @click.stop
+                          @mouseenter="(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--card-2)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--line)'; }"
+                          @mouseleave="(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; }"
                         >
-                          <Icon name="more" :size="15" />
+                          <Icon name="more" :size="14" />
                         </button>
                       </template>
                     </Dropdown>
@@ -340,8 +342,8 @@ watch(keywordResults, (kws) => {
           <!-- ── L2 左：面包屑 + 3 状态条 + 关键词列表 ── -->
           <template v-else>
             <!-- 面包屑 -->
-            <div class="mb-3 flex-shrink-0 flex items-start gap-3">
-              <button type="button" class="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center" :style="{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-2)', cursor: 'pointer' }" title="返回任务列表" @click="backToList()"><Icon name="arrowLeft" :size="14" /></button>
+            <div class="mb-3 flex flex-shrink-0 items-center gap-3">
+              <button type="button" class="inline-flex flex-shrink-0 items-center justify-center" :style="{ width: '28px', height: '28px', background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: '999px', color: 'var(--ink-2)', cursor: 'pointer' }" title="返回任务列表" @click="backToList()"><Icon name="arrowLeft" :size="13" /></button>
               <div class="min-w-0 flex-1">
                 <div class="text-[11px]" :style="{ color: 'var(--ink-3)' }">知乎搜索 · 关键词列表</div>
                 <div class="font-display text-[14px] font-semibold mt-0.5">{{ selectedTask?.name ?? '' }}</div>
@@ -354,7 +356,7 @@ watch(keywordResults, (kws) => {
             <div v-if="fulltextNoCookie" class="mb-2 flex-shrink-0 flex items-center gap-2 text-[12px]" :style="{ color: 'var(--ink-2)' }"><Pill tone="warn">全文匹配未生效</Pill>已开启全文匹配但未配置知乎 Cookie，请到 Cookie 管理添加。</div>
 
             <!-- L2 列头：2 列 -->
-            <div class="grid flex-shrink-0 items-center py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.6fr 1fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
+            <div class="grid flex-shrink-0 items-center px-2 py-2 text-[11px] uppercase" :style="{ gridTemplateColumns: '1.6fr 1fr', letterSpacing: '1.2px', color: 'var(--ink-3)', borderBottom: '1px solid var(--line)' }">
               <div>关键词</div><div class="text-center">状态</div>
             </div>
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -368,9 +370,6 @@ watch(keywordResults, (kws) => {
                 <!-- Col 1: 关键词 + 副标题（卡位 · 首位） -->
                 <div class="min-w-0">
                   <div class="truncate text-[12.5px] font-medium" :style="{ color: 'var(--ink)' }">{{ kw.keyword }}</div>
-                  <div class="truncate text-[11px] mt-0.5" :style="{ color: 'var(--ink-3)' }">
-                    卡位 {{ kw.matched_count }} · 首位 {{ kw.first_rank > 0 ? '#' + kw.first_rank : '—' }}
-                  </div>
                 </div>
                 <!-- Col 2: 状态 Pill -->
                 <div class="text-center">
@@ -392,7 +391,7 @@ watch(keywordResults, (kws) => {
           <template v-if="selectedId === null">
             <div v-if="!previewTask" class="flex flex-1 flex-col items-center justify-center text-center" :style="{ color: 'var(--ink-3)' }">
               <div class="text-[14px] font-medium mb-1">暂无任务</div>
-              <div class="text-[11.5px]">点击左上「新增任务」开始监测</div>
+              <div class="text-[11.5px]">点击左上「新建任务」开始监测</div>
             </div>
             <template v-else>
               <!-- 标题 -->

@@ -28,7 +28,7 @@ const gridStyle = computed(() => ({
 
 <template>
   <div :style="gridStyle">
-    <div class="min-h-0"><slot name="left" /></div>
-    <div class="min-h-0"><slot name="right" /></div>
+    <div class="min-h-0 min-w-0"><slot name="left" /></div>
+    <div class="min-h-0 min-w-0"><slot name="right" /></div>
   </div>
 </template>
