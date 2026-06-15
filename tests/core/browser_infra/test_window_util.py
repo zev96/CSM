@@ -30,6 +30,7 @@ class _FakeCtx:
 class _FakePage:
     def __init__(self, cdp): self.context = _FakeCtx(cdp); self._front = 0
     def bring_to_front(self): self._front += 1
+    def evaluate(self, script): return {"w": 1920, "h": 1080}
 
 
 def test_surface_window_moves_onscreen():
@@ -39,7 +40,9 @@ def test_surface_window_moves_onscreen():
     assert "Browser.getWindowForTarget" in methods
     setb = next(p for m, p in cdp.sent if m == "Browser.setWindowBounds")
     assert setb["windowId"] == 7
-    assert setb["bounds"]["left"] >= 0 and setb["bounds"]["top"] >= 0
+    # _FakePage 报 1920×1080；1100×800 窗 → 居中 (410, 140)
+    assert setb["bounds"]["left"] == (1920 - 1100) // 2
+    assert setb["bounds"]["top"] == (1080 - 800) // 2
     assert page._front == 1
 
 
@@ -54,3 +57,16 @@ def test_surface_window_swallows_cdp_error():
     class Boom:
         context = type("C", (), {"new_cdp_session": lambda self, p: (_ for _ in ()).throw(RuntimeError("no cdp"))})()
     window_util.surface_window(Boom())  # must not raise
+
+
+def test_center_bounds_centers_window():
+    left, top = window_util._center_bounds(1920, 1080, 1100, 800)
+    assert left == (1920 - 1100) // 2  # 410
+    assert top == (1080 - 800) // 2    # 140
+
+
+def test_center_bounds_clamps_when_window_larger_than_screen():
+    # 窗口比屏幕大 → 不出现负坐标
+    left, top = window_util._center_bounds(800, 600, 1100, 800)
+    assert left == 0
+    assert top == 0
