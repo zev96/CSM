@@ -928,6 +928,9 @@ class BaiduKeywordAdapter:
         keywords_raw = cfg.get("search_keywords") or []
         keywords = [k.strip() for k in keywords_raw if k and k.strip()]
         brand = (cfg.get("target_brand") or "").strip()
+        # 品牌别名：同品牌多叫法（如 CEWEY / 希喂），任一命中即自家。
+        # match_brand 已支持多词 OR；喂 [brand, *aliases]。缺省=空=退化单 brand。
+        aliases = [a.strip() for a in (cfg.get("brand_aliases") or []) if a and a.strip()]
 
         if not keywords or not brand:
             return MonitorResult(
@@ -1235,12 +1238,12 @@ class BaiduKeywordAdapter:
                 # 抓默认搜索 + 最新资讯两组（pass single brand as list）。
                 # exclude_set 过滤 B2B/电商/品牌门户 —— 详见 _check_block。
                 default_results = self._check_block(
-                    page, parsed["default_links"], [brand], block="default",
+                    page, parsed["default_links"], [brand, *aliases], block="default",
                     exclude_set=exclude_set,
                     session=session,
                 )
                 news_results = self._check_block(
-                    page, parsed["news_links"], [brand], block="news",
+                    page, parsed["news_links"], [brand, *aliases], block="news",
                     exclude_set=exclude_set,
                     session=session,
                 )
@@ -1273,6 +1276,7 @@ class BaiduKeywordAdapter:
 
         metric: dict[str, Any] = {
             "target_brand": brand,
+            "brand_aliases": aliases,
             "search_keywords": all_keywords,
             "engine": "patchright",
             "headless": headless,
