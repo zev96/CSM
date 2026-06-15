@@ -82,6 +82,7 @@ const myCommentText = ref("");
 const topN = ref(5);
 // Baidu-specific
 const searchKeywordsRaw = ref(""); // newline-separated string; split to list on submit
+const baiduAliasesText = ref(""); // 品牌别名，逗号分隔；提交时 split 成 list（任一命中算自家）
 const baiduHeadless = ref(true);
 const baiduIdealRank = ref<number>(5);
 // 排除域名：换行/逗号分隔，提交时拆成 list。默认空表示「只走全局
@@ -159,6 +160,7 @@ function close() {
   myCommentText.value = "";
   topN.value = type.value === "zhihu_question" ? 10 : 5;
   searchKeywordsRaw.value = "";
+  baiduAliasesText.value = "";
   targetBrand.value = "";
   baiduHeadless.value = true;
   baiduIdealRank.value = 5;
@@ -211,6 +213,7 @@ function hydrateFromTask(t: EditingTask) {
   const exDomains: string[] = Array.isArray(cfg.exclude_domains) ? cfg.exclude_domains : [];
   baiduExcludeDomainsRaw.value = exDomains.join("\n");
   baiduUseDefaultExcludes.value = cfg.use_default_excludes !== false;
+  baiduAliasesText.value = (Array.isArray(cfg.brand_aliases) ? cfg.brand_aliases : []).join("，");
   // GEO-specific hydration
   geoBrand.value = String(cfg.brand ?? "");
   const aliases: string[] = Array.isArray(cfg.brand_aliases) ? cfg.brand_aliases : [];
@@ -391,6 +394,7 @@ async function submit() {
         ideal_rank: baiduIdealRank.value,
         exclude_domains: excludeDomains,
         use_default_excludes: baiduUseDefaultExcludes.value,
+        brand_aliases: baiduAliasesText.value.split(/[，,]/).map((s) => s.trim()).filter(Boolean),
       };
       // target_url 由第一个 search_keyword 派生 —— 后端要求非空。
       // 追加唯一参数避免同首词任务撞 UNIQUE 键被 create_task 覆盖；编辑沿用原键。
@@ -532,6 +536,14 @@ async function submit() {
               <FormInput
                 v-model="targetBrand"
                 placeholder="如：Claude Code"
+                debounce="live"
+              />
+            </FormField>
+
+            <FormField label="品牌别名" hint="逗号分隔；命中任一别名的结果也算「自家」（如：CEWEY，希喂）">
+              <FormInput
+                v-model="baiduAliasesText"
+                placeholder="如：CEWEY，希喂"
                 debounce="live"
               />
             </FormField>
