@@ -35,13 +35,26 @@ def _window_id(page: Any) -> tuple[Any, int]:
     return cdp, wid
 
 
+def _center_bounds(screen_w: int, screen_h: int, win_w: int, win_h: int) -> tuple[int, int]:
+    """屏幕居中的窗口左上角坐标；窗口比屏大时 clamp 到 0，不出负坐标。"""
+    left = max(0, (screen_w - win_w) // 2)
+    top = max(0, (screen_h - win_h) // 2)
+    return left, top
+
+
 def surface_window(page: Any) -> None:
-    """把窗口移回可见区 + 置前（验证码/登录人工处理用）。CDP 失败不崩。"""
+    """把窗口移回屏幕中央 + 置前（验证码/登录人工处理用）。CDP 失败不崩。"""
+    win_w, win_h = 1100, 800
+    try:
+        screen = page.evaluate("({w: screen.availWidth, h: screen.availHeight})")
+        left, top = _center_bounds(int(screen["w"]), int(screen["h"]), win_w, win_h)
+    except Exception:
+        left, top = 80, 80  # 取屏幕尺寸失败 → 退回固定左上角
     try:
         cdp, wid = _window_id(page)
         cdp.send("Browser.setWindowBounds", {
             "windowId": wid,
-            "bounds": {"left": 80, "top": 80, "width": 1100, "height": 800, "windowState": "normal"},
+            "bounds": {"left": left, "top": top, "width": win_w, "height": win_h, "windowState": "normal"},
         })
     except Exception:
         logger.warning("surface_window 失败（CDP 不可用）；窗口可能仍在屏外", exc_info=True)
