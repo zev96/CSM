@@ -706,7 +706,9 @@ class BaiduKeywordAdapter:
 
     def __init__(self) -> None:
         # 真实字段在 apply_settings 里被覆盖。
-        self._headless_default = True
+        # 百度恒有头（见 _run 里 effective_headless）—— 这个默认值现已不参与决策，
+        # 留作语义标记。
+        self._headless_default = False
         self._captcha_timeout_s = 90
         # 默认排除域名（B2B / 电商）。apply_settings 会用 config 里的值
         # 覆盖；空 list 表示「不应用全局黑名单」（用户在设置页清空时）。
@@ -978,8 +980,10 @@ class BaiduKeywordAdapter:
         # native 强制 headless=False（baidu_browser_session 内部也会忽略）
         # ─────────────────────────────────────────────────────────
 
-        headless = bool(cfg.get("headless", self._headless_default))
-        effective_headless = False if use_native else headless
+        # 百度恒有头 + 屏外：验证码必须可见可操作（无头无窗口 surface_window 无效）。
+        # 屏外参数 offscreen_args 在有头时自动生效，平时窗口停在 -32000 不打扰；有头
+        # 真窗口反爬指纹也更干净，可能降低验证码触发。native 模式本就强制有头。
+        effective_headless = False
         rate_limit.get_pacer(self.platform).wait()
 
         # Clamp resume_from to valid range so callers don't need to guard.
