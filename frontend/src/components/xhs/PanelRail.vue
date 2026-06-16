@@ -22,7 +22,7 @@ interface PanelDef {
   key: XhsPanel;
   icon: string;
   label: string;
-  /** 占位说明：该面板将在哪个阶段上线（仅 image/ai 仍占位）。 */
+  /** 占位说明：该面板将在哪个阶段上线（仅 ai 仍占位，image 已于 P2 上线）。 */
   stage: string;
 }
 
@@ -39,7 +39,7 @@ const PANELS: PanelDef[] = [
   { key: "ai", icon: "spark", label: "AI", stage: "P3" },
 ];
 
-// activePanel → 面板组件；image / ai 不在表内 → 走占位分支。
+// activePanel → 面板组件；ai 不在表内 → 走占位分支（image 已于 P2 接入）。
 const PANEL_COMPONENTS: Partial<Record<XhsPanel, Component>> = {
   template: TemplatePanel,
   theme: ThemePanel,
@@ -84,7 +84,7 @@ function activeDef(): PanelDef {
       </button>
     </div>
 
-    <!-- 面板内容区：派发到真实面板；image/ai 仍占位 -->
+    <!-- 面板内容区：派发到真实面板；仅 ai 仍占位 -->
     <div class="min-h-0 flex-1 overflow-hidden" :style="{ padding: '14px' }">
       <component :is="activeComponent" v-if="activeComponent" />
       <div

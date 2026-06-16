@@ -88,7 +88,7 @@ def patch_draft(draft_id: str, body: DraftPatch) -> dict[str, Any]:
     if updated is None:
         raise HTTPException(status_code=404, detail=f"draft not found: {draft_id}")
     if body.image_ids is not None and old is not None:
-        removed = [i for i in old["image_ids"] if i not in body.image_ids]
+        removed = sorted(set(old["image_ids"]) - set(body.image_ids))
         if removed:
             xhs_images_service.delete_images(removed)
     return updated
