@@ -258,6 +258,14 @@ describe("useXhs — 图片", () => {
     expect(x.coverIndex).toBe(0);
   });
 
+  it("removeImage：删封面后面的图，封面下标不变", () => {
+    const x = useXhs();
+    x.$patch({ imageIds: ["a", "b", "c"], coverIndex: 0 }); // 封面是 a
+    x.removeImage(2); // 删 c（在封面之后）
+    expect(x.imageIds).toEqual(["a", "b"]);
+    expect(x.coverIndex).toBe(0); // 封面仍指向 a，不受影响
+  });
+
   it("reorderImages：移动后封面跟随原图", () => {
     const x = useXhs();
     x.$patch({ imageIds: ["a", "b", "c"], coverIndex: 0 }); // 封面 a
