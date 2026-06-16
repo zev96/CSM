@@ -109,6 +109,9 @@ const PATHS: Record<string, string> = {
   // Plain document outline — simpler than fileText (no body lines). Used as
   // a sidebar bullet on TemplatesView; reads better at 13px than fileText.
   doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  // Notebook — used for the 小红书 editor nav entry (P0 T7).
+  notebook:
+    '<path d="M4 4a2 2 0 0 1 2-2h12a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2z"/><path d="M9 2v20"/><path d="M13 7h3"/><path d="M13 11h3"/>',
   // Bar chart — three vertical bars rising left-to-right. Used by 首页 数据中心
   // shortcut card (ShortcutColumn) as the visual hook for analytics / 排名监控.
   barChart:

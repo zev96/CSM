@@ -50,6 +50,18 @@ def monitor_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
+def xhs_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Per-test 独立 xhs.db。重置 storage 模块全局（解除 re-init 守卫）。"""
+    from csm_core.xhs import storage as xhs_storage
+    db_file = tmp_path / "xhs.db"
+    monkeypatch.setattr(xhs_storage, "_db_path", None, raising=True)
+    monkeypatch.setattr(xhs_storage, "_initialized", False, raising=True)
+    monkeypatch.setattr(xhs_storage, "_local", threading.local(), raising=True)
+    xhs_storage.init_db(db_file)
+    return db_file
+
+
+@pytest.fixture
 def client(settings_path: Path, vault_cache_reset) -> Iterator[TestClient]:
     """Authenticated TestClient. Token is minted on app startup (lifespan).
 
