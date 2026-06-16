@@ -30,6 +30,8 @@ class DraftCreate(BaseModel):
 
 
 class DraftPatch(BaseModel):
+    # 约定：字段为 None = 「该字段不更新」（保持原值）。P0 不支持把 theme_id
+    # 清回 NULL（主题切换在 P3 才需要）——与 storage.update_draft 的语义一致。
     title: str | None = None
     body: str | None = None
     topics: list[str] | None = None
@@ -53,7 +55,11 @@ def create_draft(body: DraftCreate) -> dict[str, Any]:
         cover_index=body.cover_index,
         theme_id=body.theme_id,
     )
-    return xhs_storage.get_draft(draft_id) or {}
+    created = xhs_storage.get_draft(draft_id)
+    if created is None:
+        # 刚插入就读不回来 = 写入异常；别给前端发「201 + 空 body」害它读 d.id 崩溃
+        raise HTTPException(status_code=500, detail="draft creation failed")
+    return created
 
 
 @router.get("/api/xhs/drafts/{draft_id}")

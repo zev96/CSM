@@ -27,6 +27,7 @@ def test_create_empty_ok(client: TestClient, xhs_db: Path):
 
 
 def test_list(client: TestClient, xhs_db: Path):
+    # xhs_db fixture 每个测试一个全新 tmp 库，所以列表里只有下面新建的两条
     client.post("/api/xhs/drafts", json={"title": "a"})
     client.post("/api/xhs/drafts", json={"title": "b"})
     r = client.get("/api/xhs/drafts")

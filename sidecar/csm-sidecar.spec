@@ -108,9 +108,10 @@ hiddenimports: list[str] = [
     "csm_core.llm.providers.qwen",
     "csm_core.llm.providers.kimi",
     "csm_core.llm.providers.doubao",
-    # Monitor module
+    # XHS module (小红书 图文笔记编辑器)
     "csm_core.xhs",
     "csm_core.xhs.storage",
+    # Monitor module
     "csm_core.monitor",
     "csm_core.monitor.base",
     "csm_core.monitor.scheduler",
