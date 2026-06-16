@@ -185,7 +185,7 @@ describe("useXhs — 排版主题", () => {
     expect(x.activeTheme?.id).toBe(t.id);
   });
 
-  it("themeToolbar 由激活主题映射出 小标题/无序/分割线 三个按钮", () => {
+  it("themeToolbar 由激活主题映射出 小标题/无序/有序/分割线 四个按钮", () => {
     const x = useXhs();
     const t = THEMES[0];
     x.applyTheme(t.id);
@@ -220,6 +220,7 @@ describe("useXhs — 排版主题", () => {
     const t = THEMES.find((th) => th.ordered === "emoji") ?? THEMES[0];
     x.applyTheme(t.id);
     x.setBody("1️⃣ 第一条\n"); // 已有 1 个 emoji 序号
+    // 本测试未注册光标插入器 → insertAtCursor 回退「追加正文末」，故可直接断言 x.body
     x.insertOrdered();          // 应插入第 2 个 → "2️⃣ "
     expect(x.body).toContain("2️⃣ ");
   });
