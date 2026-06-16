@@ -54,26 +54,31 @@ interface XhsState {
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _inserter: ((text: string) => void) | null = null;
 
+/**
+ * @internal 仅供单测 beforeEach 调用：重置模块级可变状态（去抖定时器 +
+ * 正文插入器）。生产代码不应调用 —— 这两个单例的生命周期分别由
+ * scheduleSave/saveNow 和 NoteEditor 的 mount/unmount 管理。
+ */
+export function _resetXhsModuleState(): void {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = null;
+  _inserter = null;
+}
+
 export const useXhs = defineStore("xhs", {
-  state: (): XhsState => {
-    // 新建 store 实例时（含测试里的 setActivePinia + createPinia）顺带重置
-    // 模块级状态，防止跨用例污染。
-    _inserter = null;
-    _saveTimer = null;
-    return {
-      draftId: null,
-      title: "",
-      body: "",
-      topics: [],
-      imageIds: [],
-      coverIndex: 0,
-      themeId: null,
-      activePanel: "template",
-      previewTab: "note",
-      drafts: [],
-      saving: false,
-    };
-  },
+  state: (): XhsState => ({
+    draftId: null,
+    title: "",
+    body: "",
+    topics: [],
+    imageIds: [],
+    coverIndex: 0,
+    themeId: null,
+    activePanel: "template",
+    previewTab: "note",
+    drafts: [],
+    saving: false,
+  }),
   getters: {
     fullText: (s): string => buildFullText(s.title, s.body, s.topics),
     titleCount: (s): number => countChars(s.title),

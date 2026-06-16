@@ -12,10 +12,11 @@ vi.mock("@/stores/sidecar", () => ({
   }),
 }));
 
-import { useXhs } from "@/stores/xhs";
+import { useXhs, _resetXhsModuleState } from "@/stores/xhs";
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  _resetXhsModuleState();
   getMock.mockReset();
   postMock.mockReset();
   patchMock.mockReset();
