@@ -53,4 +53,15 @@ describe("TemplatePanel", () => {
     expect(store.body).not.toBe("已有内容");
     w.unmount();
   });
+
+  it("编辑器非空时取消确认不覆盖", async () => {
+    vi.mocked(confirmDialog).mockResolvedValueOnce(false);
+    const store = useXhs();
+    store.$patch({ body: "已有内容" });
+    const w = mount(TemplatePanel);
+    await w.find(".xhs-tpl-card").trigger("click");
+    await flushPromises();
+    expect(store.body).toBe("已有内容");
+    w.unmount();
+  });
 });
