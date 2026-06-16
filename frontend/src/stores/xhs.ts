@@ -13,6 +13,7 @@ import { defineStore } from "pinia";
 import { useSidecar } from "./sidecar";
 import { useToast } from "@/composables/useToast";
 import { buildFullText, countChars } from "@/utils/xhsText";
+import { findTheme, type XhsTheme } from "@/data/xhs/assets";
 
 export interface XhsDraft {
   id: string;
@@ -89,6 +90,19 @@ export const useXhs = defineStore("xhs", {
     titleOver: (s): boolean => countChars(s.title) > TITLE_SOFT_LIMIT,
     bodyOver: (s): boolean => countChars(s.body) > BODY_SOFT_LIMIT,
     isEmpty: (s): boolean => s.title.trim() === "" && s.body.trim() === "",
+    /** 当前激活的排版主题对象（无则 null）。 */
+    activeTheme: (s): XhsTheme | null => findTheme(s.themeId),
+    /** 工具条快捷符号按钮：激活主题 → 小标题/无序/分割线（无主题时空）。
+     *  用 function 形式以便通过 this 访问 activeTheme（设计稿 §1 P1 工具条）。 */
+    themeToolbar(): { key: string; label: string; symbol: string }[] {
+      const t = this.activeTheme;
+      if (!t) return [];
+      return [
+        { key: "heading", label: "小标题", symbol: t.heading },
+        { key: "bullet", label: "无序", symbol: t.bullet },
+        { key: "divider", label: "分割线", symbol: t.divider },
+      ];
+    },
   },
   actions: {
     async loadDrafts(): Promise<void> {
@@ -123,6 +137,18 @@ export const useXhs = defineStore("xhs", {
       this.imageIds = [];
       this.coverIndex = 0;
       this.themeId = null;
+    },
+    /** 模板载入：整篇覆盖标题/正文/话题（是否弹确认由调用方面板决定）。 */
+    applyTemplate(tpl: { title: string; body: string; topics: string[] }): void {
+      this.title = tpl.title;
+      this.body = tpl.body;
+      this.topics = [...tpl.topics];
+      this.scheduleSave();
+    },
+    /** 应用排版主题：设激活主题 id，工具条随即出现该主题快捷符号。 */
+    applyTheme(themeId: string): void {
+      this.themeId = themeId;
+      this.scheduleSave();
     },
     _payload() {
       return {
