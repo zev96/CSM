@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from . import llm_factory
@@ -55,17 +56,28 @@ def _strip_code_fence(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _loads_or_none(s: str) -> Any:
+    """json.loads，失败返回 None（不抛）。"""
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        return None
+
+
 def _parse_generated(text: str) -> dict[str, Any]:
     """把模型输出解析成 ``{title, body, topics}``。
 
-    解析失败（非 JSON / 非对象）→ 兜底：整段原文塞进 body（设计稿 §4.6）。
-    字段缺失或类型不符 → 该字段取空。
+    依次尝试：① 去围栏后整体解析；② 模型加了前言时，用正则抠出第一个 ``{...}``
+    再解析。都失败 → 兜底：整段原文塞进 body（设计稿 §4.6）。字段缺失或类型
+    不符 → 该字段取空；topics 仅保留非空字符串元素。
     """
     raw = (text or "").strip()
-    try:
-        data = json.loads(_strip_code_fence(raw))
-    except (json.JSONDecodeError, ValueError):
-        data = None
+    data = _loads_or_none(_strip_code_fence(raw))
+    if data is None:
+        # 模型可能在 JSON 前加「好的，这是你的笔记：」之类前言 → 抠出第一个 {...} 再试。
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            data = _loads_or_none(m.group(0))
     if isinstance(data, dict):
         title = data.get("title")
         body = data.get("body")
@@ -73,7 +85,7 @@ def _parse_generated(text: str) -> dict[str, Any]:
         return {
             "title": title if isinstance(title, str) else "",
             "body": body if isinstance(body, str) else "",
-            "topics": [t for t in topics if isinstance(t, str)] if isinstance(topics, list) else [],
+            "topics": [t for t in topics if isinstance(t, str) and t.strip()] if isinstance(topics, list) else [],
         }
     return {"title": "", "body": raw, "topics": []}
 

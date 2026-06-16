@@ -65,6 +65,22 @@ def test_parse_generated_missing_fields_default_empty():
     assert out == {"title": "只有标题", "body": "", "topics": []}
 
 
+def test_parse_generated_filters_empty_topics():
+    out = xhs_ai_service._parse_generated(
+        '{"title": "T", "body": "B", "topics": ["ok", "", "  ", "yes"]}'
+    )
+    assert out["topics"] == ["ok", "yes"]
+
+
+def test_parse_generated_extracts_json_with_preamble():
+    out = xhs_ai_service._parse_generated(
+        '好的，这是你的笔记：\n{"title": "T", "body": "B", "topics": ["x"]}'
+    )
+    assert out["title"] == "T"
+    assert out["body"] == "B"
+    assert out["topics"] == ["x"]
+
+
 # ── generate_note ─────────────────────────────────────────────────────────
 def test_generate_note_returns_parsed_dict(settings_path: Path, fake_client: _RecordingClient):
     config_service.patch({"default_provider": "mock"})
