@@ -70,7 +70,11 @@ export const COPY_GROUPS = (copyRaw as { groups: ItemGroup[] }).groups;
 export const TOPIC_GROUPS = (topicsRaw as { groups: TopicGroup[] }).groups;
 export const DECORATION_GROUPS = (decorationsRaw as { groups: ItemGroup[] }).groups;
 
-/** 模板分类（按出现顺序去重）。 */
+/**
+ * 模板分类（按出现顺序去重）。注意这里是 `string[]`，与其它 `{key,name}[]`
+ * 分组导出形状不同 —— 模板分类没有独立 key，分类名本身即 key 即显示名，
+ * 故 TemplatePanel 用 `c => ({ key: c, name: c })` 适配 CategoryTabs。
+ */
 export const TEMPLATE_CATEGORIES: string[] = [...new Set(TEMPLATES.map((t) => t.category))];
 
 /** 按 id 找主题；id 为 null / 找不到时返回 null。 */
