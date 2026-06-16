@@ -15,7 +15,8 @@ from pydantic import BaseModel, Field
 from csm_core.xhs import storage as xhs_storage
 
 from ..auth import RequireToken
-from ..services import xhs_images_service
+from ..services import xhs_ai_service, xhs_images_service
+from ..services.llm_factory import LLMConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -139,3 +140,56 @@ def get_image(image_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail=f"image not found: {image_id}")
     media_type = _EXT_TO_MEDIA_TYPE.get(path.suffix.lower(), "application/octet-stream")
     return FileResponse(str(path), media_type=media_type)
+
+
+# ── AI 助手（P3）─────────────────────────────────────────────────────────────
+class AiGenerateBody(BaseModel):
+    intent: str = ""
+
+
+class AiPolishBody(BaseModel):
+    text: str = ""
+
+
+def _llm_http_error(e: Exception) -> HTTPException:
+    """LLMConfigError → 503 llm_not_configured；其余 LLM 异常 → 502 llm_error。
+
+    与 mining AI 路由同款映射，前端据 detail.code 区分「去设置」与普通报错。
+    """
+    if isinstance(e, LLMConfigError):
+        return HTTPException(
+            status_code=503,
+            detail={"code": "llm_not_configured", "detail": str(e)},
+        )
+    return HTTPException(
+        status_code=502,
+        detail={"code": "llm_error", "detail": str(e) or e.__class__.__name__},
+    )
+
+
+@router.post("/api/xhs/ai/generate")
+def ai_generate(body: AiGenerateBody) -> dict[str, Any]:
+    """输入主题/关键词 → 返回 {title, body, topics}（前端决定是否覆盖填入）。"""
+    if not body.intent.strip():
+        raise HTTPException(status_code=400, detail="intent required")
+    try:
+        return xhs_ai_service.generate_note(body.intent)
+    except LLMConfigError as e:
+        raise _llm_http_error(e)
+    except Exception as e:  # noqa: BLE001 —— LLM client 可能抛任何异常
+        logger.exception("xhs ai_generate failed")
+        raise _llm_http_error(e)
+
+
+@router.post("/api/xhs/ai/polish")
+def ai_polish(body: AiPolishBody) -> dict[str, Any]:
+    """输入正文 → 返回 {body: 润色后正文}。"""
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="text required")
+    try:
+        return {"body": xhs_ai_service.polish_note(body.text)}
+    except LLMConfigError as e:
+        raise _llm_http_error(e)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("xhs ai_polish failed")
+        raise _llm_http_error(e)
