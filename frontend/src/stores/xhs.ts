@@ -10,6 +10,7 @@
  */
 import { defineStore } from "pinia";
 
+import type { AxiosError } from "axios";
 import { useSidecar } from "./sidecar";
 import { useToast } from "@/composables/useToast";
 import { buildFullText, countChars } from "@/utils/xhsText";
@@ -68,6 +69,27 @@ export function _resetXhsModuleState(): void {
   _saveTimer = null;
   _inserter = null;
   _creating = null;
+}
+
+/**
+ * 503 + code="llm_not_configured" 时抛出。AiPanel 据此弹「去设置」toast，
+ * 而非通用报错。与 mining store 的同名类各自独立（xhs 模块自洽，不耦合 mining）。
+ */
+export class LLMNotConfiguredError extends Error {
+  constructor(message = "请先在设置中配置 AI 服务") {
+    super(message);
+    this.name = "LLMNotConfiguredError";
+  }
+}
+
+/** 把 sidecar AI 路由的 503 llm_not_configured 解包成 LLMNotConfiguredError，其余原样抛。 */
+function _wrapLLMError(err: unknown): never {
+  const ax = err as AxiosError<{ code?: string; detail?: string }>;
+  const resp = ax?.response;
+  if (resp?.status === 503 && resp.data?.code === "llm_not_configured") {
+    throw new LLMNotConfiguredError(resp.data.detail || undefined);
+  }
+  throw err;
 }
 
 export const useXhs = defineStore("xhs", {
@@ -306,6 +328,31 @@ export const useXhs = defineStore("xhs", {
       await sidecar.client.delete(`/api/xhs/drafts/${id}`);
       if (this.draftId === id) this.newDraft();
       await this.loadDrafts();
+    },
+    /** AI 生成整篇：返回 {title, body, topics}（调用方决定是否覆盖填入）。
+     *  503 未配置 LLM → 抛 LLMNotConfiguredError（AiPanel 弹「去设置」）。 */
+    async generateNote(intent: string): Promise<{ title: string; body: string; topics: string[] }> {
+      const sidecar = useSidecar();
+      try {
+        const r = await sidecar.client.post("/api/xhs/ai/generate", { intent });
+        return {
+          title: typeof r.data?.title === "string" ? r.data.title : "",
+          body: typeof r.data?.body === "string" ? r.data.body : "",
+          topics: Array.isArray(r.data?.topics) ? r.data.topics : [],
+        };
+      } catch (e) {
+        _wrapLLMError(e);
+      }
+    },
+    /** AI 润色当前正文：返回润色后文本（不直接写回，调用方决定）。 */
+    async polishBody(): Promise<string> {
+      const sidecar = useSidecar();
+      try {
+        const r = await sidecar.client.post("/api/xhs/ai/polish", { text: this.body });
+        return typeof r.data?.body === "string" ? r.data.body : "";
+      } catch (e) {
+        _wrapLLMError(e);
+      }
     },
   },
 });

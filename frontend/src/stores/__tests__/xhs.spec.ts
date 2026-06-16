@@ -12,7 +12,7 @@ vi.mock("@/stores/sidecar", () => ({
   }),
 }));
 
-import { useXhs, _resetXhsModuleState } from "@/stores/xhs";
+import { useXhs, _resetXhsModuleState, LLMNotConfiguredError } from "@/stores/xhs";
 import { THEMES } from "@/data/xhs/assets";
 import { orderedMarker } from "@/utils/xhsTheme";
 
@@ -299,5 +299,46 @@ describe("useXhs — 图片", () => {
     x.reorderImages(0, 2); // a 移到末尾 → [b, c, a]
     expect(x.imageIds).toEqual(["b", "c", "a"]);
     expect(x.coverIndex).toBe(2); // 封面仍是 a
+  });
+});
+
+describe("useXhs — AI actions", () => {
+  it("generateNote 返回后端 {title, body, topics}", async () => {
+    const x = useXhs();
+    postMock.mockResolvedValueOnce({ data: { title: "T", body: "B", topics: ["a", "b"] } });
+    const out = await x.generateNote("主题");
+    expect(out).toEqual({ title: "T", body: "B", topics: ["a", "b"] });
+    expect(postMock).toHaveBeenCalledWith("/api/xhs/ai/generate", { intent: "主题" });
+  });
+
+  it("generateNote 缺字段时各自取空", async () => {
+    const x = useXhs();
+    postMock.mockResolvedValueOnce({ data: { title: "只有标题" } });
+    const out = await x.generateNote("主题");
+    expect(out).toEqual({ title: "只有标题", body: "", topics: [] });
+  });
+
+  it("503 llm_not_configured → 抛 LLMNotConfiguredError", async () => {
+    const x = useXhs();
+    postMock.mockRejectedValueOnce({
+      response: { status: 503, data: { code: "llm_not_configured", detail: "去配置" } },
+    });
+    await expect(x.generateNote("主题")).rejects.toBeInstanceOf(LLMNotConfiguredError);
+  });
+
+  it("polishBody 把当前正文 POST 给 /polish 并返回 body", async () => {
+    const x = useXhs();
+    x.setBody("朴素正文");
+    postMock.mockResolvedValueOnce({ data: { body: "润色后" } });
+    const out = await x.polishBody();
+    expect(out).toBe("润色后");
+    expect(postMock).toHaveBeenCalledWith("/api/xhs/ai/polish", { text: "朴素正文" });
+  });
+
+  it("polishBody 非 503 错误原样抛出（不包成 LLMNotConfiguredError）", async () => {
+    const x = useXhs();
+    x.setBody("正文");
+    postMock.mockRejectedValueOnce({ response: { status: 502, data: { code: "llm_error" } } });
+    await expect(x.polishBody()).rejects.not.toBeInstanceOf(LLMNotConfiguredError);
   });
 });
