@@ -11,12 +11,9 @@
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
-import uuid
 from pathlib import Path
-from typing import Any
 
 from csm_core.config import default_config_dir
 
@@ -75,6 +72,7 @@ def init_db(db_path: Path) -> None:
         conn = sqlite3.connect(str(_db_path), isolation_level=None)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
             _migrate(conn)
         finally:
             conn.close()
@@ -93,6 +91,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
 def _ensure_initialized() -> None:
     """生产路径：首次取连接时若未初始化，则在默认路径建库。
 
+    双重检查锁定：这里的 ``if not _initialized`` 是无锁快速路径（GIL 保证
+    bool 读原子）。权威判断在 ``init_db`` 内部的 ``with _init_lock`` 段里
+    重做 —— 即便两个线程同时通过这里的检查、同时调 init_db，锁会串行化，
+    第一个建库、第二个命中 idempotent 直接返回，无重复建库、无竞态。
+
+    ⚠ 不要把 ``with _init_lock`` 挪到这里再调 init_db —— _init_lock 是
+    非可重入 threading.Lock，init_db 内部会再次 acquire 同一把锁，造成死锁。
+
     测试通过 fixture 先 ``init_db(tmp)`` 占位，``_initialized`` 已 True，
     这里成为 no-op，于是测试永不会写到真实 ``%LOCALAPPDATA%`` 目录。
     """
@@ -109,5 +115,6 @@ def get_conn() -> sqlite3.Connection:
         conn = sqlite3.connect(str(_db_path), isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
         _local.conn = conn
     return conn
