@@ -5,7 +5,7 @@
  *   ├ 左 PanelRail（素材，P0 占位） │ 中 NoteEditor │ 右 PhonePreview
  * 挂载即拉草稿列表；新建从空白开始（首次有内容时 store 自动建草稿）。
  */
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import Icon from "@/components/ui/Icon.vue";
 import PanelRail from "@/components/xhs/PanelRail.vue";
 import NoteEditor from "@/components/xhs/NoteEditor.vue";
@@ -15,10 +15,22 @@ import { confirmDialog } from "@/composables/useConfirm";
 
 const xhs = useXhs();
 const draftMenuOpen = ref(false);
+const draftWrap = ref<HTMLElement | null>(null);
+
+// 点击下拉之外关闭菜单。toggle 按钮本身在 draftWrap 内，所以「点按钮打开」
+// 的那次 click 冒泡到 document 时 contains() 为真、不会把刚开的菜单自关。
+function onDocClick(e: MouseEvent) {
+  if (!draftMenuOpen.value) return;
+  if (draftWrap.value && !draftWrap.value.contains(e.target as Node)) {
+    draftMenuOpen.value = false;
+  }
+}
 
 onMounted(() => {
   void xhs.loadDrafts();
+  document.addEventListener("click", onDocClick);
 });
+onUnmounted(() => document.removeEventListener("click", onDocClick));
 
 async function openDraft(id: string) {
   draftMenuOpen.value = false;
@@ -54,11 +66,11 @@ function draftLabel(d: { title: string; updated_at: string }): string {
 <template>
   <div class="flex h-full flex-col" :style="{ gap: '14px' }">
     <!-- 顶部条 -->
-    <div class="flex items-center" :style="{ gap: '12px' }">
+    <div class="flex items-center" :style="{ gap: '12px', flexShrink: 0 }">
       <div :style="{ fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }">小红书 · 图文笔记</div>
 
       <!-- 草稿下拉 -->
-      <div class="relative" :style="{ marginLeft: 'auto' }">
+      <div ref="draftWrap" class="relative" :style="{ marginLeft: 'auto' }">
         <button
           type="button"
           class="flex items-center"
@@ -84,16 +96,18 @@ function draftLabel(d: { title: string; updated_at: string }): string {
           <div v-if="!xhs.drafts.length" :style="{ padding: '16px', textAlign: 'center', color: 'var(--ink-2)', fontSize: '13px' }">
             还没有草稿，开始写第一篇吧～
           </div>
-          <button
+          <div
             v-for="d in xhs.drafts"
             :key="d.id"
-            type="button"
+            role="button"
+            tabindex="0"
             class="flex w-full items-center"
             :style="{
               gap: '8px', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', textAlign: 'left',
               background: d.id === xhs.draftId ? 'rgba(var(--ink-rgb),0.06)' : 'transparent',
             }"
             @click="openDraft(d.id)"
+            @keydown.enter.prevent="openDraft(d.id)"
           >
             <span :style="{ flex: 1, fontSize: '13px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
               {{ draftLabel(d) }}
@@ -104,7 +118,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
               title="删除"
               @click="removeDraft(d.id, $event)"
             ><Icon name="trash" :size="14" /></button>
-          </button>
+          </div>
         </div>
       </div>
 
