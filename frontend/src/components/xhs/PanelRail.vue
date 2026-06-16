@@ -14,6 +14,7 @@ import TitlePanel from "./panels/TitlePanel.vue";
 import CopyPanel from "./panels/CopyPanel.vue";
 import TopicPanel from "./panels/TopicPanel.vue";
 import DecorationPanel from "./panels/DecorationPanel.vue";
+import ImagePanel from "./panels/ImagePanel.vue";
 
 const xhs = useXhs();
 
@@ -47,6 +48,7 @@ const PANEL_COMPONENTS: Partial<Record<XhsPanel, Component>> = {
   copy: CopyPanel,
   topic: TopicPanel,
   decoration: DecorationPanel,
+  image: ImagePanel,
 };
 
 const activeComponent = computed<Component | null>(() => PANEL_COMPONENTS[xhs.activePanel] ?? null);
