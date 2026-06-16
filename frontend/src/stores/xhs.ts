@@ -53,16 +53,19 @@ interface XhsState {
 // （一个是 timer handle，一个是 DOM 操作回调，都不需要触发渲染）。
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _inserter: ((text: string) => void) | null = null;
+// 建草稿请求去重：in-flight 的 POST promise，避免并发 saveNow 重复建草稿。
+let _creating: Promise<string | null> | null = null;
 
 /**
  * @internal 仅供单测 beforeEach 调用：重置模块级可变状态（去抖定时器 +
- * 正文插入器）。生产代码不应调用 —— 这两个单例的生命周期分别由
- * scheduleSave/saveNow 和 NoteEditor 的 mount/unmount 管理。
+ * 正文插入器 + 建草稿 in-flight 去重）。生产代码不应调用 —— 这些单例的
+ * 生命周期分别由 scheduleSave/saveNow 和 NoteEditor 的 mount/unmount 管理。
  */
 export function _resetXhsModuleState(): void {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = null;
   _inserter = null;
+  _creating = null;
 }
 
 export const useXhs = defineStore("xhs", {
@@ -131,14 +134,23 @@ export const useXhs = defineStore("xhs", {
         theme_id: this.themeId,
       };
     },
-    /** 首次有内容时建草稿拿 id；空草稿不建（避免堆积）。返回 draftId 或 null。 */
+    /** 首次有内容时建草稿拿 id；空草稿不建（避免堆积）。返回 draftId 或 null。
+     *  用 _creating 去重：并发调用复用同一个 in-flight POST，防止建出孤儿草稿。 */
     async _ensureCreated(): Promise<string | null> {
       if (this.draftId) return this.draftId;
       if (this.isEmpty) return null;
-      const sidecar = useSidecar();
-      const r = await sidecar.client.post("/api/xhs/drafts", this._payload());
-      this.draftId = r.data.id;
-      return this.draftId;
+      if (_creating) return _creating;
+      _creating = (async () => {
+        try {
+          const sidecar = useSidecar();
+          const r = await sidecar.client.post("/api/xhs/drafts", this._payload());
+          this.draftId = r.data.id;
+          return this.draftId;
+        } finally {
+          _creating = null;
+        }
+      })();
+      return _creating;
     },
     scheduleSave(): void {
       if (_saveTimer) clearTimeout(_saveTimer);

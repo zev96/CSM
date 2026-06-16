@@ -71,7 +71,7 @@ describe("useXhs — 自动保存 _ensureCreated", () => {
     await x.saveNow();
     expect(postMock).toHaveBeenCalledTimes(1);
     expect(x.draftId).toBe("d1");
-    expect(patchMock).toHaveBeenCalledTimes(1); // 建完立即 PATCH 一次落盘当前态
+    expect(patchMock).toHaveBeenCalledTimes(1); // saveNow 在 _ensureCreated(POST) 后继续走一次 PATCH
     expect(patchMock).toHaveBeenCalledWith("/api/xhs/drafts/d1", expect.objectContaining({ title: "T" }));
 
     await x.saveNow();
@@ -90,6 +90,20 @@ describe("useXhs — 自动保存 _ensureCreated", () => {
     expect(postMock).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(800);
     expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("并发 saveNow 只建一次草稿（in-flight 去重）", async () => {
+    let resolvePost!: (v: unknown) => void;
+    postMock.mockReturnValue(new Promise((res) => { resolvePost = res; }));
+    patchMock.mockResolvedValue({ data: {} });
+    const x = useXhs();
+    x.$patch({ title: "T" });
+    const p1 = x.saveNow();
+    const p2 = x.saveNow();   // 与 p1 并发：应复用同一个 in-flight POST
+    resolvePost({ data: { id: "d1" } });
+    await Promise.all([p1, p2]);
+    expect(postMock).toHaveBeenCalledTimes(1); // 只建一次
+    expect(x.draftId).toBe("d1");
   });
 });
 

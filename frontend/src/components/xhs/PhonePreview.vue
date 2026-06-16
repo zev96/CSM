@@ -10,7 +10,7 @@ import { useConfig } from "@/stores/config";
 const xhs = useXhs();
 const cfg = useConfig();
 
-const nickname = computed<string>(() => (cfg.data?.user_name as string) || "我的小红书");
+const nickname = computed<string>(() => String(cfg.data?.user_name ?? "") || "我的小红书");
 const avatarLetter = computed<string>(() => (nickname.value || "我").slice(0, 1).toUpperCase());
 
 // 正文按行渲染（white-space: pre-wrap 保留换行与缩进 + emoji）。
