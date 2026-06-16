@@ -53,6 +53,12 @@ const router = createRouter({
       meta: { label: "模板库" },
     },
     {
+      path: "/xhs",
+      name: "xhs",
+      component: () => import("@/views/XhsEditorView.vue"),
+      meta: { label: "小红书" },
+    },
+    {
       // 结构模板编辑/新建独立页 —— 用户要求 ⋯ → 编辑 / 卡片点击都走 router
       // 而不是原先的 inBuilder modal-takeover 模式。`:id = "new"` = 新建。
       path: "/templates/edit/:id",
