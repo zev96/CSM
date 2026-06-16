@@ -14,6 +14,7 @@ vi.mock("@/stores/sidecar", () => ({
 
 import { useXhs, _resetXhsModuleState } from "@/stores/xhs";
 import { THEMES } from "@/data/xhs/assets";
+import { orderedMarker } from "@/utils/xhsTheme";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -189,7 +190,7 @@ describe("useXhs — 排版主题", () => {
     const t = THEMES[0];
     x.applyTheme(t.id);
     const tb = x.themeToolbar;
-    expect(tb.map((b) => b.key)).toEqual(["heading", "bullet", "divider"]);
+    expect(tb.map((b) => b.key)).toEqual(["heading", "bullet", "ordered", "divider"]);
     expect(tb.find((b) => b.key === "heading")?.symbol).toBe(t.heading);
     expect(tb.find((b) => b.key === "bullet")?.symbol).toBe(t.bullet);
     expect(tb.find((b) => b.key === "divider")?.symbol).toBe(t.divider);
@@ -203,6 +204,31 @@ describe("useXhs — 排版主题", () => {
     x.applyTheme(THEMES[0].id);
     await vi.advanceTimersByTimeAsync(800);
     expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("themeToolbar 的「有序」symbol = 该主题样式的第 1 个序号字形", () => {
+    const x = useXhs();
+    const t = THEMES.find((th) => th.ordered === "circle") ?? THEMES[0];
+    x.applyTheme(t.id);
+    const ordered = x.themeToolbar.find((b) => b.key === "ordered");
+    expect(ordered?.label).toBe("有序");
+    expect(ordered?.symbol).toBe(orderedMarker(1, t.ordered));
+  });
+
+  it("insertOrdered 按正文已有序号数插入下一个序号", () => {
+    const x = useXhs();
+    const t = THEMES.find((th) => th.ordered === "emoji") ?? THEMES[0];
+    x.applyTheme(t.id);
+    x.setBody("1️⃣ 第一条\n"); // 已有 1 个 emoji 序号
+    x.insertOrdered();          // 应插入第 2 个 → "2️⃣ "
+    expect(x.body).toContain("2️⃣ ");
+  });
+
+  it("无激活主题时 insertOrdered 不动正文", () => {
+    const x = useXhs();
+    x.setBody("原样");
+    x.insertOrdered();
+    expect(x.body).toBe("原样");
   });
 });
 
