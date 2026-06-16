@@ -59,6 +59,12 @@ def test_reject_oversized(isolated_root: Path):
         images.save_image("d", too_big)
 
 
+def test_save_image_rejects_traversal_draft_id(isolated_root: Path):
+    for bad in ["../escape", "a/b", "a\\b", "..", ""]:
+        with pytest.raises(ValueError, match="invalid draft_id"):
+            images.save_image(bad, PNG_BYTES)
+
+
 def test_get_image_path_rejects_traversal(isolated_root: Path):
     assert images.get_image_path("../../etc/passwd") is None
 

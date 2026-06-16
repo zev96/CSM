@@ -57,9 +57,12 @@ def save_image(draft_id: str, content: bytes) -> str:
     """Validate, write to disk under ``xhs_images/{draft_id}/``, return image_id.
 
     Raises:
+        ValueError("invalid draft_id") on traversal-shaped draft_id.
         ValueError("image too large") when content exceeds 5 MB.
         ValueError("unsupported image type") on magic-bytes mismatch.
     """
+    if not draft_id or "/" in draft_id or "\\" in draft_id or ".." in draft_id:
+        raise ValueError("invalid draft_id")
     if len(content) > _MAX_BYTES:
         raise ValueError("image too large")
     ext = _detect_ext(content)
@@ -102,7 +105,11 @@ def get_image_path(image_id: str) -> Path | None:
 
 
 def delete_images(image_ids: list[str]) -> None:
-    """Best-effort cleanup; missing files are logged but never raise."""
+    """Best-effort cleanup; missing files are logged but never raise.
+
+    不做跨草稿引用计数 —— 每草稿图片独立（每次上传生成新 uuid image_id，
+    草稿间不共享），所以这里直接删是安全的。
+    """
     for image_id in image_ids:
         path = get_image_path(image_id)
         if path is None:
