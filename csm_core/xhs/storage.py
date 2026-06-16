@@ -11,9 +11,12 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
+import uuid
 from pathlib import Path
+from typing import Any
 
 from csm_core.config import default_config_dir
 
@@ -118,3 +121,116 @@ def get_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys=ON")
         _local.conn = conn
     return conn
+
+
+# ── Draft CRUD ──────────────────────────────────────────────────────────────
+def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "body": row["body"],
+        "topics": json.loads(row["topics_json"]) if row["topics_json"] else [],
+        "image_ids": json.loads(row["image_ids_json"]) if row["image_ids_json"] else [],
+        "cover_index": row["cover_index"],
+        "theme_id": row["theme_id"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def create_draft(
+    *,
+    title: str = "",
+    body: str = "",
+    topics: list[str] | None = None,
+    image_ids: list[str] | None = None,
+    cover_index: int = 0,
+    theme_id: str | None = None,
+) -> str:
+    """插入一条草稿，返回新生成的 uuid4 hex id。"""
+    conn = get_conn()
+    draft_id = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO xhs_drafts(id, title, body, topics_json, image_ids_json, cover_index, theme_id)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            draft_id,
+            title,
+            body,
+            json.dumps(list(topics or []), ensure_ascii=False),
+            json.dumps(list(image_ids or []), ensure_ascii=False),
+            cover_index,
+            theme_id,
+        ),
+    )
+    return draft_id
+
+
+def get_draft(draft_id: str) -> dict[str, Any] | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM xhs_drafts WHERE id=?", (draft_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def list_drafts() -> list[dict[str, Any]]:
+    """最近编辑的排最前。"""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM xhs_drafts ORDER BY updated_at DESC, id DESC").fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def update_draft(
+    draft_id: str,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+    topics: list[str] | None = None,
+    image_ids: list[str] | None = None,
+    cover_index: int | None = None,
+    theme_id: str | None = None,
+) -> dict[str, Any] | None:
+    """部分更新。返回更新后的行，或 None（无此 id）。
+
+    约定：``None`` = 该字段「未提供」，保持原值。P0 不需要「把 theme 清回
+    NULL」这种语义（主题切换在 P3），所以 theme_id 也按 ``is not None`` 处理；
+    将来 P3 需要清空时再引入 sentinel。
+    """
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM xhs_drafts WHERE id=?", (draft_id,)).fetchone()
+    if row is None:
+        return None
+    sets: list[str] = []
+    args: list[Any] = []
+    if title is not None:
+        sets.append("title=?")
+        args.append(title)
+    if body is not None:
+        sets.append("body=?")
+        args.append(body)
+    if topics is not None:
+        sets.append("topics_json=?")
+        args.append(json.dumps(list(topics), ensure_ascii=False))
+    if image_ids is not None:
+        sets.append("image_ids_json=?")
+        args.append(json.dumps(list(image_ids), ensure_ascii=False))
+    if cover_index is not None:
+        sets.append("cover_index=?")
+        args.append(cover_index)
+    if theme_id is not None:
+        sets.append("theme_id=?")
+        args.append(theme_id)
+    if not sets:
+        return _row_to_dict(row)
+    sets.append("updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+    args.append(draft_id)
+    conn.execute(f"UPDATE xhs_drafts SET {', '.join(sets)} WHERE id=?", args)
+    new_row = conn.execute("SELECT * FROM xhs_drafts WHERE id=?", (draft_id,)).fetchone()
+    return _row_to_dict(new_row) if new_row else None
+
+
+def delete_draft(draft_id: str) -> bool:
+    conn = get_conn()
+    cur = conn.execute("DELETE FROM xhs_drafts WHERE id=?", (draft_id,))
+    return cur.rowcount > 0
