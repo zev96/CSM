@@ -46,4 +46,14 @@ describe("PhonePreview 封面", () => {
     expect(w.find("img.xhs-cover-img").attributes("src")).toBe("MOCK/api/xhs/images/a");
     w.unmount();
   });
+
+  it("发现页有图时封面也渲染真实 img", () => {
+    const store = useXhs();
+    store.$patch({ imageIds: ["a", "b"], coverIndex: 1, previewTab: "discover" });
+    const w = mount(PhonePreview);
+    const img = w.find("img.xhs-cover-img");
+    expect(img.exists()).toBe(true);
+    expect(img.attributes("src")).toBe("MOCK/api/xhs/images/b");
+    w.unmount();
+  });
 });
