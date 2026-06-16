@@ -219,6 +219,7 @@ hiddenimports: list[str] = [
     "csm_sidecar.services.title_service",
     "csm_sidecar.services.updater_service",
     "csm_sidecar.services.vault_service",
+    "csm_sidecar.services.xhs_images_service",
     # Third-party — SDKs that resolve lazily.
     "anthropic",
     "frontmatter",

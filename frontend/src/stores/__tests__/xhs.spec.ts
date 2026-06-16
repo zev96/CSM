@@ -205,3 +205,72 @@ describe("useXhs — 排版主题", () => {
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("useXhs — 图片", () => {
+  it("isEmpty 也看图片：有图即非空", () => {
+    const x = useXhs();
+    expect(x.isEmpty).toBe(true);
+    x.$patch({ imageIds: ["a"] });
+    expect(x.isEmpty).toBe(false);
+  });
+
+  it("uploadImage：空草稿也强制建 draft，再 POST 图片，把 id 推进 imageIds", async () => {
+    postMock.mockResolvedValueOnce({ data: { id: "d1" } });            // _ensureCreated(force) 建草稿
+    postMock.mockResolvedValueOnce({ data: { image_id: "img1", url: "/api/xhs/images/img1", size: 9 } }); // 上传
+    patchMock.mockResolvedValue({ data: {} });
+    const x = useXhs();
+    const file = new File([new Uint8Array([1, 2, 3])], "a.png", { type: "image/png" });
+    await x.uploadImage(file);
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expect(x.draftId).toBe("d1");
+    expect(postMock.mock.calls[1][0]).toBe("/api/xhs/drafts/d1/images");
+    expect(x.imageIds).toEqual(["img1"]);
+  });
+
+  it("setCover 设封面下标", () => {
+    const x = useXhs();
+    x.$patch({ imageIds: ["a", "b", "c"] });
+    x.setCover(2);
+    expect(x.coverIndex).toBe(2);
+  });
+
+  it("removeImage：删封面前的图，封面下标左移保持指向同一张", () => {
+    const x = useXhs();
+    x.$patch({ imageIds: ["a", "b", "c"], coverIndex: 2 }); // 封面是 c
+    x.removeImage(0); // 删 a
+    expect(x.imageIds).toEqual(["b", "c"]);
+    expect(x.coverIndex).toBe(1); // 仍指向 c
+  });
+
+  it("removeImage：删的就是封面，封面回退且不越界", () => {
+    const x = useXhs();
+    x.$patch({ imageIds: ["a", "b"], coverIndex: 1 });
+    x.removeImage(1); // 删封面 b
+    expect(x.imageIds).toEqual(["a"]);
+    expect(x.coverIndex).toBe(0);
+  });
+
+  it("removeImage：删到空，封面归 0", () => {
+    const x = useXhs();
+    x.$patch({ imageIds: ["a"], coverIndex: 0 });
+    x.removeImage(0);
+    expect(x.imageIds).toEqual([]);
+    expect(x.coverIndex).toBe(0);
+  });
+
+  it("removeImage：删封面后面的图，封面下标不变", () => {
+    const x = useXhs();
+    x.$patch({ imageIds: ["a", "b", "c"], coverIndex: 0 }); // 封面是 a
+    x.removeImage(2); // 删 c（在封面之后）
+    expect(x.imageIds).toEqual(["a", "b"]);
+    expect(x.coverIndex).toBe(0); // 封面仍指向 a，不受影响
+  });
+
+  it("reorderImages：移动后封面跟随原图", () => {
+    const x = useXhs();
+    x.$patch({ imageIds: ["a", "b", "c"], coverIndex: 0 }); // 封面 a
+    x.reorderImages(0, 2); // a 移到末尾 → [b, c, a]
+    expect(x.imageIds).toEqual(["b", "c", "a"]);
+    expect(x.coverIndex).toBe(2); // 封面仍是 a
+  });
+});
