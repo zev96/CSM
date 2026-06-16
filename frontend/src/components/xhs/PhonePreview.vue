@@ -6,9 +6,17 @@
 import { computed } from "vue";
 import { useXhs } from "@/stores/xhs";
 import { useConfig } from "@/stores/config";
+import { useSidecar } from "@/stores/sidecar";
 
 const xhs = useXhs();
 const cfg = useConfig();
+const sidecar = useSidecar();
+
+const coverUrl = computed<string | null>(() => {
+  if (!xhs.imageIds.length) return null;
+  const idx = xhs.coverIndex >= 0 && xhs.coverIndex < xhs.imageIds.length ? xhs.coverIndex : 0;
+  return sidecar.sseURL(`/api/xhs/images/${xhs.imageIds[idx]}`);
+});
 
 const nickname = computed<string>(() => String(cfg.data?.user_name ?? "") || "我的小红书");
 const avatarLetter = computed<string>(() => (nickname.value || "我").slice(0, 1).toUpperCase());
@@ -57,21 +65,23 @@ const tags = computed(() => xhs.topics.filter((t) => t.trim()));
     >
       <!-- ── 笔记页 ── -->
       <div v-if="xhs.previewTab === 'note'" :style="{ paddingBottom: '12px' }">
-        <!-- 封面（P0 占位） -->
+        <!-- 封面：有图显示真实封面，无图占位 -->
+        <img
+          v-if="coverUrl"
+          class="xhs-cover-img"
+          :src="coverUrl"
+          :style="{ width: '100%', aspectRatio: '3 / 4', objectFit: 'cover', display: 'block', borderRadius: '20px 20px 0 0' }"
+        />
         <div
+          v-else
           :style="{
-            width: '100%',
-            aspectRatio: '3 / 4',
+            width: '100%', aspectRatio: '3 / 4',
             background: 'linear-gradient(135deg, #ffe3d3, #ffd0b5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--primary)',
-            fontSize: '13px',
-            borderRadius: '20px 20px 0 0',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--primary)', fontSize: '13px', borderRadius: '20px 20px 0 0',
           }"
         >
-          封面图（P2 上传）
+          暂无封面（左侧「图片」上传）
         </div>
         <div :style="{ padding: '12px 14px' }">
           <!-- 作者条 -->
@@ -121,7 +131,14 @@ const tags = computed(() => xhs.topics.filter((t) => t.trim()));
             border: '1px solid var(--line-2)',
           }"
         >
+          <img
+            v-if="coverUrl"
+            class="xhs-cover-img"
+            :src="coverUrl"
+            :style="{ width: '100%', aspectRatio: '3 / 4', objectFit: 'cover', display: 'block' }"
+          />
           <div
+            v-else
             :style="{
               width: '100%', aspectRatio: '3 / 4',
               background: 'linear-gradient(135deg, #ffe3d3, #ffd0b5)',
