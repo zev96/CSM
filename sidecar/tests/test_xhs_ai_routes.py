@@ -44,10 +44,8 @@ def test_generate_returns_title_body_topics(
     assert body == {"title": "T", "body": "B", "topics": ["x", "y"]}
 
 
-def test_generate_empty_intent_returns_400(
-    client: TestClient, settings_path: Path, fake_client: _RecordingClient,
-):
-    config_service.patch({"default_provider": "mock"})
+def test_generate_empty_intent_returns_400(client: TestClient, settings_path: Path):
+    # 400 在调 service 之前就触发，无需配置 LLM。
     r = client.post("/api/xhs/ai/generate", json={"intent": "   "})
     assert r.status_code == 400
 
@@ -87,10 +85,8 @@ def test_polish_returns_body(
     assert r.json() == {"body": "润色后正文"}
 
 
-def test_polish_empty_text_returns_400(
-    client: TestClient, settings_path: Path, fake_client: _RecordingClient,
-):
-    config_service.patch({"default_provider": "mock"})
+def test_polish_empty_text_returns_400(client: TestClient, settings_path: Path):
+    # 400 在调 service 之前就触发，无需配置 LLM。
     r = client.post("/api/xhs/ai/polish", json={"text": ""})
     assert r.status_code == 400
 
