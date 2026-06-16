@@ -17,6 +17,7 @@ vi.mock("@/stores/sidecar", () => ({
 import ThemePanel from "@/components/xhs/panels/ThemePanel.vue";
 import { useXhs, _resetXhsModuleState } from "@/stores/xhs";
 import { THEMES } from "@/data/xhs/assets";
+import { orderedMarker } from "@/utils/xhsTheme";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -35,6 +36,13 @@ describe("ThemePanel", () => {
     await w.find(".xhs-theme-card").trigger("click");
     expect(store.themeId).toBe(THEMES[0].id);
     expect(store.activeTheme?.id).toBe(THEMES[0].id);
+    w.unmount();
+  });
+
+  it("卡片预览含有序样例（第一个主题样式的序号字形）", () => {
+    const w = mount(ThemePanel);
+    const firstCard = w.findAll(".xhs-theme-card")[0];
+    expect(firstCard.text()).toContain(orderedMarker(1, THEMES[0].ordered));
     w.unmount();
   });
 });

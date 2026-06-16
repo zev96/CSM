@@ -6,6 +6,7 @@
 import Icon from "@/components/ui/Icon.vue";
 import { THEMES } from "@/data/xhs/assets";
 import { useXhs } from "@/stores/xhs";
+import { orderedMarker } from "@/utils/xhsTheme";
 
 const xhs = useXhs();
 </script>
@@ -29,7 +30,8 @@ const xhs = useXhs();
       </div>
       <div :style="{ fontSize: '13px', color: 'var(--ink)', lineHeight: 1.9 }">
         <div>{{ t.heading }} 小标题示例</div>
-        <div>{{ t.bullet }} 列表项一</div>
+        <div>{{ t.bullet }} 无序列表项</div>
+        <div>{{ orderedMarker(1, t.ordered) }} 有序列表项</div>
         <div :style="{ color: 'var(--ink-2)' }">{{ t.divider }}</div>
       </div>
     </button>
