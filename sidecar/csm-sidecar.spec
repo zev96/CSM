@@ -109,6 +109,8 @@ hiddenimports: list[str] = [
     "csm_core.llm.providers.kimi",
     "csm_core.llm.providers.doubao",
     # Monitor module
+    "csm_core.xhs",
+    "csm_core.xhs.storage",
     "csm_core.monitor",
     "csm_core.monitor.base",
     "csm_core.monitor.scheduler",
@@ -197,6 +199,7 @@ hiddenimports: list[str] = [
     "csm_sidecar.routes.templates",
     "csm_sidecar.routes.updater",
     "csm_sidecar.routes.vault",
+    "csm_sidecar.routes.xhs",
     "csm_sidecar.services",
     "csm_sidecar.services.aggregation_service",
     "csm_sidecar.services.batch_service",

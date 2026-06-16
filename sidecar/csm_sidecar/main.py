@@ -29,6 +29,7 @@ from .routes import system as system_routes
 from .routes import templates as templates_routes
 from .routes import updater as updater_routes
 from .routes import vault as vault_routes
+from .routes import xhs as xhs_routes
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ app.include_router(dedup_routes.router)
 app.include_router(updater_routes.router)
 app.include_router(aggregation_routes.router)
 app.include_router(assembler_routes.router)
+app.include_router(xhs_routes.router)
 
 
 def run() -> None:
