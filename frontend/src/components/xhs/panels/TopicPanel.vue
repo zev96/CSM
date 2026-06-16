@@ -36,3 +36,12 @@ function added(tag: string): boolean {
     </div>
   </div>
 </template>
+
+<style scoped>
+.xhs-tag {
+  transition: filter 0.15s;
+}
+.xhs-tag:hover {
+  filter: brightness(0.97);
+}
+</style>

@@ -31,3 +31,12 @@ const items = computed(() => DECORATION_GROUPS.find((g) => g.key === grp.value)?
     </div>
   </div>
 </template>
+
+<style scoped>
+.xhs-deco {
+  transition: filter 0.15s;
+}
+.xhs-deco:hover {
+  filter: brightness(0.97);
+}
+</style>

@@ -80,6 +80,12 @@ const emojis = computed(() => {
 </template>
 
 <style scoped>
+.xhs-code {
+  transition: filter 0.15s;
+}
+.xhs-code:hover {
+  filter: brightness(0.97);
+}
 .xhs-emoji {
   font-size: 20px;
   line-height: 1;
