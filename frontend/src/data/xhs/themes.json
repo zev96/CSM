@@ -1,0 +1,5 @@
+[
+  { "id": "warm_yellow", "name": "温暖黄", "heading": "💛", "bullet": "🔸", "ordered": "emoji", "divider": "✨━━━━━━━━✨" },
+  { "id": "sky_blue", "name": "天空蓝", "heading": "💙", "bullet": "🔹", "ordered": "circle", "divider": "·｡✦ ──────── ✦｡·" },
+  { "id": "energy_orange", "name": "元气橙", "heading": "🧡", "bullet": "🔶", "ordered": "emoji", "divider": "🍊─────────🍊" }
+]

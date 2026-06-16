@@ -13,6 +13,7 @@ vi.mock("@/stores/sidecar", () => ({
 }));
 
 import { useXhs, _resetXhsModuleState } from "@/stores/xhs";
+import { THEMES } from "@/data/xhs/assets";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -149,5 +150,58 @@ describe("useXhs — 复制", () => {
     await x.copy("full");
     expect(writeText).toHaveBeenCalledWith("T\n\nB\n\n#a");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("useXhs — 模板载入", () => {
+  it("applyTemplate 覆盖标题/正文/话题并去抖保存", async () => {
+    postMock.mockResolvedValue({ data: { id: "d1" } });
+    patchMock.mockResolvedValue({ data: {} });
+    const x = useXhs();
+    x.$patch({ title: "旧", body: "旧正文", topics: ["旧"] });
+    x.applyTemplate({ title: "新标题", body: "新正文\n第二行", topics: ["a", "b"] });
+    expect(x.title).toBe("新标题");
+    expect(x.body).toBe("新正文\n第二行");
+    expect(x.topics).toEqual(["a", "b"]);
+    // 触发了去抖保存：800ms 后建草稿
+    await vi.advanceTimersByTimeAsync(800);
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useXhs — 排版主题", () => {
+  it("默认无激活主题，activeTheme=null、themeToolbar 为空", () => {
+    const x = useXhs();
+    expect(x.activeTheme).toBeNull();
+    expect(x.themeToolbar).toEqual([]);
+  });
+
+  it("applyTheme 设激活主题，activeTheme 解析出主题对象", () => {
+    const x = useXhs();
+    const t = THEMES[0];
+    x.applyTheme(t.id);
+    expect(x.themeId).toBe(t.id);
+    expect(x.activeTheme?.id).toBe(t.id);
+  });
+
+  it("themeToolbar 由激活主题映射出 小标题/无序/分割线 三个按钮", () => {
+    const x = useXhs();
+    const t = THEMES[0];
+    x.applyTheme(t.id);
+    const tb = x.themeToolbar;
+    expect(tb.map((b) => b.key)).toEqual(["heading", "bullet", "divider"]);
+    expect(tb.find((b) => b.key === "heading")?.symbol).toBe(t.heading);
+    expect(tb.find((b) => b.key === "bullet")?.symbol).toBe(t.bullet);
+    expect(tb.find((b) => b.key === "divider")?.symbol).toBe(t.divider);
+  });
+
+  it("applyTheme 触发去抖保存", async () => {
+    postMock.mockResolvedValue({ data: { id: "d1" } });
+    patchMock.mockResolvedValue({ data: {} });
+    const x = useXhs();
+    x.$patch({ title: "有内容" }); // 非空才会真的建草稿
+    x.applyTheme(THEMES[0].id);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 });
