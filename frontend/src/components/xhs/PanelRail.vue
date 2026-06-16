@@ -1,10 +1,19 @@
 <script setup lang="ts">
 /**
- * 左栏素材面板骨架（设计稿 §4.1 左 / §5 九面板）。
- * P0：9 个 tab 切换 + 占位内容。P1 起逐个面板填真实素材（JSON 驱动）。
+ * 左栏素材面板（设计稿 §4.1 左 / §5 九面板）。
+ * 左侧 9 个图标 tab；右侧内容区按 activePanel 派发到对应面板组件。
+ * 文字面板（模版/主题/表情/标题/文案/话题/装饰）P1 已上线；图片(P2)/AI(P3) 仍占位。
  */
+import { computed, type Component } from "vue";
 import Icon from "@/components/ui/Icon.vue";
 import { useXhs, type XhsPanel } from "@/stores/xhs";
+import TemplatePanel from "./panels/TemplatePanel.vue";
+import ThemePanel from "./panels/ThemePanel.vue";
+import EmojiPanel from "./panels/EmojiPanel.vue";
+import TitlePanel from "./panels/TitlePanel.vue";
+import CopyPanel from "./panels/CopyPanel.vue";
+import TopicPanel from "./panels/TopicPanel.vue";
+import DecorationPanel from "./panels/DecorationPanel.vue";
 
 const xhs = useXhs();
 
@@ -12,11 +21,11 @@ interface PanelDef {
   key: XhsPanel;
   icon: string;
   label: string;
-  /** 占位说明：该面板将在哪个阶段上线。 */
+  /** 占位说明：该面板将在哪个阶段上线（仅 image/ai 仍占位）。 */
   stage: string;
 }
 
-// icon 全部复用 Icon.vue 现有图标，避免新增 9 个 SVG。
+// icon 全部复用 Icon.vue 现有图标，避免新增 SVG。
 const PANELS: PanelDef[] = [
   { key: "template", icon: "library", label: "模版", stage: "P1" },
   { key: "theme", icon: "sliders", label: "主题", stage: "P1" },
@@ -28,6 +37,19 @@ const PANELS: PanelDef[] = [
   { key: "image", icon: "image", label: "图片", stage: "P2" },
   { key: "ai", icon: "spark", label: "AI", stage: "P3" },
 ];
+
+// activePanel → 面板组件；image / ai 不在表内 → 走占位分支。
+const PANEL_COMPONENTS: Partial<Record<XhsPanel, Component>> = {
+  template: TemplatePanel,
+  theme: ThemePanel,
+  emoji: EmojiPanel,
+  title: TitlePanel,
+  copy: CopyPanel,
+  topic: TopicPanel,
+  decoration: DecorationPanel,
+};
+
+const activeComponent = computed<Component | null>(() => PANEL_COMPONENTS[xhs.activePanel] ?? null);
 
 function activeDef(): PanelDef {
   return PANELS.find((p) => p.key === xhs.activePanel) ?? PANELS[0];
@@ -60,12 +82,11 @@ function activeDef(): PanelDef {
       </button>
     </div>
 
-    <!-- 面板内容区（P0 占位） -->
-    <div class="min-h-0 flex-1 overflow-y-auto" :style="{ padding: '16px' }">
-      <div :style="{ fontSize: '14px', fontWeight: 600, color: 'var(--ink)', marginBottom: '10px' }">
-        {{ activeDef().label }}
-      </div>
+    <!-- 面板内容区：派发到真实面板；image/ai 仍占位 -->
+    <div class="min-h-0 flex-1 overflow-hidden" :style="{ padding: '14px' }">
+      <component :is="activeComponent" v-if="activeComponent" />
       <div
+        v-else
         class="flex flex-col items-center justify-center"
         :style="{
           gap: '10px', textAlign: 'center', color: 'var(--ink-2)', fontSize: '13px',
