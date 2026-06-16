@@ -2,7 +2,7 @@
 /**
  * 左栏素材面板（设计稿 §4.1 左 / §5 九面板）。
  * 左侧 9 个图标 tab；右侧内容区按 activePanel 派发到对应面板组件。
- * 文字面板（模版/主题/表情/标题/文案/话题/装饰）P1 已上线；图片(P2)/AI(P3) 仍占位。
+ * 9 个面板全部上线（文字 P1 / 图片 P2 / AI P3）。
  */
 import { computed, type Component } from "vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -15,6 +15,7 @@ import CopyPanel from "./panels/CopyPanel.vue";
 import TopicPanel from "./panels/TopicPanel.vue";
 import DecorationPanel from "./panels/DecorationPanel.vue";
 import ImagePanel from "./panels/ImagePanel.vue";
+import AiPanel from "./panels/AiPanel.vue";
 
 const xhs = useXhs();
 
@@ -22,7 +23,7 @@ interface PanelDef {
   key: XhsPanel;
   icon: string;
   label: string;
-  /** 占位说明：该面板将在哪个阶段上线（仅 ai 仍占位，image 已于 P2 上线）。 */
+  /** 上线阶段（9 面板全部上线，stage 仅作展示）。 */
   stage: string;
 }
 
@@ -39,7 +40,7 @@ const PANELS: PanelDef[] = [
   { key: "ai", icon: "spark", label: "AI", stage: "P3" },
 ];
 
-// activePanel → 面板组件；ai 不在表内 → 走占位分支（image 已于 P2 接入）。
+// activePanel → 面板组件；9 面板全部映射（v-else 兜底未来未映射的 panel）。
 const PANEL_COMPONENTS: Partial<Record<XhsPanel, Component>> = {
   template: TemplatePanel,
   theme: ThemePanel,
@@ -49,6 +50,7 @@ const PANEL_COMPONENTS: Partial<Record<XhsPanel, Component>> = {
   topic: TopicPanel,
   decoration: DecorationPanel,
   image: ImagePanel,
+  ai: AiPanel,
 };
 
 const activeComponent = computed<Component | null>(() => PANEL_COMPONENTS[xhs.activePanel] ?? null);
@@ -84,7 +86,7 @@ function activeDef(): PanelDef {
       </button>
     </div>
 
-    <!-- 面板内容区：派发到真实面板；仅 ai 仍占位 -->
+    <!-- 面板内容区：派发到对应面板组件 -->
     <div class="min-h-0 flex-1 overflow-hidden" :style="{ padding: '14px' }">
       <component :is="activeComponent" v-if="activeComponent" />
       <div
