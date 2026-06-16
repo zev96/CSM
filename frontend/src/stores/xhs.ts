@@ -89,7 +89,8 @@ export const useXhs = defineStore("xhs", {
     bodyCount: (s): number => countChars(s.body),
     titleOver: (s): boolean => countChars(s.title) > TITLE_SOFT_LIMIT,
     bodyOver: (s): boolean => countChars(s.body) > BODY_SOFT_LIMIT,
-    isEmpty: (s): boolean => s.title.trim() === "" && s.body.trim() === "",
+    isEmpty: (s): boolean =>
+      s.title.trim() === "" && s.body.trim() === "" && s.imageIds.length === 0,
     /** 当前激活的排版主题对象（无则 null）。 */
     activeTheme: (s): XhsTheme | null => findTheme(s.themeId),
     /** 工具条快捷符号按钮：激活主题 → 小标题/无序/分割线（无主题时空）。
@@ -161,10 +162,11 @@ export const useXhs = defineStore("xhs", {
       };
     },
     /** 首次有内容时建草稿拿 id；空草稿不建（避免堆积）。返回 draftId 或 null。
+     *  force=true 时无视 isEmpty 强制建（上传图片场景：上传动作本身即内容）。
      *  用 _creating 去重：并发调用复用同一个 in-flight POST，防止建出孤儿草稿。 */
-    async _ensureCreated(): Promise<string | null> {
+    async _ensureCreated(force = false): Promise<string | null> {
       if (this.draftId) return this.draftId;
-      if (this.isEmpty) return null;
+      if (!force && this.isEmpty) return null;
       if (_creating) return _creating;
       _creating = (async () => {
         try {
@@ -241,6 +243,52 @@ export const useXhs = defineStore("xhs", {
       } catch {
         toast.error("复制失败，请检查剪贴板权限");
       }
+    },
+    /** 上传一张图片：强制确保草稿存在 → multipart POST → 把 image_id 推进 imageIds → 去抖保存。
+     *  失败（如 400 超限/非图）向上抛，由调用方（ImagePanel）toast。 */
+    async uploadImage(file: File): Promise<void> {
+      const id = await this._ensureCreated(true);
+      if (!id) return;
+      const sidecar = useSidecar();
+      const form = new FormData();
+      form.append("file", file);
+      const r = await sidecar.client.post(`/api/xhs/drafts/${id}/images`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      this.imageIds.push(r.data.image_id);
+      this.scheduleSave();
+    },
+    /** 删第 i 张图。封面下标随之修正：删封面前的图→左移；删的就是封面或越界→夹回合法范围。
+     *  文件删除由后端 PATCH diff（image_ids 变化）负责。 */
+    removeImage(i: number): void {
+      if (i < 0 || i >= this.imageIds.length) return;
+      const removedWasCover = i === this.coverIndex;
+      this.imageIds.splice(i, 1);
+      if (this.imageIds.length === 0) {
+        this.coverIndex = 0;
+      } else if (removedWasCover) {
+        this.coverIndex = Math.min(this.coverIndex, this.imageIds.length - 1);
+      } else if (i < this.coverIndex) {
+        this.coverIndex -= 1;
+      }
+      this.scheduleSave();
+    },
+    /** 设第 i 张为封面。 */
+    setCover(i: number): void {
+      if (i < 0 || i >= this.imageIds.length) return;
+      this.coverIndex = i;
+      this.scheduleSave();
+    },
+    /** 把第 from 张移到 to 位；封面下标跟随原封面图。 */
+    reorderImages(from: number, to: number): void {
+      const n = this.imageIds.length;
+      if (from === to || from < 0 || from >= n || to < 0 || to >= n) return;
+      const coverId = this.imageIds[this.coverIndex];
+      const [moved] = this.imageIds.splice(from, 1);
+      this.imageIds.splice(to, 0, moved);
+      const newCover = this.imageIds.indexOf(coverId);
+      if (newCover >= 0) this.coverIndex = newCover;
+      this.scheduleSave();
     },
     async deleteDraft(id: string): Promise<void> {
       const sidecar = useSidecar();
