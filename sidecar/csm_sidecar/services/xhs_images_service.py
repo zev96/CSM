@@ -128,7 +128,12 @@ def copy_images(src_draft_id: str, dst_draft_id: str, image_ids: list[str]) -> l
     避免删 src 草稿时误删 dst 草稿的图片。
     src_draft_id 是 API 契约参数；get_image_path 按 image_id 全局查找，
     实际不需要用到 src_draft_id。
+
+    Raises:
+        ValueError("invalid draft_id") on traversal-shaped src_draft_id or dst_draft_id.
     """
+    if not src_draft_id or "/" in src_draft_id or "\\" in src_draft_id or ".." in src_draft_id:
+        raise ValueError("invalid draft_id")
     new_ids: list[str] = []
     for image_id in image_ids:
         path = get_image_path(image_id)

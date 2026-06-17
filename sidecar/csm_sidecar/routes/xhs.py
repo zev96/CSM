@@ -121,9 +121,11 @@ def duplicate_draft(draft_id: str) -> dict[str, Any]:
         theme_id=src["theme_id"],
     )
     new_image_ids = xhs_images_service.copy_images(draft_id, new_id, src["image_ids"])
-    if new_image_ids:
-        xhs_storage.update_draft(new_id, image_ids=new_image_ids)
+    effective_cover = min(src["cover_index"], len(new_image_ids) - 1) if new_image_ids else 0
+    xhs_storage.update_draft(new_id, image_ids=new_image_ids, cover_index=effective_cover)
     result = xhs_storage.get_draft(new_id)
+    if result is None:
+        raise HTTPException(status_code=500, detail="duplicate failed")
     return result
 
 
