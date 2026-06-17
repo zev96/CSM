@@ -77,6 +77,23 @@ async function removeMine(id: string) {
 .xhs-mine-row { display: flex; align-items: center; gap: 6px; }
 .xhs-mine-main { flex: 1; min-width: 0; text-align: left; border: 1px solid var(--line-2); border-radius: 10px; padding: 8px 12px; background: #fff; color: var(--ink); font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: border-color 0.15s; }
 .xhs-mine-main:hover { border-color: var(--primary); }
-.xhs-mine-del { flex-shrink: 0; width: 26px; height: 26px; border-radius: 6px; color: var(--ink-2); cursor: pointer; }
-.xhs-mine-del:hover { color: var(--red); background: rgba(var(--ink-rgb),0.06); }
+.xhs-mine-del {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--ink-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.xhs-mine-del:hover {
+  color: #e53e3e;
+  border-color: #e53e3e;
+}
 </style>
