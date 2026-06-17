@@ -87,13 +87,12 @@ describe("PhonePreview 发现页瀑布流", () => {
     w.unmount();
   });
 
-  it("自己的笔记带「我的」标记，且只有一张", () => {
+  it("自己的笔记只有一张，且无「我的」标记/高亮", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    const mine = w.findAll(".dc-mine");
-    expect(mine.length).toBe(1);
-    expect(w.find(".dc-badge-mine").text()).toBe("我的");
+    expect(w.findAll(".dc-mine").length).toBe(1);
+    expect(w.find(".dc-badge-mine").exists()).toBe(false);
     w.unmount();
   });
 

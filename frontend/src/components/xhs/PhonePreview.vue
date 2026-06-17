@@ -284,7 +284,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                       :src="card.cover"
                     />
                     <div v-else class="dc-cover dc-cover-ph"><span class="dc-emoji">📷</span></div>
-                    <span v-if="card.mine" class="dc-badge dc-badge-mine">我的</span>
                   </div>
                   <div class="dc-meta">
                     <div class="dc-title" :class="{ 'dc-title-empty': card.mine && !xhs.title }">{{ card.title }}</div>
@@ -614,10 +613,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   background: #fff;
   border: 1px solid var(--line-2);
 }
-.dc-mine {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary);
-}
 .dc-cover-wrap {
   position: relative;
   flex: 1;
@@ -639,20 +634,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 .dc-emoji {
   font-size: 26px;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
-}
-.dc-badge {
-  position: absolute;
-  top: 5px;
-  left: 5px;
-  font-size: 9px;
-  line-height: 1;
-  color: #fff;
-  padding: 3px 5px;
-  border-radius: 5px;
-  font-weight: 600;
-}
-.dc-badge-mine {
-  background: var(--primary);
 }
 .dc-meta {
   flex-shrink: 0;
