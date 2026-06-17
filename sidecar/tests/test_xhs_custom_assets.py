@@ -39,8 +39,8 @@ def test_list_filters_by_kind(db):
 
 def test_payload_roundtrips_complex_shape(db):
     payload = {"name": "我的话题", "tags": ["秋冬穿搭", "通勤", "显瘦"]}
-    a = db.create_custom_asset(kind="topic_group", payload=payload)
-    got = db.list_custom_assets(kind="topic_group")[0]
+    a = db.create_custom_asset(kind="topic", payload=payload)
+    got = db.list_custom_assets(kind="topic")[0]
     assert got["payload"] == payload
     assert a["payload"]["tags"][0] == "秋冬穿搭"
 
@@ -95,3 +95,20 @@ def test_delete_custom_asset_route(client: TestClient, xhs_db: Path):
     aid = client.post("/api/xhs/custom-assets", json={"kind": "copy", "payload": {"text": "x"}}).json()["asset"]["id"]
     assert client.delete(f"/api/xhs/custom-assets/{aid}").status_code == 204
     assert client.delete(f"/api/xhs/custom-assets/{aid}").status_code == 404
+
+
+def test_post_accepts_title_kind(client: TestClient, xhs_db: Path):
+    r = client.post("/api/xhs/custom-assets", json={"kind": "title", "payload": {"text": "好标题"}})
+    assert r.status_code == 201
+    assert r.json()["asset"]["kind"] == "title"
+
+
+def test_post_accepts_topic_kind(client: TestClient, xhs_db: Path):
+    r = client.post("/api/xhs/custom-assets", json={"kind": "topic", "payload": {"text": "穿搭"}})
+    assert r.status_code == 201
+    assert r.json()["asset"]["kind"] == "topic"
+
+
+def test_post_rejects_topic_group_kind(client: TestClient, xhs_db: Path):
+    r = client.post("/api/xhs/custom-assets", json={"kind": "topic_group", "payload": {"text": "x"}})
+    assert r.status_code == 400

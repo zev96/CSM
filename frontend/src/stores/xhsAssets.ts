@@ -1,5 +1,5 @@
 /**
- * 小红书自定义素材 store（设计稿 §3.4）。kind ∈ template|copy|topic_group，
+ * 小红书自定义素材 store（设计稿 §3.4）。kind ∈ template|copy|title|topic，
  * 与起步 JSON 合并显示、标「我的」分组。setup-store 写法（仿 templates.ts），
  * 与承载草稿的 options-store useXhs 解耦。
  */
@@ -7,12 +7,12 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { useSidecar } from "@/stores/sidecar";
 
-export type XhsAssetKind = "template" | "copy" | "topic_group";
+export type XhsAssetKind = "template" | "copy" | "title" | "topic";
 
 export interface XhsCustomAsset {
   id: string;
   kind: XhsAssetKind;
-  // payload 形状随 kind 变（template:{name,title,body,topics} / copy:{text} / topic_group:{name,tags}）
+  // payload 形状随 kind 变（template:{name,title,body,topics} / copy:{text} / title:{text} / topic:{text}）
   payload: Record<string, any>;
   created_at: string;
 }
@@ -25,7 +25,10 @@ export const useXhsAssets = defineStore("xhsAssets", () => {
 
   const templates = computed(() => assets.value.filter((a) => a.kind === "template"));
   const copies = computed(() => assets.value.filter((a) => a.kind === "copy"));
-  const topicGroups = computed(() => assets.value.filter((a) => a.kind === "topic_group"));
+  const titles = computed(() => assets.value.filter((a) => a.kind === "title"));
+  const topics = computed(() => assets.value.filter((a) => a.kind === "topic"));
+  /** @deprecated TopicPanel 重构前的临时垫片，移除 TopicPanel 对此的引用后删除。 */
+  const topicGroups = computed(() => [] as XhsCustomAsset[]);
 
   async function reload(): Promise<void> {
     const r = await api().get("/api/xhs/custom-assets");
@@ -51,5 +54,5 @@ export const useXhsAssets = defineStore("xhsAssets", () => {
     assets.value = assets.value.filter((a) => a.id !== id);
   }
 
-  return { assets, loaded, templates, copies, topicGroups, ensureLoaded, reload, create, remove };
+  return { assets, loaded, templates, copies, titles, topics, topicGroups, ensureLoaded, reload, create, remove };
 });

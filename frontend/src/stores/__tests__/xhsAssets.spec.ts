@@ -26,7 +26,8 @@ describe("xhsAssets store", () => {
         assets: [
           { id: "1", kind: "copy", payload: { text: "a" }, created_at: "t1" },
           { id: "2", kind: "template", payload: { name: "n", title: "t", body: "b", topics: [] }, created_at: "t2" },
-          { id: "3", kind: "topic_group", payload: { name: "g", tags: ["x"] }, created_at: "t3" },
+          { id: "3", kind: "title", payload: { text: "好标题" }, created_at: "t3" },
+          { id: "4", kind: "topic", payload: { text: "穿搭" }, created_at: "t4" },
         ],
       },
     });
@@ -34,7 +35,8 @@ describe("xhsAssets store", () => {
     await s.ensureLoaded();
     expect(s.copies.length).toBe(1);
     expect(s.templates.length).toBe(1);
-    expect(s.topicGroups.length).toBe(1);
+    expect(s.titles.length).toBe(1);
+    expect(s.topics.length).toBe(1);
     await s.ensureLoaded();
     expect(mockClient.get).toHaveBeenCalledTimes(1);
   });

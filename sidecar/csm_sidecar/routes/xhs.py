@@ -222,7 +222,7 @@ def ai_polish(body: AiPolishBody) -> dict[str, Any]:
 
 
 # ── 自定义素材（P4）──────────────────────────────────────────────────────────
-_ASSET_KINDS = {"template", "copy", "topic_group"}
+_ASSET_KINDS = {"template", "copy", "title", "topic"}
 
 
 class CustomAssetCreate(BaseModel):

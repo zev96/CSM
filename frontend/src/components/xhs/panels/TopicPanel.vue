@@ -31,7 +31,7 @@ async function saveTopicGroup() {
   if (!xhs.topics.length) { toast.error("先在正文区加几个话题，再存为分组"); return; }
   const name = xhs.topics.slice(0, 3).map((t) => "#" + t).join(" ") + (xhs.topics.length > 3 ? " …" : "");
   try {
-    await assets.create("topic_group", { name, tags: [...xhs.topics] });
+    await assets.create("topic", { name, tags: [...xhs.topics] });
     toast.success("已存为话题分组");
   } catch { toast.error("保存失败"); }
 }
