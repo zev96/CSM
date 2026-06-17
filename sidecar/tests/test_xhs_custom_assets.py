@@ -62,37 +62,11 @@ def test_list_order_newest_first(db):
 
 # ── 路由测试（Task 2）────────────────────────────────────────────────────────
 from pathlib import Path
-from typing import Iterator
 
 from fastapi.testclient import TestClient
 
-from csm_sidecar import auth
-from csm_sidecar.main import app
-from csm_sidecar.services import config_service
 
-
-@pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """Authenticated TestClient with isolated xhs.db."""
-    # 重置 config_service（与 conftest settings_path 等价）
-    p = tmp_path / "settings.json"
-    config_service.init(p)
-
-    # 重置 xhs storage（防跨测试泄漏）
-    monkeypatch.setattr(storage, "_db_path", None, raising=True)
-    monkeypatch.setattr(storage, "_initialized", False, raising=True)
-    monkeypatch.setattr(storage, "_local", threading.local(), raising=True)
-    storage.init_db(tmp_path / "xhs.db")
-
-    with TestClient(app) as c:
-        c.headers["Authorization"] = f"Bearer {auth.get_token()}"
-        yield c
-
-    # 清理 config_service
-    config_service.init(None)
-
-
-def test_post_and_get_custom_assets(client):
+def test_post_and_get_custom_assets(client: TestClient, xhs_db: Path):
     r = client.post("/api/xhs/custom-assets", json={"kind": "copy", "payload": {"text": "元气满满"}})
     assert r.status_code == 201
     asset = r.json()["asset"]
@@ -103,21 +77,21 @@ def test_post_and_get_custom_assets(client):
     assert len(r2.json()["assets"]) == 1
 
 
-def test_post_rejects_bad_kind(client):
+def test_post_rejects_bad_kind(client: TestClient, xhs_db: Path):
     r = client.post("/api/xhs/custom-assets", json={"kind": "evil", "payload": {"text": "x"}})
     assert r.status_code == 400
 
 
-def test_post_rejects_empty_payload(client):
+def test_post_rejects_empty_payload(client: TestClient, xhs_db: Path):
     r = client.post("/api/xhs/custom-assets", json={"kind": "copy", "payload": {}})
     assert r.status_code == 400
 
 
-def test_get_rejects_bad_kind(client):
+def test_get_rejects_bad_kind(client: TestClient, xhs_db: Path):
     assert client.get("/api/xhs/custom-assets", params={"kind": "evil"}).status_code == 400
 
 
-def test_delete_custom_asset_route(client):
+def test_delete_custom_asset_route(client: TestClient, xhs_db: Path):
     aid = client.post("/api/xhs/custom-assets", json={"kind": "copy", "payload": {"text": "x"}}).json()["asset"]["id"]
     assert client.delete(f"/api/xhs/custom-assets/{aid}").status_code == 204
     assert client.delete(f"/api/xhs/custom-assets/{aid}").status_code == 404
