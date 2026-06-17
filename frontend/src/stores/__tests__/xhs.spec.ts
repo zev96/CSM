@@ -302,6 +302,20 @@ describe("useXhs — 图片", () => {
   });
 });
 
+describe("isEmpty 纳入 topics（P4）", () => {
+  it("仅有话题时 isEmpty 为 false", () => {
+    const s = useXhs();
+    s.$patch({ title: "", body: "", imageIds: [], topics: ["穿搭"] });
+    expect(s.isEmpty).toBe(false);
+  });
+
+  it("标题/正文/图/话题全空时 isEmpty 为 true", () => {
+    const s = useXhs();
+    s.$patch({ title: "  ", body: "", imageIds: [], topics: [] });
+    expect(s.isEmpty).toBe(true);
+  });
+});
+
 describe("useXhs — AI actions", () => {
   it("generateNote 返回后端 {title, body, topics}", async () => {
     const x = useXhs();

@@ -79,7 +79,7 @@ const inputBaseStyle = {
       <div :style="labelStyle">
         <span>标题</span>
         <span :style="{ color: xhs.titleOver ? 'var(--red)' : 'var(--ink-2)' }">
-          {{ xhs.titleCount }}/{{ TITLE_SOFT_LIMIT }}
+          {{ xhs.titleCount }}/{{ TITLE_SOFT_LIMIT }}<template v-if="xhs.titleOver"> · 超 {{ xhs.titleCount - TITLE_SOFT_LIMIT }} 字</template>
         </span>
       </div>
       <input
@@ -96,7 +96,7 @@ const inputBaseStyle = {
       <div :style="labelStyle">
         <span>正文</span>
         <span :style="{ color: xhs.bodyOver ? 'var(--red)' : 'var(--ink-2)' }">
-          {{ xhs.bodyCount }}/{{ BODY_SOFT_LIMIT }}
+          {{ xhs.bodyCount }}/{{ BODY_SOFT_LIMIT }}<template v-if="xhs.bodyOver"> · 超 {{ xhs.bodyCount - BODY_SOFT_LIMIT }} 字</template>
         </span>
       </div>
       <textarea

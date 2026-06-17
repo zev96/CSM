@@ -113,7 +113,10 @@ export const useXhs = defineStore("xhs", {
     titleOver: (s): boolean => countChars(s.title) > TITLE_SOFT_LIMIT,
     bodyOver: (s): boolean => countChars(s.body) > BODY_SOFT_LIMIT,
     isEmpty: (s): boolean =>
-      s.title.trim() === "" && s.body.trim() === "" && s.imageIds.length === 0,
+      s.title.trim() === "" &&
+      s.body.trim() === "" &&
+      s.imageIds.length === 0 &&
+      s.topics.length === 0,
     /** 当前激活的排版主题对象（无则 null）。 */
     activeTheme: (s): XhsTheme | null => findTheme(s.themeId),
     /** 工具条快捷符号按钮：激活主题 → 小标题/无序/有序/分割线（无主题时空）。
