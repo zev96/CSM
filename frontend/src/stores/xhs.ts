@@ -15,7 +15,7 @@ import { useSidecar } from "./sidecar";
 import { useToast } from "@/composables/useToast";
 import { buildFullText, countChars } from "@/utils/xhsText";
 import { findTheme, type XhsTheme } from "@/data/xhs/assets";
-import { orderedMarker, countOrderedMarkers } from "@/utils/xhsTheme";
+import { orderedMarker, nextOrderedNumber } from "@/utils/xhsTheme";
 
 export interface XhsDraft {
   id: string;
@@ -56,6 +56,8 @@ interface XhsState {
 // （一个是 timer handle，一个是 DOM 操作回调，都不需要触发渲染）。
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _inserter: ((text: string) => void) | null = null;
+// 光标上下文探针：NoteEditor 注册，返回光标前文本，用于有序列表按块计数。
+let _cursorProbe: (() => { before: string }) | null = null;
 // 建草稿请求去重：in-flight 的 POST promise，避免并发 saveNow 重复建草稿。
 let _creating: Promise<string | null> | null = null;
 
@@ -68,6 +70,7 @@ export function _resetXhsModuleState(): void {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = null;
   _inserter = null;
+  _cursorProbe = null;
   _creating = null;
 }
 
@@ -180,11 +183,12 @@ export const useXhs = defineStore("xhs", {
       this.scheduleSave();
     },
     /** 工具条「有序」：按激活主题 ordered 样式，在光标处插入「下一个序号 + 空格」。
-     *  下一个序号 = 正文已有同样式序号个数 + 1。无激活主题时不动。 */
+     *  下一个序号按光标前当前列表块（空行分块）计数，跨块各自从 1 起。无激活主题时不动。 */
     insertOrdered(): void {
       const t = this.activeTheme;
       if (!t) return;
-      const n = countOrderedMarkers(this.body, t.ordered) + 1;
+      const before = _cursorProbe ? _cursorProbe().before : this.body;
+      const n = nextOrderedNumber(before, t.ordered);
       this.insertAtCursor(orderedMarker(n, t.ordered) + " ");
     },
     _payload() {
@@ -261,6 +265,10 @@ export const useXhs = defineStore("xhs", {
     /** NoteEditor 挂载时注册正文光标插入器；卸载时传 null 注销。 */
     registerInserter(fn: ((text: string) => void) | null): void {
       _inserter = fn;
+    },
+    /** NoteEditor 挂载时注册光标上下文探针（取光标前文本）；卸载传 null。 */
+    registerCursorProbe(fn: (() => { before: string }) | null): void {
+      _cursorProbe = fn;
     },
     /** P1 素材面板插入入口：有注册器走光标插入，否则回退追加到正文末尾。 */
     insertAtCursor(text: string): void {

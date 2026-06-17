@@ -316,6 +316,40 @@ describe("isEmpty 纳入 topics（P4）", () => {
   });
 });
 
+describe("insertOrdered 按光标前列表块计数（P4）", () => {
+  it("有探针时按当前块算下一个序号", () => {
+    const s = useXhs();
+    s.applyTheme("warm_yellow"); // 任一存在的主题；取其 ordered 样式
+    const style = s.activeTheme!.ordered;
+    const inserted: string[] = [];
+    s.registerInserter((t) => inserted.push(t));
+    // 当前块已有 2 个序号 → 期望插入第 3 个
+    const before = `${orderedMarker(1, style)} a\n${orderedMarker(2, style)} b\n`;
+    s.registerCursorProbe(() => ({ before }));
+    s.insertOrdered();
+    expect(inserted[0]).toBe(orderedMarker(3, style) + " ");
+  });
+
+  it("空行后是新块 → 从 1 起", () => {
+    const s = useXhs();
+    s.applyTheme("warm_yellow");
+    const style = s.activeTheme!.ordered;
+    const inserted: string[] = [];
+    s.registerInserter((t) => inserted.push(t));
+    s.registerCursorProbe(() => ({ before: `${orderedMarker(1, style)} a\n\n` }));
+    s.insertOrdered();
+    expect(inserted[0]).toBe(orderedMarker(1, style) + " ");
+  });
+
+  it("无探针时回退按整段正文尾块计数（不抛错）", () => {
+    const s = useXhs();
+    s.applyTheme("warm_yellow");
+    s.registerInserter(() => {});
+    s.registerCursorProbe(null);
+    expect(() => s.insertOrdered()).not.toThrow();
+  });
+});
+
 describe("useXhs — AI actions", () => {
   it("generateNote 返回后端 {title, body, topics}", async () => {
     const x = useXhs();

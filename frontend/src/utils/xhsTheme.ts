@@ -34,3 +34,14 @@ export function countOrderedMarkers(body: string, style: OrderedStyle): number {
   }
   return count;
 }
+
+/**
+ * 光标处「下一个有序序号」——只数当前列表块（最后一个空行之后的文本）里的同样式序号。
+ * 这样跨多个列表块会各自从 1 重新计数（P4 打磨，取代 P3 的全文连续计数）。
+ */
+export function nextOrderedNumber(textBeforeCursor: string, style: OrderedStyle): number {
+  // 空行（仅空白的整行）分隔列表块；取光标前最后一块。
+  const blocks = textBeforeCursor.split(/\n[ \t]*\n/);
+  const currentBlock = blocks[blocks.length - 1] ?? "";
+  return countOrderedMarkers(currentBlock, style) + 1;
+}

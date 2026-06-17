@@ -14,8 +14,18 @@ const xhs = useXhs();
 const bodyRef = ref<HTMLTextAreaElement | null>(null);
 const { insert } = useCursorInsert(bodyRef, (v) => xhs.setBody(v));
 
-onMounted(() => xhs.registerInserter(insert));
-onUnmounted(() => xhs.registerInserter(null));
+onMounted(() => {
+  xhs.registerInserter(insert);
+  xhs.registerCursorProbe(() => {
+    const el = bodyRef.value;
+    const pos = el ? (el.selectionStart ?? el.value.length) : 0;
+    return { before: (el?.value ?? xhs.body).slice(0, pos) };
+  });
+});
+onUnmounted(() => {
+  xhs.registerInserter(null);
+  xhs.registerCursorProbe(null);
+});
 
 // 话题输入
 const topicInput = ref("");
