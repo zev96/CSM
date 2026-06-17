@@ -27,7 +27,9 @@ onMounted(() => {
   void assets.ensureLoaded();
 });
 
-async function pick(t: XhsTemplate) {
+interface TemplateMinePayload { name?: string; title?: string; body?: string; topics?: unknown[] }
+
+async function applyConfirmedTemplate(tpl: { title: string; body: string; topics: string[] }) {
   if (!xhs.isEmpty) {
     const ok = await confirmDialog("载入模板会覆盖当前的标题 / 正文 / 话题，确定吗？", {
       title: "载入模板",
@@ -36,23 +38,24 @@ async function pick(t: XhsTemplate) {
     });
     if (!ok) return;
   }
-  xhs.applyTemplate({ title: t.title, body: t.body, topics: t.topics });
+  xhs.applyTemplate(tpl);
 }
 
-async function applyMine(payload: Record<string, any>) {
-  if (!xhs.isEmpty) {
-    const ok = await confirmDialog("载入模板会覆盖当前的标题 / 正文 / 话题，确定吗？", {
-      title: "载入模板",
-      okLabel: "载入",
-      kind: "danger",
-    });
-    if (!ok) return;
-  }
-  xhs.applyTemplate({
+async function pick(t: XhsTemplate) {
+  await applyConfirmedTemplate({ title: t.title, body: t.body, topics: t.topics });
+}
+
+async function applyMine(payload: TemplateMinePayload) {
+  await applyConfirmedTemplate({
     title: payload.title ?? "",
     body: payload.body ?? "",
-    topics: Array.isArray(payload.topics) ? payload.topics : [],
+    topics: Array.isArray(payload.topics) ? (payload.topics as string[]) : [],
   });
+}
+
+async function removeMine(id: string) {
+  try { await assets.remove(id); }
+  catch { toast.error("删除失败"); }
 }
 
 function saveAsTemplate() {
@@ -108,10 +111,10 @@ function saveAsTemplate() {
       </div>
       <div v-for="a in assets.templates" :key="a.id" class="xhs-mine-row">
         <button type="button" class="xhs-mine-main" @click="applyMine(a.payload)">
-          <div class="xhs-mine-name">{{ a.payload.name || "我的模版" }}</div>
-          <div class="xhs-mine-preview">{{ a.payload.title }}</div>
+          <div class="xhs-mine-name">{{ a.payload.name || a.payload.title || "（未命名）" }}</div>
+          <div class="xhs-mine-preview">{{ a.payload.body }}</div>
         </button>
-        <button type="button" class="xhs-mine-del" title="删除" @click="assets.remove(a.id)">✕</button>
+        <button type="button" class="xhs-mine-del" title="删除" @click="removeMine(a.id)">✕</button>
       </div>
     </div>
   </div>

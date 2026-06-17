@@ -98,4 +98,29 @@ describe("TemplatePanel 我的模版", () => {
     expect(mockClient.post).not.toHaveBeenCalled();
     w.unmount();
   });
+
+  it("点删除按钮调用 DELETE /api/xhs/custom-assets/:id", async () => {
+    mockClient.get.mockResolvedValue({
+      data: {
+        assets: [
+          { id: "7", kind: "template", payload: { name: "模版甲", title: "t", body: "b", topics: [] }, created_at: "t" },
+        ],
+      },
+    });
+    mockClient.delete.mockResolvedValue({ data: {} });
+    useXhs();
+    const w = mount(TemplatePanel);
+    await flushPromises();
+    // 切换到「我的」tab
+    const tabBtns = w.findAll("button");
+    const mineTab = tabBtns.find((b) => b.text() === "我的");
+    expect(mineTab).toBeDefined();
+    await mineTab!.trigger("click");
+    await flushPromises();
+    // 点击删除按钮
+    await w.find(".xhs-mine-del").trigger("click");
+    await flushPromises();
+    expect(mockClient.delete).toHaveBeenCalledWith("/api/xhs/custom-assets/7");
+    w.unmount();
+  });
 });
