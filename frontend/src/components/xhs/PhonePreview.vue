@@ -200,7 +200,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
             <template v-if="xhs.previewTab === 'note'">
               <div class="note-nav">
                 <span class="note-nav-back">❮</span>
-                <span class="mini-avatar" :style="{ width: '24px', height: '24px', fontSize: '11px' }">{{ avatarLetter }}</span>
+                <span class="mini-avatar" :style="{ width: '20px', height: '20px', fontSize: '10px' }">{{ avatarLetter }}</span>
                 <span class="note-nav-name">{{ nickname }}</span>
                 <span class="note-follow">关注</span>
                 <span class="note-nav-share">↗</span>
@@ -387,17 +387,17 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--line-2);
 }
 .note-nav-back {
-  font-size: 16px;
+  font-size: 14px;
   color: var(--ink);
   flex-shrink: 0;
 }
 .note-nav-name {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink);
   flex: 1;
   min-width: 0;
@@ -407,15 +407,15 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 }
 .note-follow {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 10px;
   color: #ff2e4d;
   border: 1px solid #ff2e4d;
   border-radius: 999px;
-  padding: 2px 12px;
+  padding: 2px 9px;
 }
 .note-nav-share {
   flex-shrink: 0;
-  font-size: 15px;
+  font-size: 13px;
   color: var(--ink-2);
 }
 .note-body {
@@ -508,26 +508,26 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 7px 10px;
   border-top: 1px solid var(--line-2);
   background: #fff;
 }
 .note-comment-input {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--ink-2);
   background: rgba(var(--ink-rgb), 0.05);
   border-radius: 999px;
-  padding: 5px 10px;
+  padding: 4px 9px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .note-stat {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--ink-2);
 }
 

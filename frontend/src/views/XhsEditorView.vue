@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
  * 小红书图文笔记编辑器主视图（设计稿 §4.1 三栏）。
- *   ┌ 顶部：标题 · 草稿下拉 · 新建 · 保存状态
+ *   ┌ 顶部：标题 · 草稿下拉 · 保存状态
  *   ├ 左 PanelRail（素材，P0 占位） │ 中 NoteEditor │ 右 PhonePreview
- * 挂载即拉草稿列表；新建从空白开始（首次有内容时 store 自动建草稿）。
+ * 挂载即拉草稿列表；新草稿在首次有内容时由 store 自动创建。
  */
 import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -38,12 +38,6 @@ async function openDraft(id: string) {
   // 切换前先把当前未落盘的改动 flush 一次
   await xhs.saveNow();
   await xhs.loadDraft(id);
-}
-
-async function newDraft() {
-  draftMenuOpen.value = false;
-  await xhs.saveNow();
-  xhs.newDraft();
 }
 
 async function removeDraft(id: string, ev: Event) {
@@ -95,7 +89,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
   <div class="flex h-full flex-col" :style="{ gap: '14px' }">
     <!-- 顶部条 -->
     <div class="flex items-center" :style="{ gap: '12px', flexShrink: 0 }">
-      <div :style="{ fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }">小红书 · 图文笔记</div>
+      <div class="text-[11px] uppercase" :style="{ letterSpacing: '1.5px', color: 'var(--ink-3)' }">图文编辑器</div>
 
       <!-- 草稿下拉 -->
       <div ref="draftWrap" class="relative" :style="{ marginLeft: 'auto' }">
@@ -183,18 +177,6 @@ function draftLabel(d: { title: string; updated_at: string }): string {
           </div>
         </div>
       </div>
-
-      <button
-        type="button"
-        class="flex items-center"
-        :style="{
-          gap: '6px', fontSize: '13px', padding: '7px 14px', borderRadius: '8px',
-          background: 'var(--primary)', color: '#fff', cursor: 'pointer',
-        }"
-        @click="newDraft"
-      >
-        <Icon name="plus" :size="14" /> 新建
-      </button>
     </div>
 
     <!-- 三栏 -->
@@ -202,7 +184,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
       <!-- 左：素材面板 -->
       <div
         :style="{
-          width: '320px', flexShrink: 0, background: 'var(--bg-inner)',
+          width: '320px', flexShrink: 0, background: 'var(--card)',
           border: '1px solid var(--line-2)', borderRadius: '16px', overflow: 'hidden',
         }"
       >
@@ -211,7 +193,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
       <!-- 中：编辑器（弹性 1.4，比右栏略宽，随窗口缩放收窄） -->
       <div
         class="min-w-0"
-        :style="{ flex: '1.4 1 0', background: 'var(--bg-inner)', border: '1px solid var(--line-2)', borderRadius: '16px', padding: '16px', overflow: 'hidden' }"
+        :style="{ flex: '1.4 1 0', background: 'var(--card)', border: '1px solid var(--line-2)', borderRadius: '16px', padding: '16px', overflow: 'hidden' }"
       >
         <NoteEditor />
       </div>
@@ -219,7 +201,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
       <div
         class="min-w-0"
         :style="{
-          flex: '1 1 0', minWidth: '300px', background: 'var(--bg-inner)',
+          flex: '1 1 0', minWidth: '300px', background: 'var(--card)',
           border: '1px solid var(--line-2)', borderRadius: '16px', padding: '16px', overflow: 'hidden',
         }"
       >
