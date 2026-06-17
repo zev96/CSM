@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from csm_core.xhs import storage as xhs_storage
 
 from ..auth import RequireToken
-from ..services import xhs_ai_service, xhs_images_service
+from ..services import config_service, xhs_ai_service, xhs_images_service
 from ..services.llm_factory import LLMConfigError
 
 logger = logging.getLogger(__name__)
@@ -226,3 +226,45 @@ def delete_custom_asset(asset_id: str) -> None:
     if not xhs_storage.delete_custom_asset(asset_id):
         raise HTTPException(status_code=404, detail="not found")
     return None
+
+
+# ── AI Prompts 配置（P4 T8）──────────────────────────────────────────────────
+
+
+class XhsAiPromptsPatch(BaseModel):
+    """PATCH /api/xhs/ai_prompts 体。空字符串 = 回内置默认。"""
+
+    generate: str | None = None
+    polish: str | None = None
+
+
+def _xhs_ai_prompts_payload() -> dict[str, Any]:
+    cfg = config_service.load()
+    return {
+        "generate": {
+            "current": cfg.xhs_generate_prompt,
+            "default": xhs_ai_service.DEFAULT_GENERATE_SYSTEM,
+        },
+        "polish": {
+            "current": cfg.xhs_polish_prompt,
+            "default": xhs_ai_service.DEFAULT_POLISH_SYSTEM,
+        },
+    }
+
+
+@router.get("/api/xhs/ai_prompts")
+def get_xhs_ai_prompts() -> dict[str, Any]:
+    return _xhs_ai_prompts_payload()
+
+
+@router.patch("/api/xhs/ai_prompts")
+def patch_xhs_ai_prompts(body: XhsAiPromptsPatch) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if body.generate is not None:
+        updates["xhs_generate_prompt"] = body.generate
+    if body.polish is not None:
+        updates["xhs_polish_prompt"] = body.polish
+    if not updates:
+        raise HTTPException(status_code=400, detail="no fields provided")
+    config_service.patch(updates)
+    return _xhs_ai_prompts_payload()
