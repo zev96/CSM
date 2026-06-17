@@ -57,3 +57,32 @@ describe("PhonePreview 封面", () => {
     w.unmount();
   });
 });
+
+describe("PhonePreview 发现页瀑布流", () => {
+  it("渲染多张卡（模拟 feed + 自己的笔记）", () => {
+    const store = useXhs();
+    store.$patch({ previewTab: "discover" });
+    const w = mount(PhonePreview);
+    // 内置 6 条 mock + 自己 1 条 = 7 张卡
+    expect(w.findAll(".discover-card").length).toBe(7);
+    w.unmount();
+  });
+
+  it("自己的笔记带「我的」标记，且只有一张", () => {
+    const store = useXhs();
+    store.$patch({ previewTab: "discover" });
+    const w = mount(PhonePreview);
+    const mine = w.findAll(".discover-mine");
+    expect(mine.length).toBe(1);
+    expect(w.find(".discover-badge").text()).toBe("我的");
+    w.unmount();
+  });
+
+  it("自己的标题混进 feed", () => {
+    const store = useXhs();
+    store.$patch({ previewTab: "discover", title: "我的测试标题" });
+    const w = mount(PhonePreview);
+    expect(w.find(".discover-mine").text()).toContain("我的测试标题");
+    w.unmount();
+  });
+});
