@@ -5,7 +5,7 @@
  *   ├ 左 PanelRail（素材，P0 占位） │ 中 NoteEditor │ 右 PhonePreview
  * 挂载即拉草稿列表；新建从空白开始（首次有内容时 store 自动建草稿）。
  */
-import { onMounted, onUnmounted, ref } from "vue";
+import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import Icon from "@/components/ui/Icon.vue";
 import PanelRail from "@/components/xhs/PanelRail.vue";
 import NoteEditor from "@/components/xhs/NoteEditor.vue";
@@ -56,6 +56,31 @@ async function removeDraft(id: string, ev: Event) {
   });
   if (!ok) return;
   await xhs.deleteDraft(id);
+}
+
+// ── 行内重命名 ────────────────────────────────────────────────────────────────
+const renamingId = ref<string | null>(null);
+const renameText = ref("");
+const renameInputRef = ref<HTMLInputElement | null>(null);
+
+function startRename(id: string, current: string, ev: Event) {
+  ev.stopPropagation();
+  renamingId.value = id;
+  renameText.value = current;
+  nextTick(() => renameInputRef.value?.focus());
+}
+
+async function commitRename(id: string, ev?: Event) {
+  ev?.stopPropagation();
+  const t = renameText.value.trim();
+  renamingId.value = null;
+  if (t) await xhs.renameDraft(id, t);
+}
+
+// ── 复制副本 ──────────────────────────────────────────────────────────────────
+async function duplicate(id: string, ev: Event) {
+  ev.stopPropagation();
+  await xhs.duplicateDraft(id);
 }
 
 function draftLabel(d: { title: string; updated_at: string }): string {
@@ -109,9 +134,43 @@ function draftLabel(d: { title: string; updated_at: string }): string {
             @click="openDraft(d.id)"
             @keydown.enter.prevent="openDraft(d.id)"
           >
-            <span :style="{ flex: 1, fontSize: '13px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
+            <!-- 行内重命名输入框（激活时替换标签文本） -->
+            <input
+              v-if="renamingId === d.id"
+              ref="renameInputRef"
+              v-model="renameText"
+              :style="{
+                flex: 1, fontSize: '13px', color: 'var(--ink)',
+                border: '1px solid var(--primary)', borderRadius: '4px',
+                padding: '1px 5px', outline: 'none', background: '#fff',
+                minWidth: 0,
+              }"
+              @keydown.enter.prevent="commitRename(d.id, $event)"
+              @keydown.esc.prevent="renamingId = null"
+              @blur="commitRename(d.id)"
+              @click.stop
+            />
+            <span
+              v-else
+              :style="{ flex: 1, fontSize: '13px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }"
+            >
               {{ draftLabel(d) }}
             </span>
+            <!-- 重命名按钮 -->
+            <button
+              type="button"
+              :style="{ cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', padding: '2px' }"
+              title="重命名"
+              @click="startRename(d.id, draftLabel(d), $event)"
+            ><Icon name="edit" :size="14" /></button>
+            <!-- 复制副本按钮 -->
+            <button
+              type="button"
+              :style="{ cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', padding: '2px' }"
+              title="复制副本"
+              @click="duplicate(d.id, $event)"
+            ><Icon name="copy" :size="14" /></button>
+            <!-- 删除按钮 -->
             <button
               type="button"
               :style="{ cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', padding: '2px' }"

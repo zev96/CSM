@@ -340,6 +340,20 @@ export const useXhs = defineStore("xhs", {
       if (this.draftId === id) this.newDraft();
       await this.loadDrafts();
     },
+    /** 重命名草稿（仅改标题）。当前打开的就是它则同步本地标题。 */
+    async renameDraft(id: string, title: string): Promise<void> {
+      const sidecar = useSidecar();
+      await sidecar.client.patch(`/api/xhs/drafts/${id}`, { title });
+      if (this.draftId === id) this.title = title;
+      await this.loadDrafts();
+    },
+    /** 复制副本：后端建副本（含图片拷贝），刷新列表。返回新 id。 */
+    async duplicateDraft(id: string): Promise<string | null> {
+      const sidecar = useSidecar();
+      const r = await sidecar.client.post(`/api/xhs/drafts/${id}/duplicate`);
+      await this.loadDrafts();
+      return r.data?.id ?? null;
+    },
     /** AI 生成整篇：返回 {title, body, topics}（调用方决定是否覆盖填入）。
      *  503 未配置 LLM → 抛 LLMNotConfiguredError（AiPanel 弹「去设置」）。 */
     async generateNote(intent: string): Promise<{ title: string; body: string; topics: string[] }> {

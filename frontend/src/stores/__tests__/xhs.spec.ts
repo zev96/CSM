@@ -394,3 +394,43 @@ describe("useXhs — AI actions", () => {
     await expect(x.polishBody()).rejects.not.toBeInstanceOf(LLMNotConfiguredError);
   });
 });
+
+describe("草稿 重命名 / 复制副本（P4）", () => {
+  it("renameDraft PATCH 标题并刷新列表；当前草稿同步标题", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    patchMock.mockResolvedValue({ data: {} });
+    const s = useXhs();
+    s.$patch({ draftId: "d1", title: "旧" });
+    await s.renameDraft("d1", "新标题");
+    expect(patchMock).toHaveBeenCalledWith("/api/xhs/drafts/d1", { title: "新标题" });
+    expect(s.title).toBe("新标题");   // 当前草稿 id === "d1" → 同步本地标题
+    expect(getMock).toHaveBeenCalledWith("/api/xhs/drafts"); // loadDrafts 触发
+  });
+
+  it("renameDraft 当前打开的不是被改名的草稿，不同步本地标题", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    patchMock.mockResolvedValue({ data: {} });
+    const s = useXhs();
+    s.$patch({ draftId: "d2", title: "我自己的标题" });
+    await s.renameDraft("d1", "另一篇的新标题");
+    expect(s.title).toBe("我自己的标题"); // 不影响当前草稿
+  });
+
+  it("duplicateDraft POST /duplicate 并刷新列表，返回新 id", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    postMock.mockResolvedValue({ data: { id: "d2" } });
+    const s = useXhs();
+    const newId = await s.duplicateDraft("d1");
+    expect(postMock).toHaveBeenCalledWith("/api/xhs/drafts/d1/duplicate");
+    expect(getMock).toHaveBeenCalledWith("/api/xhs/drafts"); // loadDrafts 触发
+    expect(newId).toBe("d2");
+  });
+
+  it("duplicateDraft 后端不返回 id 时返回 null", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    postMock.mockResolvedValue({ data: {} });
+    const s = useXhs();
+    const newId = await s.duplicateDraft("d1");
+    expect(newId).toBeNull();
+  });
+});
