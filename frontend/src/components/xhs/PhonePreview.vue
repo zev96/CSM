@@ -4,13 +4,14 @@
  * 笔记页 / 发现页两 tab，布局对齐真实小红书 App。
  *
  * 设备外框用真实 iPhone mockup 图（裁掉留白，比例 866:1732≈1:2）：图作底层、
- * 内容绝对定位铺在屏幕白区。外框宽度驱动 + aspect-ratio 锁形 → 不拉伸。
+ * 内容铺在屏幕白区（内边距/圆角按 PNG 实测，圆角用百分比随尺寸缩放，杜绝四角
+ * 戳出黑边）。内容整体以 262px 设备为基准设计，再按实际设备宽 transform:scale
+ * 等比放大 → 手机变大时文字/卡片/间距全部等比例跟着放大，不失衡。
  *
- * 发现页固定 4 卡 = 3 张竞品 + 1 张自己。竞品按用户正文/标题里出现的品类词
- * （空气净化器/猫粮/吸尘器/狗粮）自动匹配对应品类的 3 张封面（用户自备素材）。
- * 笔记页多图时：右上角页数角标 + 底部可点圆点 + 左右箭头，鼠标可翻看每张图。
+ * 发现页固定 4 卡 = 3 竞品 + 1 自己，2×2 填满一屏（竞品按用户正文品类词匹配）。
+ * 笔记页多图：右上角页数 + 底部可点圆点 + 左右箭头，鼠标可翻看每张图。
  */
-import { computed, ref } from "vue";
+import { computed, ref, onMounted, onBeforeUnmount } from "vue";
 import { useXhs } from "@/stores/xhs";
 import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
@@ -32,6 +33,27 @@ const xhs = useXhs();
 const cfg = useConfig();
 const sidecar = useSidecar();
 
+// 内容等比缩放：以 262px 设备为基准设计，按实际设备宽缩放。
+const REF_DEVICE_W = 262;
+const deviceRef = ref<HTMLElement | null>(null);
+const scale = ref(1);
+let ro: ResizeObserver | null = null;
+function updateScale() {
+  const w = deviceRef.value?.clientWidth ?? 0;
+  if (w > 0) scale.value = w / REF_DEVICE_W;
+}
+onMounted(() => {
+  updateScale();
+  if (typeof ResizeObserver !== "undefined" && deviceRef.value) {
+    ro = new ResizeObserver(updateScale);
+    ro.observe(deviceRef.value);
+  }
+});
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  ro = null;
+});
+
 const imgCount = computed(() => xhs.imageIds.length);
 const hasMulti = computed(() => imgCount.value > 1);
 const clampedCover = computed(() => {
@@ -39,7 +61,6 @@ const clampedCover = computed(() => {
   if (n === 0) return 0;
   return xhs.coverIndex >= 0 && xhs.coverIndex < n ? xhs.coverIndex : 0;
 });
-// 发现页用户卡封面（用 coverIndex 选定的那张）
 const coverUrl = computed<string | null>(() =>
   imgCount.value ? sidecar.sseURL(`/api/xhs/images/${xhs.imageIds[clampedCover.value]}`) : null,
 );
@@ -108,7 +129,6 @@ const CATEGORIES: Category[] = [
   ] },
 ];
 
-// 按用户标题 + 正文里出现的品类词匹配竞品品类；都没命中默认第一个（空气净化器）。
 const matchedCategory = computed<Category>(() => {
   const text = `${xhs.title} ${xhs.body}`;
   return CATEGORIES.find((c) => c.keywords.some((k) => text.includes(k))) ?? CATEGORIES[0];
@@ -123,7 +143,7 @@ interface FeedCard {
   cover: string | null;
 }
 
-// 固定 4 张：竞品0 / 自己 / 竞品1 / 竞品2（自己插在第 2 位，首屏可见）。
+// 固定 4 张：竞品0 / 自己 / 竞品1 / 竞品2（自己插在第 2 位，2×2 填满）。
 const feedCards = computed<FeedCard[]>(() => {
   const comps: FeedCard[] = matchedCategory.value.cards.map((c) => ({
     mine: false,
@@ -171,128 +191,119 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 
     <!-- 舞台：居中、可滚（窗口很矮时滚动看全机身），杜绝设备被拉伸 -->
     <div class="phone-stage no-scrollbar">
-      <div class="device">
+      <div ref="deviceRef" class="device">
         <img class="device-png" :src="phoneFrame" alt="手机预览外框" />
         <div class="screen">
-          <!-- ══ 笔记页 ══ -->
-          <template v-if="xhs.previewTab === 'note'">
-            <div class="note-nav">
-              <span class="note-nav-back">❮</span>
-              <span class="mini-avatar" :style="{ width: '24px', height: '24px', fontSize: '11px' }">{{ avatarLetter }}</span>
-              <span class="note-nav-name">{{ nickname }}</span>
-              <span class="note-follow">关注</span>
-              <span class="note-nav-share">↗</span>
-            </div>
-            <div class="note-body no-scrollbar">
-              <!-- 封面 + 多图页数角标 + 左右箭头（鼠标可翻看） -->
-              <div class="note-cover-wrap">
-                <img
-                  v-if="noteImageUrl"
-                  class="xhs-cover-img note-cover"
-                  :src="noteImageUrl"
-                />
-                <div v-else class="note-cover note-cover-ph">暂无封面（左侧「图片」上传）</div>
-                <template v-if="hasMulti">
-                  <span class="note-pager">{{ noteIdx + 1 }}/{{ imgCount }}</span>
-                  <button
-                    type="button"
-                    class="note-arrow note-arrow-l"
-                    :disabled="noteIdx === 0"
-                    @click="prevImg"
-                  >‹</button>
-                  <button
-                    type="button"
-                    class="note-arrow note-arrow-r"
-                    :disabled="noteIdx === imgCount - 1"
-                    @click="nextImg"
-                  >›</button>
-                </template>
+          <!-- 内容按 262 基准设计，整体 scale 等比放大 -->
+          <div class="screen-scale" :style="{ transform: `scale(${scale})` }">
+            <!-- ══ 笔记页 ══ -->
+            <template v-if="xhs.previewTab === 'note'">
+              <div class="note-nav">
+                <span class="note-nav-back">❮</span>
+                <span class="mini-avatar" :style="{ width: '24px', height: '24px', fontSize: '11px' }">{{ avatarLetter }}</span>
+                <span class="note-nav-name">{{ nickname }}</span>
+                <span class="note-follow">关注</span>
+                <span class="note-nav-share">↗</span>
               </div>
-              <!-- 多图轮播圆点（可点切换，与下方标题留出间距） -->
-              <div v-if="hasMulti" class="note-dots">
-                <span
-                  v-for="n in imgCount"
-                  :key="n"
-                  class="note-dot"
-                  :class="{ 'note-dot-active': n - 1 === noteIdx }"
-                  @click="gotoImg(n - 1)"
-                />
-              </div>
-              <div class="note-content">
-                <div :style="{ fontSize: '15px', fontWeight: 700, lineHeight: 1.4, marginBottom: '6px', color: xhs.title ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayTitle }}</div>
-                <div :style="{ fontSize: '13px', lineHeight: 1.7, color: xhs.body ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayBody }}</div>
-                <div v-if="tags.length" :style="{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px' }">
-                  <span v-for="(t, i) in tags" :key="i" :style="{ fontSize: '13px', color: '#3a6fb0' }">#{{ t }}</span>
-                </div>
-                <div :style="{ marginTop: '12px', fontSize: '11px', color: '#bbb' }">编辑于 刚刚 · 广州</div>
-              </div>
-            </div>
-            <div class="note-actionbar">
-              <span class="note-comment-input">✏️ 说点什么...</span>
-              <span class="note-stat">♡ 5322</span>
-              <span class="note-stat">☆ 705</span>
-              <span class="note-stat">💬 1171</span>
-            </div>
-          </template>
-
-          <!-- ══ 发现页（固定 4 卡：3 竞品 + 1 自己）══ -->
-          <template v-else>
-            <div class="dc-topbar">
-              <span class="dc-icon">💬</span>
-              <div class="dc-tabs">
-                <span
-                  v-for="(t, i) in DISCOVER_TABS"
-                  :key="t"
-                  class="dc-tab"
-                  :class="{ 'dc-tab-active': t === '发现' }"
-                >{{ t }}<sup v-if="i === 0" class="dc-tab-dot">8</sup></span>
-              </div>
-              <span class="dc-icon">🔍</span>
-            </div>
-            <div class="dc-subtabs no-scrollbar">
-              <span
-                v-for="(s, i) in SUB_TABS"
-                :key="s"
-                class="dc-subtab"
-                :class="{ 'dc-subtab-active': i === 0 }"
-              >{{ s }}</span>
-            </div>
-            <div class="dc-feed no-scrollbar">
-              <div
-                v-for="(card, i) in feedCards"
-                :key="i"
-                class="dc-card"
-                :class="{ 'dc-mine': card.mine }"
-              >
-                <div class="dc-cover-wrap">
+              <div class="note-body no-scrollbar">
+                <div class="note-cover-wrap">
                   <img
-                    v-if="card.cover"
-                    class="dc-cover"
-                    :class="{ 'xhs-cover-img': card.mine }"
-                    :src="card.cover"
+                    v-if="noteImageUrl"
+                    class="xhs-cover-img note-cover"
+                    :src="noteImageUrl"
                   />
-                  <div v-else class="dc-cover dc-cover-ph"><span class="dc-emoji">📷</span></div>
-                  <span v-if="card.mine" class="dc-badge dc-badge-mine">我的</span>
+                  <div v-else class="note-cover note-cover-ph">暂无封面（左侧「图片」上传）</div>
+                  <template v-if="hasMulti">
+                    <span class="note-pager">{{ noteIdx + 1 }}/{{ imgCount }}</span>
+                    <button type="button" class="note-arrow note-arrow-l" :disabled="noteIdx === 0" @click="prevImg">‹</button>
+                    <button type="button" class="note-arrow note-arrow-r" :disabled="noteIdx === imgCount - 1" @click="nextImg">›</button>
+                  </template>
                 </div>
-                <div class="dc-meta">
-                  <div class="dc-title" :class="{ 'dc-title-empty': card.mine && !xhs.title }">{{ card.title }}</div>
-                  <div class="dc-author">
-                    <span class="mini-avatar dc-avatar">{{ card.avatar }}</span>
-                    <span class="dc-name">{{ card.author }}</span>
-                    <span class="dc-likes">♡ {{ card.likes }}</span>
+                <div v-if="hasMulti" class="note-dots">
+                  <span
+                    v-for="n in imgCount"
+                    :key="n"
+                    class="note-dot"
+                    :class="{ 'note-dot-active': n - 1 === noteIdx }"
+                    @click="gotoImg(n - 1)"
+                  />
+                </div>
+                <div class="note-content">
+                  <div :style="{ fontSize: '15px', fontWeight: 700, lineHeight: 1.4, marginBottom: '6px', color: xhs.title ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayTitle }}</div>
+                  <div :style="{ fontSize: '13px', lineHeight: 1.7, color: xhs.body ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayBody }}</div>
+                  <div v-if="tags.length" :style="{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px' }">
+                    <span v-for="(t, i) in tags" :key="i" :style="{ fontSize: '13px', color: '#3a6fb0' }">#{{ t }}</span>
+                  </div>
+                  <div :style="{ marginTop: '12px', fontSize: '11px', color: '#bbb' }">编辑于 刚刚 · 广州</div>
+                </div>
+              </div>
+              <div class="note-actionbar">
+                <span class="note-comment-input">✏️ 说点什么...</span>
+                <span class="note-stat">♡ 5322</span>
+                <span class="note-stat">☆ 705</span>
+                <span class="note-stat">💬 1171</span>
+              </div>
+            </template>
+
+            <!-- ══ 发现页（固定 4 卡：3 竞品 + 1 自己，2×2 填满）══ -->
+            <template v-else>
+              <div class="dc-topbar">
+                <span class="dc-icon">💬</span>
+                <div class="dc-tabs">
+                  <span
+                    v-for="(t, i) in DISCOVER_TABS"
+                    :key="t"
+                    class="dc-tab"
+                    :class="{ 'dc-tab-active': t === '发现' }"
+                  >{{ t }}<sup v-if="i === 0" class="dc-tab-dot">8</sup></span>
+                </div>
+                <span class="dc-icon">🔍</span>
+              </div>
+              <div class="dc-subtabs no-scrollbar">
+                <span
+                  v-for="(s, i) in SUB_TABS"
+                  :key="s"
+                  class="dc-subtab"
+                  :class="{ 'dc-subtab-active': i === 0 }"
+                >{{ s }}</span>
+              </div>
+              <div class="dc-feed">
+                <div
+                  v-for="(card, i) in feedCards"
+                  :key="i"
+                  class="dc-card"
+                  :class="{ 'dc-mine': card.mine }"
+                >
+                  <div class="dc-cover-wrap">
+                    <img
+                      v-if="card.cover"
+                      class="dc-cover"
+                      :class="{ 'xhs-cover-img': card.mine }"
+                      :src="card.cover"
+                    />
+                    <div v-else class="dc-cover dc-cover-ph"><span class="dc-emoji">📷</span></div>
+                    <span v-if="card.mine" class="dc-badge dc-badge-mine">我的</span>
+                  </div>
+                  <div class="dc-meta">
+                    <div class="dc-title" :class="{ 'dc-title-empty': card.mine && !xhs.title }">{{ card.title }}</div>
+                    <div class="dc-author">
+                      <span class="mini-avatar dc-avatar">{{ card.avatar }}</span>
+                      <span class="dc-name">{{ card.author }}</span>
+                      <span class="dc-likes">♡ {{ card.likes }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-            <div class="dc-nav">
-              <span
-                v-for="(n, i) in NAV"
-                :key="i"
-                class="dc-nav-item"
-                :class="{ 'dc-nav-home': i === 0, 'dc-nav-plus': n === '+' }"
-              >{{ n }}</span>
-            </div>
-          </template>
+              <div class="dc-nav">
+                <span
+                  v-for="(n, i) in NAV"
+                  :key="i"
+                  class="dc-nav-item"
+                  :class="{ 'dc-nav-home': i === 0, 'dc-nav-plus': n === '+' }"
+                >{{ n }}</span>
+              </div>
+            </template>
+          </div>
         </div>
       </div>
     </div>
@@ -337,18 +348,26 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   user-select: none;
   z-index: 0;
 }
+/* 屏幕白区：实测内边距 + 百分比圆角（随尺寸缩放，四角始终贴合不戳黑边） */
 .screen {
   position: absolute;
-  top: 2.66%;
-  left: 6.24%;
-  right: 6.24%;
-  bottom: 2.71%;
+  top: 2.71%;
+  left: 6.47%;
+  right: 6.47%;
+  bottom: 2.83%;
   z-index: 1;
   background: #fff;
-  border-radius: 24px;
+  border-radius: 10.1% / 4.6%;
   overflow: hidden;
+}
+/* 以 262 设备为基准的内容画布：228×495，再整体 scale 等比放大 */
+.screen-scale {
+  width: 228px;
+  height: 495px;
+  transform-origin: top left;
   display: flex;
   flex-direction: column;
+  background: #fff;
 }
 
 .mini-avatar {
@@ -469,7 +488,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   display: flex;
   justify-content: center;
   gap: 4px;
-  padding: 9px 0 7px; /* 与下方标题留出间距 */
+  padding: 9px 0 7px;
 }
 .note-dot {
   width: 6px;
@@ -489,7 +508,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 10px;
   border-top: 1px solid var(--line-2);
   background: #fff;
 }
@@ -573,17 +592,21 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   color: var(--ink);
   font-weight: 700;
 }
+/* 2×2 等高网格：4 张卡铺满 feed 区，封面填满卡片剩余高度，无下方留白 */
 .dc-feed {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   display: grid;
-  grid-template-columns: 1fr 1fr; /* 平均双列网格：4 张卡均匀布局 */
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
   gap: 7px;
-  align-content: start;
-  padding: 2px 7px 6px;
+  padding: 2px 7px 7px;
 }
 .dc-card {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border-radius: 9px;
   overflow: hidden;
   background: #fff;
@@ -595,8 +618,9 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 }
 .dc-cover-wrap {
   position: relative;
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  aspect-ratio: 3 / 4; /* 统一小红书笔记封面比例 */
 }
 .dc-cover {
   width: 100%;
@@ -629,7 +653,8 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   background: var(--primary);
 }
 .dc-meta {
-  padding: 6px 7px 8px;
+  flex-shrink: 0;
+  padding: 6px 7px 7px;
 }
 .dc-title {
   font-size: 10px;
@@ -649,7 +674,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 6px;
+  margin-top: 5px;
 }
 .dc-avatar {
   width: 14px;
@@ -676,7 +701,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   align-items: center;
   justify-content: space-around;
   border-top: 1px solid var(--line-2);
-  padding: 7px 4px calc(7px + env(safe-area-inset-bottom, 0px));
+  padding: 7px 4px;
   background: #fff;
 }
 .dc-nav-item {
