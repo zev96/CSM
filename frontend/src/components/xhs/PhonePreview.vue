@@ -3,14 +3,14 @@
  * 手机预览（设计稿 §4.3）—— 纯 computed 渲染，不做 DOM 转图（导出=复制文案）。
  * 笔记页 / 发现页两 tab，布局对齐真实小红书 App。
  *
- * 设备外框用真实 iPhone mockup 图（已裁掉留白，比例 866:1732≈1:2）：图作底层、
- * 内容绝对定位铺在屏幕白区（内边距按 PNG 实测）。外框宽度驱动 + aspect-ratio
- * 锁形 → 任何窗口尺寸都不拉伸。两页内容区滚动但隐藏滚动条（.no-scrollbar）。
+ * 设备外框用真实 iPhone mockup 图（裁掉留白，比例 866:1732≈1:2）：图作底层、
+ * 内容绝对定位铺在屏幕白区。外框宽度驱动 + aspect-ratio 锁形 → 不拉伸。
  *
- * 发现页的仿造 feed 封面图为用户自备素材（放 src/assets/xhs-feed），随包打进；
- * 笔记页多图时右上角显示页数、封面下方显示轮播圆点（对齐小红书图集笔记）。
+ * 发现页固定 4 卡 = 3 张竞品 + 1 张自己。竞品按用户正文/标题里出现的品类词
+ * （空气净化器/猫粮/吸尘器/狗粮）自动匹配对应品类的 3 张封面（用户自备素材）。
+ * 笔记页多图时：右上角页数角标 + 底部可点圆点 + 左右箭头，鼠标可翻看每张图。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useXhs } from "@/stores/xhs";
 import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
@@ -39,10 +39,31 @@ const clampedCover = computed(() => {
   if (n === 0) return 0;
   return xhs.coverIndex >= 0 && xhs.coverIndex < n ? xhs.coverIndex : 0;
 });
-const coverUrl = computed<string | null>(() => {
-  if (!imgCount.value) return null;
-  return sidecar.sseURL(`/api/xhs/images/${xhs.imageIds[clampedCover.value]}`);
+// 发现页用户卡封面（用 coverIndex 选定的那张）
+const coverUrl = computed<string | null>(() =>
+  imgCount.value ? sidecar.sseURL(`/api/xhs/images/${xhs.imageIds[clampedCover.value]}`) : null,
+);
+
+// 笔记页轮播：本地浏览索引；null = 跟随封面，点箭头/圆点后切到指定图。
+const browseIdx = ref<number | null>(null);
+const noteIdx = computed(() => {
+  const n = imgCount.value;
+  if (n === 0) return 0;
+  const base = browseIdx.value ?? clampedCover.value;
+  return Math.min(Math.max(base, 0), n - 1);
 });
+const noteImageUrl = computed<string | null>(() =>
+  imgCount.value ? sidecar.sseURL(`/api/xhs/images/${xhs.imageIds[noteIdx.value]}`) : null,
+);
+function prevImg() {
+  if (noteIdx.value > 0) browseIdx.value = noteIdx.value - 1;
+}
+function nextImg() {
+  if (noteIdx.value < imgCount.value - 1) browseIdx.value = noteIdx.value + 1;
+}
+function gotoImg(i: number) {
+  browseIdx.value = i;
+}
 
 const nickname = computed<string>(() => String(cfg.data?.user_name ?? "") || "我的小红书");
 const avatarLetter = computed<string>(() => (nickname.value || "我").slice(0, 1).toUpperCase());
@@ -51,9 +72,48 @@ const displayTitle = computed(() => xhs.title || "添加标题更吸睛～");
 const displayBody = computed(() => xhs.body || "正文还没写哦，左侧素材点一点，右侧实时预览～");
 const tags = computed(() => xhs.topics.filter((t) => t.trim()));
 
-// ── 发现页：模拟 feed（数码/萌宠好物分享，对齐真实小红书发现页）──────────────
-// 封面为用户自备图片素材；文案自撰。封面统一裁成 3:4（小红书笔记标准比例），
-// 均匀双列网格、隐藏滚动条。用户自己的笔记混在其中（橙框「我的」）。
+// ── 发现页竞品：按品类词匹配（用户自备封面素材 + 自撰文案）────────────────────
+interface CompCard {
+  title: string;
+  author: string;
+  likes: string;
+  cover: string;
+}
+interface Category {
+  key: string;
+  keywords: string[];
+  cards: CompCard[];
+}
+
+const CATEGORIES: Category[] = [
+  { key: "purifier", keywords: ["空气净化器", "净化器", "除甲醛", "甲醛"], cards: [
+    { title: "除甲醛空气净化器选购指南｜避坑必看", author: "科技博薯", likes: "89", cover: purifier1 },
+    { title: "新房入住前，这台空气净化器真没白买", author: "暖暖家居", likes: "312", cover: purifier2 },
+    { title: "母婴家庭怎么选空气净化器？一篇讲透", author: "萌妈日记", likes: "156", cover: purifier3 },
+  ] },
+  { key: "vacuum", keywords: ["吸尘器", "扫地机", "吸尘"], cards: [
+    { title: "吸尘器怎么选？三款主流真实横评", author: "数码张", likes: "327", cover: vacuum1 },
+    { title: "养宠家庭的吸尘器，吸毛是真的强", author: "毛孩子妈", likes: "175", cover: vacuum2 },
+    { title: "无线吸尘器选购｜别再交智商税", author: "居家好物", likes: "64", cover: vacuum3 },
+  ] },
+  { key: "catfood", keywords: ["猫粮", "猫咪", "猫"], cards: [
+    { title: "猫粮怎么选？配料表避雷指南🐱", author: "撸猫日常", likes: "421", cover: catfood1 },
+    { title: "主子吃了不软便的猫粮，已无限回购", author: "三只猫", likes: "88", cover: catfood2 },
+    { title: "平价猫粮测评｜学生养猫也能放心冲", author: "穷养幸福", likes: "203", cover: catfood3 },
+  ] },
+  { key: "dogfood", keywords: ["狗粮", "狗狗", "幼犬", "狗"], cards: [
+    { title: "狗粮红黑榜｜这几款放心闭眼囤", author: "狗子饭堂", likes: "509", cover: dogfood1 },
+    { title: "幼犬狗粮怎么选？新手养狗必看", author: "柴犬团子", likes: "142", cover: dogfood2 },
+    { title: "天然粮 vs 商品粮，差别真有这么大？", author: "科学养宠", likes: "97", cover: dogfood3 },
+  ] },
+];
+
+// 按用户标题 + 正文里出现的品类词匹配竞品品类；都没命中默认第一个（空气净化器）。
+const matchedCategory = computed<Category>(() => {
+  const text = `${xhs.title} ${xhs.body}`;
+  return CATEGORIES.find((c) => c.keywords.some((k) => text.includes(k))) ?? CATEGORIES[0];
+});
+
 interface FeedCard {
   mine: boolean;
   title: string;
@@ -63,22 +123,16 @@ interface FeedCard {
   cover: string | null;
 }
 
-const MOCK_CARDS: Omit<FeedCard, "mine" | "avatar">[] = [
-  { title: "除甲醛空气净化器选购指南｜避坑必看", author: "科技博薯", likes: "89", cover: purifier1 },
-  { title: "猫粮怎么选？配料表避雷指南", author: "撸猫日常", likes: "421", cover: catfood1 },
-  { title: "吸尘器哪款值得买？三款真实横评", author: "数码张", likes: "327", cover: vacuum1 },
-  { title: "狗粮红黑榜｜这几款放心囤", author: "狗子饭堂", likes: "509", cover: dogfood1 },
-  { title: "新房入住前，这台空气净化器真没白买", author: "暖暖家", likes: "312", cover: purifier2 },
-  { title: "主子吃了不软便的猫粮，已回购", author: "三只猫", likes: "88", cover: catfood2 },
-  { title: "养宠家庭的吸尘器，吸毛是真的强", author: "毛孩子妈", likes: "175", cover: vacuum2 },
-  { title: "幼犬狗粮怎么选？新手养狗必看", author: "柴犬团子", likes: "142", cover: dogfood2 },
-  { title: "母婴家庭怎么选空气净化器？一篇讲透", author: "萌妈日记", likes: "156", cover: purifier3 },
-  { title: "平价猫粮测评｜学生养猫也能冲", author: "穷养也幸福", likes: "203", cover: catfood3 },
-  { title: "无线吸尘器选购｜别再交智商税", author: "居家好物", likes: "64", cover: vacuum3 },
-  { title: "天然粮 vs 商品粮，差别真有这么大？", author: "科学养宠", likes: "97", cover: dogfood3 },
-];
-
+// 固定 4 张：竞品0 / 自己 / 竞品1 / 竞品2（自己插在第 2 位，首屏可见）。
 const feedCards = computed<FeedCard[]>(() => {
+  const comps: FeedCard[] = matchedCategory.value.cards.map((c) => ({
+    mine: false,
+    title: c.title,
+    author: c.author,
+    avatar: c.author.slice(0, 1).toUpperCase(),
+    likes: c.likes,
+    cover: c.cover,
+  }));
   const mine: FeedCard = {
     mine: true,
     title: displayTitle.value,
@@ -87,14 +141,7 @@ const feedCards = computed<FeedCard[]>(() => {
     likes: "1.2k",
     cover: coverUrl.value,
   };
-  const others: FeedCard[] = MOCK_CARDS.map((c) => ({
-    ...c,
-    mine: false,
-    avatar: c.author.slice(0, 1).toUpperCase(),
-  }));
-  // 把自己的笔记插到第 2 位（首屏可见、又不显得刻意置顶）。
-  others.splice(1, 0, mine);
-  return others;
+  return [comps[0], mine, comps[1], comps[2]];
 });
 
 const DISCOVER_TABS = ["关注", "发现", "世界杯", "广州"];
@@ -129,7 +176,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
         <div class="screen">
           <!-- ══ 笔记页 ══ -->
           <template v-if="xhs.previewTab === 'note'">
-            <!-- 顶部导航：返回 / 作者 / 关注 / 分享 -->
             <div class="note-nav">
               <span class="note-nav-back">❮</span>
               <span class="mini-avatar" :style="{ width: '24px', height: '24px', fontSize: '11px' }">{{ avatarLetter }}</span>
@@ -137,25 +183,39 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
               <span class="note-follow">关注</span>
               <span class="note-nav-share">↗</span>
             </div>
-            <!-- 内容（可滚，隐藏滚动条） -->
             <div class="note-body no-scrollbar">
-              <!-- 封面 + 多图页数角标 -->
+              <!-- 封面 + 多图页数角标 + 左右箭头（鼠标可翻看） -->
               <div class="note-cover-wrap">
                 <img
-                  v-if="coverUrl"
+                  v-if="noteImageUrl"
                   class="xhs-cover-img note-cover"
-                  :src="coverUrl"
+                  :src="noteImageUrl"
                 />
                 <div v-else class="note-cover note-cover-ph">暂无封面（左侧「图片」上传）</div>
-                <span v-if="hasMulti" class="note-pager">{{ clampedCover + 1 }}/{{ imgCount }}</span>
+                <template v-if="hasMulti">
+                  <span class="note-pager">{{ noteIdx + 1 }}/{{ imgCount }}</span>
+                  <button
+                    type="button"
+                    class="note-arrow note-arrow-l"
+                    :disabled="noteIdx === 0"
+                    @click="prevImg"
+                  >‹</button>
+                  <button
+                    type="button"
+                    class="note-arrow note-arrow-r"
+                    :disabled="noteIdx === imgCount - 1"
+                    @click="nextImg"
+                  >›</button>
+                </template>
               </div>
-              <!-- 多图轮播圆点（与下方标题留出间距） -->
+              <!-- 多图轮播圆点（可点切换，与下方标题留出间距） -->
               <div v-if="hasMulti" class="note-dots">
                 <span
                   v-for="n in imgCount"
                   :key="n"
                   class="note-dot"
-                  :class="{ 'note-dot-active': n - 1 === clampedCover }"
+                  :class="{ 'note-dot-active': n - 1 === noteIdx }"
+                  @click="gotoImg(n - 1)"
                 />
               </div>
               <div class="note-content">
@@ -167,7 +227,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                 <div :style="{ marginTop: '12px', fontSize: '11px', color: '#bbb' }">编辑于 刚刚 · 广州</div>
               </div>
             </div>
-            <!-- 底部操作栏：评论框 + 点赞/收藏/评论 计数 -->
             <div class="note-actionbar">
               <span class="note-comment-input">✏️ 说点什么...</span>
               <span class="note-stat">♡ 5322</span>
@@ -176,7 +235,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
             </div>
           </template>
 
-          <!-- ══ 发现页 ══ -->
+          <!-- ══ 发现页（固定 4 卡：3 竞品 + 1 自己）══ -->
           <template v-else>
             <div class="dc-topbar">
               <span class="dc-icon">💬</span>
@@ -198,7 +257,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                 :class="{ 'dc-subtab-active': i === 0 }"
               >{{ s }}</span>
             </div>
-            <!-- 瀑布流 feed（均匀双列网格，可滚，隐藏滚动条） -->
             <div class="dc-feed no-scrollbar">
               <div
                 v-for="(card, i) in feedCards"
@@ -376,6 +434,37 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   padding: 3px 7px;
   border-radius: 999px;
 }
+.note-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(0, 0, 0, 0.32);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.note-arrow:hover {
+  background: rgba(0, 0, 0, 0.5);
+}
+.note-arrow:disabled {
+  opacity: 0;
+  cursor: default;
+}
+.note-arrow-l {
+  left: 6px;
+}
+.note-arrow-r {
+  right: 6px;
+}
 .note-dots {
   display: flex;
   justify-content: center;
@@ -383,10 +472,11 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   padding: 9px 0 7px; /* 与下方标题留出间距 */
 }
 .note-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 999px;
   background: rgba(var(--ink-rgb), 0.22);
+  cursor: pointer;
 }
 .note-dot-active {
   background: var(--ink-2);
@@ -488,7 +578,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: 1fr 1fr; /* 平均双列网格 */
+  grid-template-columns: 1fr 1fr; /* 平均双列网格：4 张卡均匀布局 */
   gap: 7px;
   align-content: start;
   padding: 2px 7px 6px;

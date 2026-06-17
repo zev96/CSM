@@ -59,14 +59,31 @@ describe("PhonePreview 封面", () => {
 });
 
 describe("PhonePreview 发现页瀑布流", () => {
-  it("渲染瀑布流卡片（12 条真实图 mock + 自己的笔记）+ 子分类 + 底部导航", () => {
+  it("固定 4 张卡（3 竞品 + 自己）+ 子分类 + 底部导航", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    // 12 条 mock + 自己 1 条 = 13 张卡，均匀双列网格
-    expect(w.findAll(".dc-card").length).toBe(13);
+    // 3 竞品 + 自己 1 条 = 4 张卡，均匀双列网格
+    expect(w.findAll(".dc-card").length).toBe(4);
+    expect(w.findAll(".dc-mine").length).toBe(1);
     expect(w.find(".dc-nav").exists()).toBe(true);
     expect(w.find(".dc-subtabs").exists()).toBe(true);
+    w.unmount();
+  });
+
+  it("竞品按正文品类词匹配（吸尘器→吸尘器竞品）", () => {
+    const store = useXhs();
+    store.$patch({ previewTab: "discover", body: "求推荐一款好用的吸尘器" });
+    const w = mount(PhonePreview);
+    expect(w.find(".dc-feed").text()).toContain("吸尘器");
+    w.unmount();
+  });
+
+  it("无品类词时默认显示空气净化器竞品", () => {
+    const store = useXhs();
+    store.$patch({ previewTab: "discover" });
+    const w = mount(PhonePreview);
+    expect(w.find(".dc-feed").text()).toContain("空气净化器");
     w.unmount();
   });
 
@@ -114,6 +131,27 @@ describe("PhonePreview 笔记页多图", () => {
     const w = mount(PhonePreview);
     expect(w.find(".note-pager").exists()).toBe(false);
     expect(w.find(".note-dots").exists()).toBe(false);
+    w.unmount();
+  });
+
+  it("点右箭头翻到下一张，页数同步（鼠标可翻看）", async () => {
+    const store = useXhs();
+    store.$patch({ imageIds: ["a", "b", "c"], coverIndex: 0, previewTab: "note" });
+    const w = mount(PhonePreview);
+    expect(w.find(".note-pager").text()).toBe("1/3");
+    await w.find(".note-arrow-r").trigger("click");
+    expect(w.find(".note-pager").text()).toBe("2/3");
+    await w.find(".note-arrow-r").trigger("click");
+    expect(w.find(".note-pager").text()).toBe("3/3");
+    w.unmount();
+  });
+
+  it("点圆点直接跳到对应图", async () => {
+    const store = useXhs();
+    store.$patch({ imageIds: ["a", "b", "c"], coverIndex: 0, previewTab: "note" });
+    const w = mount(PhonePreview);
+    await w.findAll(".note-dot")[2].trigger("click");
+    expect(w.find(".note-pager").text()).toBe("3/3");
     w.unmount();
   });
 });
