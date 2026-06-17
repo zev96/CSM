@@ -155,3 +155,25 @@ describe("PhonePreview 笔记页多图", () => {
     w.unmount();
   });
 });
+
+describe("PhonePreview 代码 chip", () => {
+  it("正文含 [害羞R] 渲染成 chip（显示标签「害羞」）", () => {
+    const store = useXhs();
+    store.$patch({ body: "今天[害羞R]好开心", previewTab: "note" });
+    const w = mount(PhonePreview);
+    const chips = w.findAll(".xhs-code-chip");
+    expect(chips.length).toBe(1);
+    expect(chips[0].text()).toBe("害羞");
+    expect(w.text()).toContain("今天");
+    expect(w.text()).toContain("好开心");
+    w.unmount();
+  });
+
+  it("正文无代码时不产生 chip", () => {
+    const store = useXhs();
+    store.$patch({ body: "纯文本正文", previewTab: "note" });
+    const w = mount(PhonePreview);
+    expect(w.findAll(".xhs-code-chip").length).toBe(0);
+    w.unmount();
+  });
+});

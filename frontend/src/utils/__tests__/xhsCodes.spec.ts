@@ -32,4 +32,12 @@ describe("tokenizeXhsCodes", () => {
   it("非 R 结尾的方括号不当代码", () => {
     expect(tokenizeXhsCodes("[备注]说明")).toEqual([{ type: "text", value: "[备注]说明", label: "" }]);
   });
+
+  it("代码开头 + 尾随文本 → code/text 两段", () => {
+    const segs = tokenizeXhsCodes("[害羞R]结束");
+    expect(segs).toEqual([
+      { type: "code", value: "[害羞R]", label: "害羞" },
+      { type: "text", value: "结束", label: "" },
+    ]);
+  });
 });
