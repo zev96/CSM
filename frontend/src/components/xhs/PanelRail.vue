@@ -8,7 +8,6 @@ import { computed, type Component } from "vue";
 import Icon from "@/components/ui/Icon.vue";
 import { useXhs, type XhsPanel } from "@/stores/xhs";
 import TemplatePanel from "./panels/TemplatePanel.vue";
-import ThemePanel from "./panels/ThemePanel.vue";
 import EmojiPanel from "./panels/EmojiPanel.vue";
 import TitlePanel from "./panels/TitlePanel.vue";
 import CopyPanel from "./panels/CopyPanel.vue";
@@ -30,7 +29,6 @@ interface PanelDef {
 // icon 全部复用 Icon.vue 现有图标，避免新增 SVG。
 const PANELS: PanelDef[] = [
   { key: "template", icon: "library", label: "模版", stage: "P1" },
-  { key: "theme", icon: "sliders", label: "主题", stage: "P1" },
   { key: "emoji", icon: "heart", label: "表情", stage: "P1" },
   { key: "title", icon: "edit", label: "标题", stage: "P1" },
   { key: "copy", icon: "doc", label: "文案", stage: "P1" },
@@ -43,7 +41,6 @@ const PANELS: PanelDef[] = [
 // activePanel → 面板组件；9 面板全部映射（v-else 兜底未来未映射的 panel）。
 const PANEL_COMPONENTS: Partial<Record<XhsPanel, Component>> = {
   template: TemplatePanel,
-  theme: ThemePanel,
   emoji: EmojiPanel,
   title: TitlePanel,
   copy: CopyPanel,

@@ -13,8 +13,6 @@ vi.mock("@/stores/sidecar", () => ({
 }));
 
 import { useXhs, _resetXhsModuleState, LLMNotConfiguredError } from "@/stores/xhs";
-import { THEMES } from "@/data/xhs/assets";
-import { orderedMarker } from "@/utils/xhsTheme";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -191,68 +189,6 @@ describe("useXhs — 模板载入", () => {
   });
 });
 
-describe("useXhs — 排版主题", () => {
-  it("默认无激活主题，activeTheme=null、themeToolbar 为空", () => {
-    const x = useXhs();
-    expect(x.activeTheme).toBeNull();
-    expect(x.themeToolbar).toEqual([]);
-  });
-
-  it("applyTheme 设激活主题，activeTheme 解析出主题对象", () => {
-    const x = useXhs();
-    const t = THEMES[0];
-    x.applyTheme(t.id);
-    expect(x.themeId).toBe(t.id);
-    expect(x.activeTheme?.id).toBe(t.id);
-  });
-
-  it("themeToolbar 由激活主题映射出 小标题/无序/有序/分割线 四个按钮", () => {
-    const x = useXhs();
-    const t = THEMES[0];
-    x.applyTheme(t.id);
-    const tb = x.themeToolbar;
-    expect(tb.map((b) => b.key)).toEqual(["heading", "bullet", "ordered", "divider"]);
-    expect(tb.find((b) => b.key === "heading")?.symbol).toBe(t.heading);
-    expect(tb.find((b) => b.key === "bullet")?.symbol).toBe(t.bullet);
-    expect(tb.find((b) => b.key === "divider")?.symbol).toBe(t.divider);
-  });
-
-  it("applyTheme 触发去抖保存", async () => {
-    postMock.mockResolvedValue({ data: { id: "d1" } });
-    patchMock.mockResolvedValue({ data: {} });
-    const x = useXhs();
-    x.$patch({ title: "有内容" }); // 非空才会真的建草稿
-    x.applyTheme(THEMES[0].id);
-    await vi.advanceTimersByTimeAsync(800);
-    expect(postMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("themeToolbar 的「有序」symbol = 该主题样式的第 1 个序号字形", () => {
-    const x = useXhs();
-    const t = THEMES.find((th) => th.ordered === "circle") ?? THEMES[0];
-    x.applyTheme(t.id);
-    const ordered = x.themeToolbar.find((b) => b.key === "ordered");
-    expect(ordered?.label).toBe("有序");
-    expect(ordered?.symbol).toBe(orderedMarker(1, t.ordered));
-  });
-
-  it("insertOrdered 按正文已有序号数插入下一个序号", () => {
-    const x = useXhs();
-    const t = THEMES.find((th) => th.ordered === "emoji") ?? THEMES[0];
-    x.applyTheme(t.id);
-    x.setBody("1️⃣ 第一条\n"); // 已有 1 个 emoji 序号
-    // 本测试未注册光标插入器 → insertAtCursor 回退「追加正文末」，故可直接断言 x.body
-    x.insertOrdered();          // 应插入第 2 个 → "2️⃣ "
-    expect(x.body).toContain("2️⃣ ");
-  });
-
-  it("无激活主题时 insertOrdered 不动正文", () => {
-    const x = useXhs();
-    x.setBody("原样");
-    x.insertOrdered();
-    expect(x.body).toBe("原样");
-  });
-});
 
 describe("useXhs — 图片", () => {
   it("isEmpty 也看图片：有图即非空", () => {
@@ -337,43 +273,6 @@ describe("isEmpty（话题入正文后）", () => {
   });
 });
 
-describe("insertOrdered 按光标前列表块计数（P4）", () => {
-  it("有探针时按当前块算下一个序号", () => {
-    const s = useXhs();
-    s.applyTheme("warm_yellow"); // 任一存在的主题；取其 ordered 样式
-    const style = s.activeTheme!.ordered;
-    const inserted: string[] = [];
-    s.registerInserter((t) => inserted.push(t));
-    // 当前块已有 2 个序号 → 期望插入第 3 个
-    const before = `${orderedMarker(1, style)} a\n${orderedMarker(2, style)} b\n`;
-    s.registerCursorProbe(() => ({ before }));
-    s.insertOrdered();
-    expect(inserted[0]).toBe(orderedMarker(3, style) + " ");
-  });
-
-  it("空行后是新块 → 从 1 起", () => {
-    const s = useXhs();
-    s.applyTheme("warm_yellow");
-    const style = s.activeTheme!.ordered;
-    const inserted: string[] = [];
-    s.registerInserter((t) => inserted.push(t));
-    s.registerCursorProbe(() => ({ before: `${orderedMarker(1, style)} a\n\n` }));
-    s.insertOrdered();
-    expect(inserted[0]).toBe(orderedMarker(1, style) + " ");
-  });
-
-  it("无探针时回退按整段正文尾块计数", () => {
-    const s = useXhs();
-    s.applyTheme("warm_yellow");
-    const style = s.activeTheme!.ordered;
-    s.$patch({ body: `${orderedMarker(1, style)} a\n` });
-    const inserted: string[] = [];
-    s.registerInserter((t) => inserted.push(t));
-    s.registerCursorProbe(null);
-    s.insertOrdered();
-    expect(inserted[0]).toBe(orderedMarker(2, style) + " ");
-  });
-});
 
 describe("useXhs — AI actions", () => {
   it("generateNote 返回后端 {title, body, topics}", async () => {

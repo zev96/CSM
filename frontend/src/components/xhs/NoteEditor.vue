@@ -16,15 +16,9 @@ const { insert } = useCursorInsert(bodyRef, (v) => xhs.setBody(v));
 
 onMounted(() => {
   xhs.registerInserter(insert);
-  xhs.registerCursorProbe(() => {
-    const el = bodyRef.value;
-    const pos = el ? (el.selectionStart ?? el.value.length) : 0;
-    return { before: (el?.value ?? xhs.body).slice(0, pos) };
-  });
 });
 onUnmounted(() => {
   xhs.registerInserter(null);
-  xhs.registerCursorProbe(null);
 });
 
 const labelStyle = {
@@ -51,25 +45,9 @@ const inputBaseStyle = {
 
 <template>
   <div class="flex h-full flex-col" :style="{ gap: '14px' }">
-    <!-- 工具条：排版主题快捷符号 + 表情快捷（设计稿 §4.1 中栏工具条 / §1 P1） -->
+    <!-- 工具条：表情快捷（设计稿 §4.1 中栏工具条） -->
     <div class="flex flex-wrap items-center" :style="{ gap: '6px', flexShrink: 0 }">
-      <template v-if="xhs.themeToolbar.length">
-        <button
-          v-for="b in xhs.themeToolbar"
-          :key="b.key"
-          type="button"
-          class="xhs-tool-btn"
-          :title="`插入${b.label}符号`"
-          @click="b.key === 'ordered' ? xhs.insertOrdered() : xhs.insertAtCursor(b.symbol)"
-        >
-          <span :style="{ fontSize: '14px' }">{{ b.symbol }}</span>
-          <span :style="{ fontSize: '12px', color: 'var(--ink-2)' }">{{ b.label }}</span>
-        </button>
-      </template>
-      <button v-else type="button" class="xhs-tool-btn" @click="xhs.setActivePanel('theme')">
-        <Icon name="wand" :size="14" /> 选择排版主题
-      </button>
-      <button type="button" class="xhs-tool-btn" :style="{ marginLeft: 'auto' }" @click="xhs.setActivePanel('emoji')">
+      <button type="button" class="xhs-tool-btn" @click="xhs.setActivePanel('emoji')">
         <Icon name="heart" :size="14" /> 表情
       </button>
     </div>
