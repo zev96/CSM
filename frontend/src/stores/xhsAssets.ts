@@ -1,0 +1,53 @@
+/**
+ * 小红书自定义素材 store（设计稿 §3.4）。kind ∈ template|copy|topic_group，
+ * 与起步 JSON 合并显示、标「我的」分组。setup-store 写法（仿 templates.ts），
+ * 与承载草稿的 options-store useXhs 解耦。
+ */
+import { defineStore } from "pinia";
+import { ref, computed } from "vue";
+import { useSidecar } from "./sidecar";
+
+export type XhsAssetKind = "template" | "copy" | "topic_group";
+
+export interface XhsCustomAsset {
+  id: string;
+  kind: XhsAssetKind;
+  // payload 形状随 kind 变（template:{name,title,body,topics} / copy:{text} / topic_group:{name,tags}）
+  payload: Record<string, any>;
+  created_at: string;
+}
+
+export const useXhsAssets = defineStore("xhsAssets", () => {
+  const assets = ref<XhsCustomAsset[]>([]);
+  const loaded = ref(false);
+
+  const templates = computed(() => assets.value.filter((a) => a.kind === "template"));
+  const copies = computed(() => assets.value.filter((a) => a.kind === "copy"));
+  const topicGroups = computed(() => assets.value.filter((a) => a.kind === "topic_group"));
+
+  async function reload(): Promise<void> {
+    const r = await useSidecar().client.get("/api/xhs/custom-assets");
+    assets.value = r.data.assets ?? [];
+    loaded.value = true;
+  }
+
+  /** 首次加载（已加载则跳过）。面板挂载时调用。 */
+  async function ensureLoaded(): Promise<void> {
+    if (loaded.value) return;
+    await reload();
+  }
+
+  async function create(kind: XhsAssetKind, payload: Record<string, any>): Promise<XhsCustomAsset> {
+    const r = await useSidecar().client.post("/api/xhs/custom-assets", { kind, payload });
+    const asset = r.data.asset as XhsCustomAsset;
+    assets.value.unshift(asset); // 后端按 created_at DESC，新的在前
+    return asset;
+  }
+
+  async function remove(id: string): Promise<void> {
+    await useSidecar().client.delete(`/api/xhs/custom-assets/${id}`);
+    assets.value = assets.value.filter((a) => a.id !== id);
+  }
+
+  return { assets, loaded, templates, copies, topicGroups, ensureLoaded, reload, create, remove };
+});
