@@ -43,16 +43,15 @@ interface FeedCard {
   grad: string;
   ratio: string;
   cover: string | null;
-  badge?: string;
-  video?: boolean;
+  coverText?: string; // 仿造图文的封面大字（文字叠在渐变上，模拟数码好物封面）
 }
 
+// 数码好物分享主题（自撰文案 + 自制文字封面，不打包/不抓取任何站点图片）。
+// 封面统一 3:4（小红书笔记标准比例），平均网格布局。
 const MOCK_CARDS: Omit<FeedCard, "mine" | "avatar" | "cover">[] = [
-  { title: "梅开二度！这场也太燃了⚽", author: "体育君", likes: "2021万", emoji: "⚽", grad: "linear-gradient(135deg,#bfe0ff,#a9d3ff)", ratio: "4 / 5", badge: "热点", video: true },
-  { title: "同居后才发现的 5 个真相", author: "旺旺饼干", likes: "1908", emoji: "🏠", grad: "linear-gradient(135deg,#fdf3da,#f7e9c8)", ratio: "1 / 1" },
-  { title: "美版 vs 国行，差价 1000 怎么选", author: "数码张", likes: "327", emoji: "💻", grad: "linear-gradient(135deg,#dfe4ff,#cdd6ff)", ratio: "3 / 4", video: true },
-  { title: "Ins风咖啡店探店｜氛围感拉满", author: "Bella十三", likes: "18", emoji: "☕", grad: "linear-gradient(135deg,#ffe7c2,#ffd0a8)", ratio: "1 / 1" },
-  { title: "梨形身材显瘦穿搭公式", author: "小裙子", likes: "642", emoji: "👗", grad: "linear-gradient(135deg,#ffd9e6,#ffc6dd)", ratio: "3 / 4" },
+  { title: "除甲醛空气净化器选购指南｜避坑必看", author: "科技博薯", likes: "89", emoji: "💨", grad: "linear-gradient(150deg,#e2f3ec,#bfe6d6)", ratio: "3 / 4", coverText: "空气净化器\n选购指南" },
+  { title: "美版 vs 国行 MacBook，差价1000怎么选", author: "数码张", likes: "327", emoji: "💻", grad: "linear-gradient(150deg,#e2e7ff,#c3cdff)", ratio: "3 / 4", coverText: "美版 vs 国行\nMacBook 怎么选" },
+  { title: "打工人快充包｜通勤数码好物一次买齐", author: "极客小李", likes: "156", emoji: "🔋", grad: "linear-gradient(150deg,#ffe9c9,#ffd29c)", ratio: "3 / 4", coverText: "通勤数码\n好物清单" },
 ];
 
 const feedCards = computed<FeedCard[]>(() => {
@@ -63,7 +62,7 @@ const feedCards = computed<FeedCard[]>(() => {
     avatar: avatarLetter.value,
     likes: "1.2k",
     emoji: "📷",
-    grad: "linear-gradient(135deg, #ffe3d3, #ffd0b5)",
+    grad: "linear-gradient(150deg, #ffe3d3, #ffd0b5)",
     ratio: "3 / 4",
     cover: coverUrl.value,
   };
@@ -193,11 +192,14 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                     :src="card.cover"
                   />
                   <div v-else class="dc-cover dc-cover-ph" :style="{ background: card.grad }">
-                    <span class="dc-emoji">{{ card.emoji }}</span>
+                    <template v-if="card.coverText">
+                      <span class="dc-cover-text">{{ card.coverText }}</span>
+                      <span class="dc-cover-emoji">{{ card.emoji }}</span>
+                      <span class="dc-cover-tag">数码好物</span>
+                    </template>
+                    <span v-else class="dc-emoji">{{ card.emoji }}</span>
                   </div>
                   <span v-if="card.mine" class="dc-badge dc-badge-mine">我的</span>
-                  <span v-else-if="card.badge" class="dc-badge dc-badge-hot">{{ card.badge }}</span>
-                  <span v-if="card.video" class="dc-play">▶</span>
                 </div>
                 <div class="dc-meta">
                   <div class="dc-title" :class="{ 'dc-title-empty': card.mine && !xhs.title }">{{ card.title }}</div>
@@ -377,7 +379,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 }
 .dc-tab {
   position: relative;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-2);
 }
 .dc-tab-active {
@@ -412,7 +414,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 }
 .dc-subtab {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--ink-2);
 }
 .dc-subtab-active {
@@ -423,13 +425,13 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  column-count: 2;
-  column-gap: 7px;
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* 平均双列网格：4 张卡均匀布局 */
+  gap: 7px;
+  align-content: start;
   padding: 2px 7px 6px;
 }
 .dc-card {
-  break-inside: avoid;
-  margin-bottom: 7px;
   border-radius: 9px;
   overflow: hidden;
   background: #fff;
@@ -458,6 +460,35 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   font-size: 26px;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
 }
+/* 数码好物仿造封面：渐变上叠大字 + 角落 emoji + 好物标签 */
+.dc-cover-text {
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+  color: rgba(0, 0, 0, 0.72);
+  text-align: center;
+  white-space: pre-line;
+  padding: 0 8px;
+  letter-spacing: 0.3px;
+}
+.dc-cover-emoji {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  font-size: 16px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12));
+}
+.dc-cover-tag {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 8px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.32);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
 .dc-badge {
   position: absolute;
   top: 5px;
@@ -472,22 +503,11 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 .dc-badge-mine {
   background: var(--primary);
 }
-.dc-badge-hot {
-  background: rgba(0, 0, 0, 0.45);
-}
-.dc-play {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  font-size: 9px;
-  color: #fff;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
-}
 .dc-meta {
   padding: 6px 7px 8px;
 }
 .dc-title {
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.35;
   font-weight: 600;
   color: var(--ink);
@@ -512,7 +532,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   font-size: 8px;
 }
 .dc-name {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--ink-2);
   flex: 1;
   min-width: 0;
@@ -521,7 +541,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   white-space: nowrap;
 }
 .dc-likes {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--ink-2);
   flex-shrink: 0;
 }

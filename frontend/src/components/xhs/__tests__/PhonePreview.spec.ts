@@ -59,12 +59,12 @@ describe("PhonePreview 封面", () => {
 });
 
 describe("PhonePreview 发现页瀑布流", () => {
-  it("渲染瀑布流卡片（mock + 自己的笔记）+ 顶部子分类 + 底部导航", () => {
+  it("渲染 4 张卡（3 条数码好物 + 自己的笔记）+ 子分类 + 底部导航", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    // 5 条 mock + 自己 1 条 = 6 张卡
-    expect(w.findAll(".dc-card").length).toBe(6);
+    // 3 条数码好物 mock + 自己 1 条 = 4 张卡，均匀网格
+    expect(w.findAll(".dc-card").length).toBe(4);
     expect(w.find(".dc-nav").exists()).toBe(true);
     expect(w.find(".dc-subtabs").exists()).toBe(true);
     w.unmount();
