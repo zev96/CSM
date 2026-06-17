@@ -59,12 +59,12 @@ describe("PhonePreview 封面", () => {
 });
 
 describe("PhonePreview 发现页瀑布流", () => {
-  it("渲染 4 张卡（3 条数码好物 + 自己的笔记）+ 子分类 + 底部导航", () => {
+  it("渲染瀑布流卡片（12 条真实图 mock + 自己的笔记）+ 子分类 + 底部导航", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    // 3 条数码好物 mock + 自己 1 条 = 4 张卡，均匀网格
-    expect(w.findAll(".dc-card").length).toBe(4);
+    // 12 条 mock + 自己 1 条 = 13 张卡，均匀双列网格
+    expect(w.findAll(".dc-card").length).toBe(13);
     expect(w.find(".dc-nav").exists()).toBe(true);
     expect(w.find(".dc-subtabs").exists()).toBe(true);
     w.unmount();
@@ -85,6 +85,35 @@ describe("PhonePreview 发现页瀑布流", () => {
     store.$patch({ previewTab: "discover", title: "我的测试标题" });
     const w = mount(PhonePreview);
     expect(w.find(".dc-mine").text()).toContain("我的测试标题");
+    w.unmount();
+  });
+});
+
+describe("PhonePreview 笔记页多图", () => {
+  it("多图时显示页数角标 + 轮播圆点", () => {
+    const store = useXhs();
+    store.$patch({ imageIds: ["a", "b", "c"], coverIndex: 0, previewTab: "note" });
+    const w = mount(PhonePreview);
+    expect(w.find(".note-pager").text()).toBe("1/3");
+    expect(w.findAll(".note-dot").length).toBe(3);
+    w.unmount();
+  });
+
+  it("封面为第2张时，页数与高亮圆点同步", () => {
+    const store = useXhs();
+    store.$patch({ imageIds: ["a", "b", "c"], coverIndex: 1, previewTab: "note" });
+    const w = mount(PhonePreview);
+    expect(w.find(".note-pager").text()).toBe("2/3");
+    expect(w.findAll(".note-dot-active").length).toBe(1);
+    w.unmount();
+  });
+
+  it("单图/无图不显示页数和圆点", () => {
+    const store = useXhs();
+    store.$patch({ imageIds: ["a"], previewTab: "note" });
+    const w = mount(PhonePreview);
+    expect(w.find(".note-pager").exists()).toBe(false);
+    expect(w.find(".note-dots").exists()).toBe(false);
     w.unmount();
   });
 });
