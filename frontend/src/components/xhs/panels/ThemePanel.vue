@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 主题面板（设计稿 §5「主题」/§1 P1 排版主题）。点击应用排版主题，
- * 编辑器工具条随即出现这套主题的小标题/无序/分割线快捷符号。P1 起步 3 套。
+ * 主题面板（设计稿 §5「主题」/§1 排版主题）。点击应用排版主题，
+ * 编辑器工具条随即出现这套主题的小标题/无序/有序/分割线快捷符号。P3 扩到 8 套色系。
  */
 import Icon from "@/components/ui/Icon.vue";
 import { THEMES } from "@/data/xhs/assets";
