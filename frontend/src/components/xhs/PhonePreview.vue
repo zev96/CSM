@@ -323,7 +323,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 .device {
   position: relative;
   width: 100%;
-  max-width: 262px;
+  max-width: 410px; /* 右栏变宽后手机随之变大贴边；过高时由 .phone-stage 滚动 */
   aspect-ratio: 866 / 1732;
   flex-shrink: 0;
 }
