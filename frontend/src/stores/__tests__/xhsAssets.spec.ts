@@ -48,6 +48,7 @@ describe("xhsAssets store", () => {
     await s.ensureLoaded();
     const a = await s.create("copy", { text: "new" });
     expect(a.id).toBe("9");
+    expect(s.assets[0].id).toBe("9");
     expect(s.copies.length).toBe(1);
     expect(mockClient.post).toHaveBeenCalledWith("/api/xhs/custom-assets", { kind: "copy", payload: { text: "new" } });
   });

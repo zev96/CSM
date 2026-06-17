@@ -5,7 +5,7 @@
  */
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { useSidecar } from "./sidecar";
+import { useSidecar } from "@/stores/sidecar";
 
 export type XhsAssetKind = "template" | "copy" | "topic_group";
 
@@ -18,6 +18,8 @@ export interface XhsCustomAsset {
 }
 
 export const useXhsAssets = defineStore("xhsAssets", () => {
+  const api = () => useSidecar().client;
+
   const assets = ref<XhsCustomAsset[]>([]);
   const loaded = ref(false);
 
@@ -26,7 +28,7 @@ export const useXhsAssets = defineStore("xhsAssets", () => {
   const topicGroups = computed(() => assets.value.filter((a) => a.kind === "topic_group"));
 
   async function reload(): Promise<void> {
-    const r = await useSidecar().client.get("/api/xhs/custom-assets");
+    const r = await api().get("/api/xhs/custom-assets");
     assets.value = r.data.assets ?? [];
     loaded.value = true;
   }
@@ -38,14 +40,14 @@ export const useXhsAssets = defineStore("xhsAssets", () => {
   }
 
   async function create(kind: XhsAssetKind, payload: Record<string, any>): Promise<XhsCustomAsset> {
-    const r = await useSidecar().client.post("/api/xhs/custom-assets", { kind, payload });
+    const r = await api().post("/api/xhs/custom-assets", { kind, payload });
     const asset = r.data.asset as XhsCustomAsset;
     assets.value.unshift(asset); // 后端按 created_at DESC，新的在前
     return asset;
   }
 
   async function remove(id: string): Promise<void> {
-    await useSidecar().client.delete(`/api/xhs/custom-assets/${id}`);
+    await api().delete(`/api/xhs/custom-assets/${id}`);
     assets.value = assets.value.filter((a) => a.id !== id);
   }
 
