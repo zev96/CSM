@@ -61,17 +61,20 @@ async function removeDraft(id: string, ev: Event) {
 // ── 行内重命名 ────────────────────────────────────────────────────────────────
 const renamingId = ref<string | null>(null);
 const renameText = ref("");
-const renameInputRef = ref<HTMLInputElement | null>(null);
+// v-for 内的 ref 会收集为数组；v-if 保证同一时刻至多一个输入框在 DOM 中，取 [0] 即可
+const renameInputRef = ref<HTMLInputElement[]>([]);
 
 function startRename(id: string, current: string, ev: Event) {
   ev.stopPropagation();
   renamingId.value = id;
   renameText.value = current;
-  nextTick(() => renameInputRef.value?.focus());
+  nextTick(() => renameInputRef.value[0]?.focus());
 }
 
 async function commitRename(id: string, ev?: Event) {
   ev?.stopPropagation();
+  // 防止 Enter 提交后 DOM 移除触发 blur 再次调用（双提交）
+  if (renamingId.value !== id) return;
   const t = renameText.value.trim();
   renamingId.value = null;
   if (t) await xhs.renameDraft(id, t);
