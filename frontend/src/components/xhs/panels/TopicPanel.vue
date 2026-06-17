@@ -22,7 +22,10 @@ const grp = ref(TOPIC_GROUPS[0]?.key ?? "");
 const tags = computed(() => TOPIC_GROUPS.find((g) => g.key === grp.value)?.tags ?? []);
 
 function added(tag: string): boolean {
-  return xhs.topics.includes(tag);
+  const t = tag.replace(/^#+/, "").trim();
+  if (!t) return false;
+  const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp("#" + esc + "(?=\\s|$)").test(xhs.body);
 }
 
 onMounted(() => { void assets.ensureLoaded(); });

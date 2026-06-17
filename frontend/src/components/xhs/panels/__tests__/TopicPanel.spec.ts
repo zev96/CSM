@@ -35,6 +35,29 @@ describe("TopicPanel 预设话题", () => {
     expect(spy).toHaveBeenCalledWith(tag);
     w.unmount();
   });
+
+  it("预设话题已添加到正文时按钮渲染为「已添加」高亮样式", async () => {
+    const store = useXhs();
+    const w = mount(TopicPanel);
+    await flushPromises();
+
+    // 取第一个预设 tag 按钮的标签文字（去掉 # 前缀）
+    const first = w.find(".xhs-tag");
+    const tagText = first.text().replace(/^#/, "").trim();
+
+    // 添加前：border 应为 line-2 变量（未高亮状态）
+    const styleBefore = (first.element as HTMLElement).style.borderColor;
+    expect(styleBefore).not.toBe("rgb(58, 111, 176)");
+
+    // 将该话题添加进正文
+    store.addTopic(tagText);
+    await flushPromises();
+
+    // 添加后：按钮 border-color 应变为 #3a6fb0（即 rgb(58, 111, 176)）
+    const styleAfter = (first.element as HTMLElement).style.borderColor;
+    expect(styleAfter).toBe("rgb(58, 111, 176)");
+    w.unmount();
+  });
 });
 
 describe("TopicPanel 我的自定义话题", () => {
