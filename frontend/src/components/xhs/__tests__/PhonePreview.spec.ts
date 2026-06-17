@@ -59,12 +59,13 @@ describe("PhonePreview 封面", () => {
 });
 
 describe("PhonePreview 发现页瀑布流", () => {
-  it("渲染多张卡（模拟 feed + 自己的笔记）", () => {
+  it("渲染 4 张卡（3 条 mock + 自己的笔记），底部有导航", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    // 内置 6 条 mock + 自己 1 条 = 7 张卡
-    expect(w.findAll(".discover-card").length).toBe(7);
+    // 3 条 mock + 自己 1 条 = 4 张卡，铺满一屏不滚动
+    expect(w.findAll(".discover-card").length).toBe(4);
+    expect(w.find(".discover-nav").exists()).toBe(true);
     w.unmount();
   });
 
