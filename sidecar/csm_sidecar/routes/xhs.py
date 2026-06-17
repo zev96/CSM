@@ -103,6 +103,30 @@ def delete_draft(draft_id: str) -> None:
     xhs_images_service.delete_draft_images(draft_id)
 
 
+@router.post("/api/xhs/drafts/{draft_id}/duplicate", status_code=201)
+def duplicate_draft(draft_id: str) -> dict[str, Any]:
+    """复制草稿（副本）：复制文本字段 + 独立拷贝图片文件，返回新草稿完整 dict。
+
+    图片走 copy_images 生成全新 image_id，不共享文件路径——避免删源草稿时
+    误删副本图片（各草稿图片目录独立，§8 级联安全）。
+    """
+    src = xhs_storage.get_draft(draft_id)
+    if src is None:
+        raise HTTPException(status_code=404, detail="not found")
+    new_id = xhs_storage.create_draft(
+        title=(src["title"] or "") + "（副本）",
+        body=src["body"],
+        topics=src["topics"],
+        cover_index=src["cover_index"],
+        theme_id=src["theme_id"],
+    )
+    new_image_ids = xhs_images_service.copy_images(draft_id, new_id, src["image_ids"])
+    if new_image_ids:
+        xhs_storage.update_draft(new_id, image_ids=new_image_ids)
+    result = xhs_storage.get_draft(new_id)
+    return result
+
+
 # ── 图片（P2）────────────────────────────────────────────────────────────────
 _EXT_TO_MEDIA_TYPE = {
     ".jpg": "image/jpeg",

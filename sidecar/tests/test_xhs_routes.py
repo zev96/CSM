@@ -65,3 +65,30 @@ def test_delete(client: TestClient, xhs_db: Path):
 
 def test_delete_missing_404(client: TestClient, xhs_db: Path):
     assert client.delete("/api/xhs/drafts/deadbeef").status_code == 404
+
+
+# ── 副本（P4 T14）────────────────────────────────────────────────────────────
+
+def test_duplicate_draft_copies_fields_and_images(client: TestClient, xhs_db: Path, tmp_path, monkeypatch):
+    from csm_core import config as core_config
+    monkeypatch.setattr(core_config, "default_config_dir", lambda: tmp_path)
+
+    d = client.post("/api/xhs/drafts", json={"title": "原标题", "body": "正文", "topics": ["a"]}).json()
+    did = d["id"]
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+    up = client.post(f"/api/xhs/drafts/{did}/images", files={"file": ("x.jpg", jpeg, "image/jpeg")}).json()
+    client.patch(f"/api/xhs/drafts/{did}", json={"image_ids": [up["image_id"]], "cover_index": 0})
+
+    r = client.post(f"/api/xhs/drafts/{did}/duplicate")
+    assert r.status_code == 201
+    dup = r.json()
+    assert dup["id"] != did
+    assert dup["title"] == "原标题（副本）"
+    assert dup["body"] == "正文"
+    assert dup["topics"] == ["a"]
+    assert len(dup["image_ids"]) == 1
+    assert dup["image_ids"][0] != up["image_id"]  # 新 id
+
+
+def test_duplicate_missing_draft_404(client: TestClient, xhs_db: Path):
+    assert client.post("/api/xhs/drafts/nope/duplicate").status_code == 404

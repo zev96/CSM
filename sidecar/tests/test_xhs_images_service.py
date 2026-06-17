@@ -130,3 +130,20 @@ def test_delete_draft_images_rejects_traversal(isolated_root: Path):
 
 def test_delete_draft_images_missing_noop(isolated_root: Path):
     images.delete_draft_images("never-existed")  # no raise
+
+
+# ── copy_images（P4 T14）─────────────────────────────────────────────────────
+
+def test_copy_images_clones_files_with_new_ids(isolated_root: Path):
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 64  # valid jpeg magic
+    id1 = images.save_image("draftA", jpeg)
+    new_ids = images.copy_images("draftA", "draftB", [id1])
+    assert len(new_ids) == 1
+    assert new_ids[0] != id1
+    p = images.get_image_path(new_ids[0])
+    assert p is not None
+    assert p.read_bytes() == jpeg
+
+
+def test_copy_images_skips_missing(isolated_root: Path):
+    assert images.copy_images("draftA", "draftB", ["nope"]) == []
