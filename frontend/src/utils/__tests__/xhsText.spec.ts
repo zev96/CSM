@@ -18,24 +18,19 @@ describe("countChars", () => {
 });
 
 describe("buildFullText", () => {
-  it("标题 + 正文 + 话题用空行拼接，话题加 #", () => {
-    expect(buildFullText("标题", "正文内容", ["考证", "干货"])).toBe(
-      "标题\n\n正文内容\n\n#考证 #干货",
-    );
+  it("标题 + 正文用空行拼接", () => {
+    expect(buildFullText("标题", "正文内容")).toBe("标题\n\n正文内容");
   });
   it("正文保留内部换行，不被 trim", () => {
-    expect(buildFullText("T", "第一行\n第二行", [])).toBe("T\n\n第一行\n第二行");
+    expect(buildFullText("T", "第一行\n第二行")).toBe("T\n\n第一行\n第二行");
   });
-  it("无标题时跳过标题段", () => {
-    expect(buildFullText("", "正文", ["x"])).toBe("正文\n\n#x");
+  it("无标题时只返回正文", () => {
+    expect(buildFullText("", "正文")).toBe("正文");
   });
-  it("无话题时跳过话题段", () => {
-    expect(buildFullText("T", "B", [])).toBe("T\n\nB");
-  });
-  it("话题去掉空白项，并去掉用户误带的前导 #", () => {
-    expect(buildFullText("", "", ["  ", "#已带", "正常"])).toBe("#已带 #正常");
+  it("正文含 #话题 时原样保留（话题已内嵌正文）", () => {
+    expect(buildFullText("T", "B #考证 #干货")).toBe("T\n\nB #考证 #干货");
   });
   it("全空返回空串", () => {
-    expect(buildFullText("", "", [])).toBe("");
+    expect(buildFullText("", "")).toBe("");
   });
 });

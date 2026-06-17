@@ -27,16 +27,6 @@ onUnmounted(() => {
   xhs.registerCursorProbe(null);
 });
 
-// 话题输入
-const topicInput = ref("");
-function commitTopic() {
-  const v = topicInput.value;
-  if (!v.trim()) return;
-  // 支持一次输入多个（空格 / 逗号分隔）
-  for (const piece of v.split(/[\s,，]+/)) xhs.addTopic(piece);
-  topicInput.value = "";
-}
-
 const labelStyle = {
   fontSize: "12px",
   color: "var(--ink-2)",
@@ -116,38 +106,6 @@ const inputBaseStyle = {
         :style="{ ...inputBaseStyle, flex: 1, minHeight: '160px', resize: 'none', lineHeight: 1.7, fontFamily: 'inherit' }"
         @input="xhs.setBody(($event.target as HTMLTextAreaElement).value)"
       />
-    </div>
-
-    <!-- 话题 -->
-    <div>
-      <div :style="labelStyle"><span>话题</span></div>
-      <div class="flex flex-wrap items-center" :style="{ gap: '6px' }">
-        <span
-          v-for="(t, i) in xhs.topics"
-          :key="i"
-          class="flex items-center"
-          :style="{
-            gap: '4px', fontSize: '13px', color: '#3a6fb0',
-            background: 'rgba(58,111,176,0.08)', borderRadius: '999px', padding: '3px 10px',
-          }"
-        >
-          #{{ t }}
-          <button
-            type="button"
-            :style="{ cursor: 'pointer', color: '#3a6fb0', display: 'flex', alignItems: 'center' }"
-            title="移除"
-            @click="xhs.removeTopic(i)"
-          ><Icon name="x" :size="12" /></button>
-        </span>
-        <input
-          v-model="topicInput"
-          type="text"
-          placeholder="加话题，回车确认"
-          :style="{ flex: 1, minWidth: '120px', border: 'none', outline: 'none', background: 'transparent', fontSize: '13px', color: 'var(--ink)' }"
-          @keydown.enter.prevent="commitTopic"
-          @blur="commitTopic"
-        />
-      </div>
     </div>
 
     <!-- 复制按钮 -->

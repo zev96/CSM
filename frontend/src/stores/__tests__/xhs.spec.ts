@@ -34,10 +34,10 @@ afterEach(() => {
 });
 
 describe("useXhs — getters", () => {
-  it("fullText 组装标题/正文/话题", () => {
+  it("fullText 组装标题/正文（话题已内嵌正文）", () => {
     const x = useXhs();
-    x.$patch({ title: "T", body: "B", topics: ["a"] });
-    expect(x.fullText).toBe("T\n\nB\n\n#a");
+    x.$patch({ title: "T", body: "B #a" });
+    expect(x.fullText).toBe("T\n\nB #a");
   });
   it("字数与超限标志", () => {
     const x = useXhs();
@@ -46,7 +46,7 @@ describe("useXhs — getters", () => {
     expect(x.titleOver).toBe(true);
     expect(x.bodyOver).toBe(false);
   });
-  it("isEmpty 看标题与正文是否都空白", () => {
+  it("isEmpty 看标题/正文/图片是否都为空", () => {
     const x = useXhs();
     expect(x.isEmpty).toBe(true);
     x.$patch({ body: "  " });
@@ -109,20 +109,41 @@ describe("useXhs — 自动保存 _ensureCreated", () => {
   });
 });
 
-describe("useXhs — 话题", () => {
-  it("addTopic 去前导 # + 去重 + 丢空", () => {
+describe("useXhs — 话题（内嵌正文）", () => {
+  it("addTopic 把 #话题 追加到正文末尾", () => {
     const x = useXhs();
-    x.addTopic("#考证");
-    x.addTopic("考证"); // 重复
-    x.addTopic("   ");  // 空
-    x.addTopic("干货");
-    expect(x.topics).toEqual(["考证", "干货"]);
+    x.$patch({ body: "正文" });
+    x.addTopic("穿搭");
+    expect(x.body).toBe("正文 #穿搭");
   });
-  it("removeTopic 按下标删除", () => {
+  it("addTopic 去前导 # 后追加", () => {
     const x = useXhs();
-    x.$patch({ topics: ["a", "b", "c"] });
-    x.removeTopic(1);
-    expect(x.topics).toEqual(["a", "c"]);
+    x.$patch({ body: "" });
+    x.addTopic("#通勤");
+    expect(x.body).toBe("#通勤");
+  });
+  it("addTopic 去重：同名 #话题 已存在则跳过", () => {
+    const x = useXhs();
+    x.$patch({ body: "正文 #穿搭" });
+    x.addTopic("穿搭");
+    expect(x.body).toBe("正文 #穿搭"); // 不重复追加
+  });
+  it("addTopic 丢空", () => {
+    const x = useXhs();
+    x.$patch({ body: "正文" });
+    x.addTopic("   ");
+    expect(x.body).toBe("正文"); // 无变化
+  });
+  it("addTopic 正文末尾已有空格时不重复加空格", () => {
+    const x = useXhs();
+    x.$patch({ body: "正文 " });
+    x.addTopic("干货");
+    expect(x.body).toBe("正文 #干货");
+  });
+  it("topics 数组始终为空（话题入正文，不入数组）", () => {
+    const x = useXhs();
+    x.addTopic("穿搭");
+    expect(x.topics).toEqual([]);
   });
 });
 
@@ -143,27 +164,27 @@ describe("useXhs — 光标插入入口", () => {
 });
 
 describe("useXhs — 复制", () => {
-  it("copy('full') 写入剪贴板全文", async () => {
+  it("copy('full') 写入剪贴板全文（话题已内嵌正文）", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const x = useXhs();
-    x.$patch({ title: "T", body: "B", topics: ["a"] });
+    x.$patch({ title: "T", body: "B #a" });
     await x.copy("full");
-    expect(writeText).toHaveBeenCalledWith("T\n\nB\n\n#a");
+    expect(writeText).toHaveBeenCalledWith("T\n\nB #a");
     vi.unstubAllGlobals();
   });
 });
 
 describe("useXhs — 模板载入", () => {
-  it("applyTemplate 覆盖标题/正文/话题并去抖保存", async () => {
+  it("applyTemplate 覆盖标题/正文，模板话题拼入正文末尾，topics 数组为空", async () => {
     postMock.mockResolvedValue({ data: { id: "d1" } });
     patchMock.mockResolvedValue({ data: {} });
     const x = useXhs();
     x.$patch({ title: "旧", body: "旧正文", topics: ["旧"] });
     x.applyTemplate({ title: "新标题", body: "新正文\n第二行", topics: ["a", "b"] });
     expect(x.title).toBe("新标题");
-    expect(x.body).toBe("新正文\n第二行");
-    expect(x.topics).toEqual(["a", "b"]);
+    expect(x.body).toBe("新正文\n第二行 #a #b"); // 话题内嵌正文
+    expect(x.topics).toEqual([]); // 数组始终空
     // 触发了去抖保存：800ms 后建草稿
     await vi.advanceTimersByTimeAsync(800);
     expect(postMock).toHaveBeenCalledTimes(1);
@@ -302,17 +323,17 @@ describe("useXhs — 图片", () => {
   });
 });
 
-describe("isEmpty 纳入 topics（P4）", () => {
-  it("仅有话题时 isEmpty 为 false", () => {
+describe("isEmpty（话题入正文后）", () => {
+  it("标题/正文/图全空时 isEmpty 为 true", () => {
     const s = useXhs();
-    s.$patch({ title: "", body: "", imageIds: [], topics: ["穿搭"] });
-    expect(s.isEmpty).toBe(false);
+    s.$patch({ title: "  ", body: "", imageIds: [] });
+    expect(s.isEmpty).toBe(true);
   });
 
-  it("标题/正文/图/话题全空时 isEmpty 为 true", () => {
+  it("正文含 #话题 文本时 isEmpty 为 false", () => {
     const s = useXhs();
-    s.$patch({ title: "  ", body: "", imageIds: [], topics: [] });
-    expect(s.isEmpty).toBe(true);
+    s.$patch({ title: "", body: "#穿搭", imageIds: [] });
+    expect(s.isEmpty).toBe(false);
   });
 });
 

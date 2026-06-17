@@ -14,20 +14,16 @@ export function countChars(s: string): number {
 }
 
 /**
- * 组装「复制全文」：标题 + 空行 + 正文 + 空行 + `#话题` 串。
+ * 组装「复制全文」：标题 + 空行 + 正文。
+ *
+ * 话题现以 `#标签` 文本形式直接存在于正文末尾，无需单独处理。
  *
  * - 标题用 trim 后判空（首尾空白不该单独成段）；
- * - 正文**不 trim**（保留 emoji 排版的首尾换行/缩进），仅用 trim 判空；
- * - 话题逐个 trim、去掉用户误带的前导 `#`、丢弃空项，再以空格连接。
+ * - 正文**不 trim**（保留 emoji 排版的首尾换行/缩进），仅用 trim 判空。
  */
-export function buildFullText(title: string, body: string, topics: string[]): string {
+export function buildFullText(title: string, body: string): string {
   const parts: string[] = [];
   if (title.trim()) parts.push(title.trim());
   if (body.trim()) parts.push(body);
-  const tags = topics
-    .map((t) => t.replace(/^#+/, "").trim())
-    .filter((t) => t.length > 0)
-    .map((t) => `#${t}`);
-  if (tags.length) parts.push(tags.join(" "));
   return parts.join("\n\n");
 }

@@ -110,16 +110,13 @@ export const useXhs = defineStore("xhs", {
     saving: false,
   }),
   getters: {
-    fullText: (s): string => buildFullText(s.title, s.body, s.topics),
+    fullText: (s): string => buildFullText(s.title, s.body),
     titleCount: (s): number => countChars(s.title),
     bodyCount: (s): number => countChars(s.body),
     titleOver: (s): boolean => countChars(s.title) > TITLE_SOFT_LIMIT,
     bodyOver: (s): boolean => countChars(s.body) > BODY_SOFT_LIMIT,
     isEmpty: (s): boolean =>
-      s.title.trim() === "" &&
-      s.body.trim() === "" &&
-      s.imageIds.length === 0 &&
-      s.topics.length === 0,
+      s.title.trim() === "" && s.body.trim() === "" && s.imageIds.length === 0,
     /** 当前激活的排版主题对象（无则 null）。 */
     activeTheme: (s): XhsTheme | null => findTheme(s.themeId),
     /** 工具条快捷符号按钮：激活主题 → 小标题/无序/有序/分割线（无主题时空）。
@@ -155,7 +152,7 @@ export const useXhs = defineStore("xhs", {
       this.draftId = d.id;
       this.title = d.title ?? "";
       this.body = d.body ?? "";
-      this.topics = [...(d.topics ?? [])];
+      this.topics = []; // 话题现以 #标签 文本形式存在于正文；旧草稿 topic 数组忽略
       this.imageIds = [...(d.image_ids ?? [])];
       this.coverIndex = d.cover_index ?? 0;
       this.themeId = d.theme_id ?? null;
@@ -170,11 +167,12 @@ export const useXhs = defineStore("xhs", {
       this.coverIndex = 0;
       this.themeId = null;
     },
-    /** 模板载入：整篇覆盖标题/正文/话题（是否弹确认由调用方面板决定）。 */
+    /** 模板载入：覆盖标题/正文，模板话题以 #话题 形式拼到正文末尾。 */
     applyTemplate(tpl: { title: string; body: string; topics: string[] }): void {
       this.title = tpl.title;
       this.body = tpl.body;
-      this.topics = [...tpl.topics];
+      this.topics = [];
+      for (const t of tpl.topics) this.addTopic(t);
       this.scheduleSave();
     },
     /** 应用排版主题：设激活主题 id，工具条随即出现该主题快捷符号。 */
@@ -246,15 +244,14 @@ export const useXhs = defineStore("xhs", {
       this.body = v;
       this.scheduleSave();
     },
+    /** 点击/输入话题：在正文末尾追加「#话题」（已存在则跳过）。话题现以 #标签 文本形式存在于正文。 */
     addTopic(tag: string): void {
       const t = tag.replace(/^#+/, "").trim();
-      if (!t || this.topics.includes(t)) return;
-      this.topics.push(t);
-      this.scheduleSave();
-    },
-    removeTopic(i: number): void {
-      this.topics.splice(i, 1);
-      this.scheduleSave();
+      if (!t) return;
+      const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp("#" + esc + "(?=\\s|$)").test(this.body)) return; // 去重：已有同名 #话题
+      const sep = this.body.length === 0 || /\s$/.test(this.body) ? "" : " ";
+      this.setBody(this.body + sep + "#" + t);
     },
     setActivePanel(p: XhsPanel): void {
       this.activePanel = p;
