@@ -65,3 +65,55 @@ def test_delete(client: TestClient, xhs_db: Path):
 
 def test_delete_missing_404(client: TestClient, xhs_db: Path):
     assert client.delete("/api/xhs/drafts/deadbeef").status_code == 404
+
+
+# ── 副本（P4 T14）────────────────────────────────────────────────────────────
+
+def test_duplicate_draft_copies_fields_and_images(client: TestClient, xhs_db: Path, tmp_path, monkeypatch):
+    from csm_core import config as core_config
+    monkeypatch.setattr(core_config, "default_config_dir", lambda: tmp_path)
+
+    d = client.post("/api/xhs/drafts", json={"title": "原标题", "body": "正文", "topics": ["a"]}).json()
+    did = d["id"]
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+    up = client.post(f"/api/xhs/drafts/{did}/images", files={"file": ("x.jpg", jpeg, "image/jpeg")}).json()
+    client.patch(f"/api/xhs/drafts/{did}", json={"image_ids": [up["image_id"]], "cover_index": 0})
+
+    r = client.post(f"/api/xhs/drafts/{did}/duplicate")
+    assert r.status_code == 201
+    dup = r.json()
+    assert dup["id"] != did
+    assert dup["title"] == "原标题（副本）"
+    assert dup["body"] == "正文"
+    assert dup["topics"] == ["a"]
+    assert len(dup["image_ids"]) == 1
+    assert dup["image_ids"][0] != up["image_id"]  # 新 id
+    assert dup["cover_index"] == 0
+
+
+def test_duplicate_clamps_cover_when_image_missing(client: TestClient, xhs_db: Path, tmp_path, monkeypatch):
+    from csm_core import config as core_config
+    from csm_sidecar.services import xhs_images_service
+    monkeypatch.setattr(core_config, "default_config_dir", lambda: tmp_path)
+
+    d = client.post("/api/xhs/drafts", json={"title": "封面测试"}).json()
+    did = d["id"]
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+    up = client.post(f"/api/xhs/drafts/{did}/images", files={"file": ("x.jpg", jpeg, "image/jpeg")}).json()
+    image_id = up["image_id"]
+    client.patch(f"/api/xhs/drafts/{did}", json={"image_ids": [image_id], "cover_index": 0})
+
+    # 删掉源图片文件，模拟丢失场景
+    img_path = xhs_images_service.get_image_path(image_id)
+    assert img_path is not None
+    img_path.unlink()
+
+    r = client.post(f"/api/xhs/drafts/{did}/duplicate")
+    assert r.status_code == 201
+    dup = r.json()
+    assert dup["image_ids"] == []   # 缺失图片被跳过
+    assert dup["cover_index"] == 0  # 夹紧到 0
+
+
+def test_duplicate_missing_draft_404(client: TestClient, xhs_db: Path):
+    assert client.post("/api/xhs/drafts/nope/duplicate").status_code == 404

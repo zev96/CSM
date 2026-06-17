@@ -121,6 +121,32 @@ def delete_images(image_ids: list[str]) -> None:
             logger.warning("delete_images: unlink %s failed: %s", path, e)
 
 
+def copy_images(src_draft_id: str, dst_draft_id: str, image_ids: list[str]) -> list[str]:
+    """把 src 草稿的若干图片复制进 dst 草稿目录，返回新 image_id 列表（缺失的跳过）。
+
+    复用 save_image：在 dst 子目录落新文件、生成新 id，不共享文件路径，
+    避免删 src 草稿时误删 dst 草稿的图片。
+    src_draft_id 是 API 契约参数；get_image_path 按 image_id 全局查找，
+    实际不需要用到 src_draft_id。
+
+    Raises:
+        ValueError("invalid draft_id") on traversal-shaped src_draft_id or dst_draft_id.
+    """
+    if not src_draft_id or "/" in src_draft_id or "\\" in src_draft_id or ".." in src_draft_id:
+        raise ValueError("invalid draft_id")
+    new_ids: list[str] = []
+    for image_id in image_ids:
+        path = get_image_path(image_id)
+        if path is None:
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        new_ids.append(save_image(dst_draft_id, data))
+    return new_ids
+
+
 def delete_draft_images(draft_id: str) -> None:
     """删草稿级联：整个 ``xhs_images/{draft_id}/`` 目录 rmtree（§8）。
 

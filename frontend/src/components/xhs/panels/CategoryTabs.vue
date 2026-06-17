@@ -1,16 +1,25 @@
 <script setup lang="ts">
 /**
  * 素材面板通用「分类标签条」（设计稿 §5 多面板共用）。
- * 受控组件：v-model 绑定当前分类 key；横向可滚动，激活项橙色高亮。
+ * 受控组件：v-model 绑定当前分类 key；分类自动换行，最多显示三行、超出再竖向滚动；激活项橙色高亮。
  */
 defineProps<{ tabs: { key: string; name: string }[]; modelValue: string }>();
 defineEmits<{ (e: "update:modelValue", key: string): void }>();
 </script>
 
 <template>
+  <!-- 换行铺满，最多三行高度（约 96px），超出才出现竖向滚动条 -->
   <div
     class="flex"
-    :style="{ gap: '6px', overflowX: 'auto', flexWrap: 'nowrap', flexShrink: 0, paddingBottom: '2px' }"
+    :style="{
+      gap: '6px',
+      flexWrap: 'wrap',
+      alignContent: 'flex-start',
+      maxHeight: '96px',
+      overflowY: 'auto',
+      flexShrink: 0,
+      paddingBottom: '2px',
+    }"
   >
     <button
       v-for="t in tabs"

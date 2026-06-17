@@ -2,19 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount, flushPromises } from "@vue/test-utils";
 
+const mockClient = { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() };
 vi.mock("@/stores/sidecar", () => ({
   useSidecar: () => ({
-    client: {
-      get: vi.fn(),
-      post: vi.fn().mockResolvedValue({ data: { id: "d1" } }),
-      patch: vi.fn().mockResolvedValue({ data: {} }),
-      delete: vi.fn(),
-    },
+    client: mockClient,
     sseURL: (p: string) => p,
   }),
 }));
 vi.mock("@/composables/useConfirm", () => ({
   confirmDialog: vi.fn().mockResolvedValue(true),
+}));
+vi.mock("@/composables/useToast", () => ({
+  useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), toasts: { value: [] } }),
 }));
 
 import TemplatePanel from "@/components/xhs/panels/TemplatePanel.vue";
@@ -26,6 +25,12 @@ beforeEach(() => {
   _resetXhsModuleState();
   vi.mocked(confirmDialog).mockClear();
   vi.useFakeTimers();
+  mockClient.get.mockResolvedValue({ data: { assets: [] } });
+  mockClient.post.mockReset();
+  mockClient.post.mockResolvedValue({ data: { id: "d1" } });
+  mockClient.patch.mockReset();
+  mockClient.patch.mockResolvedValue({ data: {} });
+  mockClient.delete.mockReset();
 });
 afterEach(() => {
   vi.clearAllTimers();
@@ -62,6 +67,60 @@ describe("TemplatePanel", () => {
     await w.find(".xhs-tpl-card").trigger("click");
     await flushPromises();
     expect(store.body).toBe("已有内容");
+    w.unmount();
+  });
+});
+
+describe("TemplatePanel 我的模版", () => {
+  it("点「存为我的模版」用当前标题/正文 create(template)", async () => {
+    mockClient.post.mockResolvedValue({
+      data: { asset: { id: "1", kind: "template", payload: { name: "我的标题", title: "我的标题", body: "正文", topics: [] }, created_at: "t" } },
+    });
+    const store = useXhs();
+    store.$patch({ title: "我的标题", body: "正文" });
+    const w = mount(TemplatePanel);
+    await flushPromises();
+    await w.find(".xhs-save-template").trigger("click");
+    await flushPromises();
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    const [, body] = mockClient.post.mock.calls[0];
+    expect(body.kind).toBe("template");
+    expect(body.payload.title).toBe("我的标题");
+    w.unmount();
+  });
+
+  it("内容为空时不创建（提示先写内容）", async () => {
+    useXhs();
+    const w = mount(TemplatePanel);
+    await flushPromises();
+    await w.find(".xhs-save-template").trigger("click");
+    await flushPromises();
+    expect(mockClient.post).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it("点删除按钮调用 DELETE /api/xhs/custom-assets/:id", async () => {
+    mockClient.get.mockResolvedValue({
+      data: {
+        assets: [
+          { id: "7", kind: "template", payload: { name: "模版甲", title: "t", body: "b", topics: [] }, created_at: "t" },
+        ],
+      },
+    });
+    mockClient.delete.mockResolvedValue({ data: {} });
+    useXhs();
+    const w = mount(TemplatePanel);
+    await flushPromises();
+    // 切换到「我的」tab
+    const tabBtns = w.findAll("button");
+    const mineTab = tabBtns.find((b) => b.text() === "我的");
+    expect(mineTab).toBeDefined();
+    await mineTab!.trigger("click");
+    await flushPromises();
+    // 点击删除按钮
+    await w.find(".xhs-mine-del").trigger("click");
+    await flushPromises();
+    expect(mockClient.delete).toHaveBeenCalledWith("/api/xhs/custom-assets/7");
     w.unmount();
   });
 });

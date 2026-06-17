@@ -15,6 +15,7 @@ import { computed, ref, onMounted, onBeforeUnmount } from "vue";
 import { useXhs } from "@/stores/xhs";
 import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
+import { tokenizeXhsCodes } from "@/utils/xhsCodes";
 import phoneFrame from "@/assets/xhs-phone-frame.png";
 import purifier1 from "@/assets/xhs-feed/purifier1.jpg";
 import purifier2 from "@/assets/xhs-feed/purifier2.jpg";
@@ -91,8 +92,7 @@ const avatarLetter = computed<string>(() => (nickname.value || "我").slice(0, 1
 
 const displayTitle = computed(() => xhs.title || "添加标题更吸睛～");
 const displayBody = computed(() => xhs.body || "正文还没写哦，左侧素材点一点，右侧实时预览～");
-const tags = computed(() => xhs.topics.filter((t) => t.trim()));
-
+const bodySegments = computed(() => tokenizeXhsCodes(displayBody.value));
 // ── 发现页竞品：按品类词匹配（用户自备封面素材 + 自撰文案）────────────────────
 interface CompCard {
   title: string;
@@ -230,9 +230,11 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                 </div>
                 <div class="note-content">
                   <div :style="{ fontSize: '15px', fontWeight: 700, lineHeight: 1.4, marginBottom: '6px', color: xhs.title ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayTitle }}</div>
-                  <div :style="{ fontSize: '13px', lineHeight: 1.7, color: xhs.body ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayBody }}</div>
-                  <div v-if="tags.length" :style="{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px' }">
-                    <span v-for="(t, i) in tags" :key="i" :style="{ fontSize: '13px', color: '#3a6fb0' }">#{{ t }}</span>
+                  <div :style="{ fontSize: '13px', lineHeight: 1.7, color: xhs.body ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">
+                    <template v-for="(seg, i) in bodySegments" :key="i">
+                      <span v-if="seg.type === 'text'">{{ seg.value }}</span>
+                      <span v-else class="xhs-code-chip">{{ seg.label }}</span>
+                    </template>
                   </div>
                   <div :style="{ marginTop: '12px', fontSize: '11px', color: '#bbb' }">编辑于 刚刚 · 广州</div>
                 </div>
@@ -282,7 +284,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                       :src="card.cover"
                     />
                     <div v-else class="dc-cover dc-cover-ph"><span class="dc-emoji">📷</span></div>
-                    <span v-if="card.mine" class="dc-badge dc-badge-mine">我的</span>
                   </div>
                   <div class="dc-meta">
                     <div class="dc-title" :class="{ 'dc-title-empty': card.mine && !xhs.title }">{{ card.title }}</div>
@@ -612,10 +613,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   background: #fff;
   border: 1px solid var(--line-2);
 }
-.dc-mine {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary);
-}
 .dc-cover-wrap {
   position: relative;
   flex: 1;
@@ -637,20 +634,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
 .dc-emoji {
   font-size: 26px;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
-}
-.dc-badge {
-  position: absolute;
-  top: 5px;
-  left: 5px;
-  font-size: 9px;
-  line-height: 1;
-  color: #fff;
-  padding: 3px 5px;
-  border-radius: 5px;
-  font-weight: 600;
-}
-.dc-badge-mine {
-  background: var(--primary);
 }
 .dc-meta {
   flex-shrink: 0;
@@ -719,5 +702,19 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   padding: 2px 9px;
   font-size: 14px;
   line-height: 1.2;
+}
+
+/* ── 表情代码占位 chip (§6) ── */
+.xhs-code-chip {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 0 1px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--primary);
+  background: rgba(238, 106, 42, 0.12);
+  vertical-align: baseline;
+  white-space: nowrap;
 }
 </style>

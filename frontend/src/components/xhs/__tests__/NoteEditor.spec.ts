@@ -16,7 +16,6 @@ vi.mock("@/stores/sidecar", () => ({
 
 import NoteEditor from "@/components/xhs/NoteEditor.vue";
 import { useXhs, _resetXhsModuleState } from "@/stores/xhs";
-import { THEMES } from "@/data/xhs/assets";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -29,25 +28,6 @@ afterEach(() => {
 });
 
 describe("NoteEditor 工具条", () => {
-  it("无激活主题时显示「选择排版主题」入口", () => {
-    useXhs();
-    const w = mount(NoteEditor);
-    expect(w.text()).toContain("选择排版主题");
-    w.unmount();
-  });
-
-  it("有激活主题时点击小标题快捷符号插入该符号", async () => {
-    const store = useXhs();
-    store.applyTheme(THEMES[0].id);
-    const spy = vi.spyOn(store, "insertAtCursor");
-    const w = mount(NoteEditor);
-    const btn = w.findAll(".xhs-tool-btn").find((b) => b.text().includes("小标题"));
-    expect(btn).toBeTruthy();
-    await btn!.trigger("click");
-    expect(spy).toHaveBeenCalledWith(THEMES[0].heading);
-    w.unmount();
-  });
-
   it("点击「表情」快捷切到 emoji 面板", async () => {
     const store = useXhs();
     const w = mount(NoteEditor);

@@ -14,18 +14,12 @@ const xhs = useXhs();
 const bodyRef = ref<HTMLTextAreaElement | null>(null);
 const { insert } = useCursorInsert(bodyRef, (v) => xhs.setBody(v));
 
-onMounted(() => xhs.registerInserter(insert));
-onUnmounted(() => xhs.registerInserter(null));
-
-// 话题输入
-const topicInput = ref("");
-function commitTopic() {
-  const v = topicInput.value;
-  if (!v.trim()) return;
-  // 支持一次输入多个（空格 / 逗号分隔）
-  for (const piece of v.split(/[\s,，]+/)) xhs.addTopic(piece);
-  topicInput.value = "";
-}
+onMounted(() => {
+  xhs.registerInserter(insert);
+});
+onUnmounted(() => {
+  xhs.registerInserter(null);
+});
 
 const labelStyle = {
   fontSize: "12px",
@@ -51,25 +45,9 @@ const inputBaseStyle = {
 
 <template>
   <div class="flex h-full flex-col" :style="{ gap: '14px' }">
-    <!-- 工具条：排版主题快捷符号 + 表情快捷（设计稿 §4.1 中栏工具条 / §1 P1） -->
+    <!-- 工具条：表情快捷（设计稿 §4.1 中栏工具条） -->
     <div class="flex flex-wrap items-center" :style="{ gap: '6px', flexShrink: 0 }">
-      <template v-if="xhs.themeToolbar.length">
-        <button
-          v-for="b in xhs.themeToolbar"
-          :key="b.key"
-          type="button"
-          class="xhs-tool-btn"
-          :title="`插入${b.label}符号`"
-          @click="b.key === 'ordered' ? xhs.insertOrdered() : xhs.insertAtCursor(b.symbol)"
-        >
-          <span :style="{ fontSize: '14px' }">{{ b.symbol }}</span>
-          <span :style="{ fontSize: '12px', color: 'var(--ink-2)' }">{{ b.label }}</span>
-        </button>
-      </template>
-      <button v-else type="button" class="xhs-tool-btn" @click="xhs.setActivePanel('theme')">
-        <Icon name="wand" :size="14" /> 选择排版主题
-      </button>
-      <button type="button" class="xhs-tool-btn" :style="{ marginLeft: 'auto' }" @click="xhs.setActivePanel('emoji')">
+      <button type="button" class="xhs-tool-btn" @click="xhs.setActivePanel('emoji')">
         <Icon name="heart" :size="14" /> 表情
       </button>
     </div>
@@ -79,7 +57,7 @@ const inputBaseStyle = {
       <div :style="labelStyle">
         <span>标题</span>
         <span :style="{ color: xhs.titleOver ? 'var(--red)' : 'var(--ink-2)' }">
-          {{ xhs.titleCount }}/{{ TITLE_SOFT_LIMIT }}
+          {{ xhs.titleCount }}/{{ TITLE_SOFT_LIMIT }}<template v-if="xhs.titleOver"> · 超 {{ xhs.titleCount - TITLE_SOFT_LIMIT }} 字</template>
         </span>
       </div>
       <input
@@ -96,7 +74,7 @@ const inputBaseStyle = {
       <div :style="labelStyle">
         <span>正文</span>
         <span :style="{ color: xhs.bodyOver ? 'var(--red)' : 'var(--ink-2)' }">
-          {{ xhs.bodyCount }}/{{ BODY_SOFT_LIMIT }}
+          {{ xhs.bodyCount }}/{{ BODY_SOFT_LIMIT }}<template v-if="xhs.bodyOver"> · 超 {{ xhs.bodyCount - BODY_SOFT_LIMIT }} 字</template>
         </span>
       </div>
       <textarea
@@ -106,38 +84,6 @@ const inputBaseStyle = {
         :style="{ ...inputBaseStyle, flex: 1, minHeight: '160px', resize: 'none', lineHeight: 1.7, fontFamily: 'inherit' }"
         @input="xhs.setBody(($event.target as HTMLTextAreaElement).value)"
       />
-    </div>
-
-    <!-- 话题 -->
-    <div>
-      <div :style="labelStyle"><span>话题</span></div>
-      <div class="flex flex-wrap items-center" :style="{ gap: '6px' }">
-        <span
-          v-for="(t, i) in xhs.topics"
-          :key="i"
-          class="flex items-center"
-          :style="{
-            gap: '4px', fontSize: '13px', color: '#3a6fb0',
-            background: 'rgba(58,111,176,0.08)', borderRadius: '999px', padding: '3px 10px',
-          }"
-        >
-          #{{ t }}
-          <button
-            type="button"
-            :style="{ cursor: 'pointer', color: '#3a6fb0', display: 'flex', alignItems: 'center' }"
-            title="移除"
-            @click="xhs.removeTopic(i)"
-          ><Icon name="x" :size="12" /></button>
-        </span>
-        <input
-          v-model="topicInput"
-          type="text"
-          placeholder="加话题，回车确认"
-          :style="{ flex: 1, minWidth: '120px', border: 'none', outline: 'none', background: 'transparent', fontSize: '13px', color: 'var(--ink)' }"
-          @keydown.enter.prevent="commitTopic"
-          @blur="commitTopic"
-        />
-      </div>
     </div>
 
     <!-- 复制按钮 -->

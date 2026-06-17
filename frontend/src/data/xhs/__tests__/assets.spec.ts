@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  TEMPLATES, TEMPLATE_CATEGORIES, THEMES, EMOJI,
+  TEMPLATES, TEMPLATE_CATEGORIES, EMOJI,
   TITLE_CATEGORIES, COPY_GROUPS, TOPIC_GROUPS, DECORATION_GROUPS,
-  findTheme,
 } from "@/data/xhs/assets";
 
 describe("xhs 起步素材完整性", () => {
@@ -25,21 +24,6 @@ describe("xhs 起步素材完整性", () => {
     for (const c of TEMPLATE_CATEGORIES) {
       expect(TEMPLATES.some((t) => t.category === c)).toBe(true);
     }
-  });
-
-  it("主题：非空、id 唯一、ordered 合法、符号齐全、findTheme 命中", () => {
-    expect(THEMES.length).toBeGreaterThanOrEqual(6); // P3「完整化」：6–8 套色系
-    const ids = THEMES.map((t) => t.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    for (const t of THEMES) {
-      expect(["emoji", "circle", "superscript"]).toContain(t.ordered);
-      expect(t.heading).toBeTruthy();
-      expect(t.bullet).toBeTruthy();
-      expect(t.divider).toBeTruthy();
-    }
-    expect(findTheme(THEMES[0].id)?.id).toBe(THEMES[0].id);
-    expect(findTheme(null)).toBeNull();
-    expect(findTheme("不存在的id")).toBeNull();
   });
 
   it("表情：三段都非空，每个 emoji 分组有内容，代码以 [ 开头", () => {

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from csm_core.xhs import storage as xhs_storage
 
 from ..auth import RequireToken
-from ..services import xhs_ai_service, xhs_images_service
+from ..services import config_service, xhs_ai_service, xhs_images_service
 from ..services.llm_factory import LLMConfigError
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,32 @@ def delete_draft(draft_id: str) -> None:
         raise HTTPException(status_code=404, detail=f"draft not found: {draft_id}")
     # 级联删 xhs_images/{draft_id}/ 整目录（§8 孤儿清理）。
     xhs_images_service.delete_draft_images(draft_id)
+
+
+@router.post("/api/xhs/drafts/{draft_id}/duplicate", status_code=201)
+def duplicate_draft(draft_id: str) -> dict[str, Any]:
+    """复制草稿（副本）：复制文本字段 + 独立拷贝图片文件，返回新草稿完整 dict。
+
+    图片走 copy_images 生成全新 image_id，不共享文件路径——避免删源草稿时
+    误删副本图片（各草稿图片目录独立，§8 级联安全）。
+    """
+    src = xhs_storage.get_draft(draft_id)
+    if src is None:
+        raise HTTPException(status_code=404, detail="not found")
+    new_id = xhs_storage.create_draft(
+        title=(src["title"] or "") + "（副本）",
+        body=src["body"],
+        topics=src["topics"],
+        cover_index=src["cover_index"],
+        theme_id=src["theme_id"],
+    )
+    new_image_ids = xhs_images_service.copy_images(draft_id, new_id, src["image_ids"])
+    effective_cover = min(src["cover_index"], len(new_image_ids) - 1) if new_image_ids else 0
+    xhs_storage.update_draft(new_id, image_ids=new_image_ids, cover_index=effective_cover)
+    result = xhs_storage.get_draft(new_id)
+    if result is None:
+        raise HTTPException(status_code=500, detail="duplicate failed")
+    return result
 
 
 # ── 图片（P2）────────────────────────────────────────────────────────────────
@@ -193,3 +219,80 @@ def ai_polish(body: AiPolishBody) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         logger.exception("xhs ai_polish failed")
         raise _llm_http_error(e)
+
+
+# ── 自定义素材（P4）──────────────────────────────────────────────────────────
+_ASSET_KINDS = {"template", "copy", "title", "topic"}
+
+
+class CustomAssetCreate(BaseModel):
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/api/xhs/custom-assets")
+def list_custom_assets(kind: str | None = None) -> dict[str, Any]:
+    if kind is not None and kind not in _ASSET_KINDS:
+        raise HTTPException(status_code=400, detail="invalid kind")
+    return {"assets": xhs_storage.list_custom_assets(kind=kind)}
+
+
+@router.post("/api/xhs/custom-assets", status_code=201)
+def create_custom_asset(body: CustomAssetCreate) -> dict[str, Any]:
+    if body.kind not in _ASSET_KINDS:
+        raise HTTPException(status_code=400, detail="invalid kind")
+    if not body.payload:
+        raise HTTPException(status_code=400, detail="empty payload")
+    asset = xhs_storage.create_custom_asset(kind=body.kind, payload=body.payload)
+    return {"asset": asset}
+
+
+@router.delete("/api/xhs/custom-assets/{asset_id}", status_code=204)
+def delete_custom_asset(asset_id: str) -> None:
+    if not xhs_storage.delete_custom_asset(asset_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return None
+
+
+# ── AI Prompts 配置（P4 T8）──────────────────────────────────────────────────
+
+
+class XhsAiPromptsPatch(BaseModel):
+    """PATCH /api/xhs/ai_prompts 体。空字符串 = 回内置默认。"""
+
+    generate: str | None = None
+    polish: str | None = None
+
+
+def _xhs_ai_prompts_payload() -> dict[str, Any]:
+    cfg = config_service.load()
+    return {
+        "generate": {
+            "current": cfg.xhs_generate_prompt,
+            "default": xhs_ai_service.DEFAULT_GENERATE_SYSTEM,
+        },
+        "polish": {
+            "current": cfg.xhs_polish_prompt,
+            "default": xhs_ai_service.DEFAULT_POLISH_SYSTEM,
+        },
+    }
+
+
+@router.get("/api/xhs/ai_prompts")
+def get_xhs_ai_prompts() -> dict[str, Any]:
+    """返回小红书 AI 生成/润色的当前 + 内置默认 prompt。"""
+    return _xhs_ai_prompts_payload()
+
+
+@router.patch("/api/xhs/ai_prompts")
+def patch_xhs_ai_prompts(body: XhsAiPromptsPatch) -> dict[str, Any]:
+    """更新 prompt。字段为 None=不动；空字符串=清空回内置默认。无字段→400。"""
+    updates: dict[str, Any] = {}
+    if body.generate is not None:
+        updates["xhs_generate_prompt"] = body.generate
+    if body.polish is not None:
+        updates["xhs_polish_prompt"] = body.polish
+    if not updates:
+        raise HTTPException(status_code=400, detail="no fields provided")
+    config_service.patch(updates)
+    return _xhs_ai_prompts_payload()

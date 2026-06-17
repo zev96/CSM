@@ -20,7 +20,7 @@ from typing import Any
 
 from csm_core.config import default_config_dir
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 # ── Schema ──────────────────────────────────────────────────────────────────
 _DDL_V1 = [
@@ -43,6 +43,15 @@ _DDL_V1 = [
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS xhs_custom_assets (
+        id          TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_xhs_assets_kind ON xhs_custom_assets(kind, created_at DESC)",
 ]
 
 
@@ -233,4 +242,50 @@ def update_draft(
 def delete_draft(draft_id: str) -> bool:
     conn = get_conn()
     cur = conn.execute("DELETE FROM xhs_drafts WHERE id=?", (draft_id,))
+    return cur.rowcount > 0
+
+
+# ── Custom Assets CRUD ──────────────────────────────────────────────────────
+def _row_to_asset_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "payload": json.loads(row["payload_json"]),
+        "created_at": row["created_at"],
+    }
+
+
+def create_custom_asset(*, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """新建一条自定义素材。kind ∈ {template,copy,topic_group}（校验在路由层）。"""
+    asset_id = uuid.uuid4().hex
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO xhs_custom_assets(id, kind, payload_json) VALUES(?, ?, ?)",
+        (asset_id, kind, json.dumps(payload, ensure_ascii=False)),
+    )
+    row = conn.execute(
+        "SELECT * FROM xhs_custom_assets WHERE id = ?", (asset_id,)
+    ).fetchone()
+    return _row_to_asset_dict(row)
+
+
+def list_custom_assets(kind: str | None = None) -> list[dict[str, Any]]:
+    """列自定义素材，按 created_at DESC, rowid DESC（后建的在前）。kind 给定则只列该类。"""
+    conn = get_conn()
+    if kind is None:
+        rows = conn.execute(
+            "SELECT * FROM xhs_custom_assets ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM xhs_custom_assets WHERE kind = ? ORDER BY created_at DESC, rowid DESC",
+            (kind,),
+        ).fetchall()
+    return [_row_to_asset_dict(r) for r in rows]
+
+
+def delete_custom_asset(asset_id: str) -> bool:
+    """删一条，返回是否真的删到。"""
+    conn = get_conn()
+    cur = conn.execute("DELETE FROM xhs_custom_assets WHERE id = ?", (asset_id,))
     return cur.rowcount > 0

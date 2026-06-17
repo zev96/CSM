@@ -13,8 +13,6 @@ vi.mock("@/stores/sidecar", () => ({
 }));
 
 import { useXhs, _resetXhsModuleState, LLMNotConfiguredError } from "@/stores/xhs";
-import { THEMES } from "@/data/xhs/assets";
-import { orderedMarker } from "@/utils/xhsTheme";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -34,10 +32,10 @@ afterEach(() => {
 });
 
 describe("useXhs — getters", () => {
-  it("fullText 组装标题/正文/话题", () => {
+  it("fullText 组装标题/正文（话题已内嵌正文）", () => {
     const x = useXhs();
-    x.$patch({ title: "T", body: "B", topics: ["a"] });
-    expect(x.fullText).toBe("T\n\nB\n\n#a");
+    x.$patch({ title: "T", body: "B #a" });
+    expect(x.fullText).toBe("T\n\nB #a");
   });
   it("字数与超限标志", () => {
     const x = useXhs();
@@ -46,7 +44,7 @@ describe("useXhs — getters", () => {
     expect(x.titleOver).toBe(true);
     expect(x.bodyOver).toBe(false);
   });
-  it("isEmpty 看标题与正文是否都空白", () => {
+  it("isEmpty 看标题/正文/图片是否都为空", () => {
     const x = useXhs();
     expect(x.isEmpty).toBe(true);
     x.$patch({ body: "  " });
@@ -109,20 +107,41 @@ describe("useXhs — 自动保存 _ensureCreated", () => {
   });
 });
 
-describe("useXhs — 话题", () => {
-  it("addTopic 去前导 # + 去重 + 丢空", () => {
+describe("useXhs — 话题（内嵌正文）", () => {
+  it("addTopic 把 #话题 追加到正文末尾", () => {
     const x = useXhs();
-    x.addTopic("#考证");
-    x.addTopic("考证"); // 重复
-    x.addTopic("   ");  // 空
-    x.addTopic("干货");
-    expect(x.topics).toEqual(["考证", "干货"]);
+    x.$patch({ body: "正文" });
+    x.addTopic("穿搭");
+    expect(x.body).toBe("正文 #穿搭");
   });
-  it("removeTopic 按下标删除", () => {
+  it("addTopic 去前导 # 后追加", () => {
     const x = useXhs();
-    x.$patch({ topics: ["a", "b", "c"] });
-    x.removeTopic(1);
-    expect(x.topics).toEqual(["a", "c"]);
+    x.$patch({ body: "" });
+    x.addTopic("#通勤");
+    expect(x.body).toBe("#通勤");
+  });
+  it("addTopic 去重：同名 #话题 已存在则跳过", () => {
+    const x = useXhs();
+    x.$patch({ body: "正文 #穿搭" });
+    x.addTopic("穿搭");
+    expect(x.body).toBe("正文 #穿搭"); // 不重复追加
+  });
+  it("addTopic 丢空", () => {
+    const x = useXhs();
+    x.$patch({ body: "正文" });
+    x.addTopic("   ");
+    expect(x.body).toBe("正文"); // 无变化
+  });
+  it("addTopic 正文末尾已有空格时不重复加空格", () => {
+    const x = useXhs();
+    x.$patch({ body: "正文 " });
+    x.addTopic("干货");
+    expect(x.body).toBe("正文 #干货");
+  });
+  it("topics 数组始终为空（话题入正文，不入数组）", () => {
+    const x = useXhs();
+    x.addTopic("穿搭");
+    expect(x.topics).toEqual([]);
   });
 });
 
@@ -143,95 +162,33 @@ describe("useXhs — 光标插入入口", () => {
 });
 
 describe("useXhs — 复制", () => {
-  it("copy('full') 写入剪贴板全文", async () => {
+  it("copy('full') 写入剪贴板全文（话题已内嵌正文）", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const x = useXhs();
-    x.$patch({ title: "T", body: "B", topics: ["a"] });
+    x.$patch({ title: "T", body: "B #a" });
     await x.copy("full");
-    expect(writeText).toHaveBeenCalledWith("T\n\nB\n\n#a");
+    expect(writeText).toHaveBeenCalledWith("T\n\nB #a");
     vi.unstubAllGlobals();
   });
 });
 
 describe("useXhs — 模板载入", () => {
-  it("applyTemplate 覆盖标题/正文/话题并去抖保存", async () => {
+  it("applyTemplate 覆盖标题/正文，模板话题拼入正文末尾，topics 数组为空", async () => {
     postMock.mockResolvedValue({ data: { id: "d1" } });
     patchMock.mockResolvedValue({ data: {} });
     const x = useXhs();
     x.$patch({ title: "旧", body: "旧正文", topics: ["旧"] });
     x.applyTemplate({ title: "新标题", body: "新正文\n第二行", topics: ["a", "b"] });
     expect(x.title).toBe("新标题");
-    expect(x.body).toBe("新正文\n第二行");
-    expect(x.topics).toEqual(["a", "b"]);
+    expect(x.body).toBe("新正文\n第二行 #a #b"); // 话题内嵌正文
+    expect(x.topics).toEqual([]); // 数组始终空
     // 触发了去抖保存：800ms 后建草稿
     await vi.advanceTimersByTimeAsync(800);
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("useXhs — 排版主题", () => {
-  it("默认无激活主题，activeTheme=null、themeToolbar 为空", () => {
-    const x = useXhs();
-    expect(x.activeTheme).toBeNull();
-    expect(x.themeToolbar).toEqual([]);
-  });
-
-  it("applyTheme 设激活主题，activeTheme 解析出主题对象", () => {
-    const x = useXhs();
-    const t = THEMES[0];
-    x.applyTheme(t.id);
-    expect(x.themeId).toBe(t.id);
-    expect(x.activeTheme?.id).toBe(t.id);
-  });
-
-  it("themeToolbar 由激活主题映射出 小标题/无序/有序/分割线 四个按钮", () => {
-    const x = useXhs();
-    const t = THEMES[0];
-    x.applyTheme(t.id);
-    const tb = x.themeToolbar;
-    expect(tb.map((b) => b.key)).toEqual(["heading", "bullet", "ordered", "divider"]);
-    expect(tb.find((b) => b.key === "heading")?.symbol).toBe(t.heading);
-    expect(tb.find((b) => b.key === "bullet")?.symbol).toBe(t.bullet);
-    expect(tb.find((b) => b.key === "divider")?.symbol).toBe(t.divider);
-  });
-
-  it("applyTheme 触发去抖保存", async () => {
-    postMock.mockResolvedValue({ data: { id: "d1" } });
-    patchMock.mockResolvedValue({ data: {} });
-    const x = useXhs();
-    x.$patch({ title: "有内容" }); // 非空才会真的建草稿
-    x.applyTheme(THEMES[0].id);
-    await vi.advanceTimersByTimeAsync(800);
-    expect(postMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("themeToolbar 的「有序」symbol = 该主题样式的第 1 个序号字形", () => {
-    const x = useXhs();
-    const t = THEMES.find((th) => th.ordered === "circle") ?? THEMES[0];
-    x.applyTheme(t.id);
-    const ordered = x.themeToolbar.find((b) => b.key === "ordered");
-    expect(ordered?.label).toBe("有序");
-    expect(ordered?.symbol).toBe(orderedMarker(1, t.ordered));
-  });
-
-  it("insertOrdered 按正文已有序号数插入下一个序号", () => {
-    const x = useXhs();
-    const t = THEMES.find((th) => th.ordered === "emoji") ?? THEMES[0];
-    x.applyTheme(t.id);
-    x.setBody("1️⃣ 第一条\n"); // 已有 1 个 emoji 序号
-    // 本测试未注册光标插入器 → insertAtCursor 回退「追加正文末」，故可直接断言 x.body
-    x.insertOrdered();          // 应插入第 2 个 → "2️⃣ "
-    expect(x.body).toContain("2️⃣ ");
-  });
-
-  it("无激活主题时 insertOrdered 不动正文", () => {
-    const x = useXhs();
-    x.setBody("原样");
-    x.insertOrdered();
-    expect(x.body).toBe("原样");
-  });
-});
 
 describe("useXhs — 图片", () => {
   it("isEmpty 也看图片：有图即非空", () => {
@@ -302,6 +259,21 @@ describe("useXhs — 图片", () => {
   });
 });
 
+describe("isEmpty（话题入正文后）", () => {
+  it("标题/正文/图全空时 isEmpty 为 true", () => {
+    const s = useXhs();
+    s.$patch({ title: "  ", body: "", imageIds: [] });
+    expect(s.isEmpty).toBe(true);
+  });
+
+  it("正文含 #话题 文本时 isEmpty 为 false", () => {
+    const s = useXhs();
+    s.$patch({ title: "", body: "#穿搭", imageIds: [] });
+    expect(s.isEmpty).toBe(false);
+  });
+});
+
+
 describe("useXhs — AI actions", () => {
   it("generateNote 返回后端 {title, body, topics}", async () => {
     const x = useXhs();
@@ -340,5 +312,45 @@ describe("useXhs — AI actions", () => {
     x.setBody("正文");
     postMock.mockRejectedValueOnce({ response: { status: 502, data: { code: "llm_error" } } });
     await expect(x.polishBody()).rejects.not.toBeInstanceOf(LLMNotConfiguredError);
+  });
+});
+
+describe("草稿 重命名 / 复制副本（P4）", () => {
+  it("renameDraft PATCH 标题并刷新列表；当前草稿同步标题", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    patchMock.mockResolvedValue({ data: {} });
+    const s = useXhs();
+    s.$patch({ draftId: "d1", title: "旧" });
+    await s.renameDraft("d1", "新标题");
+    expect(patchMock).toHaveBeenCalledWith("/api/xhs/drafts/d1", { title: "新标题" });
+    expect(s.title).toBe("新标题");   // 当前草稿 id === "d1" → 同步本地标题
+    expect(getMock).toHaveBeenCalledWith("/api/xhs/drafts"); // loadDrafts 触发
+  });
+
+  it("renameDraft 当前打开的不是被改名的草稿，不同步本地标题", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    patchMock.mockResolvedValue({ data: {} });
+    const s = useXhs();
+    s.$patch({ draftId: "d2", title: "我自己的标题" });
+    await s.renameDraft("d1", "另一篇的新标题");
+    expect(s.title).toBe("我自己的标题"); // 不影响当前草稿
+  });
+
+  it("duplicateDraft POST /duplicate 并刷新列表，返回新 id", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    postMock.mockResolvedValue({ data: { id: "d2" } });
+    const s = useXhs();
+    const newId = await s.duplicateDraft("d1");
+    expect(postMock).toHaveBeenCalledWith("/api/xhs/drafts/d1/duplicate");
+    expect(getMock).toHaveBeenCalledWith("/api/xhs/drafts"); // loadDrafts 触发
+    expect(newId).toBe("d2");
+  });
+
+  it("duplicateDraft 后端不返回 id 时返回 null", async () => {
+    getMock.mockResolvedValue({ data: { drafts: [] } });
+    postMock.mockResolvedValue({ data: {} });
+    const s = useXhs();
+    const newId = await s.duplicateDraft("d1");
+    expect(newId).toBeNull();
   });
 });

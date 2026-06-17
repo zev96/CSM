@@ -6,7 +6,6 @@
  * 的合法性由 __tests__/assets.spec.ts 校验。
  */
 import templatesRaw from "./templates.json";
-import themesRaw from "./themes.json";
 import emojiRaw from "./emoji.json";
 import titlesRaw from "./titles.json";
 import copyRaw from "./copy.json";
@@ -20,16 +19,6 @@ export interface XhsTemplate {
   title: string;
   body: string;
   topics: string[];
-}
-
-/** 排版主题：用 emoji 当结构符号。ordered 是有序列表样式，P1 未用、留给 P3。 */
-export interface XhsTheme {
-  id: string;
-  name: string;
-  heading: string;
-  bullet: string;
-  ordered: "emoji" | "circle" | "superscript";
-  divider: string;
 }
 
 export interface EmojiGroup {
@@ -61,9 +50,6 @@ export interface TopicGroup {
 }
 
 export const TEMPLATES = templatesRaw as XhsTemplate[];
-// themes.json 的 ordered 被推断成 string，与联合类型不直接兼容，经 unknown 收窄；
-// 合法性（只能是三种值之一）由 assets.spec.ts 保证。
-export const THEMES = themesRaw as unknown as XhsTheme[];
 export const EMOJI = emojiRaw as EmojiLibrary;
 export const TITLE_CATEGORIES = (titlesRaw as { categories: ItemGroup[] }).categories;
 export const COPY_GROUPS = (copyRaw as { groups: ItemGroup[] }).groups;
@@ -77,8 +63,3 @@ export const DECORATION_GROUPS = (decorationsRaw as { groups: ItemGroup[] }).gro
  */
 export const TEMPLATE_CATEGORIES: string[] = [...new Set(TEMPLATES.map((t) => t.category))];
 
-/** 按 id 找主题；id 为 null / 找不到时返回 null。 */
-export function findTheme(id: string | null): XhsTheme | null {
-  if (!id) return null;
-  return THEMES.find((t) => t.id === id) ?? null;
-}

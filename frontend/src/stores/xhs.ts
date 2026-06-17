@@ -14,8 +14,6 @@ import type { AxiosError } from "axios";
 import { useSidecar } from "./sidecar";
 import { useToast } from "@/composables/useToast";
 import { buildFullText, countChars } from "@/utils/xhsText";
-import { findTheme, type XhsTheme } from "@/data/xhs/assets";
-import { orderedMarker, countOrderedMarkers } from "@/utils/xhsTheme";
 
 export interface XhsDraft {
   id: string;
@@ -30,7 +28,7 @@ export interface XhsDraft {
 }
 
 export type XhsPanel =
-  | "template" | "theme" | "emoji" | "title" | "copy"
+  | "template" | "emoji" | "title" | "copy"
   | "topic" | "decoration" | "image" | "ai";
 
 export type XhsPreviewTab = "note" | "discover";
@@ -107,28 +105,13 @@ export const useXhs = defineStore("xhs", {
     saving: false,
   }),
   getters: {
-    fullText: (s): string => buildFullText(s.title, s.body, s.topics),
+    fullText: (s): string => buildFullText(s.title, s.body),
     titleCount: (s): number => countChars(s.title),
     bodyCount: (s): number => countChars(s.body),
     titleOver: (s): boolean => countChars(s.title) > TITLE_SOFT_LIMIT,
     bodyOver: (s): boolean => countChars(s.body) > BODY_SOFT_LIMIT,
     isEmpty: (s): boolean =>
       s.title.trim() === "" && s.body.trim() === "" && s.imageIds.length === 0,
-    /** 当前激活的排版主题对象（无则 null）。 */
-    activeTheme: (s): XhsTheme | null => findTheme(s.themeId),
-    /** 工具条快捷符号按钮：激活主题 → 小标题/无序/有序/分割线（无主题时空）。
-     *  「有序」的 symbol 仅作按钮提示（该样式第 1 个序号字形），点击实际走
-     *  insertOrdered 按正文已有序号推算下一个。用 function 形式以便 this 访问 activeTheme。 */
-    themeToolbar(): { key: string; label: string; symbol: string }[] {
-      const t = this.activeTheme;
-      if (!t) return [];
-      return [
-        { key: "heading", label: "小标题", symbol: t.heading },
-        { key: "bullet", label: "无序", symbol: t.bullet },
-        { key: "ordered", label: "有序", symbol: orderedMarker(1, t.ordered) },
-        { key: "divider", label: "分割线", symbol: t.divider },
-      ];
-    },
   },
   actions: {
     async loadDrafts(): Promise<void> {
@@ -149,7 +132,7 @@ export const useXhs = defineStore("xhs", {
       this.draftId = d.id;
       this.title = d.title ?? "";
       this.body = d.body ?? "";
-      this.topics = [...(d.topics ?? [])];
+      this.topics = []; // 话题现以 #标签 文本形式存在于正文；旧草稿 topic 数组忽略
       this.imageIds = [...(d.image_ids ?? [])];
       this.coverIndex = d.cover_index ?? 0;
       this.themeId = d.theme_id ?? null;
@@ -164,25 +147,13 @@ export const useXhs = defineStore("xhs", {
       this.coverIndex = 0;
       this.themeId = null;
     },
-    /** 模板载入：整篇覆盖标题/正文/话题（是否弹确认由调用方面板决定）。 */
+    /** 模板载入：覆盖标题/正文，模板话题以 #话题 形式拼到正文末尾。 */
     applyTemplate(tpl: { title: string; body: string; topics: string[] }): void {
       this.title = tpl.title;
       this.body = tpl.body;
-      this.topics = [...tpl.topics];
+      this.topics = [];
+      for (const t of tpl.topics) this.addTopic(t);
       this.scheduleSave();
-    },
-    /** 应用排版主题：设激活主题 id，工具条随即出现该主题快捷符号。 */
-    applyTheme(themeId: string): void {
-      this.themeId = themeId;
-      this.scheduleSave();
-    },
-    /** 工具条「有序」：按激活主题 ordered 样式，在光标处插入「下一个序号 + 空格」。
-     *  下一个序号 = 正文已有同样式序号个数 + 1。无激活主题时不动。 */
-    insertOrdered(): void {
-      const t = this.activeTheme;
-      if (!t) return;
-      const n = countOrderedMarkers(this.body, t.ordered) + 1;
-      this.insertAtCursor(orderedMarker(n, t.ordered) + " ");
     },
     _payload() {
       return {
@@ -239,15 +210,14 @@ export const useXhs = defineStore("xhs", {
       this.body = v;
       this.scheduleSave();
     },
+    /** 点击/输入话题：在正文末尾追加「#话题」（已存在则跳过）。话题现以 #标签 文本形式存在于正文。 */
     addTopic(tag: string): void {
       const t = tag.replace(/^#+/, "").trim();
-      if (!t || this.topics.includes(t)) return;
-      this.topics.push(t);
-      this.scheduleSave();
-    },
-    removeTopic(i: number): void {
-      this.topics.splice(i, 1);
-      this.scheduleSave();
+      if (!t) return;
+      const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp("#" + esc + "(?=\\s|$)").test(this.body)) return; // 去重：已有同名 #话题
+      const sep = this.body.length === 0 || /\s$/.test(this.body) ? "" : " ";
+      this.setBody(this.body + sep + "#" + t);
     },
     setActivePanel(p: XhsPanel): void {
       this.activePanel = p;
@@ -328,6 +298,20 @@ export const useXhs = defineStore("xhs", {
       await sidecar.client.delete(`/api/xhs/drafts/${id}`);
       if (this.draftId === id) this.newDraft();
       await this.loadDrafts();
+    },
+    /** 重命名草稿（仅改标题）。当前打开的就是它则同步本地标题。 */
+    async renameDraft(id: string, title: string): Promise<void> {
+      const sidecar = useSidecar();
+      await sidecar.client.patch(`/api/xhs/drafts/${id}`, { title });
+      if (this.draftId === id) this.title = title;
+      await this.loadDrafts();
+    },
+    /** 复制副本：后端建副本（含图片拷贝），刷新列表。返回新 id。 */
+    async duplicateDraft(id: string): Promise<string | null> {
+      const sidecar = useSidecar();
+      const r = await sidecar.client.post(`/api/xhs/drafts/${id}/duplicate`);
+      await this.loadDrafts();
+      return r.data?.id ?? null;
     },
     /** AI 生成整篇：返回 {title, body, topics}（调用方决定是否覆盖填入）。
      *  503 未配置 LLM → 抛 LLMNotConfiguredError（AiPanel 弹「去设置」）。 */

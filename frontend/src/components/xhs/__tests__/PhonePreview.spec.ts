@@ -87,13 +87,12 @@ describe("PhonePreview 发现页瀑布流", () => {
     w.unmount();
   });
 
-  it("自己的笔记带「我的」标记，且只有一张", () => {
+  it("自己的笔记只有一张，且无「我的」标记/高亮", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    const mine = w.findAll(".dc-mine");
-    expect(mine.length).toBe(1);
-    expect(w.find(".dc-badge-mine").text()).toBe("我的");
+    expect(w.findAll(".dc-mine").length).toBe(1);
+    expect(w.find(".dc-badge-mine").exists()).toBe(false);
     w.unmount();
   });
 
@@ -152,6 +151,28 @@ describe("PhonePreview 笔记页多图", () => {
     const w = mount(PhonePreview);
     await w.findAll(".note-dot")[2].trigger("click");
     expect(w.find(".note-pager").text()).toBe("3/3");
+    w.unmount();
+  });
+});
+
+describe("PhonePreview 代码 chip", () => {
+  it("正文含 [害羞R] 渲染成 chip（显示标签「害羞」）", () => {
+    const store = useXhs();
+    store.$patch({ body: "今天[害羞R]好开心", previewTab: "note" });
+    const w = mount(PhonePreview);
+    const chips = w.findAll(".xhs-code-chip");
+    expect(chips.length).toBe(1);
+    expect(chips[0].text()).toBe("害羞");
+    expect(w.text()).toContain("今天");
+    expect(w.text()).toContain("好开心");
+    w.unmount();
+  });
+
+  it("正文无代码时不产生 chip", () => {
+    const store = useXhs();
+    store.$patch({ body: "纯文本正文", previewTab: "note" });
+    const w = mount(PhonePreview);
+    expect(w.findAll(".xhs-code-chip").length).toBe(0);
     w.unmount();
   });
 });
