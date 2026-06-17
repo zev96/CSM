@@ -40,8 +40,8 @@ export function countOrderedMarkers(body: string, style: OrderedStyle): number {
  * 这样跨多个列表块会各自从 1 重新计数（P4 打磨，取代 P3 的全文连续计数）。
  */
 export function nextOrderedNumber(textBeforeCursor: string, style: OrderedStyle): number {
-  // 空行（仅空白的整行）分隔列表块；取光标前最后一块。
-  const blocks = textBeforeCursor.split(/\n[ \t]*\n/);
+  // 先归一化 CRLF→LF（textarea 通常已是 LF，但防御外部来源的 \r\n），空行分隔列表块；取光标前最后一块。
+  const blocks = textBeforeCursor.replace(/\r\n/g, "\n").split(/\n[ \t]*\n/);
   const currentBlock = blocks[blocks.length - 1] ?? "";
   return countOrderedMarkers(currentBlock, style) + 1;
 }

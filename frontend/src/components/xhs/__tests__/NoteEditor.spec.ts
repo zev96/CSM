@@ -57,4 +57,15 @@ describe("NoteEditor 工具条", () => {
     expect(store.activePanel).toBe("emoji");
     w.unmount();
   });
+
+  it("挂载注册光标探针，卸载注销", () => {
+    const store = useXhs();
+    const spy = vi.spyOn(store, "registerCursorProbe");
+    const w = mount(NoteEditor);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBeTypeOf("function");
+    w.unmount();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[1][0]).toBeNull();
+  });
 });

@@ -341,12 +341,16 @@ describe("insertOrdered 按光标前列表块计数（P4）", () => {
     expect(inserted[0]).toBe(orderedMarker(1, style) + " ");
   });
 
-  it("无探针时回退按整段正文尾块计数（不抛错）", () => {
+  it("无探针时回退按整段正文尾块计数", () => {
     const s = useXhs();
     s.applyTheme("warm_yellow");
-    s.registerInserter(() => {});
+    const style = s.activeTheme!.ordered;
+    s.$patch({ body: `${orderedMarker(1, style)} a\n` });
+    const inserted: string[] = [];
+    s.registerInserter((t) => inserted.push(t));
     s.registerCursorProbe(null);
-    expect(() => s.insertOrdered()).not.toThrow();
+    s.insertOrdered();
+    expect(inserted[0]).toBe(orderedMarker(2, style) + " ");
   });
 });
 

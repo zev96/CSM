@@ -50,4 +50,7 @@ describe("nextOrderedNumber 按列表块计数", () => {
   it("emoji 样式同理", () => {
     expect(nextOrderedNumber("1️⃣ a\n2️⃣ b\n", "emoji")).toBe(3);
   });
+  it("CRLF 空行也能分块", () => {
+    expect(nextOrderedNumber("① 上一组\r\n\r\n", "circle")).toBe(1);
+  });
 });
