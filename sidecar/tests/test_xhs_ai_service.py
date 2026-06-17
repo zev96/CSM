@@ -124,3 +124,57 @@ def test_polish_note_empty_returns_empty_without_llm(settings_path: Path, fake_c
 def test_polish_note_raises_when_no_provider(settings_path: Path):
     with pytest.raises(LLMConfigError):
         xhs_ai_service.polish_note("正文")
+
+
+# ── P4: configurable prompts ─────────────────────────────────────────────────
+from csm_core.config import AppConfig
+
+
+def test_generate_uses_custom_system_prompt(monkeypatch):
+    from csm_sidecar.services import xhs_ai_service as service
+
+    recorded = {}
+
+    class _Rec:
+        def complete(self, *, system, user, temperature=None):
+            recorded["system"] = system
+            recorded["user"] = user
+            return '{"title":"t","body":"b","topics":[]}'
+
+    monkeypatch.setattr(service.llm_factory, "build_client", lambda **kw: _Rec())
+    monkeypatch.setattr(service.config_service, "load", lambda: AppConfig(xhs_generate_prompt="我的生成提示词"))
+    service.generate_note("主题")
+    assert recorded["system"] == "我的生成提示词"
+
+
+def test_generate_falls_back_to_default_when_empty(monkeypatch):
+    from csm_sidecar.services import xhs_ai_service as service
+
+    recorded = {}
+
+    class _Rec:
+        def complete(self, *, system, user, temperature=None):
+            recorded["system"] = system
+            return '{"title":"t","body":"b","topics":[]}'
+
+    monkeypatch.setattr(service.llm_factory, "build_client", lambda **kw: _Rec())
+    monkeypatch.setattr(service.config_service, "load", lambda: AppConfig())
+    service.generate_note("主题")
+    assert recorded["system"] == service.DEFAULT_GENERATE_SYSTEM
+
+
+def test_polish_uses_custom_system_prompt(monkeypatch):
+    from csm_sidecar.services import xhs_ai_service as service
+
+    recorded = {}
+
+    class _Rec:
+        def complete(self, *, system, user, temperature=None):
+            recorded["system"] = system
+            return "润色后"
+
+    monkeypatch.setattr(service.llm_factory, "build_client", lambda **kw: _Rec())
+    monkeypatch.setattr(service.config_service, "load", lambda: AppConfig(xhs_polish_prompt="我的润色提示词"))
+    out = service.polish_note("原文")
+    assert recorded["system"] == "我的润色提示词"
+    assert out == "润色后"

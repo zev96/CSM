@@ -18,7 +18,8 @@ import logging
 import re
 from typing import Any
 
-from . import llm_factory
+from csm_core.config import AppConfig
+from . import config_service, llm_factory
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,20 @@ DEFAULT_POLISH_SYSTEM = (
     "口语化、亲切、适当分点和 emoji 排版、保留原意不编造事实、结尾自然引导互动。"
     "只返回改写后的正文，不要加任何前后缀、引号、标题或解释。"
 )
+
+
+# ── config helpers ────────────────────────────────────────────────────────
+def _load_config() -> AppConfig:
+    """读全局配置；未初始化（如部分单测未注入路径）时退回默认值，保证内置 prompt 可用。"""
+    try:
+        return config_service.load()
+    except Exception:
+        return AppConfig()
+
+
+def _resolve_system(custom: str, default: str) -> str:
+    """空白自定义 → 内置默认。"""
+    return custom if custom.strip() else default
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
@@ -100,9 +115,11 @@ def generate_note(intent: str) -> dict[str, Any]:
         未配置 default provider / api key（路由层捕获 → 503）。
     """
     intent = (intent or "").strip()
+    cfg = _load_config()
+    system = _resolve_system(cfg.xhs_generate_prompt, DEFAULT_GENERATE_SYSTEM)
     client = llm_factory.build_client()
     text = client.complete(
-        system=DEFAULT_GENERATE_SYSTEM,
+        system=system,
         user=f"主题 / 关键词：{intent}",
     )
     return _parse_generated(text)
@@ -116,6 +133,8 @@ def polish_note(text: str) -> str:
     text = (text or "").strip()
     if not text:
         return ""
+    cfg = _load_config()
+    system = _resolve_system(cfg.xhs_polish_prompt, DEFAULT_POLISH_SYSTEM)
     client = llm_factory.build_client()
-    out = client.complete(system=DEFAULT_POLISH_SYSTEM, user=text)
+    out = client.complete(system=system, user=text)
     return (out or "").strip()

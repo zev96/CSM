@@ -193,6 +193,12 @@ class AppConfig(BaseModel):
     mining_summary_prompt: str = ""
     mining_suggest_prompt: str = ""
 
+    # ── XHS editor AI prompts (P4) ──────────────────────────────────────────
+    # 空字符串 = 用 xhs_ai_service 内置默认 prompt（DEFAULT_GENERATE_SYSTEM /
+    # DEFAULT_POLISH_SYSTEM）。用户在设置页改了之后，下次 AI 生成/润色优先用这里。
+    xhs_generate_prompt: str = ""
+    xhs_polish_prompt: str = ""
+
 
 def load_config(path: Path) -> AppConfig:
     path = Path(path)
