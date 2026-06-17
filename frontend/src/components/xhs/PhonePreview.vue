@@ -93,8 +93,6 @@ const avatarLetter = computed<string>(() => (nickname.value || "我").slice(0, 1
 const displayTitle = computed(() => xhs.title || "添加标题更吸睛～");
 const displayBody = computed(() => xhs.body || "正文还没写哦，左侧素材点一点，右侧实时预览～");
 const bodySegments = computed(() => tokenizeXhsCodes(displayBody.value));
-const tags = computed(() => xhs.topics.filter((t) => t.trim()));
-
 // ── 发现页竞品：按品类词匹配（用户自备封面素材 + 自撰文案）────────────────────
 interface CompCard {
   title: string;
@@ -237,9 +235,6 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                       <span v-if="seg.type === 'text'">{{ seg.value }}</span>
                       <span v-else class="xhs-code-chip">{{ seg.label }}</span>
                     </template>
-                  </div>
-                  <div v-if="tags.length" :style="{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px 8px' }">
-                    <span v-for="(t, i) in tags" :key="i" :style="{ fontSize: '13px', color: '#3a6fb0' }">#{{ t }}</span>
                   </div>
                   <div :style="{ marginTop: '12px', fontSize: '11px', color: '#bbb' }">编辑于 刚刚 · 广州</div>
                 </div>
