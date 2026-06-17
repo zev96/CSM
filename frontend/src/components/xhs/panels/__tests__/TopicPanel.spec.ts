@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 
@@ -23,9 +23,6 @@ beforeEach(() => {
   mockClient.delete.mockReset();
 });
 
-afterEach(() => {
-  vi.clearAllTimers();
-});
 
 describe("TopicPanel", () => {
   it("点击话题加入 topics，重复点击不重复", async () => {
