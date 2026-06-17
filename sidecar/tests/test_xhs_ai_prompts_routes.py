@@ -10,7 +10,7 @@ def test_get_shape_defaults_empty(client: TestClient, monitor_db: Path):
     r = client.get("/api/xhs/ai_prompts")
     assert r.status_code == 200
     data = r.json()
-    assert set(data.keys()) >= {"generate", "polish"}
+    assert set(data.keys()) == {"generate", "polish"}
     assert data["generate"]["current"] == ""
     assert data["polish"]["current"] == ""
     assert data["generate"]["default"]   # 内置默认非空
@@ -24,10 +24,18 @@ def test_patch_persists_generate(client: TestClient, monitor_db: Path):
     assert client.get("/api/xhs/ai_prompts").json()["generate"]["current"] == "自定义生成"
 
 
-def test_patch_empty_clears_back_to_default(client: TestClient, monitor_db: Path):
+def test_patch_empty_string_clears_to_blank(client: TestClient, monitor_db: Path):
     client.patch("/api/xhs/ai_prompts", json={"polish": "x"})
     r = client.patch("/api/xhs/ai_prompts", json={"polish": ""})
     assert r.json()["polish"]["current"] == ""
+
+
+def test_patch_both_at_once(client: TestClient, monitor_db: Path):
+    r = client.patch("/api/xhs/ai_prompts", json={"generate": "G", "polish": "P"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["generate"]["current"] == "G"
+    assert body["polish"]["current"] == "P"
 
 
 def test_patch_no_fields_400(client: TestClient, monitor_db: Path):

@@ -254,11 +254,13 @@ def _xhs_ai_prompts_payload() -> dict[str, Any]:
 
 @router.get("/api/xhs/ai_prompts")
 def get_xhs_ai_prompts() -> dict[str, Any]:
+    """返回小红书 AI 生成/润色的当前 + 内置默认 prompt。"""
     return _xhs_ai_prompts_payload()
 
 
 @router.patch("/api/xhs/ai_prompts")
 def patch_xhs_ai_prompts(body: XhsAiPromptsPatch) -> dict[str, Any]:
+    """更新 prompt。字段为 None=不动；空字符串=清空回内置默认。无字段→400。"""
     updates: dict[str, Any] = {}
     if body.generate is not None:
         updates["xhs_generate_prompt"] = body.generate
