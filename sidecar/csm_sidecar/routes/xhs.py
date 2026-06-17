@@ -193,3 +193,36 @@ def ai_polish(body: AiPolishBody) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         logger.exception("xhs ai_polish failed")
         raise _llm_http_error(e)
+
+
+# ── 自定义素材（P4）──────────────────────────────────────────────────────────
+_ASSET_KINDS = {"template", "copy", "topic_group"}
+
+
+class CustomAssetCreate(BaseModel):
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/api/xhs/custom-assets")
+def list_custom_assets(kind: str | None = None) -> dict[str, Any]:
+    if kind is not None and kind not in _ASSET_KINDS:
+        raise HTTPException(status_code=400, detail="invalid kind")
+    return {"assets": xhs_storage.list_custom_assets(kind=kind)}
+
+
+@router.post("/api/xhs/custom-assets", status_code=201)
+def create_custom_asset(body: CustomAssetCreate) -> dict[str, Any]:
+    if body.kind not in _ASSET_KINDS:
+        raise HTTPException(status_code=400, detail="invalid kind")
+    if not body.payload:
+        raise HTTPException(status_code=400, detail="empty payload")
+    asset = xhs_storage.create_custom_asset(kind=body.kind, payload=body.payload)
+    return {"asset": asset}
+
+
+@router.delete("/api/xhs/custom-assets/{asset_id}", status_code=204)
+def delete_custom_asset(asset_id: str) -> None:
+    if not xhs_storage.delete_custom_asset(asset_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return None
