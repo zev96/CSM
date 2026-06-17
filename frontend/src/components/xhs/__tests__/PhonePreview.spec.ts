@@ -59,13 +59,14 @@ describe("PhonePreview 封面", () => {
 });
 
 describe("PhonePreview 发现页瀑布流", () => {
-  it("渲染 4 张卡（3 条 mock + 自己的笔记），底部有导航", () => {
+  it("渲染瀑布流卡片（mock + 自己的笔记）+ 顶部子分类 + 底部导航", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    // 3 条 mock + 自己 1 条 = 4 张卡，铺满一屏不滚动
-    expect(w.findAll(".discover-card").length).toBe(4);
-    expect(w.find(".discover-nav").exists()).toBe(true);
+    // 5 条 mock + 自己 1 条 = 6 张卡
+    expect(w.findAll(".dc-card").length).toBe(6);
+    expect(w.find(".dc-nav").exists()).toBe(true);
+    expect(w.find(".dc-subtabs").exists()).toBe(true);
     w.unmount();
   });
 
@@ -73,9 +74,9 @@ describe("PhonePreview 发现页瀑布流", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover" });
     const w = mount(PhonePreview);
-    const mine = w.findAll(".discover-mine");
+    const mine = w.findAll(".dc-mine");
     expect(mine.length).toBe(1);
-    expect(w.find(".discover-badge").text()).toBe("我的");
+    expect(w.find(".dc-badge-mine").text()).toBe("我的");
     w.unmount();
   });
 
@@ -83,7 +84,7 @@ describe("PhonePreview 发现页瀑布流", () => {
     const store = useXhs();
     store.$patch({ previewTab: "discover", title: "我的测试标题" });
     const w = mount(PhonePreview);
-    expect(w.find(".discover-mine").text()).toContain("我的测试标题");
+    expect(w.find(".dc-mine").text()).toContain("我的测试标题");
     w.unmount();
   });
 });
