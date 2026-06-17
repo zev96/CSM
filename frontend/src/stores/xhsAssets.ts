@@ -27,8 +27,6 @@ export const useXhsAssets = defineStore("xhsAssets", () => {
   const copies = computed(() => assets.value.filter((a) => a.kind === "copy"));
   const titles = computed(() => assets.value.filter((a) => a.kind === "title"));
   const topics = computed(() => assets.value.filter((a) => a.kind === "topic"));
-  /** @deprecated TopicPanel 重构前的临时垫片，移除 TopicPanel 对此的引用后删除。 */
-  const topicGroups = computed(() => [] as XhsCustomAsset[]);
 
   async function reload(): Promise<void> {
     const r = await api().get("/api/xhs/custom-assets");
@@ -54,5 +52,5 @@ export const useXhsAssets = defineStore("xhsAssets", () => {
     assets.value = assets.value.filter((a) => a.id !== id);
   }
 
-  return { assets, loaded, templates, copies, titles, topics, topicGroups, ensureLoaded, reload, create, remove };
+  return { assets, loaded, templates, copies, titles, topics, ensureLoaded, reload, create, remove };
 });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-/** 话题面板（设计稿 §5「话题」）。分组 tab + #话题；点击加 chip（store 去重去 #）。已加的高亮。
- *  「我的」tab：自定义话题分组（Task 6 P4）—— 存为分组 + 全部添加 + 删除。
+/** 话题面板（设计稿 §5「话题」）。分组 tab + #话题；点击追加到正文（store 去重去 #）。
+ *  「我的」tab：单条自定义话题（输入添加 + 点击追加正文 + 删除）。
  */
 import { ref, computed, onMounted } from "vue";
 import CategoryTabs from "./CategoryTabs.vue";
@@ -27,17 +27,16 @@ function added(tag: string): boolean {
 
 onMounted(() => { void assets.ensureLoaded(); });
 
-async function saveTopicGroup() {
-  if (!xhs.topics.length) { toast.error("先在正文区加几个话题，再存为分组"); return; }
-  const name = xhs.topics.slice(0, 3).map((t) => "#" + t).join(" ") + (xhs.topics.length > 3 ? " …" : "");
+const addInput = ref("");
+async function addCustom() {
+  const t = addInput.value.trim().replace(/^#+/, "");
+  if (!t) return;
   try {
-    await assets.create("topic", { name, tags: [...xhs.topics] });
-    toast.success("已存为话题分组");
-  } catch { toast.error("保存失败"); }
-}
-
-function addAll(tags: string[]) {
-  for (const t of tags) xhs.addTopic(t);
+    await assets.create("topic", { text: t });
+    addInput.value = "";
+  } catch {
+    toast.error("添加失败");
+  }
 }
 
 async function removeMine(id: string) {
@@ -48,11 +47,8 @@ async function removeMine(id: string) {
 
 <template>
   <div class="flex h-full flex-col" :style="{ gap: '10px' }">
-    <!-- 顶部：tab + 存为话题分组按钮 -->
-    <div class="tg-header">
-      <CategoryTabs v-model="grp" :tabs="tabs" />
-      <button type="button" class="xhs-save-topicgroup" @click="saveTopicGroup">＋ 存为话题分组</button>
-    </div>
+    <!-- 顶部：tab -->
+    <CategoryTabs v-model="grp" :tabs="tabs" />
 
     <!-- 内置话题列表（非「我的」tab） -->
     <div v-if="grp !== MINE" class="min-h-0 flex-1 overflow-y-auto flex flex-wrap" :style="{ gap: '8px', alignContent: 'flex-start' }">
@@ -73,32 +69,30 @@ async function removeMine(id: string) {
       </button>
     </div>
 
-    <!-- 「我的」自定义话题分组列表 -->
-    <template v-if="grp === MINE">
+    <!-- 「我的」自定义话题 -->
+    <div v-else class="min-h-0 flex-1 flex flex-col" :style="{ gap: '8px' }">
+      <div class="flex items-center" :style="{ gap: '6px' }">
+        <input
+          v-model="addInput"
+          type="text"
+          class="xhs-topic-add-input"
+          placeholder="输入话题，回车或点添加"
+          @keydown.enter.prevent="addCustom"
+        />
+        <button type="button" class="xhs-topic-add-btn" @click="addCustom">添加</button>
+      </div>
       <div class="min-h-0 flex-1 overflow-y-auto flex flex-col" :style="{ gap: '8px' }">
-        <div v-if="!assets.topicGroups.length" class="xhs-empty">还没有自定义话题分组～</div>
-        <div v-for="a in assets.topicGroups" :key="a.id" class="xhs-tg-card">
-          <div class="xhs-tg-head">
-            <span class="xhs-tg-name">{{ a.payload.name || '我的话题' }}</span>
-            <button type="button" class="xhs-addall" @click="addAll(a.payload.tags ?? [])">全部添加</button>
-            <button type="button" class="xhs-mine-del" title="删除分组" @click="removeMine(a.id)">✕</button>
-          </div>
-          <div class="flex flex-wrap" :style="{ gap: '6px' }">
-            <button v-for="(t, i) in (a.payload.tags ?? [])" :key="i" type="button" class="xhs-tag-chip" @click="xhs.addTopic(t)">#{{ t }}</button>
-          </div>
+        <div v-if="!assets.topics.length" class="xhs-empty">还没有自定义话题～</div>
+        <div v-for="a in assets.topics" :key="a.id" class="xhs-mine-row">
+          <button type="button" class="xhs-mine-main" @click="xhs.addTopic(a.payload.text)">#{{ a.payload.text }}</button>
+          <button type="button" class="xhs-mine-del" title="删除" @click="removeMine(a.id)">✕</button>
         </div>
       </div>
-    </template>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.tg-header {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .xhs-tag {
   transition: filter 0.15s;
 }
@@ -106,33 +100,61 @@ async function removeMine(id: string) {
   filter: brightness(0.97);
 }
 
-/* 存为话题分组 button — matches TemplatePanel's xhs-save-template style */
-.xhs-save-topicgroup {
-  align-self: flex-start;
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--primary);
-  border: 1px solid var(--primary);
+.xhs-topic-add-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line-2);
   border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  padding: 7px 10px;
+  font-size: 13px;
+  outline: none;
+  color: var(--ink);
+  background: #fff;
 }
-.xhs-save-topicgroup:hover {
+
+.xhs-topic-add-btn {
+  flex-shrink: 0;
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 8px;
   background: var(--primary);
   color: #fff;
+  cursor: pointer;
 }
 
-/* 空状态提示 — EXACT copy from TemplatePanel */
 .xhs-empty {
-  font-size: 12px;
   color: var(--ink-2);
+  font-size: 12.5px;
   text-align: center;
-  padding: 24px 12px;
+  padding: 16px 8px;
 }
 
-/* 删除按钮 — EXACT copy from TemplatePanel */
+.xhs-mine-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.xhs-mine-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 0.15s;
+}
+.xhs-mine-main:hover {
+  border-color: var(--primary);
+}
+
 .xhs-mine-del {
   flex-shrink: 0;
   width: 26px;
@@ -151,60 +173,5 @@ async function removeMine(id: string) {
 .xhs-mine-del:hover {
   color: #e53e3e;
   border-color: #e53e3e;
-}
-
-/* 自定义话题分组卡片 */
-.xhs-tg-card {
-  border: 1px solid var(--line-2);
-  border-radius: 10px;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* 卡片头部：分组名 + 全部添加 + ✕ */
-.xhs-tg-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.xhs-tg-name {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-/* 全部添加 ghost button */
-.xhs-addall {
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--line-2);
-  background: #fff;
-  color: var(--ink);
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-.xhs-addall:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-}
-
-/* 分组内话题 chip */
-.xhs-tag-chip {
-  font-size: 13px;
-  color: #3a6fb0;
-  background: rgba(58, 111, 176, 0.08);
-  border-radius: 999px;
-  padding: 3px 10px;
-  cursor: pointer;
-  border: none;
-  transition: background 0.15s;
-}
-.xhs-tag-chip:hover {
-  background: rgba(58, 111, 176, 0.16);
 }
 </style>
