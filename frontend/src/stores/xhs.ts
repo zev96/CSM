@@ -10,10 +10,12 @@
  */
 import { defineStore } from "pinia";
 
+import type { AxiosError } from "axios";
 import { useSidecar } from "./sidecar";
 import { useToast } from "@/composables/useToast";
 import { buildFullText, countChars } from "@/utils/xhsText";
 import { findTheme, type XhsTheme } from "@/data/xhs/assets";
+import { orderedMarker, countOrderedMarkers } from "@/utils/xhsTheme";
 
 export interface XhsDraft {
   id: string;
@@ -69,6 +71,27 @@ export function _resetXhsModuleState(): void {
   _creating = null;
 }
 
+/**
+ * 503 + code="llm_not_configured" 时抛出。AiPanel 据此弹「去设置」toast，
+ * 而非通用报错。与 mining store 的同名类各自独立（xhs 模块自洽，不耦合 mining）。
+ */
+export class LLMNotConfiguredError extends Error {
+  constructor(message = "请先在设置中配置 AI 服务") {
+    super(message);
+    this.name = "LLMNotConfiguredError";
+  }
+}
+
+/** 把 sidecar AI 路由的 503 llm_not_configured 解包成 LLMNotConfiguredError，其余原样抛。 */
+function _wrapLLMError(err: unknown): never {
+  const ax = err as AxiosError<{ code?: string; detail?: string }>;
+  const resp = ax?.response;
+  if (resp?.status === 503 && resp.data?.code === "llm_not_configured") {
+    throw new LLMNotConfiguredError(resp.data.detail || undefined);
+  }
+  throw err;
+}
+
 export const useXhs = defineStore("xhs", {
   state: (): XhsState => ({
     draftId: null,
@@ -93,14 +116,16 @@ export const useXhs = defineStore("xhs", {
       s.title.trim() === "" && s.body.trim() === "" && s.imageIds.length === 0,
     /** 当前激活的排版主题对象（无则 null）。 */
     activeTheme: (s): XhsTheme | null => findTheme(s.themeId),
-    /** 工具条快捷符号按钮：激活主题 → 小标题/无序/分割线（无主题时空）。
-     *  用 function 形式以便通过 this 访问 activeTheme（设计稿 §1 P1 工具条）。 */
+    /** 工具条快捷符号按钮：激活主题 → 小标题/无序/有序/分割线（无主题时空）。
+     *  「有序」的 symbol 仅作按钮提示（该样式第 1 个序号字形），点击实际走
+     *  insertOrdered 按正文已有序号推算下一个。用 function 形式以便 this 访问 activeTheme。 */
     themeToolbar(): { key: string; label: string; symbol: string }[] {
       const t = this.activeTheme;
       if (!t) return [];
       return [
         { key: "heading", label: "小标题", symbol: t.heading },
         { key: "bullet", label: "无序", symbol: t.bullet },
+        { key: "ordered", label: "有序", symbol: orderedMarker(1, t.ordered) },
         { key: "divider", label: "分割线", symbol: t.divider },
       ];
     },
@@ -150,6 +175,14 @@ export const useXhs = defineStore("xhs", {
     applyTheme(themeId: string): void {
       this.themeId = themeId;
       this.scheduleSave();
+    },
+    /** 工具条「有序」：按激活主题 ordered 样式，在光标处插入「下一个序号 + 空格」。
+     *  下一个序号 = 正文已有同样式序号个数 + 1。无激活主题时不动。 */
+    insertOrdered(): void {
+      const t = this.activeTheme;
+      if (!t) return;
+      const n = countOrderedMarkers(this.body, t.ordered) + 1;
+      this.insertAtCursor(orderedMarker(n, t.ordered) + " ");
     },
     _payload() {
       return {
@@ -295,6 +328,31 @@ export const useXhs = defineStore("xhs", {
       await sidecar.client.delete(`/api/xhs/drafts/${id}`);
       if (this.draftId === id) this.newDraft();
       await this.loadDrafts();
+    },
+    /** AI 生成整篇：返回 {title, body, topics}（调用方决定是否覆盖填入）。
+     *  503 未配置 LLM → 抛 LLMNotConfiguredError（AiPanel 弹「去设置」）。 */
+    async generateNote(intent: string): Promise<{ title: string; body: string; topics: string[] }> {
+      const sidecar = useSidecar();
+      try {
+        const r = await sidecar.client.post("/api/xhs/ai/generate", { intent });
+        return {
+          title: typeof r.data?.title === "string" ? r.data.title : "",
+          body: typeof r.data?.body === "string" ? r.data.body : "",
+          topics: Array.isArray(r.data?.topics) ? r.data.topics : [],
+        };
+      } catch (e) {
+        _wrapLLMError(e);
+      }
+    },
+    /** AI 润色当前正文：返回润色后文本（不直接写回，调用方决定）。 */
+    async polishBody(): Promise<string> {
+      const sidecar = useSidecar();
+      try {
+        const r = await sidecar.client.post("/api/xhs/ai/polish", { text: this.body });
+        return typeof r.data?.body === "string" ? r.data.body : "";
+      } catch (e) {
+        _wrapLLMError(e);
+      }
     },
   },
 });

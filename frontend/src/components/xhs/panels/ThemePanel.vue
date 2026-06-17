@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
- * 主题面板（设计稿 §5「主题」/§1 P1 排版主题）。点击应用排版主题，
- * 编辑器工具条随即出现这套主题的小标题/无序/分割线快捷符号。P1 起步 3 套。
+ * 主题面板（设计稿 §5「主题」/§1 排版主题）。点击应用排版主题，
+ * 编辑器工具条随即出现这套主题的小标题/无序/有序/分割线快捷符号。P3 扩到 8 套色系。
  */
 import Icon from "@/components/ui/Icon.vue";
 import { THEMES } from "@/data/xhs/assets";
 import { useXhs } from "@/stores/xhs";
+import { orderedMarker } from "@/utils/xhsTheme";
 
 const xhs = useXhs();
 </script>
@@ -29,7 +30,8 @@ const xhs = useXhs();
       </div>
       <div :style="{ fontSize: '13px', color: 'var(--ink)', lineHeight: 1.9 }">
         <div>{{ t.heading }} 小标题示例</div>
-        <div>{{ t.bullet }} 列表项一</div>
+        <div>{{ t.bullet }} 无序列表项</div>
+        <div>{{ orderedMarker(1, t.ordered) }} 有序列表项</div>
         <div :style="{ color: 'var(--ink-2)' }">{{ t.divider }}</div>
       </div>
     </button>

@@ -60,7 +60,7 @@ const inputBaseStyle = {
           type="button"
           class="xhs-tool-btn"
           :title="`插入${b.label}符号`"
-          @click="xhs.insertAtCursor(b.symbol)"
+          @click="b.key === 'ordered' ? xhs.insertOrdered() : xhs.insertAtCursor(b.symbol)"
         >
           <span :style="{ fontSize: '14px' }">{{ b.symbol }}</span>
           <span :style="{ fontSize: '12px', color: 'var(--ink-2)' }">{{ b.label }}</span>

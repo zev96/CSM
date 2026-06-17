@@ -28,7 +28,7 @@ describe("xhs 起步素材完整性", () => {
   });
 
   it("主题：非空、id 唯一、ordered 合法、符号齐全、findTheme 命中", () => {
-    expect(THEMES.length).toBeGreaterThan(0);
+    expect(THEMES.length).toBeGreaterThanOrEqual(6); // P3「完整化」：6–8 套色系
     const ids = THEMES.map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const t of THEMES) {

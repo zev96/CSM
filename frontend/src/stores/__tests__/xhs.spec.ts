@@ -12,8 +12,9 @@ vi.mock("@/stores/sidecar", () => ({
   }),
 }));
 
-import { useXhs, _resetXhsModuleState } from "@/stores/xhs";
+import { useXhs, _resetXhsModuleState, LLMNotConfiguredError } from "@/stores/xhs";
 import { THEMES } from "@/data/xhs/assets";
+import { orderedMarker } from "@/utils/xhsTheme";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -184,12 +185,12 @@ describe("useXhs — 排版主题", () => {
     expect(x.activeTheme?.id).toBe(t.id);
   });
 
-  it("themeToolbar 由激活主题映射出 小标题/无序/分割线 三个按钮", () => {
+  it("themeToolbar 由激活主题映射出 小标题/无序/有序/分割线 四个按钮", () => {
     const x = useXhs();
     const t = THEMES[0];
     x.applyTheme(t.id);
     const tb = x.themeToolbar;
-    expect(tb.map((b) => b.key)).toEqual(["heading", "bullet", "divider"]);
+    expect(tb.map((b) => b.key)).toEqual(["heading", "bullet", "ordered", "divider"]);
     expect(tb.find((b) => b.key === "heading")?.symbol).toBe(t.heading);
     expect(tb.find((b) => b.key === "bullet")?.symbol).toBe(t.bullet);
     expect(tb.find((b) => b.key === "divider")?.symbol).toBe(t.divider);
@@ -203,6 +204,32 @@ describe("useXhs — 排版主题", () => {
     x.applyTheme(THEMES[0].id);
     await vi.advanceTimersByTimeAsync(800);
     expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("themeToolbar 的「有序」symbol = 该主题样式的第 1 个序号字形", () => {
+    const x = useXhs();
+    const t = THEMES.find((th) => th.ordered === "circle") ?? THEMES[0];
+    x.applyTheme(t.id);
+    const ordered = x.themeToolbar.find((b) => b.key === "ordered");
+    expect(ordered?.label).toBe("有序");
+    expect(ordered?.symbol).toBe(orderedMarker(1, t.ordered));
+  });
+
+  it("insertOrdered 按正文已有序号数插入下一个序号", () => {
+    const x = useXhs();
+    const t = THEMES.find((th) => th.ordered === "emoji") ?? THEMES[0];
+    x.applyTheme(t.id);
+    x.setBody("1️⃣ 第一条\n"); // 已有 1 个 emoji 序号
+    // 本测试未注册光标插入器 → insertAtCursor 回退「追加正文末」，故可直接断言 x.body
+    x.insertOrdered();          // 应插入第 2 个 → "2️⃣ "
+    expect(x.body).toContain("2️⃣ ");
+  });
+
+  it("无激活主题时 insertOrdered 不动正文", () => {
+    const x = useXhs();
+    x.setBody("原样");
+    x.insertOrdered();
+    expect(x.body).toBe("原样");
   });
 });
 
@@ -272,5 +299,46 @@ describe("useXhs — 图片", () => {
     x.reorderImages(0, 2); // a 移到末尾 → [b, c, a]
     expect(x.imageIds).toEqual(["b", "c", "a"]);
     expect(x.coverIndex).toBe(2); // 封面仍是 a
+  });
+});
+
+describe("useXhs — AI actions", () => {
+  it("generateNote 返回后端 {title, body, topics}", async () => {
+    const x = useXhs();
+    postMock.mockResolvedValueOnce({ data: { title: "T", body: "B", topics: ["a", "b"] } });
+    const out = await x.generateNote("主题");
+    expect(out).toEqual({ title: "T", body: "B", topics: ["a", "b"] });
+    expect(postMock).toHaveBeenCalledWith("/api/xhs/ai/generate", { intent: "主题" });
+  });
+
+  it("generateNote 缺字段时各自取空", async () => {
+    const x = useXhs();
+    postMock.mockResolvedValueOnce({ data: { title: "只有标题" } });
+    const out = await x.generateNote("主题");
+    expect(out).toEqual({ title: "只有标题", body: "", topics: [] });
+  });
+
+  it("503 llm_not_configured → 抛 LLMNotConfiguredError", async () => {
+    const x = useXhs();
+    postMock.mockRejectedValueOnce({
+      response: { status: 503, data: { code: "llm_not_configured", detail: "去配置" } },
+    });
+    await expect(x.generateNote("主题")).rejects.toBeInstanceOf(LLMNotConfiguredError);
+  });
+
+  it("polishBody 把当前正文 POST 给 /polish 并返回 body", async () => {
+    const x = useXhs();
+    x.setBody("朴素正文");
+    postMock.mockResolvedValueOnce({ data: { body: "润色后" } });
+    const out = await x.polishBody();
+    expect(out).toBe("润色后");
+    expect(postMock).toHaveBeenCalledWith("/api/xhs/ai/polish", { text: "朴素正文" });
+  });
+
+  it("polishBody 非 503 错误原样抛出（不包成 LLMNotConfiguredError）", async () => {
+    const x = useXhs();
+    x.setBody("正文");
+    postMock.mockRejectedValueOnce({ response: { status: 502, data: { code: "llm_error" } } });
+    await expect(x.polishBody()).rejects.not.toBeInstanceOf(LLMNotConfiguredError);
   });
 });

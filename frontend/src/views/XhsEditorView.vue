@@ -146,17 +146,18 @@ function draftLabel(d: { title: string; updated_at: string }): string {
       >
         <PanelRail />
       </div>
-      <!-- 中：编辑器 -->
+      <!-- 中：编辑器（弹性 1.4，比右栏略宽，随窗口缩放收窄） -->
       <div
-        class="min-w-0 flex-1"
-        :style="{ background: 'var(--bg-inner)', border: '1px solid var(--line-2)', borderRadius: '16px', padding: '16px', overflow: 'hidden' }"
+        class="min-w-0"
+        :style="{ flex: '1.4 1 0', background: 'var(--bg-inner)', border: '1px solid var(--line-2)', borderRadius: '16px', padding: '16px', overflow: 'hidden' }"
       >
         <NoteEditor />
       </div>
-      <!-- 右：手机预览 -->
+      <!-- 右：手机预览（弹性 1，比原来更宽，手机随之变大贴边） -->
       <div
+        class="min-w-0"
         :style="{
-          width: '340px', flexShrink: 0, background: 'var(--bg-inner)',
+          flex: '1 1 0', minWidth: '300px', background: 'var(--bg-inner)',
           border: '1px solid var(--line-2)', borderRadius: '16px', padding: '16px', overflow: 'hidden',
         }"
       >
