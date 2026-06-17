@@ -80,11 +80,11 @@ async function removeMine(id: string) {
         <div v-for="a in assets.topicGroups" :key="a.id" class="xhs-tg-card">
           <div class="xhs-tg-head">
             <span class="xhs-tg-name">{{ a.payload.name || '我的话题' }}</span>
-            <button type="button" class="xhs-addall" @click="addAll(a.payload.tags)">全部添加</button>
+            <button type="button" class="xhs-addall" @click="addAll(a.payload.tags ?? [])">全部添加</button>
             <button type="button" class="xhs-mine-del" title="删除分组" @click="removeMine(a.id)">✕</button>
           </div>
           <div class="flex flex-wrap" :style="{ gap: '6px' }">
-            <button v-for="(t, i) in a.payload.tags" :key="i" type="button" class="xhs-tag-chip" @click="xhs.addTopic(t)">#{{ t }}</button>
+            <button v-for="(t, i) in (a.payload.tags ?? [])" :key="i" type="button" class="xhs-tag-chip" @click="xhs.addTopic(t)">#{{ t }}</button>
           </div>
         </div>
       </div>

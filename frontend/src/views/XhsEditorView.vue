@@ -164,7 +164,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
               type="button"
               :style="{ cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', padding: '2px' }"
               title="重命名"
-              @click="startRename(d.id, draftLabel(d), $event)"
+              @click="startRename(d.id, d.title, $event)"
             ><Icon name="edit" :size="14" /></button>
             <!-- 复制副本按钮 -->
             <button
