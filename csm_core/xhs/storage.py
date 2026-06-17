@@ -263,7 +263,6 @@ def create_custom_asset(*, kind: str, payload: dict[str, Any]) -> dict[str, Any]
         "INSERT INTO xhs_custom_assets(id, kind, payload_json) VALUES(?, ?, ?)",
         (asset_id, kind, json.dumps(payload, ensure_ascii=False)),
     )
-    conn.commit()
     row = conn.execute(
         "SELECT * FROM xhs_custom_assets WHERE id = ?", (asset_id,)
     ).fetchone()
@@ -271,15 +270,15 @@ def create_custom_asset(*, kind: str, payload: dict[str, Any]) -> dict[str, Any]
 
 
 def list_custom_assets(kind: str | None = None) -> list[dict[str, Any]]:
-    """列自定义素材，按 created_at DESC, id DESC（后建的在前）。kind 给定则只列该类。"""
+    """列自定义素材，按 created_at DESC, rowid DESC（后建的在前）。kind 给定则只列该类。"""
     conn = get_conn()
     if kind is None:
         rows = conn.execute(
-            "SELECT * FROM xhs_custom_assets ORDER BY created_at DESC, id DESC"
+            "SELECT * FROM xhs_custom_assets ORDER BY created_at DESC, rowid DESC"
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM xhs_custom_assets WHERE kind = ? ORDER BY created_at DESC, id DESC",
+            "SELECT * FROM xhs_custom_assets WHERE kind = ? ORDER BY created_at DESC, rowid DESC",
             (kind,),
         ).fetchall()
     return [_row_to_asset_dict(r) for r in rows]
@@ -289,5 +288,4 @@ def delete_custom_asset(asset_id: str) -> bool:
     """删一条，返回是否真的删到。"""
     conn = get_conn()
     cur = conn.execute("DELETE FROM xhs_custom_assets WHERE id = ?", (asset_id,))
-    conn.commit()
     return cur.rowcount > 0
