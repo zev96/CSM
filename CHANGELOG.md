@@ -2,6 +2,11 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.4] - 2026-06-18
+
+### Fixed
+- **图文编辑器 / 挖掘评论的图片不显示**：应用的内容安全策略（CSP）`img-src` 未放行 sidecar 来源 `http://127.0.0.1:*`，导致所有 `<img>` 加载本地图片被 WebView 拦截——上传走 axios（归 `connect-src` 管，已放行）故能传上去、缩略图数量也对，但图片像素一律渲染不出来（图文编辑器封面/预览空白、挖掘评论配图空白）。给 `img-src` 补齐 `http://127.0.0.1:* http://localhost:*`，与 `connect-src` 对齐；新增回归测试钉死「凡 connect-src 里的本地 sidecar 来源，img-src 必须也有」。
+
 ## [0.6.3] - 2026-06-17
 
 ### Added
