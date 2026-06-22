@@ -37,6 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TAURI_CONF = ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
 CARGO_TOML = ROOT / "frontend" / "src-tauri" / "Cargo.toml"
+CARGO_LOCK = ROOT / "frontend" / "src-tauri" / "Cargo.lock"
 SIDECAR_INIT = ROOT / "sidecar" / "csm_sidecar" / "__init__.py"
 PACKAGE_JSON = ROOT / "frontend" / "package.json"
 PACKAGE_LOCK = ROOT / "frontend" / "package-lock.json"
@@ -109,6 +110,33 @@ def _bump_cargo_toml(new: str) -> None:
               file=sys.stderr)
         sys.exit(1)
     CARGO_TOML.write_text(new_text, encoding="utf-8")
+
+
+def _bump_cargo_lock(new: str) -> None:
+    """Rewrite the csm-tauri package version in Cargo.lock.
+
+    Cargo.lock 自 #123 起纳入版本控制（Tauri app 必须提交 lock 以保证可复现
+    构建）。它在 ``[[package]] name = "csm-tauri"`` 块里也存一份 version，必须
+    跟 Cargo.toml 同步——否则 release CI 的 ``cargo build --locked`` 会因
+    lock != manifest 直接失败（不带 --locked 则构建期静默改 lock，违背提交
+    lock 的可复现初衷）。
+
+    Anchored 在 ``name = "csm-tauri"`` 紧跟的 ``version = "..."`` 相邻两行
+    （lock 里唯一的本 crate 条目），count=1，不会误改某个恰好同版本号的依赖。
+    无需 re.MULTILINE —— 直接匹配字面换行。
+    """
+    text = CARGO_LOCK.read_text(encoding="utf-8")
+    new_text, n = re.subn(
+        r'(name = "csm-tauri"\nversion = ")[^"]+(")',
+        rf'\g<1>{new}\g<2>',
+        text,
+        count=1,
+    )
+    if n != 1:
+        print(f"ERROR: cannot find csm-tauri package entry in {CARGO_LOCK}",
+              file=sys.stderr)
+        sys.exit(1)
+    CARGO_LOCK.write_text(new_text, encoding="utf-8", newline="\n")
 
 
 def _bump_sidecar_init(new: str) -> None:
@@ -229,6 +257,7 @@ def main(argv: list[str]) -> int:
     if args.dry_run:
         print(f"[dry-run] would write {TAURI_CONF} with version={new_version}")
         print(f"[dry-run] would write {CARGO_TOML} with version={new_version}")
+        print(f"[dry-run] would write {CARGO_LOCK} csm-tauri version={new_version}")
         print(f"[dry-run] would write {SIDECAR_INIT} with __version__={new_version}")
         print(f"[dry-run] would write {PACKAGE_JSON} with version={new_version}")
         print(f"[dry-run] would write {PACKAGE_LOCK} with version={new_version} (2 fields)")
@@ -244,11 +273,13 @@ def main(argv: list[str]) -> int:
     _bump_sidecar_init(new_version)
     _bump_package_json(new_version)
     _bump_package_lock(new_version)
+    _bump_cargo_lock(new_version)
     _bump_changelog(new_version)
     subprocess.check_call(
         ["git", "add",
          "frontend/src-tauri/tauri.conf.json",
          "frontend/src-tauri/Cargo.toml",
+         "frontend/src-tauri/Cargo.lock",
          "sidecar/csm_sidecar/__init__.py",
          "frontend/package.json",
          "frontend/package-lock.json",
