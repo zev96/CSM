@@ -1,5 +1,4 @@
 target/
-Cargo.lock
 gen/
 
 # Sidecar binaries are produced by PyInstaller into binaries/<triple>/ at
