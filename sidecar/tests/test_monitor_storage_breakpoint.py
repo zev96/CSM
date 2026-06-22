@@ -87,6 +87,27 @@ def isolated_storage(tmp_path, monkeypatch):
         storage._local.conn = None
 
 
+@pytest.fixture(autouse=True)
+def _pin_clean_config(settings_path):
+    """Pin a clean (non-native) config for every test in this file.
+
+    Without this, ``fetch()`` calls ``config_service.load()`` which reads the
+    developer's real settings.json. On a machine with native Chrome mode on
+    (``use_native_chrome=True`` — the project's everyday config), ``fetch``
+    passes ``use_native_chrome=`` and friends to the fake session, whose
+    ``_ctx(*, headless)`` only accepts ``headless`` → TypeError before the
+    code under test runs, masking the real behaviour. CI has no settings.json
+    so it takes the model default (False) and never sees it — the same blind
+    spot that let the brand-aliases NameError (86e9018) slip the net.
+
+    ``settings_path`` (conftest) points config at a fresh empty tmp file →
+    model defaults (use_native_chrome=False) → empty session_kwargs → the
+    fake session works. Keeps local == CI. No test in this file needs native
+    config, so applying it file-wide via autouse is safe.
+    """
+    return settings_path
+
+
 @pytest.fixture
 def no_wait_pacer(monkeypatch):
     """Make rate-limit pacer.wait() a no-op so tests don't sleep."""

@@ -175,14 +175,24 @@ def test_fetch_article_http_non_html_triggers_fallback(monkeypatch):
 
 
 def test_fetch_article_http_too_short_triggers_fallback(monkeypatch):
-    """readability 提出来正文 < 200 字 → 视为 SPA 壳，要求浏览器 fallback。"""
+    """极短壳页（<500 字符 HTML、正文提不出）→ 判定为 JS challenge 壳，
+    交给 caller 用 SERP title 兜底，而不是浏览器 fallback。
+
+    v0.5.6+ 演进（覆盖旧断言）：原策略「readability 正文<200 字 →
+    needs_browser_fallback=True」对这种连 raw body 都为空的极短壳页，改成标
+    ``is_js_challenge=True`` + ``needs_browser_fallback=False``（浏览器兜底会
+    触发风控、代价远大于 article-level fail，且标题党概率低于反爬概率）。
+    只有 raw HTML ≥500 但正文仍<200 的「大而空」页才继续要 browser fallback。
+    """
     short = "<html><body><div>请打开 APP 查看</div></body></html>"
     monkeypatch.setattr(
         baidu_keyword, "_cc_get",
         lambda url, **kw: _FakeResp(text=short),
     )
     result = baidu_keyword.fetch_article_http("https://example.com/spa")
-    assert result["needs_browser_fallback"] is True
+    assert result["is_js_challenge"] is True
+    assert result["needs_browser_fallback"] is False
+    assert result["source"] == "http_js_challenge_no_body"
 
 
 def test_fetch_article_http_network_exception_triggers_fallback(monkeypatch):
@@ -307,8 +317,16 @@ class FakeSession:
 
 
 @pytest.fixture
-def patch_session(monkeypatch):
-    """工厂 fixture：调用方传入 fake session，adapter 走 mock 路径。"""
+def patch_session(monkeypatch, settings_path):
+    """工厂 fixture：调用方传入 fake session，adapter 走 mock 路径。
+
+    依赖 ``settings_path`` 把 config 钉到一份干净的临时 settings.json
+    （use_native_chrome=False），否则 fetch() 里的 ``config_service.load()``
+    会读到开发机真实的 settings.json —— 真机若开了 native Chrome 模式，
+    fetch 会带 ``use_native_chrome=...`` 等 kwargs 调用本 fixture 的 fake
+    session（只收 headless），直接 TypeError，跟被测逻辑无关。钉死 config
+    让本地与 CI（无 settings.json，取模型默认）行为一致。
+    """
     holder: dict = {"session": None}
 
     from contextlib import contextmanager
@@ -390,6 +408,63 @@ def test_fetch_happy_path_default_only(monkeypatch, patch_session):
     # Aggregations
     assert result.metric["total_keywords"] == 2
     assert result.metric["matched_keywords"] >= 1
+
+
+def test_fetch_matches_brand_alias(monkeypatch, patch_session):
+    """品牌别名命中：正文只含别名「希喂」而无主品牌「CEWEY」→ 仍判自家。
+
+    回归 commit 86e9018 引入的 NameError：``aliases`` 在 ``fetch()`` 里定义
+    却在 ``_fetch_once`` 里使用（跨方法没传参），任何真正走到 SERP 解析的
+    抓取都会抛 ``NameError("name 'aliases' is not defined")``，被 runner
+    包成 ``adapter exception``。``patch_session`` 已注入干净 config
+    （use_native_chrome=False），让 fetch 走 fake browser session 真正进到
+    ``_check_block`` 的 ``[brand, *aliases]``，从而覆盖这条路径。
+    """
+    serp = _load("serp_default_only.html")
+    parsed = baidu_keyword.parse_serp(serp)
+    default_links = parsed["default_links"]
+    assert default_links, "fixture 至少应有一条默认结果"
+    # 第 1 条正文只提别名「希喂」，不含主品牌「CEWEY」；其余是竞品。
+    page_contents = {}
+    for i, link in enumerate(default_links):
+        url = link["href"]
+        page_contents[url] = (
+            "<html><body><article>"
+            + (f"这篇评测只提到了希喂这个牌子的猫粮 {i}。" if i == 0
+               else f"这是别的竞品的文章 {i}。 ")
+            * 30
+            + "</article></body></html>"
+        )
+
+    patch_session["session"] = FakeSession(serp_html=serp, page_contents=page_contents)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+
+    def fake_cc_get(url, **kw):
+        return _FakeResp(text=page_contents.get(url, ""))
+    monkeypatch.setattr(baidu_keyword, "_cc_get", fake_cc_get)
+
+    task = MonitorTask(
+        id=1,
+        type="baidu_keyword",
+        name="t",
+        target_url="https://www.baidu.com/s?wd=猫粮",
+        config={
+            "search_keywords": ["猫粮"],
+            "target_brand": "CEWEY",
+            "brand_aliases": ["希喂"],
+        },
+    )
+
+    result = baidu_keyword.ADAPTER.fetch(task)
+    assert result.status == "ok"
+    kw0 = result.metric["keywords"][0]
+    first = kw0["default_results"][0]
+    # 第 1 条只含别名「希喂」→ 命中自家，matched_brand 回别名原文。
+    assert first["matches_brand"] is True
+    assert first["matched_brand"] == "希喂"
+    assert kw0["default_first_rank"] == 1
+    # metric 把 brand_aliases 透出去给前端 L2 展示。
+    assert result.metric["brand_aliases"] == ["希喂"]
     assert result.metric["best_default_first_rank"] == 1
     assert result.rank == 1
     # captcha_hit field removed in Task 3 refactor — auto-promotion dead code deleted
@@ -893,7 +968,7 @@ def test_fetch_drops_session_on_normal_return(monkeypatch):
     captured: dict[str, Any] = {}
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, resume_from, session, session_kwargs=None):
+                       *, aliases=(), resume_from, session, session_kwargs=None):
         captured["session"] = session
         captured["task_id"] = task.id
         return MonitorResult(
@@ -944,7 +1019,7 @@ def test_fetch_drops_session_on_risk_control(monkeypatch):
     adapter.apply_settings(default_excluded_domains=())
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, resume_from, session, session_kwargs=None):
+                       *, aliases=(), resume_from, session, session_kwargs=None):
         raise RiskControlException(
             RiskSignal(layer="url", detail="wappass triggered"), progress=2,
         )
@@ -1007,7 +1082,9 @@ def test_navigate_to_serp_direct_goto():
     # quote() encodes 吸尘器 as %E5%90%B8%E5%B0%98%E5%99%A8
     assert "%E5%90%B8%E5%B0%98%E5%99%A8" in url
     assert kwargs.get("wait_until") == "domcontentloaded"
-    assert kwargs.get("timeout") == 30000
+    # 60s（非 30s）：native 副本 Chrome 首次启动 + 首个 SERP 加载慢，
+    # 实测 30s 不够，见 _navigate_to_serp 的 timeout=60000 注释。
+    assert kwargs.get("timeout") == 60000
 
 
 def test_navigate_to_serp_does_not_touch_input_or_keyboard():
@@ -1090,10 +1167,15 @@ def test_assert_baidu_logged_in_raises_auth_when_bduss_missing():
         raise AssertionError("expected RiskControlException")
 
 
-def test_fetch_raises_auth_risk_control_when_not_logged_in(monkeypatch):
+def test_fetch_raises_auth_risk_control_when_not_logged_in(monkeypatch, settings_path):
     """If session.context.cookies returns no BDUSS, fetch must raise
     RiskControlException(layer='auth') with progress=resume_from before
-    making a single SERP request."""
+    making a single SERP request.
+
+    ``settings_path`` pins a clean (non-native) config so the inline fake
+    session — which only accepts ``headless`` — isn't handed native-mode
+    kwargs from a developer's real settings.json.
+    """
     from csm_core.monitor.platforms import baidu_keyword
     from csm_core.monitor.base import MonitorTask
     from csm_core.monitor.drivers.risk_detector import RiskControlException
@@ -1135,10 +1217,14 @@ def test_fetch_raises_auth_risk_control_when_not_logged_in(monkeypatch):
         raise AssertionError("expected RiskControlException")
 
 
-def test_fetch_raises_auth_when_serp_redirects_to_login(monkeypatch):
+def test_fetch_raises_auth_when_serp_redirects_to_login(monkeypatch, settings_path):
     """BDUSS in cookies but SERP comes back as a wappass redirect →
     raise RiskControlException(layer='auth') with progress=kw_idx
-    (so resume continues from this keyword, not from the start)."""
+    (so resume continues from this keyword, not from the start).
+
+    ``settings_path`` pins a clean (non-native) config — see the sibling
+    auth test for why the inline fake session needs it.
+    """
     from csm_core.monitor.platforms import baidu_keyword
     from csm_core.monitor.base import MonitorTask
     from csm_core.monitor.drivers.risk_detector import RiskControlException
