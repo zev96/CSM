@@ -569,6 +569,9 @@ def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
         "imported_at": meta["imported_at"],
         "size_mb": meta["size_mb"],
         "elapsed_s": meta["elapsed_s"],
+        # 登录态文件被锁（Chrome 开着）时复制仍算成功，但带 warning 让前端
+        # 黄色提示用户去登录副本，而不是报红「复制失败」。
+        "warning": meta.get("warning"),
     }
 
 

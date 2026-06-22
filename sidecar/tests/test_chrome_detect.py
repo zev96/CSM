@@ -403,6 +403,73 @@ class TestCopyProfileTo:
         # Shared Dictionary 不复制
         assert not (target / "Default" / "Shared Dictionary").exists()
 
+    def test_tolerates_locked_files_instead_of_failing(self, tmp_path, monkeypatch):
+        """用户日常 Chrome 开着时 Cookies / LOCK 被独占锁 —— 复制不再整体失败。
+
+        回归 bug：原来裸 shutil.copytree 一遇 [Errno 13] 就在最后抛 shutil.Error，
+        整次导入判失败（哪怕 99% 文件已复制好）。现在：LOCK 按名跳过、被锁的
+        Cookies 吞错并记入 skipped_locked + 返回 warning，复制整体成功。
+        """
+        import shutil
+
+        src_user_data = tmp_path / "src_user_data"
+        src_default = src_user_data / "Default"
+        src_default.mkdir(parents=True)
+        (src_default / "Cookies").write_bytes(b"cookie-db")     # 模拟被锁
+        (src_default / "Preferences").write_text('{"profile":{}}')  # 正常复制
+        (src_user_data / "Local State").write_text('{"os_crypt":{}}')
+        # 嵌套 leveldb LOCK —— 运行时锁哨兵，应被 ignore 跳过（根本不尝试复制）
+        lvldb = src_default / "Local Storage" / "leveldb"
+        lvldb.mkdir(parents=True)
+        (lvldb / "LOCK").write_bytes(b"")
+        (lvldb / "000003.log").write_text("real-data")
+
+        # 模拟 Chrome 把 Cookies 锁住 —— 复制它必 PermissionError，其它文件正常。
+        real_copy2 = shutil.copy2
+
+        def fake_copy2(src, dst, *a, **k):
+            if os.path.basename(str(src)) in ("Cookies", "Cookies-journal"):
+                raise PermissionError(13, "Permission denied")
+            return real_copy2(src, dst, *a, **k)
+
+        monkeypatch.setattr(shutil, "copy2", fake_copy2)
+
+        target = tmp_path / "target"
+        # 关键：不再抛异常
+        meta = chrome_detect.copy_profile_to(
+            source_user_data_dir=str(src_user_data),
+            source_profile_name="Default",
+            target_path=str(target),
+        )
+
+        # 没被锁的文件照常复制
+        assert (target / "Default" / "Preferences").exists()
+        assert (target / "Local State").exists()
+        assert (target / "Default" / "Local Storage" / "leveldb" / "000003.log").exists()
+        # LOCK 按名跳过，不进副本（残留锁会让副本 Chromium 误判被占）
+        assert not (target / "Default" / "Local Storage" / "leveldb" / "LOCK").exists()
+        # 被锁的 Cookies 跳过 + 计入 skipped_locked + 给 warning
+        assert not (target / "Default" / "Cookies").exists()
+        assert "Cookies" in meta["skipped_locked"]
+        assert meta["warning"] is not None
+        assert "登录" in meta["warning"]
+
+    def test_no_warning_when_nothing_locked(self, tmp_path):
+        """正常路径（没有文件被锁）→ warning 为 None、skipped_locked 为空。"""
+        src_user_data = tmp_path / "src_user_data"
+        src_default = src_user_data / "Default"
+        src_default.mkdir(parents=True)
+        (src_default / "Cookies").write_bytes(b"cookie-db")
+        (src_user_data / "Local State").write_text('{"os_crypt":{}}')
+
+        meta = chrome_detect.copy_profile_to(
+            source_user_data_dir=str(src_user_data),
+            source_profile_name="Default",
+            target_path=str(tmp_path / "target"),
+        )
+        assert meta["warning"] is None
+        assert meta["skipped_locked"] == []
+
 
 # ── prune_profile_caches ──────────────────────────────────────────
 class TestPruneProfileCaches:

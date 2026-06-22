@@ -425,8 +425,14 @@ def test_fetch_captcha_raises_RiskControlException(monkeypatch, patch_session):
     assert exc_info.value.signal.layer == "url"
 
 
-def test_fetch_breaker_open_returns_risk_control(monkeypatch):
-    """熔断打开时跳过所有 IO 直接 risk_control。"""
+def test_fetch_breaker_open_returns_failed_with_reason(monkeypatch):
+    """熔断打开时跳过所有 IO 直接返回 *failed*（不是 risk_control）。
+
+    回归 bug：熔断早退原来回 status='risk_control' + 英文 'circuit breaker open'，
+    被 monitor_loop 当成正常完成发「监测任务完成」假通知，前端又因无 metric 显示
+    「未跑 + keyword #0 断点」，把真实失败藏起来。现在回 'failed' + 中文可读原因，
+    让前端显示「失败」并 toast 出原因。
+    """
     from csm_core.monitor.rate_limit import get_breaker
     breaker = get_breaker("baidu_keyword")
     # 保存原始值
@@ -447,8 +453,12 @@ def test_fetch_breaker_open_returns_risk_control(monkeypatch):
             config={"search_keywords": ["test"], "target_brand": "x"},
         )
         result = baidu_keyword.ADAPTER.fetch(task)
-        assert result.status == "risk_control"
-        assert "circuit breaker" in result.error_message.lower()
+        # 关键回归断言：不再是 risk_control（那会伪装成断点 + 触发假「完成」）
+        assert result.status == "failed"
+        assert "circuit breaker" not in (result.error_message or "").lower()
+        # 中文可读原因 + 可操作指引
+        assert "熔断" in result.error_message
+        assert "重新导入" in result.error_message
     finally:
         breaker.failure_threshold = orig_threshold
         breaker.cool_off_seconds = orig_cooldown

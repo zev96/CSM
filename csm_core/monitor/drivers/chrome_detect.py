@@ -50,10 +50,32 @@ _PROFILE_CACHE_DIRS_TO_SKIP = frozenset({
     # 保留 IndexedDB （某些站登录态依赖）── 不在这里排除
 })
 
+# Chrome / leveldb 运行时锁哨兵文件。用户日常 Chrome 开着时这些被独占锁住，
+# copy 必然 [Errno 13] Permission denied —— 但它们要么是 0 字节占位、要么下次
+# 启动自动重建，**复制到副本反而有害**（残留锁会让副本 Chromium 误判被占）。
+# 按名跳过，跟缓存目录同机制。
+_PROFILE_RUNTIME_LOCK_NAMES = frozenset({
+    "LOCK",
+    "SingletonLock",
+    "SingletonCookie",
+    "SingletonSocket",
+    "lockfile",
+})
+
+# 这些文件被锁住没复制成功 = 登录态没带过来。不致命（用户可在副本里重登），
+# 但值得给一条 warning 让用户知道要么关 Chrome 重导、要么登录副本。
+_PROFILE_LOGIN_FILE_NAMES = frozenset({
+    "Cookies",
+    "Cookies-journal",
+})
+
 
 def _copy_ignore_caches(dir_path: str, names: list[str]) -> list[str]:
-    """shutil.copytree ignore callback：跳过 Chrome cache 子目录。"""
-    return [n for n in names if n in _PROFILE_CACHE_DIRS_TO_SKIP]
+    """shutil.copytree ignore callback：跳过 Chrome cache 子目录 + 运行时锁文件。"""
+    return [
+        n for n in names
+        if n in _PROFILE_CACHE_DIRS_TO_SKIP or n in _PROFILE_RUNTIME_LOCK_NAMES
+    ]
 
 
 # ── Chrome executable ────────────────────────────────────────────
@@ -174,6 +196,8 @@ def copy_profile_to(
           imported_at: ISO8601 时间戳
           size_mb: 副本大小（MB）
           elapsed_s: 复制耗时
+          skipped_locked: list[str] —— 因被锁跳过的文件名（Chrome 开着时常见）
+          warning: str | None —— 登录态文件被锁时的用户提示，否则 None
     """
     source_profile = Path(source_user_data_dir) / source_profile_name
     if not source_profile.is_dir():
@@ -196,21 +220,63 @@ def copy_profile_to(
 
     start = time.monotonic()
 
+    # 逐文件容错复制 —— 用户日常 Chrome 通常**正开着**（这功能就是为「复制日常
+    # profile」设计的），Network\Cookies / 各 leveldb LOCK 等文件被独占锁住。
+    # 原来的裸 shutil.copytree 是"全有或全无"：任一文件 PermissionError 都会在
+    # 最后一次性抛 shutil.Error，把整次导入判失败（即便 99% 文件已复制成功）。
+    # 这里换成 copy_function 吞掉单文件锁错误并记录，让复制整体成功；登录态
+    # 文件（Cookies）被锁则回一条 warning，让上层提示用户而不是报红「复制失败」。
+    skipped_locked: list[str] = []
+
+    def _resilient_copy(src: str, dst: str) -> None:
+        try:
+            shutil.copy2(src, dst)
+        except (PermissionError, OSError) as e:
+            skipped_locked.append(os.path.basename(src))
+            logger.info("copy_profile_to: 跳过被锁文件 %s（%s）", src, e)
+
     # 复制 profile 内容 → target/Default/
     target_profile = target / "Default"
-    shutil.copytree(source_profile, target_profile, ignore=_copy_ignore_caches)
+    try:
+        shutil.copytree(
+            source_profile,
+            target_profile,
+            ignore=_copy_ignore_caches,
+            copy_function=_resilient_copy,
+        )
+    except shutil.Error as e:
+        # copy_function 已吞掉单文件错误；残留的 shutil.Error 只可能是目录级
+        # copystat 噪声 —— 记日志继续，不让它把整次导入判失败。
+        logger.info("copy_profile_to: 忽略 copytree 残留错误：%s", e)
 
-    # 复制 Local State（如果存在）── Chrome 解密 cookie 必需
+    # 复制 Local State（如果存在）── Chrome 解密 cookie 必需。同样容错。
     source_local_state = Path(source_user_data_dir) / "Local State"
     if source_local_state.is_file():
-        shutil.copy2(source_local_state, target / "Local State")
+        try:
+            shutil.copy2(source_local_state, target / "Local State")
+        except (PermissionError, OSError) as e:
+            skipped_locked.append("Local State")
+            logger.info("copy_profile_to: 跳过被锁 Local State（%s）", e)
 
     elapsed = time.monotonic() - start
     size_bytes = sum(p.stat().st_size for p in target.rglob("*") if p.is_file())
+
+    # 登录态文件被锁 → 给一条 warning（不致命）。Local State 缺失也会让带过来的
+    # 加密 Cookie 无法解密，等价于登录态没过来，一并纳入提示。
+    login_locked = [n for n in skipped_locked if n in _PROFILE_LOGIN_FILE_NAMES]
+    warning: str | None = None
+    if login_locked or "Local State" in skipped_locked:
+        warning = (
+            "检测到 Chrome 正在运行，登录态（Cookies）未能复制到副本。"
+            "要么完全关闭 Chrome（含后台进程）后再点「重新导入」，"
+            "要么直接点「登录百度（副本）」在副本里重新登录百度。"
+        )
     return {
         "imported_at": datetime.utcnow().isoformat(),
         "size_mb": round(size_bytes / 1024 / 1024, 1),
         "elapsed_s": round(elapsed, 1),
+        "skipped_locked": skipped_locked,
+        "warning": warning,
     }
 
 

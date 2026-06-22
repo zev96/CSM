@@ -136,6 +136,34 @@ def test_adapter_exception_is_isolated(db_path: Path, sink, captured_events):
     assert storage.list_results(task.id) == []  # type: ignore[arg-type]
 
 
+def test_non_ok_return_emits_failed_not_finished(db_path: Path, sink, captured_events):
+    """Adapter *returns* (not raises) a non-ok result (e.g. baidu breaker open
+    returns status='risk_control'/'failed') → publish 'failed', NOT 'finished'.
+
+    Regression: such results went through the normal-completion path and were
+    published as 'finished', which fires the «监测任务完成» bell while the result
+    has no metric.keywords so the pill shows «未跑» + a bogus "keyword #0"
+    breakpoint — hiding the real failure. Now they surface as 'failed'.
+    """
+    task = _make_due_task()
+    adapter = FakeAdapter(status="risk_control", rank=-1)
+    loop = MonitorLoop(
+        event_sink=sink,
+        adapters={"zhihu_question": adapter},
+        tick_seconds=3600,
+    )
+    loop.start()
+    try:
+        loop.run_task_now(task.id).result(timeout=5)  # type: ignore[arg-type]
+    finally:
+        loop.stop()
+
+    kinds = [e.kind for e in captured_events]
+    assert "finished" not in kinds  # 关键回归点：不再假报「完成」
+    assert kinds == ["started", "failed"]
+    assert captured_events[-1].error is not None
+
+
 def test_run_task_now_unknown_id_emits_failed(db_path: Path, sink, captured_events):
     loop = MonitorLoop(
         event_sink=sink,
