@@ -501,8 +501,13 @@ def get_last_resumed_keyword(task_id: int) -> int | None:
     - the stored value is not a plain int
     """
     conn = get_conn()
+    # Tie-break on id DESC: two results can share the same checked_at when
+    # saved within the same clock tick (utcnow() resolution is coarse on
+    # Windows). Without it, "latest" is non-deterministic on a tie and resume
+    # could read an older breakpoint. id is AUTOINCREMENT → higher = inserted
+    # later = the real latest.
     row = conn.execute(
-        "SELECT metric_json FROM monitor_results WHERE task_id=? ORDER BY checked_at DESC LIMIT 1",
+        "SELECT metric_json FROM monitor_results WHERE task_id=? ORDER BY checked_at DESC, id DESC LIMIT 1",
         (task_id,),
     ).fetchone()
     if row is None or not row["metric_json"]:

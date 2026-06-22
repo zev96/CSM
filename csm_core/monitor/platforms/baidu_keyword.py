@@ -1005,6 +1005,7 @@ class BaiduKeywordAdapter:
         try:
             return self._fetch_with_promotion(
                 task, keywords, brand, effective_headless, progress_cb, cancel_token,
+                aliases=aliases,
                 resume_from=resume_from,
                 session=session,
                 session_kwargs=session_kwargs,
@@ -1024,6 +1025,7 @@ class BaiduKeywordAdapter:
         progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: Any = None,
         *,
+        aliases: list[str],
         resume_from: int = 0,
         session: Any = None,
         session_kwargs: "dict[str, Any] | None" = None,
@@ -1036,6 +1038,7 @@ class BaiduKeywordAdapter:
         try:
             result = self._fetch_once(
                 task, keywords, brand, headless, progress_cb, cancel_token,
+                aliases=aliases,
                 resume_from=resume_from,
                 session=session,
                 session_kwargs=session_kwargs,
@@ -1086,6 +1089,7 @@ class BaiduKeywordAdapter:
         progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: Any = None,
         *,
+        aliases: list[str],
         resume_from: int = 0,
         session: Any = None,
         session_kwargs: "dict[str, Any] | None" = None,
@@ -1099,6 +1103,13 @@ class BaiduKeywordAdapter:
         always the **absolute** keyword index (``resume_from + rel_idx``), so
         the runner's ``last_resumed_keyword = progress + 1`` bookkeeping
         works regardless of whether this is a fresh or resumed run.
+
+        ``aliases`` 必须由 fetch() 解析后 **显式传进来**（和 ``brand`` 同款 thread
+        路径：fetch → _fetch_with_promotion → _fetch_once）。别在本方法里就地从
+        task.config 重算 —— brand_aliases 功能（86e9018）当初就是把 ``aliases = ...``
+        放在 fetch() 而 ``[brand, *aliases]`` 用在这里，跨方法作用域导致
+        NameError("name 'aliases' is not defined")，整条抓取被当 adapter exception。
+        设成 keyword-only 必填，漏传会在调用点立刻报错（fail-loud）。
         """
         now = datetime.utcnow()
 
