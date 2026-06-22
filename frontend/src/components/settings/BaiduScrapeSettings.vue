@@ -64,6 +64,7 @@ const importResult = ref<{
   size_mb?: number;
   elapsed_s?: number;
   error?: string;
+  warning?: string;
 } | null>(null);
 // 副本登录窗的结果独立于复制结果 ── 否则登录失败会被显示成"复制失败"
 const loginResult = ref<{ ok: boolean; error?: string } | null>(null);
@@ -132,6 +133,7 @@ async function importProfile() {
       size_mb?: number;
       elapsed_s?: number;
       error?: string;
+      warning?: string;
     }>("/api/monitor/baidu/copy-profile", {
       source_user_data_dir: detected.user_data_dir,
       source_profile_name: "Default",
@@ -387,6 +389,21 @@ onMounted(loadConfig);
           <span v-else class="flex-1 truncate" :title="importResult.error">
             复制失败：{{ importResult.error }}
           </span>
+        </div>
+
+        <!-- 复制成功但登录态被锁的提示（Chrome 开着时常见，非致命） -->
+        <div
+          v-if="importResult && importResult.ok && importResult.warning"
+          class="flex items-start gap-3 rounded-[10px] px-4 py-3 text-[12.5px]"
+          :style="{
+            background: 'color-mix(in srgb, var(--warn, #f59e0b) 12%, transparent)',
+            color: 'var(--warn, #b45309)',
+            border: '1px solid color-mix(in srgb, var(--warn, #f59e0b) 30%, transparent)',
+            marginTop: '0.5rem',
+          }"
+        >
+          <Icon name="warn" :size="14" class="mt-0.5 shrink-0" />
+          <span class="flex-1">{{ importResult.warning }}</span>
         </div>
 
         <!-- 操作按钮行 -->

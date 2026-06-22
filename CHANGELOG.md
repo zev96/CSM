@@ -2,6 +2,12 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Fixed
+- **百度排名「重新导入 Chrome profile」复制失败**：用户日常 Chrome 开着时（这功能本就是为「复制日常 profile」设计的），`Network\Cookies` 与各 leveldb `LOCK` 文件被 Chrome 独占锁住，原来的 `shutil.copytree` 是「全有或全无」——任一文件 `[Errno 13] Permission denied` 都会在最后一次性抛错，把整次导入判失败（哪怕 99% 文件已复制好）。改为逐文件容错复制：`LOCK` 等运行时锁哨兵按名跳过（0 字节、下次启动自动重建，复制过去反而会让副本 Chromium 误判被占），被锁的 `Cookies` 吞错并记录而非整体失败。登录态文件被锁时复制仍算成功，但回一条黄色提示让用户「关掉 Chrome 重导」或「登录百度（副本）」，不再报红「复制失败」。
+- **百度排名监控失败却假报「监测任务完成」**：百度反爬熔断器打开后，`fetch()` 会瞬间正常返回一个 `status="risk_control"` 的空结果——它经由 monitor_loop 的正常完成路径发出 `finished` 事件，前端据此弹「监测任务完成」通知；但该结果无 metric，任务状态又回落成「未跑」并显示伪造的「断点 keyword #0」，把真实失败彻底藏起来（表现为「通知完成 + 界面未跑 + 一秒结束」）。两处修复：① monitor_loop 对 adapter **正常返回**的非 ok 结果改发 `failed` 事件（带原因），不再当成 `finished`；② 熔断早退由 `risk_control` 改为 `failed` + 中文可操作原因（「百度反爬熔断中…请重新导入并登录副本」），不再伪装成断点。
+
 ## [0.6.4] - 2026-06-18
 
 ### Fixed

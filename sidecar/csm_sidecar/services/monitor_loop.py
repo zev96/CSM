@@ -558,16 +558,31 @@ class MonitorLoop:
             self._untrack_active(task_id_local)
             return None
 
-        # Normal completion: drop from active set BEFORE publishing finished
-        # so any frontend that listens to finished and then immediately
-        # calls /running sees a consistent (drained) view.
+        # Normal completion: drop from active set BEFORE publishing so any
+        # frontend that listens and then immediately calls /running sees a
+        # consistent (drained) view.
         self._untrack_active(task_id_local)
-        self._publish(MonitorEvent(
-            kind="finished", task_id=task.id, at=self._clock(), result=result,
-        ))
-        if alert_now:
+        if result.status == "ok":
             self._publish(MonitorEvent(
-                kind="alert", task_id=task.id, at=self._clock(), result=result,
+                kind="finished", task_id=task.id, at=self._clock(), result=result,
+            ))
+            if alert_now:
+                self._publish(MonitorEvent(
+                    kind="alert", task_id=task.id, at=self._clock(), result=result,
+                ))
+        else:
+            # Adapter *returned* (did NOT raise) a non-ok result: circuit-breaker
+            # open, config / native-mode validation error, or an adapter-level
+            # "failed". Publishing these as `finished` is the bug behind «通知显示
+            # 任务完成 + 界面未跑»: the frontend fires the «监测任务完成» bell on
+            # every `finished`, while a non-ok result has no metric.keywords so the
+            # Level-1 pill falls through to «未跑» with a bogus "keyword #0"
+            # breakpoint — hiding the real failure. Surface as `failed` with the
+            # real reason instead (see baidu_keyword breaker early-return + the
+            # fetch() validation guards).
+            self._publish(MonitorEvent(
+                kind="failed", task_id=task.id, at=self._clock(),
+                error=result.error_message or f"任务结束状态：{result.status}",
             ))
         return result
 

@@ -914,12 +914,21 @@ class BaiduKeywordAdapter:
         """
         breaker = rate_limit.get_breaker(self.platform)
         if not breaker.allow():
+            cooldown_min = max(1, int(breaker.cool_off_seconds / 60))
             return MonitorResult(
                 task_id=task.id or 0,
                 checked_at=datetime.utcnow(),
-                status="risk_control",
+                # 'failed' 而非 'risk_control'：这不是百度反爬断点（根本没抓），是
+                # 本地连续失败触发的熔断保护。用 risk_control 会被前端当成「未跑 +
+                # keyword #0 断点」误导用户、还经由 monitor_loop 发出「监测任务完成」
+                # 假通知；failed 让前端正确显示「失败」+ 下面的中文原因。
+                status="failed",
                 rank=-1,
-                error_message="circuit breaker open for baidu_keyword",
+                error_message=(
+                    f"百度反爬熔断中：因连续抓取失败已临时暂停，约 {cooldown_min} 分钟后"
+                    "自动恢复（或重启应用立即清除）。常见根因：副本 Chrome 启动失败 / "
+                    "副本登录态(BDUSS)失效 —— 请到设置页「重新导入」并「登录百度（副本）」。"
+                ),
             )
 
         # ── Fast-fail: validate keyword/brand BEFORE preflight ───────────
