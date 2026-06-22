@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.6.5] - 2026-06-22
 
 ### Fixed
 - **百度排名「重新导入 Chrome profile」复制失败**：用户日常 Chrome 开着时（这功能本就是为「复制日常 profile」设计的），`Network\Cookies` 与各 leveldb `LOCK` 文件被 Chrome 独占锁住，原来的 `shutil.copytree` 是「全有或全无」——任一文件 `[Errno 13] Permission denied` 都会在最后一次性抛错，把整次导入判失败（哪怕 99% 文件已复制好）。改为逐文件容错复制：`LOCK` 等运行时锁哨兵按名跳过（0 字节、下次启动自动重建，复制过去反而会让副本 Chromium 误判被占），被锁的 `Cookies` 吞错并记录而非整体失败。登录态文件被锁时复制仍算成功，但回一条黄色提示让用户「关掉 Chrome 重导」或「登录百度（副本）」，不再报红「复制失败」。
