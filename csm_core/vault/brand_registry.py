@@ -50,8 +50,8 @@ def build_brand_registry(
         note = parse_note(md)
         parsed = parse_brand_model(md.stem, aliases)
         brand = note.frontmatter.get("品牌") or (parsed[0] if parsed else None)
-        model = note.frontmatter.get("型号") or md.stem.split("-")[0]
+        model = str(note.frontmatter.get("型号") or md.stem.split("-")[0]).strip()
         if not brand or not model:
             continue
-        registry.add(canonical_brand(str(brand), aliases), str(model).strip())
+        registry.add(canonical_brand(str(brand), aliases), model)
     return registry
