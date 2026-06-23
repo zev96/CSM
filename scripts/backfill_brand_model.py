@@ -186,3 +186,74 @@ def process_note(
             out = b"\xef\xbb\xbf" + out
         path.write_bytes(out)
     return NoteResult(path=path, status="added", added=missing)
+
+
+@dataclass
+class Report:
+    added: list = field(default_factory=list)
+    skipped: list = field(default_factory=list)
+    unparseable: list = field(default_factory=list)
+
+
+def run(
+    vault_root: Path, *, apply: bool, backup_dir: Path | None,
+    aliases: dict[str, list[str]] = BRAND_ALIASES,
+) -> Report:
+    """Walk the vault, backfill every target note, collect a report."""
+    vault_root = Path(vault_root)
+    brand_models = build_brand_models(vault_root, aliases)
+    report = Report()
+    for md in sorted(vault_root.rglob("*.md")):
+        try:
+            rel = md.relative_to(vault_root)
+        except ValueError:
+            continue
+        # skip files whose top-level path component starts with '_' (backup dirs)
+        if rel.parts and rel.parts[0].startswith("_"):
+            continue
+        plan = derive_note_plan(rel.parts, md.stem, brand_models, aliases)
+        if plan is None:
+            continue
+        backup_path = (Path(backup_dir) / rel) if (apply and backup_dir) else None
+        res = process_note(md, plan, apply=apply, backup_path=backup_path)
+        if res.status == "added":
+            report.added.append(res)
+        elif res.status == "skip":
+            report.skipped.append(res)
+        elif res.status == "unparseable":
+            report.unparseable.append(res)
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    ap = argparse.ArgumentParser(
+        description="回填 vault 的 品牌/型号/适用型号 frontmatter（默认 dry-run）")
+    ap.add_argument("vault_root", type=Path)
+    ap.add_argument("--apply", action="store_true", help="实际写入（默认 dry-run，不落盘）")
+    ap.add_argument("--backup-dir", type=Path, default=None,
+                    help="--apply 时的原文件备份目录（必填，团队盘从重）")
+    args = ap.parse_args(argv)
+
+    if not args.vault_root.is_dir():
+        print(f"error: {args.vault_root} 不是目录", file=sys.stderr)
+        return 2
+    if args.apply and args.backup_dir is None:
+        print("error: --apply 必须配 --backup-dir（先备份再改团队盘）", file=sys.stderr)
+        return 2
+
+    report = run(args.vault_root, apply=args.apply, backup_dir=args.backup_dir)
+    mode = "APPLY" if args.apply else "DRY-RUN"
+    print(f"[{mode}] 回填 {len(report.added)} 篇 / 跳过(已完整) {len(report.skipped)} 篇 "
+          f"/ 无法解析 {len(report.unparseable)} 篇")
+    for r in report.added:
+        print(f"  + {r.path.name}: {r.added}")
+    if report.unparseable:
+        print("无法解析清单（需人工复核，未改动）：")
+        for r in report.unparseable:
+            print(f"  ! {r.reason}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

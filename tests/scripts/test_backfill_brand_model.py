@@ -154,3 +154,63 @@ def test_process_writes_backup(tmp_path):
     process_note(p, NotePlan(keys={"品牌": "CEWEY"}), apply=True, backup_path=bak)
     assert bak.exists()
     assert "品牌:" not in bak.read_text(encoding="utf-8")  # 备份是改前原文
+
+
+from scripts.backfill_brand_model import run, main
+
+
+def _build_fake_vault(root):
+    base = root / "营销资料库/产品模块/吸尘器"
+    tests_base = root / "营销资料库/测试项目模块/吸尘器"
+    files = {
+        base / "产品参数/CEWEYDS18-产品参数.md":
+            "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+        base / "产品参数/米家3C-产品参数.md":
+            "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+        base / "产品参数/杂牌X9-产品参数.md":
+            "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+        base / "希喂推荐内容/品牌背书/吸尘器-CEWEY品牌背书-品牌定位①.md":
+            "---\n产品: 吸尘器\n素材类型: 品牌定位\n核心关键词: [x]\n---\n体\n",
+        base / "希喂推荐内容/核心技术/吸尘器-CEWEY核心技术-动力系统①.md":
+            "---\n产品: 吸尘器\n素材类型: 动力系统\n核心关键词: [x]\n---\n体\n",
+        tests_base / "品牌产品测试结果/CEWEYDS18-测试结果.md":
+            "---\n产品: 吸尘器\n型号: CEWEYDS18\n素材类型: 测试数据\n---\n体\n",
+        base / "科普模块占位/挑选攻略/吸尘器-过滤系统选购.md":
+            "---\n产品: 吸尘器\n素材类型: 科普原理解析\n核心关键词: [x]\n---\n体\n",
+    }
+    for p, t in files.items():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(t, encoding="utf-8")
+    return root
+
+
+def test_run_dry_run_reports_but_writes_nothing(tmp_path):
+    root = _build_fake_vault(tmp_path)
+    snapshot = {p: p.read_text(encoding="utf-8") for p in root.rglob("*.md")}
+    report = run(root, apply=False, backup_dir=None)
+    # 产品参数×2(可解析) + 品牌背书×1 + 核心技术×1 + 测试结果(仅缺品牌)×1 = 5 篇会改
+    assert len(report.added) == 5
+    assert len(report.unparseable) == 1  # 杂牌X9
+    for p, t in snapshot.items():
+        assert p.read_text(encoding="utf-8") == t  # 一字未改
+
+
+def test_run_apply_changes_files_and_backs_up(tmp_path):
+    root = _build_fake_vault(tmp_path)
+    bak = tmp_path / "_bak"
+    report = run(root, apply=True, backup_dir=bak)
+    assert len(report.added) == 5
+    core = root / "营销资料库/产品模块/吸尘器/希喂推荐内容/核心技术/吸尘器-CEWEY核心技术-动力系统①.md"
+    txt = core.read_text(encoding="utf-8")
+    assert "品牌: CEWEY\n" in txt and "适用型号: [CEWEYDS18]\n" in txt
+    # 备份存在且为改前原文
+    assert list(bak.rglob("*.md"))
+    # 再跑一次 → 全部已完整 → 0 added（幂等）
+    report2 = run(root, apply=True, backup_dir=tmp_path / "_bak2")
+    assert len(report2.added) == 0
+
+
+def test_main_apply_without_backup_dir_errors(tmp_path):
+    root = _build_fake_vault(tmp_path)
+    rc = main([str(root), "--apply"])
+    assert rc == 2  # --apply 必须配 --backup-dir
