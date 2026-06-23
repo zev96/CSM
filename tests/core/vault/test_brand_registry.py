@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 from csm_core.vault.brand_registry import build_brand_registry, BrandRegistry
 
@@ -58,3 +59,17 @@ def test_registry_falls_back_to_filename_when_no_frontmatter(tmp_path: Path):
     assert set(reg.brands()) == {"CEWEY", "戴森", "小米"}
     assert set(reg.all_models()) == {"CEWEYDS18", "戴森V12", "米家3C"}
     assert reg.brand_of("米家3C") == "小米"
+
+
+_REAL_VAULT = Path(r"D:\家电组共享\DATA\营销资料库")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _REAL_VAULT.exists(), reason="真实 vault 不在本机")
+def test_real_vault_registry_has_33_models():
+    reg = build_brand_registry(_REAL_VAULT)
+    assert len(reg.all_models()) == 33
+    assert "CEWEY" in reg.brands()
+    assert "小米" in reg.brands()  # 米家* 应归一到 小米，不出现「米家」品牌
+    assert "米家" not in reg.brands()
+    assert {"米家3C", "米家2显尘版", "米家3基站版"}.issubset(set(reg.models("小米")))
