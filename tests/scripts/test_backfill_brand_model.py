@@ -56,3 +56,40 @@ def test_build_brand_models_groups_full_stems_by_canonical(tmp_path):
     bm = build_brand_models(tmp_path)
     assert bm["CEWEY"] == ["CEWEYDS18"]
     assert set(bm["小米"]) == {"米家3C", "米家3基站版"}
+
+
+from scripts.backfill_brand_model import insert_frontmatter_keys
+
+_LF = "---\n产品: 吸尘器\n素材类型: 产品参数\n---\n\n## 正文\n内容\n"
+
+
+def test_insert_adds_before_closing_delim_preserving_lf():
+    out = insert_frontmatter_keys(_LF, {"品牌": "CEWEY", "型号": "CEWEYDS18"})
+    assert "\r\n" not in out
+    assert out == (
+        "---\n产品: 吸尘器\n素材类型: 产品参数\n"
+        "品牌: CEWEY\n型号: CEWEYDS18\n"
+        "---\n\n## 正文\n内容\n"
+    )
+
+
+def test_insert_preserves_crlf():
+    crlf = _LF.replace("\n", "\r\n")
+    out = insert_frontmatter_keys(crlf, {"品牌": "CEWEY"})
+    assert "品牌: CEWEY\r\n---\r\n" in out
+    assert "\n" not in out.replace("\r\n", "")  # 没有裸 \n
+
+
+def test_insert_renders_list_as_flow_style():
+    out = insert_frontmatter_keys(_LF, {"适用型号": ["CEWEYDS18"]})
+    assert "适用型号: [CEWEYDS18]\n" in out
+
+
+def test_insert_empty_keys_is_noop():
+    assert insert_frontmatter_keys(_LF, {}) == _LF
+
+
+def test_insert_without_frontmatter_block_raises():
+    import pytest
+    with pytest.raises(ValueError):
+        insert_frontmatter_keys("没有 frontmatter 的正文\n", {"品牌": "CEWEY"})
