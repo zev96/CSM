@@ -4,13 +4,13 @@ from __future__ import annotations
 import json
 from typing import AsyncIterator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth import RequireToken
 from ..event_bus import bus
-from ..services import generate_service
+from ..services import factcheck_service, generate_service
 
 router = APIRouter(tags=["generate"], dependencies=[RequireToken])
 
@@ -69,3 +69,28 @@ def cancel_generate(job_id: str) -> dict:
     """
     ok = generate_service.request_cancel(job_id)
     return {"job_id": job_id, "ok": ok}
+
+
+class ResolveFactcheckBody(BaseModel):
+    final_text: str = Field(min_length=1)
+    released_numbers: list[float] = Field(default_factory=list)
+    released_certs: list[str] = Field(default_factory=list)
+
+
+@router.post("/api/generate/{job_id}/export")
+def resolve_factcheck(job_id: str, body: ResolveFactcheckBody) -> dict:
+    """重核一篇被事实核对拦下的成稿（含用户放行项），干净则导出。
+
+    job_id 不是「待事实核对处理」状态（过期 / 从未被拦）→ 404。
+    返回 {"ok": True, document/format/title} 或 {"ok": False, violations}。
+    """
+    try:
+        return factcheck_service.resolve_and_export(
+            job_id,
+            final_text=body.final_text,
+            released_numbers=body.released_numbers,
+            released_certs=body.released_certs,
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"no pending fact-check for job {job_id}")
