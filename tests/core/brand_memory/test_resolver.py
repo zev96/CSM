@@ -45,3 +45,13 @@ def test_resolves_competitor_shallow(tmp_path):
     assert mem.role == "竞品"
     assert any("V12" in i for i in mem.intro)
     assert mem.scripts == {}   # 竞品无技术话术
+
+
+def test_competitor_model_match_is_word_bounded(tmp_path):
+    # 型号 "V1" 不应吃到 "戴森V12" 的竞品笔记（子串误匹配回归）。
+    _write(tmp_path / VAULT / "竞品推荐内容/竞品-戴森V12.md",
+           "---\n产品: 吸尘器\n素材类型: 产品推荐理由\n核心关键词: x\n---\n"
+           "① 戴森 V12 高端机型。\n")
+    index = scan_vault(tmp_path)
+    mem = resolve_memory("戴森", "V1", "吸尘器", index, own_brands={"CEWEY"})
+    assert mem.intro == []   # V1 ≠ V12

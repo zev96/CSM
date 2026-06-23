@@ -11,7 +11,7 @@ from csm_core.vault.note_parser import ParsedNote
 from csm_core.test_framework.section_parser import extract_brand_sections
 from .identity import BRAND_ALIASES, canonical_brand, parse_brand_model
 from .specs import parse_spec_table
-from .model import BrandModelMemory
+from .model import BrandModelMemory, SpecValue
 
 _CIRCLED = "".join(chr(c) for c in range(0x2460, 0x2474))  # ①..⑳
 _DIM_RE = re.compile(r"(?:核心技术|次要技术)-(.+)$")
@@ -36,15 +36,23 @@ def _brand_folder_aliases(brand: str, aliases: dict[str, list[str]]) -> list[str
     return aliases.get(brand, [brand])
 
 
+def _model_in_stem(model: str, stem: str) -> bool:
+    # 子串匹配会让 "V1" 命中 "V12" 笔记；要求型号在文件名里前后都不接 ASCII 字母数字。
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(model)}(?![A-Za-z0-9])", stem) is not None
+
+
 def resolve_memory(
     brand: str, model: str, category: str, index: VaultIndex,
     *, own_brands: set[str], aliases: dict[str, list[str]] = BRAND_ALIASES,
 ) -> BrandModelMemory:
+    # O(N) scan of index.notes per call. For multi-model generation, callers
+    # should reuse ONE VaultIndex across all resolve_memory calls rather than
+    # re-scanning the vault per model (Plan 3 injection perf note).
     brand = canonical_brand(brand, aliases)
     role = "主推" if brand in own_brands else "竞品"
     brand_writings = {f"{a}推荐内容" for a in _brand_folder_aliases(brand, aliases)}
 
-    specs: dict = {}
+    specs: dict[str, SpecValue] = {}
     certs: list[str] = []
     scripts: dict[str, list[str]] = {}
     endorsements: list[str] = []
@@ -72,13 +80,14 @@ def resolve_memory(
                     scripts.setdefault(dim, []).extend(note.variants or [note.raw_body])
             continue
         # 竞品介绍
-        if "竞品推荐内容" in parts and model in note.id:
+        if "竞品推荐内容" in parts and _model_in_stem(model, note.id):
             intro.extend(note.variants or [note.raw_body])
             continue
         # 品牌产品测试结果
-        if "品牌产品测试结果" in parts and model in note.id:
+        if "品牌产品测试结果" in parts and _model_in_stem(model, note.id):
             for sec in extract_brand_sections(note.raw_body):
                 tests[sec.normalized_title] = sec.body
+            continue
 
     coverage = {
         "has_specs": bool(specs),
@@ -93,6 +102,13 @@ def resolve_memory(
     )
 
 
-def _certs_from_specs(specs: dict) -> list[str]:
+def _certs_from_specs(specs: dict[str, SpecValue]) -> list[str]:
+    """Extract cert names from the FIRST 认证-field row in specs.
+
+    Uses the same ``"认证" in field`` predicate as ``specs._is_cert_field``
+    (a deliberate two-site contract — change both together). If multiple rows
+    contain '认证', only the first (insertion order) contributes; the real
+    vault has at most one such row per model.
+    """
     cell = next((v.raw for k, v in specs.items() if "认证" in k), "")
     return [c.strip() for c in _CERT_SPLIT_RE.split(cell) if c.strip()]
