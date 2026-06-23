@@ -31,8 +31,6 @@ from csm_core.brand_memory.identity import (
     BRAND_ALIASES, canonical_brand, parse_brand_model,
 )
 
-logger = logging.getLogger(__name__)
-
 _SUFFIXES = ("-产品参数", "-测试结果")
 _PARAM_DIR = "产品参数"
 _TEST_DIR = "品牌产品测试结果"
@@ -244,6 +242,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply and args.backup_dir is None:
         print("error: --apply 必须配 --backup-dir（先备份再改团队盘）", file=sys.stderr)
         return 2
+    if args.apply and args.backup_dir is not None:
+        vr = args.vault_root.resolve()
+        bd = args.backup_dir.resolve()
+        if bd == vr or vr in bd.parents:
+            print("error: --backup-dir 不能在 vault 内（再次运行会扫到备份）；请放到 vault 外",
+                  file=sys.stderr)
+            return 2
 
     report = run(args.vault_root, apply=args.apply, backup_dir=args.backup_dir)
     mode = "APPLY" if args.apply else "DRY-RUN"

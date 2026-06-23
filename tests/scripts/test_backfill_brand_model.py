@@ -229,6 +229,12 @@ def test_main_apply_without_backup_dir_errors(tmp_path):
     assert rc == 2  # --apply 必须配 --backup-dir
 
 
+def test_main_apply_backup_inside_vault_errors(tmp_path):
+    root = _build_fake_vault(tmp_path / "vault")
+    rc = main([str(root), "--apply", "--backup-dir", str(root / "bak")])
+    assert rc == 2  # 备份目录在 vault 内 → 拒绝（再次运行会扫到备份）
+
+
 _REAL_VAULT = Path(r"D:\家电组共享\DATA\营销资料库")
 
 
