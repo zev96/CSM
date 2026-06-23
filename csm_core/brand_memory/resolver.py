@@ -83,8 +83,13 @@ def resolve_memory(
         if "竞品推荐内容" in parts and _model_in_stem(model, note.id):
             intro.extend(note.variants or [note.raw_body])
             continue
-        # 品牌产品测试结果
-        if "品牌产品测试结果" in parts and _model_in_stem(model, note.id):
+        # 品牌产品测试结果：自有品牌测试文件名是 <品牌><型号>-测试结果（品牌在词首）
+        # → parse_brand_model 剥后缀后精确命中（CEWEYDS18 这种拉丁直连 _model_in_stem
+        # 会漏）；保留 _model_in_stem 兜底其它命名。
+        if "品牌产品测试结果" in parts and (
+            parse_brand_model(note.id, aliases) == (brand, model)
+            or _model_in_stem(model, note.id)
+        ):
             for sec in extract_brand_sections(note.raw_body):
                 tests[sec.normalized_title] = sec.body
             continue
@@ -93,7 +98,7 @@ def resolve_memory(
         "has_specs": bool(specs),
         "has_tests": bool(tests),
         "script_dimensions": len(scripts),
-        "empty_spec_fields": [k for k, v in specs.items() if not v.numbers and not v.raw.strip("-/")],
+        "empty_spec_fields": [k for k, v in specs.items() if v.is_placeholder],
     }
     return BrandModelMemory(
         brand=brand, model=model, category=category, role=role,

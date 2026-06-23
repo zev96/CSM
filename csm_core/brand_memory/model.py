@@ -10,6 +10,7 @@ class SpecValue(BaseModel):
     numbers: list[float] = Field(default_factory=list)  # 解析出的数值（空=占位/非数值）
     unit: str = ""                   # 单位，如 "min" / "Pa"
     is_approx: bool = False          # 含 约/近/≤/起 等近似标记
+    is_placeholder: bool = False     # 占位/缺口（0/未说明/无/-/暂无…），供缺口体检
 
 
 class BrandModelMemory(BaseModel):

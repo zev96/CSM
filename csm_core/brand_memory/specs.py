@@ -50,8 +50,12 @@ def parse_spec_table(body: str) -> dict[str, SpecValue]:
             field, value = m.group(1).strip(), m.group(2).strip()
             if not field or field == "参数" or _SEP_CELL_RE.match(field):
                 continue
-            # 占位/0 与认证字段：保留字段（供缺口体检 / certs 抽取）但不出数字。
-            if _is_placeholder(value) or _is_cert_field(field):
+            # 占位/0：保留字段但标记为缺口（供缺口体检），不出数字。
+            if _is_placeholder(value):
+                specs[field] = SpecValue(field=field, raw=value, is_placeholder=True)
+                continue
+            # 认证字段：认证名清单（含 3C），非数值但也非缺口 → 不抽数字、不算占位。
+            if _is_cert_field(field):
                 specs[field] = SpecValue(field=field, raw=value)
                 continue
             numbers = [float(n) for n in _NUM_RE.findall(value)]

@@ -1,4 +1,3 @@
-import os
 import pytest
 from pathlib import Path
 from csm_core.vault.scanner import scan_vault

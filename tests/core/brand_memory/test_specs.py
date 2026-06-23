@@ -48,3 +48,12 @@ def test_non_numeric_cell_kept_as_raw():
     specs = parse_spec_table(BODY)
     assert specs["认证检测"].raw == "CE、FCC、CB、3C"
     assert specs["认证检测"].numbers == []
+
+
+def test_placeholder_flag_marks_gaps_not_certs():
+    specs = parse_spec_table(BODY)
+    # is_placeholder 供缺口体检：占位字段 True；有数值 / 认证名清单 False。
+    assert specs["真空度(Pa)"].is_placeholder is True    # 0
+    assert specs["电机功率"].is_placeholder is True        # 未说明
+    assert specs["吸力(AW)"].is_placeholder is False       # 有数值
+    assert specs["认证检测"].is_placeholder is False       # 认证名清单，非缺口
