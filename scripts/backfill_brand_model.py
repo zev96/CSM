@@ -146,8 +146,6 @@ def insert_frontmatter_keys(text: str, keys: dict) -> str:
     else:
         raise ValueError("no frontmatter block at start of note")
     lines = text.split(nl)
-    if not lines or lines[0].strip() != "---":
-        raise ValueError("no frontmatter block at start of note")
     close_idx = next(
         (i for i in range(1, len(lines)) if lines[i].strip() == "---"), None,
     )
@@ -215,9 +213,6 @@ def run(
         try:
             rel = md.relative_to(vault_root)
         except ValueError:
-            continue
-        # skip files whose top-level path component starts with '_' (backup dirs)
-        if rel.parts and rel.parts[0].startswith("_"):
             continue
         plan = derive_note_plan(rel.parts, md.stem, brand_models, aliases)
         if plan is None:

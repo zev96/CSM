@@ -1,4 +1,16 @@
-from scripts.backfill_brand_model import derive_note_plan, build_brand_models
+from pathlib import Path
+
+import pytest
+
+from scripts.backfill_brand_model import (
+    NotePlan,
+    build_brand_models,
+    derive_note_plan,
+    insert_frontmatter_keys,
+    main,
+    process_note,
+    run,
+)
 
 BM = {"CEWEY": ["CEWEYDS18"], "小米": ["米家3C"]}
 
@@ -58,8 +70,6 @@ def test_build_brand_models_groups_full_stems_by_canonical(tmp_path):
     assert set(bm["小米"]) == {"米家3C", "米家3基站版"}
 
 
-from scripts.backfill_brand_model import insert_frontmatter_keys
-
 _LF = "---\n产品: 吸尘器\n素材类型: 产品参数\n---\n\n## 正文\n内容\n"
 
 
@@ -80,6 +90,15 @@ def test_insert_preserves_crlf():
     assert "\n" not in out.replace("\r\n", "")  # 没有裸 \n
 
 
+def test_insert_handles_mixed_lf_frontmatter_crlf_body():
+    # 真实库 18 个竞品产品参数：frontmatter 用 LF、正文用 CRLF（混用）
+    mixed = "---\n产品: 吸尘器\n素材类型: 产品参数\n---\r\n\r\n## 正文\r\n内容\r\n"
+    out = insert_frontmatter_keys(mixed, {"品牌": "CEWEY"})
+    assert "品牌: CEWEY\n---\r\n" in out      # 新键随 frontmatter 用 LF
+    assert "## 正文\r\n内容\r\n" in out        # 正文 CRLF 原样保留
+    assert "\r\n产品:" not in out              # 没把 CR 带进 frontmatter
+
+
 def test_insert_renders_list_as_flow_style():
     out = insert_frontmatter_keys(_LF, {"适用型号": ["CEWEYDS18"]})
     assert "适用型号: [CEWEYDS18]\n" in out
@@ -93,9 +112,6 @@ def test_insert_without_frontmatter_block_raises():
     import pytest
     with pytest.raises(ValueError):
         insert_frontmatter_keys("没有 frontmatter 的正文\n", {"品牌": "CEWEY"})
-
-
-from scripts.backfill_brand_model import process_note, NotePlan
 
 
 def _make_param(tmp_path):
@@ -156,9 +172,6 @@ def test_process_writes_backup(tmp_path):
     assert "品牌:" not in bak.read_text(encoding="utf-8")  # 备份是改前原文
 
 
-from scripts.backfill_brand_model import run, main
-
-
 def _build_fake_vault(root):
     base = root / "营销资料库/产品模块/吸尘器"
     tests_base = root / "营销资料库/测试项目模块/吸尘器"
@@ -196,8 +209,8 @@ def test_run_dry_run_reports_but_writes_nothing(tmp_path):
 
 
 def test_run_apply_changes_files_and_backs_up(tmp_path):
-    root = _build_fake_vault(tmp_path)
-    bak = tmp_path / "_bak"
+    root = _build_fake_vault(tmp_path / "vault")
+    bak = tmp_path / "bak"  # 备份在 vault 外（与门禁 runbook 实际用法一致）
     report = run(root, apply=True, backup_dir=bak)
     assert len(report.added) == 5
     core = root / "营销资料库/产品模块/吸尘器/希喂推荐内容/核心技术/吸尘器-CEWEY核心技术-动力系统①.md"
@@ -205,8 +218,8 @@ def test_run_apply_changes_files_and_backs_up(tmp_path):
     assert "品牌: CEWEY\n" in txt and "适用型号: [CEWEYDS18]\n" in txt
     # 备份存在且为改前原文
     assert list(bak.rglob("*.md"))
-    # 再跑一次 → 全部已完整 → 0 added（幂等）
-    report2 = run(root, apply=True, backup_dir=tmp_path / "_bak2")
+    # 再跑一次 → 全部已完整 → 0 added（幂等；备份在 vault 外，不会被重新扫到）
+    report2 = run(root, apply=True, backup_dir=tmp_path / "bak2")
     assert len(report2.added) == 0
 
 
@@ -215,9 +228,6 @@ def test_main_apply_without_backup_dir_errors(tmp_path):
     rc = main([str(root), "--apply"])
     assert rc == 2  # --apply 必须配 --backup-dir
 
-
-import pytest
-from pathlib import Path
 
 _REAL_VAULT = Path(r"D:\家电组共享\DATA\营销资料库")
 
