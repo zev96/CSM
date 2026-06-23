@@ -17,7 +17,7 @@
 | Plan | 范围 | 依赖 | 本文档 |
 |---|---|---|---|
 | **1 解析层** | `csm_core/brand_memory/`：models / identity / specs 解析 / resolver / 白名单构建 | — | **✅ 全量细化（下文）** |
-| 2 增强脚本 + registry | 文件名→品牌/型号 回填脚本（副本+diff）、别名表、修 `build_brand_registry` | 复用 Plan1 identity | 待细化 |
+| 2 增强脚本 + registry | 文件名→品牌/型号 回填脚本（副本+diff）、别名表、修 `build_brand_registry` | 复用 Plan1 identity | **✅ [全量细化](2026-06-23-phase1-plan2-registry-backfill.md)** |
 | 3 注入 + 事实核对门禁 | `prompts.brand_facts`、`generate_service` 注入步+token预算、`csm_core/factcheck/`、导出门禁+放行、feature flags | Plan1 + Plan2 | 待细化 |
 | 4 skill 解耦 | 拆 `家电科普博主.md`→人设/去AI味/合并、`role` 字段、模板 default_skill_id 迁移 | — | 待细化 |
 | 5 UI | 「素材库」入口 + 「品牌型号」tab（只读+缺口+注入预览）+ `brand-memory` API | Plan1 | 待细化 |
