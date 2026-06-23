@@ -136,7 +136,15 @@ def insert_frontmatter_keys(text: str, keys: dict) -> str:
     """
     if not keys:
         return text
-    nl = "\r\n" if "\r\n" in text else "\n"
+    # Detect frontmatter newline from the opening '---' delimiter line itself,
+    # not from the full text — real-vault notes can have mixed newlines where
+    # the frontmatter block uses LF but the body uses CRLF.
+    if text.startswith("---\r\n"):
+        nl = "\r\n"
+    elif text.startswith("---\n"):
+        nl = "\n"
+    else:
+        raise ValueError("no frontmatter block at start of note")
     lines = text.split(nl)
     if not lines or lines[0].strip() != "---":
         raise ValueError("no frontmatter block at start of note")

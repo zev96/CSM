@@ -214,3 +214,19 @@ def test_main_apply_without_backup_dir_errors(tmp_path):
     root = _build_fake_vault(tmp_path)
     rc = main([str(root), "--apply"])
     assert rc == 2  # --apply 必须配 --backup-dir
+
+
+import pytest
+from pathlib import Path
+
+_REAL_VAULT = Path(r"D:\家电组共享\DATA\营销资料库")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _REAL_VAULT.exists(), reason="真实 vault 不在本机")
+def test_real_vault_dry_run_zero_unparseable():
+    report = run(_REAL_VAULT, apply=False, backup_dir=None)
+    assert report.unparseable == [], [r.reason for r in report.unparseable]
+    # 产品参数 33 + 测试结果 33 + 品牌背书 3 + 技术话术 10 = 79 篇目标；
+    # 已含 型号 的测试结果只补品牌，仍计入 added（除非 已 backfill 过）。
+    assert len(report.added) + len(report.skipped) >= 79
