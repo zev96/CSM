@@ -30,3 +30,31 @@ def test_registry_competitors_of(mini_vault_path: Path):
     registry = build_brand_registry(mini_vault_path)
     competitors = registry.competitors_of("CEWEY")
     assert set(competitors) == {"戴森V15", "小狗T12"}
+
+
+def test_registry_folds_brand_alias_to_canonical(tmp_path: Path):
+    # 笔记写的是别名「米家」，registry 应归一到 canonical「小米」
+    d = tmp_path / "营销资料库/产品模块/吸尘器/产品参数"
+    d.mkdir(parents=True)
+    (d / "米家3C-产品参数.md").write_text(
+        "---\n产品: 吸尘器\n品牌: 米家\n型号: 米家3C\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+        encoding="utf-8",
+    )
+    reg = build_brand_registry(tmp_path)
+    assert reg.brands() == ["小米"]
+    assert reg.brand_of("米家3C") == "小米"
+
+
+def test_registry_falls_back_to_filename_when_no_frontmatter(tmp_path: Path):
+    # 真实库形态：产品参数笔记无 品牌/型号 frontmatter，仅靠文件名
+    d = tmp_path / "营销资料库/产品模块/吸尘器/产品参数"
+    d.mkdir(parents=True)
+    for stem in ("CEWEYDS18-产品参数", "戴森V12-产品参数", "米家3C-产品参数"):
+        (d / f"{stem}.md").write_text(
+            "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+            encoding="utf-8",
+        )
+    reg = build_brand_registry(tmp_path)
+    assert set(reg.brands()) == {"CEWEY", "戴森", "小米"}
+    assert set(reg.all_models()) == {"CEWEYDS18", "戴森V12", "米家3C"}
+    assert reg.brand_of("米家3C") == "小米"
