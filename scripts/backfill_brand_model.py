@@ -147,3 +147,42 @@ def insert_frontmatter_keys(text: str, keys: dict) -> str:
         raise ValueError("unterminated frontmatter block")
     new_lines = [_render_kv(k, v) for k, v in keys.items()]
     return nl.join(lines[:close_idx] + new_lines + lines[close_idx:])
+
+
+@dataclass
+class NoteResult:
+    path: Path
+    status: str  # "added" | "skip" | "non_target" | "unparseable"
+    added: dict = field(default_factory=dict)
+    reason: str = ""
+
+
+def _backup(src: Path, backup_path: Path) -> None:
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, backup_path)
+
+
+def process_note(
+    path: Path, plan: NotePlan | None, *, apply: bool, backup_path: Path | None,
+) -> NoteResult:
+    """Read one note, add only the MISSING target keys (additive, idempotent)."""
+    if plan is None:
+        return NoteResult(path=path, status="non_target")
+    if plan.unparseable:
+        return NoteResult(path=path, status="unparseable", reason=plan.unparseable)
+    raw = path.read_bytes()
+    had_bom = raw.startswith(b"\xef\xbb\xbf")
+    text = raw.decode("utf-8-sig")
+    post = frontmatter.loads(text)
+    missing = {k: v for k, v in plan.keys.items() if k not in post.metadata}
+    if not missing:
+        return NoteResult(path=path, status="skip")
+    new_text = insert_frontmatter_keys(text, missing)
+    if apply:
+        if backup_path is not None:
+            _backup(path, backup_path)
+        out = new_text.encode("utf-8")
+        if had_bom:
+            out = b"\xef\xbb\xbf" + out
+        path.write_bytes(out)
+    return NoteResult(path=path, status="added", added=missing)

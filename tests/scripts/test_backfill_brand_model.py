@@ -93,3 +93,64 @@ def test_insert_without_frontmatter_block_raises():
     import pytest
     with pytest.raises(ValueError):
         insert_frontmatter_keys("没有 frontmatter 的正文\n", {"品牌": "CEWEY"})
+
+
+from scripts.backfill_brand_model import process_note, NotePlan
+
+
+def _make_param(tmp_path):
+    p = tmp_path / "CEWEYDS18-产品参数.md"
+    p.write_text(
+        "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: [x]\n---\n\n## 性能\n吸力 220\n",
+        encoding="utf-8")
+    return p
+
+
+def test_process_adds_missing_keys_and_keeps_body(tmp_path):
+    p = _make_param(tmp_path)
+    plan = NotePlan(keys={"品牌": "CEWEY", "型号": "CEWEYDS18"})
+    res = process_note(p, plan, apply=True, backup_path=None)
+    assert res.status == "added"
+    text = p.read_text(encoding="utf-8")
+    assert "品牌: CEWEY\n" in text and "型号: CEWEYDS18\n" in text
+    assert "## 性能\n吸力 220" in text  # 正文不动
+    assert "素材类型: 产品参数" in text  # 既有键不动
+
+
+def test_process_is_idempotent(tmp_path):
+    p = _make_param(tmp_path)
+    plan = NotePlan(keys={"品牌": "CEWEY", "型号": "CEWEYDS18"})
+    process_note(p, plan, apply=True, backup_path=None)
+    before = p.read_text(encoding="utf-8")
+    res2 = process_note(p, plan, apply=True, backup_path=None)
+    assert res2.status == "skip"
+    assert p.read_text(encoding="utf-8") == before  # 第二次零改动
+
+
+def test_process_never_overwrites_existing_key(tmp_path):
+    p = tmp_path / "CEWEY DS18-测试结果.md"
+    p.write_text(
+        "---\n产品: 吸尘器\n型号: CEWEY DS18\n素材类型: 测试数据\n---\n正文\n",
+        encoding="utf-8")
+    plan = NotePlan(keys={"品牌": "CEWEY", "型号": "CEWEY DS18"})
+    res = process_note(p, plan, apply=True, backup_path=None)
+    assert res.status == "added"
+    assert res.added == {"品牌": "CEWEY"}  # 只补 品牌
+    text = p.read_text(encoding="utf-8")
+    assert text.count("型号:") == 1  # 既有 型号 未被复写
+
+
+def test_process_dry_run_writes_nothing(tmp_path):
+    p = _make_param(tmp_path)
+    before = p.read_text(encoding="utf-8")
+    res = process_note(p, NotePlan(keys={"品牌": "CEWEY"}), apply=False, backup_path=None)
+    assert res.status == "added"  # 报告「会改」但不落盘
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_process_writes_backup(tmp_path):
+    p = _make_param(tmp_path)
+    bak = tmp_path / "bak" / "CEWEYDS18-产品参数.md"
+    process_note(p, NotePlan(keys={"品牌": "CEWEY"}), apply=True, backup_path=bak)
+    assert bak.exists()
+    assert "品牌:" not in bak.read_text(encoding="utf-8")  # 备份是改前原文
