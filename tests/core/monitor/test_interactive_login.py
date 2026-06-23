@@ -10,8 +10,11 @@ which isn't testable in CI. We cover:
 from __future__ import annotations
 import pytest
 
-from csm_core.monitor.drivers import interactive_login
-from csm_core.monitor.drivers.interactive_login import (
+# interactive_login was moved to csm_core.browser_infra (refactor ccc1d65); the
+# monitor.drivers path is now an ``import *`` shim, which cannot re-export the
+# private ``_format_cookie_text`` helper (underscore names are excluded from
+# ``*``). Import directly from the real module where the helper lives.
+from csm_core.browser_infra.interactive_login import (
     LOGIN_SPECS,
     _format_cookie_text,
     capture_cookies_via_login,
