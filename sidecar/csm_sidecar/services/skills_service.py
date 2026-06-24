@@ -29,6 +29,7 @@ class Skill:
     name: str         # frontmatter.name or id
     desc: str         # frontmatter.desc or ""
     tone: str         # frontmatter.tone or ""
+    role: str         # frontmatter.role or "persona"（人设 persona / 去AI味 humanize）
     path: Path
     body: str         # markdown body without frontmatter
 
@@ -38,6 +39,7 @@ class Skill:
             "name": self.name,
             "desc": self.desc,
             "tone": self.tone,
+            "role": self.role,
             "uses": 0,  # field exists in prototype mock data; sidecar returns 0 (砍 per A2)
         }
         if include_body:
@@ -66,6 +68,7 @@ def list_skills(skill_dir: Path | None) -> list[Skill]:
             name=str(fm.get("name") or md.stem),
             desc=str(fm.get("desc") or ""),
             tone=str(fm.get("tone") or ""),
+            role=str(fm.get("role") or "persona"),
             path=md,
             body=post.content or "",
         ))
@@ -89,6 +92,7 @@ def get_skill(skill_dir: Path | None, skill_id: str) -> Skill | None:
         name=str(fm.get("name") or md.stem),
         desc=str(fm.get("desc") or ""),
         tone=str(fm.get("tone") or ""),
+        role=str(fm.get("role") or "persona"),
         path=md,
         body=post.content or "",
     )

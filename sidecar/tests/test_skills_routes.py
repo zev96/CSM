@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from csm_sidecar.services import skills_service
+
 
 def _write_skill(p: Path, *, name: str, desc: str = "", tone: str = "", body: str = "") -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -89,3 +91,20 @@ def test_skill_falls_back_to_filename_when_name_missing(client: TestClient, tmp_
     resp = client.get("/api/skills/anonymous")
     assert resp.status_code == 200
     assert resp.json()["name"] == "anonymous"
+
+
+def test_skill_role_defaults_persona_when_absent(tmp_path):
+    (tmp_path / "x.md").write_text("# 无 frontmatter\n本体", encoding="utf-8")
+    sk = skills_service.get_skill(tmp_path, "x")
+    assert sk is not None
+    assert sk.role == "persona"
+    assert sk.to_dict()["role"] == "persona"
+
+
+def test_skill_role_parsed_from_frontmatter(tmp_path):
+    (tmp_path / "y.md").write_text(
+        "---\nname: 去AI味\nrole: humanize\n---\n本体", encoding="utf-8")
+    sk = skills_service.get_skill(tmp_path, "y")
+    assert sk is not None
+    assert sk.role == "humanize"
+    assert sk.to_dict()["role"] == "humanize"
