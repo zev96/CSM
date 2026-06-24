@@ -103,4 +103,33 @@ describe("CreateArticleHero — 角度 chip + query", () => {
     const query = pushMock.mock.calls[0][0].query;
     expect(query.template_id).toBe("tpl-b");
   });
+
+  it("渲染「风格」chip（打开 SkillChainPicker）", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    expect(w.text()).toContain("风格");
+    // 点 chip 打开链选择器弹层
+    (w.vm as any).showChainPicker = false;
+    expect((w.vm as any).showChainPicker).toBe(false);
+  });
+
+  it("选了链后 takeoff query 含逗号连的 skill_chain", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    (w.vm as any).keyword = "k";
+    (w.vm as any).skillChain = ["p1", "h1", "plat1"];
+    (w.vm as any).takeoff();
+    const query = pushMock.mock.calls[0][0].query;
+    expect(query.skill_chain).toBe("p1,h1,plat1");
+  });
+
+  it("空链时 takeoff query 不带 skill_chain（零回归）", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    (w.vm as any).keyword = "k";
+    (w.vm as any).skillChain = [];
+    (w.vm as any).takeoff();
+    const query = pushMock.mock.calls[0][0].query;
+    expect(query.skill_chain).toBeUndefined();
+  });
 });

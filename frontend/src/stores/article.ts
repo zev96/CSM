@@ -42,6 +42,21 @@ export interface GenerateRequest {
   // Phase 2a 角度组装 —— 标题领衔 + 角度（人群/卖点/语调）。不传 = 今天行为。
   title?: string | null;
   angle?: Angle | null;
+  // Phase 2b skill 链多-pass —— 按 role 顺序的 skill id 列表（人设→去AI味→平台）。
+  // 不传 / 空 = 退回单 skill_id（零回归）。
+  skill_chain?: string[] | null;
+}
+
+/** 链上单 pass 的预览数据（镜像后端 chain_service.ChainPass.to_dict）。
+ * SSE `pass` 事件逐个推；`done` 事件带完整 `passes` 数组覆盖。 */
+export interface ChainPass {
+  index: number;
+  role: string;
+  skill_id: string | null;
+  skill_name: string;
+  output: string;
+  input_chars: number;
+  output_chars: number;
 }
 
 /** 角度受控词表（GET /api/angle/taxonomy 的响应，picker 数据源）。
@@ -119,6 +134,9 @@ interface ArticleState {
   factcheck: { blocked: boolean; violations: FactcheckViolation[] } | null;
   // 角度受控词表 —— GET /api/angle/taxonomy 拉一次后缓存（picker 复用）。
   angleTaxonomy: AngleTaxonomy | null;
+  // Phase 2b skill 链逐 pass 输出 —— SSE `pass` 事件逐个 push，`done`
+  // 带完整 `passes` 时整体覆盖。submit 时清空。无链（单 skill 旧路径）→ [].
+  passes: ChainPass[];
 }
 
 export const useArticle = defineStore("article", {
@@ -145,6 +163,7 @@ export const useArticle = defineStore("article", {
     keywordDensity: null,
     factcheck: null,
     angleTaxonomy: null,
+    passes: [],
   }),
   getters: {
     progress(state): number {
@@ -154,6 +173,10 @@ export const useArticle = defineStore("article", {
     },
     stages: () => STAGES,
     isRunning: (state) => state.status === "running",
+    // 链成本 —— 调用次数 = pass 数；总字数 = Σ 每 pass 输出字数。
+    callCount: (state) => state.passes.length,
+    totalChars: (state) =>
+      state.passes.reduce((sum, p) => sum + (p.output_chars ?? 0), 0),
   },
   actions: {
     async submit(req: GenerateRequest): Promise<void> {
@@ -170,6 +193,7 @@ export const useArticle = defineStore("article", {
       this.plan = null;
       this.template = null;
       this.factcheck = null;
+      this.passes = [];
 
       const sidecar = useSidecar();
       try {
@@ -208,6 +232,11 @@ export const useArticle = defineStore("article", {
           this.plan = d.plan ?? null;
           this.draftText = d.draft ?? "";
         },
+        // Phase 2b skill 链 —— 每跑完一个 pass 后端推一条，逐个 push 让
+        // 成稿区可以增量显示链进度。done 会带完整 passes 再覆盖一次。
+        pass: (d: any) => {
+          this.passes.push(d as ChainPass);
+        },
         done: (d: any) => {
           this.documentPath = d.document ?? null;
           this.format = d.format ?? null;
@@ -219,6 +248,9 @@ export const useArticle = defineStore("article", {
           this.finalText = d.final_text ?? "";
           this.draftText = d.draft ?? "";
           this.plan = d.plan ?? null;
+          // 链模式下 done 带完整 passes（权威全量）—— 覆盖 SSE 增量推送的
+          // 部分列表。单 skill 旧路径无 passes 字段，保持 [] 不动（零回归）。
+          if (Array.isArray(d.passes)) this.passes = d.passes as ChainPass[];
           // 生成被 Plan 3 事实核对硬门禁拦下时，done 事件带
           // factcheck.{blocked, violations} —— 存下来给审查面板；未拦 → null。
           this.factcheck =
@@ -478,6 +510,26 @@ export const useArticle = defineStore("article", {
         return { ok: false, violations: resp.data.violations ?? [] };
       } catch (e: any) {
         return { ok: false, error: e?.response?.data?.detail ?? e?.message ?? String(e) };
+      }
+    },
+    /** 重跑链上第 `index` 个 pass（后端从该 pass 起级联其后所有 pass）。
+     * POST /api/chain/rerun {job_id, pass_index} → 用返回的 passes +
+     * final_text 覆盖本地。仿 resolveFactcheck：从不抛 —— 缓存淘汰 404 /
+     * 越界 400 / 网络异常都静默吞掉（调用方按需自行 toast）。 */
+    async rerunPass(index: number): Promise<void> {
+      if (!this.lastJobId) return;
+      const sidecar = useSidecar();
+      try {
+        const resp = await sidecar.client.post("/api/chain/rerun", {
+          job_id: this.lastJobId,
+          pass_index: index,
+        });
+        if (Array.isArray(resp.data?.passes)) {
+          this.passes = resp.data.passes as ChainPass[];
+        }
+        this.finalText = resp.data?.final_text ?? this.finalText;
+      } catch {
+        /* 静默 —— 缓存淘汰 / 越界 / 网络异常，本地状态保持不变 */
       }
     },
     _teardown() {

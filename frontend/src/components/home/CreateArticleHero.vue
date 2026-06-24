@@ -21,6 +21,7 @@ import Btn from "@/components/ui/Btn.vue";
 import Dropdown from "@/components/ui/Dropdown.vue";
 import Icon from "@/components/ui/Icon.vue";
 import AnglePicker from "@/components/article/AnglePicker.vue";
+import SkillChainPicker from "@/components/article/SkillChainPicker.vue";
 import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
@@ -29,10 +30,10 @@ import type { Angle } from "@/stores/article";
 interface Chip {
   id: string;
   name: string;
+  role?: string | null;
 }
 
 const FALLBACK_TEMPLATES: Chip[] = [{ id: "_demo_default", name: "默认模板" }];
-const FALLBACK_SKILLS: Chip[] = [{ id: "_demo_default", name: "默认 Skill" }];
 
 const router = useRouter();
 const cfg = useConfig();
@@ -41,9 +42,14 @@ const { whenReady } = useSidecarReady();
 
 const keyword = ref("");
 const templates = ref<Chip[]>(FALLBACK_TEMPLATES);
-const skills = ref<Chip[]>(FALLBACK_SKILLS);
+// skills 全量（含 role）供 SkillChainPicker 分组；空 fallback 让弹层先空着。
+const skills = ref<Chip[]>([]);
 const tplId = ref<string>(FALLBACK_TEMPLATES[0].id);
-const skillId = ref<string>(FALLBACK_SKILLS[0].id);
+
+// Phase 2b skill 链 —— 有序 skill id 列表（人设→去AI味→平台），起飞时
+// 逗号连进 query 由 ArticleView 重建。空 = 不传链 = 今天行为（零回归）。
+const skillChain = ref<string[]>([]);
+const showChainPicker = ref(false);
 
 // 角度（人群/卖点/语调）+ 标题 —— 起飞时扁平进 query，由 ArticleView 重建。
 // 默认 null/空 = 不传角度 = 今天行为。
@@ -96,16 +102,19 @@ const dateLabel = computed(() => {
 const tplLabel = computed(
   () => templates.value.find((t) => t.id === tplId.value)?.name ?? "未指定",
 );
-const skillLabel = computed(
-  () => skills.value.find((s) => s.id === skillId.value)?.name ?? "未指定",
-);
 
 const tplItems = computed(() =>
   templates.value.map((t) => ({ key: t.id, label: t.name })),
 );
-const skillItems = computed(() =>
-  skills.value.map((s) => ({ key: s.id, label: s.name })),
-);
+
+// 链 chip 文案 —— 「人设 → 去AI味 → 小红书」，按链顺序连 skill 名；
+// 空链显示「不限」。chip 高亮由 chainActive 控制。
+const chainActive = computed(() => skillChain.value.length > 0);
+const chainSummary = computed(() => {
+  if (skillChain.value.length === 0) return "风格";
+  const nameOf = (id: string) => skills.value.find((s) => s.id === id)?.name ?? id;
+  return skillChain.value.map(nameOf).join(" → ");
+});
 
 onMounted(async () => {
   try {
@@ -120,9 +129,10 @@ onMounted(async () => {
       templates.value = tpls;
       tplId.value = tpls[0].id;
     }
+    // skills 全量留给 SkillChainPicker 分组（含 role）；不默认选中任何
+    // skill —— 链默认空 = 不传 = 今天行为。
     if (sks.length > 0) {
       skills.value = sks;
-      skillId.value = sks[0].id;
     }
   } catch {
     /* 静默失败 — 占位仍可点击 takeoff，到 ArticleView 那边会再拉一次 */
@@ -133,9 +143,6 @@ function takeoff() {
   if (!keyword.value.trim()) return;
   // _demo_ 前缀仅用于占位，不要传给 sidecar，否则 ArticleView 找不到模板。
   const realTpl = tplId.value.startsWith("_demo_") ? undefined : tplId.value;
-  const realSkill = skillId.value.startsWith("_demo_")
-    ? undefined
-    : skillId.value;
 
   // 角度扁平进 query —— audience / sellpoints(逗号连) / tone / title，
   // 空的不入 query（保持 URL 干净 + ArticleView 重建时空 facet → null）。
@@ -143,7 +150,10 @@ function takeoff() {
     keyword: keyword.value.trim(),
   };
   if (realTpl) query.template_id = realTpl;
-  if (realSkill) query.skill_id = realSkill;
+  // skill 链逗号连进 query；空链不入 query（= 不传 = 今天行为，零回归）。
+  if (skillChain.value.length > 0) {
+    query.skill_chain = skillChain.value.join(",");
+  }
   const a = angle.value;
   if (a?.audience) query.audience = a.audience;
   if (a?.sellpoints?.length) query.sellpoints = a.sellpoints.join(",");
@@ -155,7 +165,7 @@ function takeoff() {
 
 // 给测试（@vue/test-utils vm）访问内部 state/方法 —— <script setup> 默认
 // 闭合，不 expose 测不到 takeoff/angle/title。
-defineExpose({ keyword, angle, title, tplId, takeoff, onPickTemplate });
+defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, takeoff, onPickTemplate });
 </script>
 
 <template>
@@ -268,43 +278,34 @@ defineExpose({ keyword, angle, title, tplId, takeoff, onPickTemplate });
         </template>
       </Dropdown>
 
-      <Dropdown :items="skillItems" @select="(k: string) => (skillId = k)">
-        <template #trigger>
-          <button
-            type="button"
-            class="inline-flex items-center gap-2"
-            :style="{
-              height: '32px',
-              padding: '0 12px',
-              background: 'var(--frosted-bg)',
-              backdropFilter: 'blur(12px) saturate(140%)',
-              WebkitBackdropFilter: 'blur(12px) saturate(140%)',
-              border: '1px solid var(--frosted-border)',
-              borderRadius: 'var(--radius-pill)',
-              fontSize: '12px',
-              color: 'var(--ink-2)',
-              cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(var(--shadow-rgb),0.04), 0 1px 2px rgba(var(--shadow-rgb),0.03)',
-            }"
-          >
-            <span :style="{ color: 'var(--ink-3)' }">风格</span>
-            <span
-              class="dd-label-stack font-semibold"
-              :style="{ color: 'var(--ink)' }"
-            >
-              <span
-                v-for="s in skills"
-                :key="s.id"
-                aria-hidden="true"
-                class="dd-label-ghost"
-                >{{ s.name }}</span
-              >
-              <span class="dd-label-current">{{ skillLabel }}</span>
-            </span>
-            <Icon name="arrowDown" :size="11" />
-          </button>
-        </template>
-      </Dropdown>
+      <!--
+        风格 chip —— 点开 SkillChainPicker 弹层（链选项多，不适合塞
+        Dropdown）。选了链时高亮 + 显示链摘要（「人设 → 去AI味 → 小红书」）。
+        未选时显示「不限」，起飞不带 skill_chain（零回归）。
+      -->
+      <button
+        type="button"
+        data-chain-chip-trigger
+        class="inline-flex items-center gap-2"
+        :style="{
+          height: '32px',
+          padding: '0 12px',
+          background: chainActive ? 'var(--primary-soft)' : 'var(--frosted-bg)',
+          backdropFilter: 'blur(12px) saturate(140%)',
+          WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+          border: chainActive ? '1px solid var(--primary)' : '1px solid var(--frosted-border)',
+          borderRadius: 'var(--radius-pill)',
+          fontSize: '12px',
+          color: chainActive ? 'var(--primary-deep)' : 'var(--ink-2)',
+          cursor: 'pointer',
+          boxShadow: '0 2px 6px rgba(var(--shadow-rgb),0.04), 0 1px 2px rgba(var(--shadow-rgb),0.03)',
+        }"
+        @click="showChainPicker = true"
+      >
+        <span :style="{ color: chainActive ? 'var(--primary-deep)' : 'var(--ink-3)' }">风格</span>
+        <span class="font-semibold">{{ chainActive ? chainSummary : "不限" }}</span>
+        <Icon name="arrowDown" :size="11" />
+      </button>
 
       <!--
         角度 chip —— 与 模板 / 风格 平级，但点击打开 AnglePicker 弹层
@@ -402,6 +403,74 @@ defineExpose({ keyword, angle, title, tplId, takeoff, onPickTemplate });
           :style="{ padding: '14px 22px 20px' }"
         >
           <Btn variant="dark" @click="showAnglePicker = false">完成</Btn>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!--
+    skill 链选择弹层 —— 居中模态（与角度弹层同款 Teleport 结构）。
+    SkillChainPicker 受控：v-model 绑 skillChain，skills 传全量（含 role）。
+    点遮罩或「完成」关闭。
+  -->
+  <Teleport to="body">
+    <div
+      v-if="showChainPicker"
+      class="fixed inset-0 z-40 flex items-center justify-center"
+      :style="{ background: 'rgba(var(--ink-rgb),0.4)' }"
+      @click.self="showChainPicker = false"
+    >
+      <div
+        class="anim-up flex flex-col"
+        :style="{
+          width: '480px',
+          maxWidth: '92vw',
+          maxHeight: '86vh',
+          borderRadius: 'var(--radius-card)',
+          background: 'var(--bg-inner)',
+          border: '1px solid var(--line)',
+          boxShadow: '0 18px 50px rgba(var(--shadow-rgb),0.18)',
+        }"
+      >
+        <div
+          class="flex flex-shrink-0 items-start justify-between"
+          :style="{ padding: '20px 22px 14px' }"
+        >
+          <div>
+            <div :style="{ fontSize: '11.5px', color: 'var(--ink-3)', marginBottom: '4px' }">
+              润色风格链
+            </div>
+            <div
+              class="font-display"
+              :style="{ fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }"
+            >
+              人设 → 去AI味 → 平台适配
+            </div>
+          </div>
+          <button
+            type="button"
+            class="inline-flex items-center justify-center transition hover:brightness-95"
+            :style="{
+              width: '28px',
+              height: '28px',
+              borderRadius: '999px',
+              background: 'var(--card-2)',
+              color: 'var(--ink-2)',
+              border: '1px solid var(--line)',
+            }"
+            @click="showChainPicker = false"
+          >
+            <Icon name="x" :size="14" />
+          </button>
+        </div>
+        <div class="min-h-0 flex-1 overflow-y-auto" :style="{ padding: '0 22px 8px' }">
+          <SkillChainPicker v-model="skillChain" :skills="skills" />
+        </div>
+        <div
+          class="flex flex-shrink-0 justify-end"
+          :style="{ padding: '14px 22px 20px' }"
+        >
+          <Btn variant="dark" @click="showChainPicker = false">完成</Btn>
         </div>
       </div>
     </div>

@@ -20,6 +20,7 @@ vi.mock("@/composables/useToast", () => ({
 }));
 
 import SkillEditView from "@/views/SkillEditView.vue";
+import FormSelect from "@/components/forms/FormSelect.vue";
 
 describe("SkillEditView role", () => {
   beforeEach(() => {
@@ -49,6 +50,38 @@ describe("SkillEditView role", () => {
       expect.objectContaining({ role: "persona" }),
     );
 
+    w.unmount();
+  });
+
+  it("role 下拉含「平台适配 (platform)」选项", () => {
+    const w = mount(SkillEditView);
+    const sel = w.findComponent(FormSelect);
+    const opts = sel.props("options") as Array<{ label: string; value: string }>;
+    const vals = opts.map((o) => o.value);
+    expect(vals).toContain("persona");
+    expect(vals).toContain("humanize");
+    expect(vals).toContain("platform");
+    const platform = opts.find((o) => o.value === "platform");
+    expect(platform!.label).toContain("平台适配");
+    w.unmount();
+  });
+
+  it("创建 role=platform 能提交", async () => {
+    postMock.mockResolvedValueOnce({
+      data: { id: "x", name: "x", role: "platform" },
+    });
+    const w = mount(SkillEditView);
+    await w.find("input").setValue("小红书适配");
+    (w.vm as any).role = "platform";
+
+    const saveBtn = w.findAll("button").find((b) => b.text().includes("创建"));
+    await saveBtn!.trigger("click");
+    await flushPromises();
+
+    expect(postMock).toHaveBeenCalledWith(
+      "/api/skills",
+      expect.objectContaining({ role: "platform" }),
+    );
     w.unmount();
   });
 });
