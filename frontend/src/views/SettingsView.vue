@@ -28,6 +28,7 @@ import FormInput from "@/components/forms/FormInput.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
 import XhsPromptsCard from "@/components/settings/XhsPromptsCard.vue";
+import BrandMemoryCard from "@/components/settings/BrandMemoryCard.vue";
 import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection.vue";
 import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
@@ -184,6 +185,7 @@ const SECTIONS: SectionDef[] = [
   { k: "general", l: "通用", icon: "settings", sub: "外观 · 行为 · 通知 · 导出", group: "basics" },
   { k: "paths", l: "存储路径", icon: "folder", sub: "Vault · 导出 · 模板 · Skills 目录", group: "basics" },
   { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL", group: "workflow" },
+  { k: "brand-memory", l: "品牌记忆", icon: "stack", sub: "型号注入 · 事实核对 · 自有品牌", group: "workflow" },
   { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建", group: "workflow" },
   { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie", group: "workflow" },
   { k: "baidu-scrape", l: "百度抓取", icon: "radar", sub: "Native Chrome profile · 降低风控", group: "workflow" },
@@ -1240,6 +1242,11 @@ async function saveAccountEdit() {
               小红书 AI 提示词
             </div>
             <XhsPromptsCard />
+          </template>
+
+          <!-- ━━━━━━━━ 品牌记忆 ━━━━━━━━ -->
+          <template v-else-if="section === 'brand-memory'">
+            <BrandMemoryCard />
           </template>
 
           <!-- 导出 section 已合并到「通用」，「导出后操作」默认无动作。 -->

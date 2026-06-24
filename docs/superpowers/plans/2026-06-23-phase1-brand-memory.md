@@ -22,6 +22,7 @@
 | 4 skill 解耦 | 拆 `家电科普博主.md`→人设/去AI味/合并、`role` 字段、模板 default_skill_id 迁移 | — | **✅ [全量细化](2026-06-24-phase1-plan4-skill-decouple.md)** |
 | 5a UI·素材库 | 「素材库」入口 + 「品牌型号」tab（只读+缺口+注入预览）+ `brand-memory` API | Plan1+3 | **✅ [全量细化](2026-06-24-phase1-plan5a-material-library.md)** |
 | 5b UI·收官 | `SkillEditView` role 下拉 + ArticleView factcheck 审查面板（+ `Violation.number` 小修） | Plan3+4 + 5a | **✅ [全量细化](2026-06-24-phase1-plan5b-skill-role-factcheck-panel.md)** |
+| 6 补遗·设置 | 「品牌记忆」设置卡（inject/factcheck 开关 + own_brands + cap，让 Phase 1 能从 UI 开）| Plan3（config 已就位） | **✅ [全量细化](2026-06-24-phase1-plan6-brand-memory-settings.md)** |
 
 > 每个 plan 跑通即得可测软件。Plan 1 是地基，先做。Plans 2–5 在 Plan 1 合并后逐个细化为同样粒度的任务。
 
