@@ -133,3 +133,24 @@ def test_update_skill_changes_role_when_given(tmp_path):
     skills_service.update_skill(
         tmp_path, "p", name="人设", desc="", tone="", body="x", role="persona")
     assert skills_service.get_skill(tmp_path, "p").role == "persona"
+
+
+def test_route_create_and_get_round_trips_role(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+    r = client.post("/api/skills", json={
+        "id": "去AI味", "name": "去AI味", "role": "humanize", "body": "正文"})
+    assert r.status_code == 201
+    assert r.json()["role"] == "humanize"
+    g = client.get("/api/skills/去AI味")
+    assert g.json()["role"] == "humanize"
+
+
+def test_route_patch_without_role_preserves(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+    client.post("/api/skills", json={
+        "id": "hz2", "name": "去AI味", "role": "humanize", "body": "a"})
+    r = client.patch("/api/skills/hz2", json={"name": "去AI味", "body": "b"})
+    assert r.status_code == 200
+    assert r.json()["role"] == "humanize"   # PATCH 不带 role → 保留
