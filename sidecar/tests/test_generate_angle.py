@@ -15,7 +15,7 @@ from csm_core.assembler.plan import AssemblyPlan
 from csm_core.brand_memory.inject import ModelScope
 from csm_core.brand_memory.model import BrandModelMemory, SpecValue
 from csm_core.config import AppConfig, BrandMemoryConfig
-from csm_sidecar.services import generate_service, factcheck_service
+from csm_sidecar.services import chain_service, generate_service, factcheck_service
 
 
 def test_request_accepts_title_and_angle():
@@ -80,14 +80,17 @@ def _wire_full_chain(monkeypatch, tmp_path: Path, *, inject: bool, factcheck: bo
         return "品牌事实块"
 
     monkeypatch.setattr(generate_service, "render_brand_facts", fake_render_brand_facts)
-    monkeypatch.setattr(generate_service.llm_factory, "build_client",
+    # Phase 2b：LLM 调用从 generate_service 单次 build_prompt+complete 迁入
+    # chain_service.run_chain（step0=build_prompt）。client + build_prompt 现在
+    # 由 chain_service 调用，故 patch 落在 chain_service 上。
+    monkeypatch.setattr(chain_service.llm_factory, "build_client",
                         lambda **k: _StubClient())
 
     def fake_build_prompt(inputs):
         captured["prompt_inputs"] = inputs
         return ("sys", "user")
 
-    monkeypatch.setattr(generate_service, "build_prompt", fake_build_prompt)
+    monkeypatch.setattr(chain_service, "build_prompt", fake_build_prompt)
 
     def fake_build_whitelist(scopes, *, source_texts):
         captured["whitelist_sources"] = source_texts

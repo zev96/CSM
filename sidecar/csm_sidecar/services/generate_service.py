@@ -25,8 +25,6 @@ from csm_core.angle import Angle, effective_sellpoints, render_angle_directive
 from csm_core.assembler.constraints import assemble_plan
 from csm_core.assembler.render import compose_draft
 from csm_core.export.markdown import export_article
-from csm_core.llm.client import LLMClient
-from csm_core.llm.prompts import PromptInputs, build_prompt
 from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
 from csm_core.vault.scanner import scan_vault
@@ -36,6 +34,7 @@ from csm_core.factcheck import check_facts
 from ..event_bus import bus
 from . import (
     assembler_service,
+    chain_service,
     config_service,
     factcheck_service,
     llm_factory,
@@ -60,6 +59,9 @@ class GenerateRequest:
     # Phase 2a: 标题领衔 + 角度选材。两者都空 = 今天行为（零回归）。
     title: str | None = None
     angle: Angle | None = None
+    # Phase 2b: skill 链多-pass（人设→去AI味→平台适配）。空 = 退回单 skill_id
+    # 1 步链 = 今天行为（零回归）。
+    skill_chain: list[str] | None = None
 
 
 # Pool sized so a typical desktop can run a generate + a batch + a polish
@@ -148,15 +150,9 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         if not tpl_path.exists():
             raise FileNotFoundError(f"template not found: {req.template_id}")
 
-        skill_prompt: str | None = None
-        if req.skill_id:
-            skill = skills_service.get_skill(
-                Path(cfg.skill_dir) if cfg.skill_dir else None,
-                req.skill_id,
-            )
-            if skill is None:
-                raise FileNotFoundError(f"skill not found: {req.skill_id}")
-            skill_prompt = skill.body
+        # skill 链解析提前到此处 —— 与今天的早期 skill-load 一样 fail-fast：
+        # 单 skill_id（无 chain）找不到仍抛 FileNotFoundError（零回归）。
+        chain_steps = _resolve_chain(req, cfg)
 
         _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="扫描资料库", index=0, total=6)
@@ -225,27 +221,33 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
                     sellpoints=effective_sellpoints(req.angle),
                 )
 
-        client: LLMClient = llm_factory.build_client(
-            provider=req.provider, model=req.model,
-        )
-        system, user = build_prompt(PromptInputs(
-            user_skill_prompt=skill_prompt,
-            keyword=req.keyword,
+        # Phase 2b: 单次 build_prompt+complete 升级为 skill 链多-pass。
+        # step0 = 组装 pass（build_prompt：毛坯+事实+角度+标题，与今天一致）；
+        # step1+ = 精修 pass（build_refine_prompt：上段输出+skill）。逐 pass 经
+        # SSE 推给前端，链状态按 job_id 缓存供 /api/chain/rerun 重跑。单步链
+        # （无 skill_chain）的 step0 入参与今天 build_prompt 字节级一致（零回归）。
+        _checkpoint(job_id)
+        bus.publish(job_id, "stage", stage="skill 链润色", index=4, total=6)
+        state = chain_service.run_chain(
+            job_id, chain_steps,
             draft=draft,
-            brand_facts=brand_facts if cfg_bm.inject else None,
+            keyword=req.keyword,
             title=req.title,
             angle_directive=render_angle_directive(req.angle),
-        ))
-
-        _checkpoint(job_id)
-        bus.publish(job_id, "stage", stage="调用 LLM", index=4, total=6)
-        final_text = client.complete(system=system, user=user)
+            brand_facts=brand_facts if cfg_bm.inject else None,
+            provider=req.provider, model=req.model,
+            checkpoint=lambda: _checkpoint(job_id),
+            on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
+        )
+        final_text = state.final_text
+        passes = [p.to_dict() for p in state.passes]
 
         # 导出前硬门禁：命中越界则缓存待导出 + done(blocked)，不导出。
         if _maybe_block_for_factcheck(
             job_id, final_text=final_text, scopes=scopes, draft=draft,
             brand_facts=brand_facts if cfg_bm.inject else None,
             title=req.title, cfg=cfg, plan=plan, out_dir=out_dir,
+            passes=passes,
         ):
             return
 
@@ -267,6 +269,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             plan=_plan_to_dict(plan),
             draft=draft,
             final_text=final_text,
+            passes=passes,
         )
     except _CancelledGenerate:
         logger.info("generate job %s cancelled by user", job_id)
@@ -280,15 +283,48 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             _cancelled.discard(job_id)
 
 
+def _resolve_chain(req: GenerateRequest, cfg) -> list[chain_service.ChainStepInput]:
+    """把 req 解析成链 steps（每个 step 带 skill 的 role/name/body）。
+
+    零回归边界：
+    - 无 skill_chain 时退回单 skill_id（[skill_id] if skill_id else []）；单
+      skill_id 给了但找不到 → **抛 FileNotFoundError**（与今天早期 skill-load
+      一致，不静默成空链）。
+    - 多条 skill_chain 里某条失效 → 跳过 + warning，链继续（其它步仍跑）。"""
+    sdir = Path(cfg.skill_dir) if cfg.skill_dir else None
+    if req.skill_chain is None:
+        # 单 skill_id 路径：保留今天的「找不到即抛」契约。
+        if not req.skill_id:
+            return []
+        skill = skills_service.get_skill(sdir, req.skill_id)
+        if skill is None:
+            raise FileNotFoundError(f"skill not found: {req.skill_id}")
+        return [chain_service.ChainStepInput(
+            skill_id=req.skill_id, role=skill.role, name=skill.name, body=skill.body)]
+    # 多步链路径：单条失效跳过 + warning（不中断整条链）。
+    steps: list[chain_service.ChainStepInput] = []
+    for sid in req.skill_chain:
+        skill = skills_service.get_skill(sdir, sid)
+        if skill is None:
+            logger.warning("skill_chain: 跳过失效 skill %s", sid)
+            continue
+        steps.append(chain_service.ChainStepInput(
+            skill_id=sid, role=skill.role, name=skill.name, body=skill.body))
+    return steps
+
+
 def _maybe_block_for_factcheck(
     job_id: str, *, final_text: str, scopes: list, draft: str,
     brand_facts: str | None, title: str | None = None, cfg, plan, out_dir: Path,
+    passes: list[dict[str, Any]] | None = None,
 ) -> bool:
     """导出前事实核对。命中越界 → 缓存待导出 + 以 done(blocked) 收尾、返回
     True（调用方须在导出前停下）。核对关 / 无型号 / 成稿干净 → False。
 
     白名单源 = 毛坯文 + 标题（若有）+ 已注入品牌事实（若有）：标题往往
-    自带数字（如「220AW 实测」），不纳入会被事实核对误判越界。"""
+    自带数字（如「220AW 实测」），不纳入会被事实核对误判越界。
+
+    blocked done 也带 passes（链每段输出）：前端被拦时仍能逐 pass 预览/重跑。"""
     if not cfg.brand_memory.factcheck or not scopes:
         return False
     sources = [draft] + ([title] if title else []) + ([brand_facts] if brand_facts else [])
@@ -305,6 +341,7 @@ def _maybe_block_for_factcheck(
     bus.finish(
         job_id, document=None, plan=_plan_to_dict(plan), draft=draft,
         final_text=final_text,
+        passes=passes or [],
         factcheck={
             "blocked": True,
             "violations": [v.model_dump() for v in report.violations],
