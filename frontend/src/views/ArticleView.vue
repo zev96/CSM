@@ -59,6 +59,14 @@ const seed = ref(0);
 const angle = ref<Angle | null>(null);
 const title = ref<string>("");
 
+// Phase 2b skill 链 —— 从 query 的逗号串重建成 id 数组提交。空 = 不传链
+// = 退回单 skill_id（零回归）。
+const skillChain = ref<string[]>([]);
+function rebuildChainFromQuery(): string[] {
+  const raw = ((route.query.skill_chain as string) ?? "").trim();
+  return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+}
+
 /** 从 route.query 重建 Angle —— sellpoints 按「,」拆（空串→[]），
  * audience/tone 空 → null；三者全空返回 null（不传角度）。 */
 function rebuildAngleFromQuery(): Angle | null {
@@ -83,6 +91,37 @@ const angleChipText = computed<string | null>(() => {
   if (a.tone) parts.push(a.tone);
   return parts.length ? parts.join(" · ") : null;
 });
+
+// header 链 chip 文案 —— 「人设 → 去AI味 → 小红书」，按 passes 顺序连
+// skill 名。无 passes（单 skill 旧路径）→ null（不渲染 chip）。
+const chainChipText = computed<string | null>(() => {
+  const ps = article.passes;
+  if (!ps || ps.length === 0) return null;
+  return ps.map((p) => p.skill_name || p.role).join(" → ");
+});
+
+// 链角色中文名 —— pass 卡上的角色标签。
+const ROLE_LABELS: Record<string, string> = {
+  persona: "人设",
+  humanize: "去AI味",
+  platform: "平台适配",
+};
+function roleLabel(role: string): string {
+  return ROLE_LABELS[role] ?? role;
+}
+
+// 正在重跑的 pass index —— 按钮 loading 态 + 互斥（同时只跑一个）。
+const rerunningPass = ref<number | null>(null);
+async function rerunPass(index: number) {
+  if (rerunningPass.value !== null) return;
+  rerunningPass.value = index;
+  try {
+    await article.rerunPass(index);
+    toast.success(`已重跑第 ${index + 1} 段`);
+  } finally {
+    rerunningPass.value = null;
+  }
+}
 
 interface TemplateRow { id: string; name: string }
 interface SkillRow { id: string; name: string; desc?: string }
@@ -316,6 +355,8 @@ async function takeoff() {
     draft_only: true,
     ...(angle.value ? { angle: angle.value } : {}),
     ...(title.value.trim() ? { title: title.value.trim() } : {}),
+    // skill 链非空才传 —— 空链 = 退回单 skill_id（零回归）。
+    ...(skillChain.value.length > 0 ? { skill_chain: skillChain.value } : {}),
   });
   // 顺便用 AI 拉一组标题候选，让用户在初稿 tab 里就能挑标题。这是
   // 整个流程里第一次 LLM 调用。失败不影响初稿展示，仅 toast 提示。
@@ -841,6 +882,7 @@ onMounted(async () => {
   // header chip 能把卖点 key 显示成 label；失败静默（chip 退回 key）。
   angle.value = rebuildAngleFromQuery();
   title.value = ((route.query.title as string) ?? "").trim();
+  skillChain.value = rebuildChainFromQuery();
   if (angle.value) article.fetchAngleTaxonomy();
 
   if (!templateId.value && templates.value[0]) {
@@ -989,6 +1031,25 @@ const tabSectionLabel = computed(() => {
         >
           <Icon name="sliders" :size="11" />
           {{ angleChipText }}
+        </span>
+        <!--
+          skill 链 chip —— 起飞带了链（passes 非空）才显示，文案如
+          「人设 → 去AI味 → 小红书」。单 skill 旧路径无 passes → 不渲染。
+        -->
+        <span
+          v-if="chainChipText"
+          data-chain-chip
+          class="inline-flex items-center gap-1 text-[11px] font-medium"
+          :style="{
+            background: 'var(--primary-soft)',
+            color: 'var(--primary-deep)',
+            padding: '3px 9px',
+            borderRadius: 'var(--radius-pill)',
+          }"
+          :title="`润色链：${chainChipText}`"
+        >
+          <Icon name="skills" :size="11" />
+          {{ chainChipText }}
         </span>
         <!--
           字数统计 (wordCount) 在右侧检查面板里有完整 KPI 卡，header
@@ -1425,8 +1486,80 @@ const tabSectionLabel = computed(() => {
               <!-- 成稿 tab 只显示"成稿 X 字"（用户反馈：初稿字数 + 阅读时间这里冗余） -->
               <div class="flex items-center gap-3 text-[11px]" :style="{ color: 'var(--ink-3)' }">
                 <span>成稿 {{ (article.finalText || SAMPLE_VARIATIONS[sampleIndex].final).length }} 字</span>
+                <!-- 链成本 —— 有 passes 时显示「调用 N 次 · 共 X 字」 -->
+                <span v-if="article.passes.length" data-chain-cost>
+                  调用 {{ article.callCount }} 次 · 共 {{ article.totalChars }} 字
+                </span>
               </div>
               <div class="mt-3" :style="{ height: '1px', background: 'var(--line)' }" />
+            </div>
+
+            <!--
+              ── skill 链逐 pass 预览 ──
+              起飞带了链（passes 非空）时，成稿区上方先展示每个 pass 的输出
+              折叠卡（角色标签 + skill 名 + 输出 + 「重跑此 pass」按钮）。
+              重跑会级联其后所有 pass（后端 chain_service.rerun）。
+              无 passes（单 skill 旧路径）→ 整块不渲染，成稿编辑器行为不变。
+            -->
+            <div
+              v-if="article.passes.length"
+              class="flex flex-col gap-2.5"
+              :style="{ padding: '0 24px 14px' }"
+            >
+              <div
+                v-for="p in article.passes"
+                :key="p.index"
+                class="flex flex-col"
+                :style="{
+                  padding: '12px 14px',
+                  borderRadius: '12px',
+                  background: '#fbfaf6',
+                  border: '1px solid var(--line)',
+                }"
+              >
+                <div class="flex items-center gap-2 mb-1.5">
+                  <span
+                    class="inline-flex items-center text-[10px] uppercase font-medium"
+                    :style="{
+                      background: 'var(--primary-soft)',
+                      color: 'var(--primary-deep)',
+                      border: '1px solid rgba(238,106,42,0.2)',
+                      padding: '3px 7px',
+                      borderRadius: '6px',
+                      letterSpacing: '1px',
+                    }"
+                  >{{ roleLabel(p.role) }}</span>
+                  <span class="text-[11.5px] font-semibold">{{ p.skill_name }}</span>
+                  <span class="text-[10px] font-mono tabular-nums" :style="{ color: 'var(--ink-3)' }">
+                    {{ p.output_chars }} 字
+                  </span>
+                  <span class="flex-1" />
+                  <button
+                    type="button"
+                    data-rerun-pass
+                    :title="rerunningPass === p.index ? '正在重跑…' : '重跑此 pass（级联其后）'"
+                    :disabled="rerunningPass !== null"
+                    class="inline-flex items-center gap-1 text-[11px] transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                    :style="{
+                      height: '26px',
+                      padding: '0 9px',
+                      borderRadius: '7px',
+                      background: 'var(--card-white)',
+                      color: 'var(--ink-2)',
+                      border: '1px solid var(--line)',
+                    }"
+                    @click="rerunPass(p.index)"
+                  >
+                    <Spinner v-if="rerunningPass === p.index" :size="11" />
+                    <Icon v-else name="refresh" :size="11" />
+                    <span>重跑此 pass</span>
+                  </button>
+                </div>
+                <div
+                  class="font-serif-cn"
+                  :style="{ fontSize: '12.5px', lineHeight: 1.75, color: 'var(--ink-2)', whiteSpace: 'pre-wrap' }"
+                >{{ p.output }}</div>
+              </div>
             </div>
             <div class="flex min-h-0 flex-1 flex-col" :style="{ padding: '0 24px 20px' }">
               <div
