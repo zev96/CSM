@@ -128,3 +128,26 @@ def run_chain(
         prev = out
     _cache_put(state)
     return state
+
+
+def rerun(job_id: str, pass_index: int, *, client: Any | None = None) -> dict[str, Any]:
+    """从 pass_index 起重跑（级联 pass_index..N），更新缓存，返回 {passes, final_text}。"""
+    state = get_state(job_id)
+    if state is None:
+        raise KeyError(f"unknown job_id: {job_id} (chain cache miss)")
+    if not (0 <= pass_index < len(state.passes)):
+        raise IndexError(f"pass_index {pass_index} out of range (0..{len(state.passes)-1})")
+    if client is None:
+        client = llm_factory.build_client(provider=state.provider, model=state.model)
+    # 末段之前的输出即 pass_index 的 prev（step0 的 prev 不参与，_prompt_for 自取 draft）
+    prev = state.passes[pass_index - 1].output if pass_index >= 1 else ""
+    for idx in range(pass_index, len(state.passes)):
+        system, user, input_text = _prompt_for(state, idx, prev)
+        out = client.complete(system=system, user=user)
+        old = state.passes[idx]
+        state.passes[idx] = ChainPass(
+            index=idx, skill_id=old.skill_id, role=old.role,
+            skill_name=old.skill_name, input=input_text, output=out)
+        prev = out
+    _cache_put(state)
+    return {"passes": [p.to_dict() for p in state.passes], "final_text": state.final_text}
