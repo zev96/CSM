@@ -11,14 +11,12 @@ const TAXONOMY = {
   ],
   dimensions: [
     { key: "动力系统", label: "吸力·电机" },
-    { key: "气旋技术", label: "气旋分离" },
     { key: "过滤系统", label: "过滤·HEPA" },
     { key: "防缠绕技术", label: "防缠绕" },
     { key: "绿光显尘", label: "绿光显尘" },
     { key: "机身重量", label: "机身重量" },
     { key: "尘杯容量", label: "尘杯容量" },
     { key: "续航时间", label: "续航" },
-    { key: "万向吸头", label: "万向吸头" },
     { key: "刷头配置", label: "刷头配件" },
     { key: "噪音大小", label: "噪音·静音" },
     { key: "维护耗材", label: "维护耗材" },
@@ -59,14 +57,14 @@ describe("AnglePicker", () => {
     getMock.mockResolvedValue({ data: TAXONOMY });
   });
 
-  it("拉词表并渲染 4 预设 / 12 维度 chips / 3 语调 / 16 人群", async () => {
+  it("拉词表并渲染 4 预设 / 10 维度 chips / 3 语调 / 16 人群", async () => {
     const w = mountPicker();
     await flushPromises();
     expect(getMock).toHaveBeenCalledWith("/api/angle/taxonomy");
     // 预设按钮
     for (const p of TAXONOMY.presets) expect(w.text()).toContain(p.name);
     // 卖点维度 chips（用 data-attr 数维度数量）
-    expect(w.findAll("[data-sellpoint]")).toHaveLength(12);
+    expect(w.findAll("[data-sellpoint]")).toHaveLength(10);
     // 人群选项 = 16 人群 + 空「不限」= 17（真实选项在 teleport 的 FormSelect
     // 弹层里，组件测试不展开它；直接断言组件的 audienceOptions computed）。
     expect((w.vm as any).audienceOptions).toHaveLength(17);
