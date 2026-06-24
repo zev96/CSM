@@ -34,7 +34,7 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 import TiptapEditor from "@/components/article/TiptapEditor.vue";
 import FactCheckPanel from "@/components/article/FactCheckPanel.vue";
 
-import { useArticle } from "@/stores/article";
+import { useArticle, type Angle } from "@/stores/article";
 import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
@@ -53,6 +53,36 @@ const keyword = ref("");
 const templateId = ref<string>("");
 const skillId = ref<string>("");
 const seed = ref(0);
+
+// Phase 2a 角度 + 标题 —— 从 home 起飞条扁平进 query，这里重建成 Angle
+// 对象提交。空 facet → null / []；全空 → angle=null（= 今天行为）。
+const angle = ref<Angle | null>(null);
+const title = ref<string>("");
+
+/** 从 route.query 重建 Angle —— sellpoints 按「,」拆（空串→[]），
+ * audience/tone 空 → null；三者全空返回 null（不传角度）。 */
+function rebuildAngleFromQuery(): Angle | null {
+  const audience = ((route.query.audience as string) ?? "").trim() || null;
+  const tone = ((route.query.tone as string) ?? "").trim() || null;
+  const spRaw = ((route.query.sellpoints as string) ?? "").trim();
+  const sellpoints = spRaw ? spRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  if (!audience && !tone && sellpoints.length === 0) return null;
+  return { audience, sellpoints, tone };
+}
+
+// header 角度 chip 文案 —— 「铲屎官 · 防缠绕 · 口语」。卖点显示词表 label
+// 拿不到就退回 key；只要任一 facet 有值就显示，全空 → null（不渲染 chip）。
+const angleChipText = computed<string | null>(() => {
+  const a = angle.value;
+  if (!a) return null;
+  const dims = article.angleTaxonomy?.dimensions ?? [];
+  const labelOf = (key: string) => dims.find((d) => d.key === key)?.label ?? key;
+  const parts: string[] = [];
+  if (a.audience) parts.push(a.audience);
+  for (const sp of a.sellpoints) parts.push(labelOf(sp));
+  if (a.tone) parts.push(a.tone);
+  return parts.length ? parts.join(" · ") : null;
+});
 
 interface TemplateRow { id: string; name: string }
 interface SkillRow { id: string; name: string; desc?: string }
@@ -277,12 +307,15 @@ async function takeoff() {
   }
   // 起飞 = 只做"随机组装出初稿"。AI 整篇润色由用户在初稿 tab 手动点
   // "整篇润色"触发，避免一把梭直接出成稿、绕过用户检查环节。
+  // angle/title 从 query 重建（home 起飞条带过来）；空 → 不传 = 今天行为。
   await article.submit({
     keyword: keyword.value.trim(),
     template_id: templateId.value,
     skill_id: skillId.value || undefined,
     seed: seed.value,
     draft_only: true,
+    ...(angle.value ? { angle: angle.value } : {}),
+    ...(title.value.trim() ? { title: title.value.trim() } : {}),
   });
   // 顺便用 AI 拉一组标题候选，让用户在初稿 tab 里就能挑标题。这是
   // 整个流程里第一次 LLM 调用。失败不影响初稿展示，仅 toast 提示。
@@ -804,6 +837,12 @@ onMounted(async () => {
   const qs = (route.query.skill_id as string) ?? "";
   if (qs) skillId.value = qs;
 
+  // 角度 + 标题从 query 重建（home 起飞条扁平带过来）。拉一次词表让
+  // header chip 能把卖点 key 显示成 label；失败静默（chip 退回 key）。
+  angle.value = rebuildAngleFromQuery();
+  title.value = ((route.query.title as string) ?? "").trim();
+  if (angle.value) article.fetchAngleTaxonomy();
+
   if (!templateId.value && templates.value[0]) {
     templateId.value = templates.value[0].id;
   }
@@ -932,6 +971,25 @@ const tabSectionLabel = computed(() => {
         <span :style="{ width: '1px', height: '18px', background: 'var(--line-2)' }" />
         <Pill>{{ templateName || "未选择模板" }}</Pill>
         <Pill tone="primary">{{ skillName || "默认 Skill" }}</Pill>
+        <!--
+          角度 chip —— 起飞时带了角度（人群/卖点/语调任一）才显示，
+          文案如「铲屎官 · 防缠绕 · 口语」。提示用户本篇是带角度生成的。
+        -->
+        <span
+          v-if="angleChipText"
+          data-angle-chip
+          class="inline-flex items-center gap-1 text-[11px] font-medium"
+          :style="{
+            background: 'var(--primary-soft)',
+            color: 'var(--primary-deep)',
+            padding: '3px 9px',
+            borderRadius: 'var(--radius-pill)',
+          }"
+          :title="`写作角度：${angleChipText}`"
+        >
+          <Icon name="sliders" :size="11" />
+          {{ angleChipText }}
+        </span>
         <!--
           字数统计 (wordCount) 在右侧检查面板里有完整 KPI 卡，header
           上的「0 字」短文本和它重复，初次进入又总是 0 看着尴尬，去掉。
