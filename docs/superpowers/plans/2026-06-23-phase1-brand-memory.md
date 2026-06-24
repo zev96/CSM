@@ -20,7 +20,8 @@
 | 2 增强脚本 + registry | 文件名→品牌/型号 回填脚本（副本+diff）、别名表、修 `build_brand_registry` | 复用 Plan1 identity | **✅ [全量细化](2026-06-23-phase1-plan2-registry-backfill.md)** |
 | 3 注入 + 事实核对门禁 | `prompts.brand_facts`、`generate_service` 注入步+token预算、`csm_core/factcheck/`、导出门禁+放行、feature flags | Plan1 + Plan2 | **✅ [全量细化](2026-06-23-phase1-plan3-inject-factcheck.md)** |
 | 4 skill 解耦 | 拆 `家电科普博主.md`→人设/去AI味/合并、`role` 字段、模板 default_skill_id 迁移 | — | **✅ [全量细化](2026-06-24-phase1-plan4-skill-decouple.md)** |
-| 5 UI | 「素材库」入口 + 「品牌型号」tab（只读+缺口+注入预览）+ `brand-memory` API | Plan1 | 待细化 |
+| 5a UI·素材库 | 「素材库」入口 + 「品牌型号」tab（只读+缺口+注入预览）+ `brand-memory` API | Plan1+3 | **✅ [全量细化](2026-06-24-phase1-plan5a-material-library.md)** |
+| 5b UI·收官 | `SkillEditView` role 下拉 + ArticleView factcheck 审查面板 | Plan3+4 + 5a | 待细化（5a 合并后） |
 
 > 每个 plan 跑通即得可测软件。Plan 1 是地基，先做。Plans 2–5 在 Plan 1 合并后逐个细化为同样粒度的任务。
 
