@@ -16,7 +16,7 @@
  * emit update:modelValue / update:title。空 facet 归一为 null / []，等价于
  * 「不传角度」= 今天行为。
  */
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted } from "vue";
 
 import FormField from "@/components/forms/FormField.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
@@ -27,8 +27,9 @@ const props = withDefaults(
   defineProps<{
     modelValue: Angle | null;
     title: string;
+    showGenTitles?: boolean;
   }>(),
-  { title: "" },
+  { title: "", showGenTitles: false },
 );
 
 const emit = defineEmits<{
@@ -118,9 +119,6 @@ function onTitleInput(v: string | number | null) {
 // title prop 仅做单向显示（受控）；FormSelect/Input 的 v-model 取 current。
 const audienceModel = computed(() => current.value.audience ?? EMPTY);
 const toneModel = computed(() => current.value.tone ?? EMPTY);
-
-// 词表加载后若父级已带 modelValue，无需额外处理 —— computed 已响应式。
-watch(taxonomy, () => {});
 </script>
 
 <template>
@@ -155,18 +153,6 @@ watch(taxonomy, () => {});
         width="100%"
         @update:model-value="setAudience"
       />
-      <!--
-        FormSelect 的 option 行在 Teleport 里，组件测试 stub teleport 后能
-        遍历到；这里额外用隐藏镜像保证「16+1」option 计数稳定可断言，且
-        不影响视觉（hidden）。
-      -->
-      <div class="sr-only" aria-hidden="true">
-        <span
-          v-for="o in audienceOptions"
-          :key="o.value"
-          data-audience-option
-        >{{ o.label }}</span>
-      </div>
     </FormField>
 
     <!-- 卖点维度多选 -->
@@ -207,10 +193,10 @@ watch(taxonomy, () => {});
         <FormInput
           :model-value="title"
           placeholder="例如：无线吸尘器哪款好用？实测分享"
-          debounce="live"
           @update:model-value="onTitleInput"
         />
         <button
+          v-if="showGenTitles"
           type="button"
           class="angle-gen-btn flex-shrink-0"
           @click="emit('gen-titles')"
@@ -264,18 +250,5 @@ watch(taxonomy, () => {});
 }
 .angle-gen-btn:hover {
   filter: brightness(0.95);
-}
-
-/* 视觉隐藏但保留在 DOM（供测试计数 + 无障碍）。 */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 </style>

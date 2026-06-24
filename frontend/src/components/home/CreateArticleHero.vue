@@ -69,8 +69,8 @@ const angleSummary = computed(() => {
 
 function onPickTemplate(id: string) {
   // AnglePicker 选了带 template_id 的预设 —— 同步更新模板选择。
-  if (templates.value.some((t) => t.id === id)) tplId.value = id;
-  else tplId.value = id; // 即便当前列表没有也接受（ArticleView 会再校验）
+  // 即便当前列表没有该 id 也接受（ArticleView 会再校验）。
+  tplId.value = id;
 }
 
 const greeting = computed(() => {

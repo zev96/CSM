@@ -67,9 +67,9 @@ describe("AnglePicker", () => {
     for (const p of TAXONOMY.presets) expect(w.text()).toContain(p.name);
     // 卖点维度 chips（用 data-attr 数维度数量）
     expect(w.findAll("[data-sellpoint]")).toHaveLength(12);
-    // 人群 select 含 16 + 空「不限」option = 17
-    const audienceOpts = w.findAll("[data-audience-option]");
-    expect(audienceOpts.length).toBe(17);
+    // 人群选项 = 16 人群 + 空「不限」= 17（真实选项在 teleport 的 FormSelect
+    // 弹层里，组件测试不展开它；直接断言组件的 audienceOptions computed）。
+    expect((w.vm as any).audienceOptions).toHaveLength(17);
   });
 
   it("点预设填充 facet 并 emit update:modelValue", async () => {
@@ -139,8 +139,9 @@ describe("AnglePicker", () => {
     expect(w.emitted("update:title")!.some((e) => e[0] === "我的标题")).toBe(true);
   });
 
-  it("「生成候选」按钮 emit gen-titles", async () => {
-    const w = mountPicker();
+  it("「生成候选」按钮（showGenTitles）emit gen-titles", async () => {
+    // 按钮默认隐藏（Hero 上下文未接线）；显式开启才渲染 + 可点。
+    const w = mountPicker({ showGenTitles: true });
     await flushPromises();
     const btn = w.findAll("button").find((b) => b.text().includes("生成候选"));
     expect(btn).toBeTruthy();
