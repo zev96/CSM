@@ -8,6 +8,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from csm_core.angle import Angle
+
 from ..auth import RequireToken
 from ..event_bus import bus
 from ..services import factcheck_service, generate_service
@@ -25,6 +27,9 @@ class GenerateBody(BaseModel):
     provider: str | None = None
     model: str | None = None
     user_config: dict[str, int] | None = None
+    # Phase 2a：标题领衔 + 角度选材（都为空 = 今天行为）。
+    title: str | None = None
+    angle: Angle | None = None
 
 
 class JobAccepted(BaseModel):
@@ -40,7 +45,12 @@ def start_generate(body: GenerateBody) -> JobAccepted:
     to receive progress events: ``stage`` (one per pipeline checkpoint),
     ``done`` (job complete with result payload), ``error`` (job failed).
     """
-    req = generate_service.GenerateRequest(**body.model_dump())
+    # angle 是 pydantic 对象——model_dump() 会把它压成 dict，而 GenerateRequest
+    # 期望 Angle。显式排除后单独传原对象，其余字段照常透传。
+    req = generate_service.GenerateRequest(
+        **body.model_dump(exclude={"angle"}),
+        angle=body.angle,
+    )
     job_id = generate_service.submit(req)
     return JobAccepted(job_id=job_id, stream_url=f"/api/events/{job_id}")
 
