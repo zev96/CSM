@@ -53,6 +53,12 @@ const router = createRouter({
       meta: { label: "模板库" },
     },
     {
+      path: "/materials",
+      name: "materials",
+      component: () => import("@/views/MaterialsView.vue"),
+      meta: { label: "素材库" },
+    },
+    {
       path: "/xhs",
       name: "xhs",
       component: () => import("@/views/XhsEditorView.vue"),

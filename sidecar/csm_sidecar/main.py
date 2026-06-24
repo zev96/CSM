@@ -19,6 +19,7 @@ from .routes import aggregation as aggregation_routes
 from .routes import article as article_routes
 from .routes import assembler as assembler_routes
 from .routes import batch as batch_routes
+from .routes import brand_memory as brand_memory_routes
 from .routes import config as config_routes
 from .routes import dedup as dedup_routes
 from .routes import generate as generate_routes
@@ -76,6 +77,7 @@ app.include_router(system_routes.router)
 app.include_router(config_routes.router)
 app.include_router(vault_routes.router)
 app.include_router(skills_routes.router)
+app.include_router(brand_memory_routes.router)
 app.include_router(templates_routes.router)
 app.include_router(generate_routes.router)
 app.include_router(article_routes.router)

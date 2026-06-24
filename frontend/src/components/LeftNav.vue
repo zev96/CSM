@@ -69,6 +69,7 @@ const NAV_TOP = [
   { key: "data-center", icon: "fileText", label: "数据中心" },
   { key: "mining", icon: "search", label: "引流" },
   { key: "templates", icon: "library", label: "模板库" },
+  { key: "materials", icon: "stack", label: "素材库" },
   { key: "xhs", icon: "notebook", label: "小红书" },
 ] as const;
 
