@@ -26,6 +26,7 @@ import Icon from "@/components/ui/Icon.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormField from "@/components/forms/FormField.vue";
 import FormInput from "@/components/forms/FormInput.vue";
+import FormSelect from "@/components/forms/FormSelect.vue";
 
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
@@ -48,6 +49,7 @@ const mode = computed<"create" | "edit">(() => (skillId.value ? "edit" : "create
 const name = ref("");
 const desc = ref("");
 const tone = ref("");
+const role = ref("persona");
 const body = ref("");
 
 const loading = ref(false);
@@ -60,6 +62,7 @@ async function loadDetail(sid: string) {
     name.value = r.data.name ?? sid;
     desc.value = r.data.desc ?? "";
     tone.value = r.data.tone ?? "";
+    role.value = r.data.role ?? "persona";
     body.value = r.data.body ?? "";
   } catch (e: any) {
     toast.error(`Skill 加载失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
@@ -110,6 +113,7 @@ async function saveCreate() {
       name: trimmed,
       desc: desc.value.trim(),
       tone: tone.value.trim(),
+      role: role.value,
       body: body.value,
     });
     toast.success(`已创建 Skill：${r.data.name ?? r.data.id}`);
@@ -134,6 +138,7 @@ async function saveEdit() {
       name: name.value.trim(),
       desc: desc.value.trim(),
       tone: tone.value.trim(),
+      role: role.value,
       body: body.value,
     });
     toast.success(`已保存：${r.data.name ?? sid}`);
@@ -180,11 +185,11 @@ function save() {
       </div>
 
       <!--
-        3 列字段：名称 / 一句话描述 / 语气标签。lg 上等宽分布，
+        4 列字段：名称 / 一句话描述 / 语气标签 / 角色。lg 上等宽分布，
         跟 TemplateBuilder header 的 4 列网格逻辑一致（grid-cols-1 在窄屏
-        堆叠，lg:grid-cols-3 在宽屏并排）。
+        堆叠，lg:grid-cols-4 在宽屏并排）。
       -->
-      <div class="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      <div class="grid grid-cols-1 gap-3 lg:grid-cols-4">
         <FormField label="名称">
           <FormInput
             v-model="name"
@@ -205,6 +210,16 @@ function save() {
             v-model="tone"
             placeholder="如 克制 / 真实 / 温柔"
             debounce="live"
+          />
+        </FormField>
+        <FormField label="角色">
+          <FormSelect
+            v-model="role"
+            :options="[
+              { label: '人设（persona）', value: 'persona' },
+              { label: '去AI味（humanize）', value: 'humanize' },
+            ]"
+            width="100%"
           />
         </FormField>
       </div>
