@@ -108,3 +108,28 @@ def test_skill_role_parsed_from_frontmatter(tmp_path):
     assert sk is not None
     assert sk.role == "humanize"
     assert sk.to_dict()["role"] == "humanize"
+
+
+def test_create_skill_persists_role(tmp_path):
+    skills_service.create_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", role="humanize", body="正文")
+    assert skills_service.get_skill(tmp_path, "hz").role == "humanize"
+
+
+def test_update_skill_preserves_role_when_omitted(tmp_path):
+    skills_service.create_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", role="humanize", body="正文")
+    # 模拟现有前端 PATCH：不带 role
+    skills_service.update_skill(
+        tmp_path, "hz", name="去AI味2", desc="d", tone="", body="新正文")
+    sk = skills_service.get_skill(tmp_path, "hz")
+    assert sk.role == "humanize"      # 关键：保留，不回退 persona
+    assert sk.name == "去AI味2" and sk.body.strip() == "新正文"
+
+
+def test_update_skill_changes_role_when_given(tmp_path):
+    skills_service.create_skill(
+        tmp_path, "p", name="人设", desc="", tone="", role="humanize", body="x")
+    skills_service.update_skill(
+        tmp_path, "p", name="人设", desc="", tone="", body="x", role="persona")
+    assert skills_service.get_skill(tmp_path, "p").role == "persona"

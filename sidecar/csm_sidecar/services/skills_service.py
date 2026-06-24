@@ -104,6 +104,7 @@ def _write_skill(
     name: str,
     desc: str,
     tone: str,
+    role: str,
     body: str,
 ) -> Path:
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +115,7 @@ def _write_skill(
             "name": name or skill_id,
             "desc": desc or "",
             "tone": tone or "",
+            "role": role or "persona",
         },
     )
     md.write_bytes(frontmatter.dumps(post).encode("utf-8"))
@@ -128,13 +130,14 @@ def create_skill(
     desc: str,
     tone: str,
     body: str,
+    role: str = "persona",
 ) -> Skill:
     if not skill_dir:
         raise ValueError("skill_dir is not configured")
     md = skill_dir / f"{skill_id}.md"
     if md.exists():
         raise FileExistsError(f"skill id already exists: {skill_id}")
-    _write_skill(skill_dir, skill_id, name, desc, tone, body)
+    _write_skill(skill_dir, skill_id, name, desc, tone, role, body)
     skill = get_skill(skill_dir, skill_id)
     assert skill is not None
     return skill
@@ -148,13 +151,17 @@ def update_skill(
     desc: str,
     tone: str,
     body: str,
+    role: str | None = None,
 ) -> Skill:
     if not skill_dir:
         raise ValueError("skill_dir is not configured")
     md = skill_dir / f"{skill_id}.md"
     if not md.exists():
         raise FileNotFoundError(f"skill not found: {skill_id}")
-    _write_skill(skill_dir, skill_id, name, desc, tone, body)
+    if role is None:                        # 前端未传 role → 保留现值，不回退
+        current = get_skill(skill_dir, skill_id)
+        role = current.role if current else "persona"
+    _write_skill(skill_dir, skill_id, name, desc, tone, role, body)
     skill = get_skill(skill_dir, skill_id)
     assert skill is not None
     return skill
