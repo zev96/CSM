@@ -21,7 +21,7 @@ def _vault(root: Path) -> None:
        "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: x\n---\n"
        "## 性能参数\n\n| 参数 | 数值 |\n|--|--|\n| 吸力(AW) | 220 |\n"
        "| 电机转速 | 12万转 |\n\n"
-       "## 基础信息\n\n| 参数 | 数值 |\n|--|--|\n| 认证检测 | CE、FCC |\n")
+       "## 基础信息\n\n| 参数 | 数值 |\n|--|--|\n| 认证检测 | CE、FCC、3C |\n")
     _w(root / VAULT / "产品参数/戴森V12-产品参数.md",
        "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: x\n---\n"
        "## 性能参数\n\n| 参数 | 数值 |\n|--|--|\n| 吸力(AW) | 240 |\n")
@@ -85,3 +85,13 @@ def test_build_whitelist_unions_specs_and_sources(tmp_path):
     assert 120000.0 in wl.numbers       # 12万转 经 normalize 展开（来自 facts 文本）
     assert 1700.0 in wl.numbers         # 来自 draft 源文本
     assert "CE" in wl.certs and "FCC" in wl.certs
+
+
+def test_whitelist_expands_wan_from_specs_even_without_source_text(tmp_path):
+    # 回归：factcheck 开 / inject 关 时 brand_facts 不进 source_texts，specs 的
+    # 「12万转」仍须 万-展开进白名单，否则成稿「12万转」(→120000) 会被误拦（验收 #4）。
+    scopes = _scopes(tmp_path)
+    wl = build_whitelist(scopes, source_texts=["草稿没提电机转速。"])  # 源文本不含 12万转
+    assert 120000.0 in wl.numbers
+    # 认证字段（CE、FCC、3C）numbers 为空 → 不被 万-展开路径波及，「3C」的 3 不入白名单
+    assert 3.0 not in wl.numbers

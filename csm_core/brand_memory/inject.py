@@ -26,7 +26,7 @@ from .whitelist import FactWhitelist, normalize_numbers
 @dataclass
 class ModelScope:
     brand: str
-    model: str
+    model: str           # 全名型号（registry 形式 CEWEYDS18）；注意 memory.model 是品牌剥离形式（DS18）
     role: str            # 主推 | 竞品
     memory: BrandModelMemory
 
@@ -130,6 +130,12 @@ def build_whitelist(
     for sc in scopes:
         for sv in sc.memory.specs.values():
             numbers.update(sv.numbers)
+            # 真·数值规格额外按核对端口径 万-展开其原文（12万转→120000），这样
+            # factcheck 开 / inject 关 时（brand_facts 不进 source_texts）也不漏。
+            # 认证/占位单元格 numbers 为空 → 跳过，避免把「3C」的 3、占位「0」
+            # 误入白名单（spec §2.3）。
+            if sv.numbers:
+                numbers |= normalize_numbers(sv.raw)
         certs.update(sc.memory.certs)
     for t in source_texts:
         numbers |= normalize_numbers(t)
