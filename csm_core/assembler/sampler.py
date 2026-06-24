@@ -78,8 +78,17 @@ def _sample_notes_source(
     pick_notes: PickNotes, pick_variants_per_note: int,
     index: VaultIndex, rng: random.Random,
     user_config: dict[str, int],
+    angle: "Angle | None" = None,
 ) -> list[PickedVariant]:
-    pool = index.query(module=source.module, filters=source.filter)
+    eff = effective_filters(source, angle)
+    pool = index.query(module=source.module, filters=eff)
+    if not pool and eff != (source.filter or {}):
+        # 角度过滤把池清空了 → 回退不带角度过滤（别让角度把文章搞空）
+        import logging
+        logging.getLogger(__name__).info(
+            "block '%s': 角度过滤后空池，回退不过滤", block_id,
+        )
+        pool = index.query(module=source.module, filters=source.filter)
     if not pool:
         raise EmptyPoolError(f"block '{block_id}': empty pool in module '{source.module}'")
     requested = _resolve_pick_count(pick_notes, block_id, user_config, rng)
@@ -131,7 +140,9 @@ def sample_block(
         )
 
     if isinstance(block, ParagraphBlock):
-        picks = _sample_source_for_block(block, index, registry, rng, user_config, aligned_models)
+        picks = _sample_source_for_block(
+            block, index, registry, rng, user_config, aligned_models, angle,
+        )
         return BlockResult(block_id=block.id, kind="paragraph", picks=picks)
 
     if isinstance(block, NumberedListBlock):
@@ -141,7 +152,7 @@ def sample_block(
             block.id, block.source, constraints=block.constraints,
             pick_notes=block.pick_notes,
             pick_variants_per_note=block.pick_variants_per_note,
-            index=index, rng=rng, user_config=user_config,
+            index=index, rng=rng, user_config=user_config, angle=angle,
         )
         return BlockResult(
             block_id=block.id, kind="numbered_list", picks=picks,
@@ -158,7 +169,7 @@ def sample_block(
             block.id, block.source, constraints=block.constraints,
             pick_notes=block.pick_notes,
             pick_variants_per_note=block.pick_variants_per_note,
-            index=index, rng=rng, user_config=user_config,
+            index=index, rng=rng, user_config=user_config, angle=angle,
         )
         enriched: list[PickedVariant] = []
         for p in picks:
@@ -178,12 +189,14 @@ def _sample_source_for_block(
     block: ParagraphBlock, index: VaultIndex, registry: BrandRegistry,
     rng: random.Random, user_config: dict[str, int],
     aligned_models: list[str] | None,
+    angle: "Angle | None" = None,
 ) -> list[PickedVariant]:
     src = block.source
     if isinstance(src, NotesQuerySource):
         return _sample_notes_source(
             block.id, src, block.constraints, block.pick_notes,
             block.pick_variants_per_note, index, rng, user_config,
+            angle=angle,
         )
     if isinstance(src, BrandFixedSource):
         return [PickedVariant(
