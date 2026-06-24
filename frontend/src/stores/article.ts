@@ -22,6 +22,14 @@ import { subscribe } from "@/api/client";
 import { useSidecar } from "./sidecar";
 import { useNotifications } from "@/composables/useNotifications";
 
+/** 每次请求的选材意图（人群/卖点/语调），镜像后端 csm_core.angle.model.Angle。
+ * 全可空：audience/tone 为 null、sellpoints 为 [] ⇔「不传角度」= 今天行为。 */
+export interface Angle {
+  audience: string | null;
+  sellpoints: string[];
+  tone: string | null;
+}
+
 export interface GenerateRequest {
   keyword: string;
   template_id: string;
@@ -31,6 +39,24 @@ export interface GenerateRequest {
   core_keyword?: string | null;
   provider?: string | null;
   model?: string | null;
+  // Phase 2a 角度组装 —— 标题领衔 + 角度（人群/卖点/语调）。不传 = 今天行为。
+  title?: string | null;
+  angle?: Angle | null;
+}
+
+/** 角度受控词表（GET /api/angle/taxonomy 的响应，picker 数据源）。
+ * 后端单一来源，前端只读缓存。 */
+export interface AngleTaxonomy {
+  tones: Array<{ key: string; hint: string }>;
+  dimensions: Array<{ key: string; label: string }>;
+  audiences: string[];
+  presets: Array<{
+    name: string;
+    template_id: string | null;
+    audience: string | null;
+    sellpoints: string[];
+    tone: string | null;
+  }>;
 }
 
 /** 事实核对违规项（镜像后端 csm_core.factcheck.model.Violation）。
@@ -91,6 +117,8 @@ interface ArticleState {
   // `factcheck.{blocked, violations}`，存这里给审查面板（FactCheckPanel）。
   // 未拦 / 无门禁 → null。放行重核（resolveFactcheck）成功后清回 null。
   factcheck: { blocked: boolean; violations: FactcheckViolation[] } | null;
+  // 角度受控词表 —— GET /api/angle/taxonomy 拉一次后缓存（picker 复用）。
+  angleTaxonomy: AngleTaxonomy | null;
 }
 
 export const useArticle = defineStore("article", {
@@ -116,6 +144,7 @@ export const useArticle = defineStore("article", {
     dedupLoading: false,
     keywordDensity: null,
     factcheck: null,
+    angleTaxonomy: null,
   }),
   getters: {
     progress(state): number {
@@ -223,6 +252,18 @@ export const useArticle = defineStore("article", {
           this._teardown();
         },
       });
+    },
+    /** 拉角度受控词表（picker 数据源），缓存一次。失败静默 —— picker
+     * 会显示空选项，用户仍可手填标题。重复调用直接返回缓存。 */
+    async fetchAngleTaxonomy(): Promise<void> {
+      if (this.angleTaxonomy) return;
+      const sidecar = useSidecar();
+      try {
+        const resp = await sidecar.client.get("/api/angle/taxonomy");
+        this.angleTaxonomy = resp.data as AngleTaxonomy;
+      } catch {
+        /* 静默 —— picker 走空词表兜底 */
+      }
     },
     /** Re-run the last request — useful for "重新随机" buttons. */
     async rerun(): Promise<void> {
