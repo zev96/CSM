@@ -15,3 +15,16 @@ def effective_sellpoints(angle: Angle | None) -> list[str]:
         dim = AUDIENCES[angle.audience]["主推维度"]
         return [dim] if dim else []
     return []
+
+
+def effective_filters(source: Any, angle: Angle | None) -> dict:
+    """该块的有效查询 filter = source.filter ∪ 角度人群 filter。
+    人群 filter 只在 source.module 含「用户人群」标记的块生效。
+    采样、reroll、持久化共用此函数，避免逻辑漂移。"""
+    base = dict(getattr(source, "filter", None) or {})
+    if angle is None or not angle.audience:
+        return base
+    module = getattr(source, "module", "") or ""
+    if AUDIENCE_MODULE_MARKER in module:
+        base["人群分类"] = angle.audience
+    return base
