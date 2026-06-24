@@ -28,6 +28,8 @@ from ..template.schema import (
     NotesQuerySource, BrandFixedSource, BrandPoolSource,
     TestResultsAlignedSource, PickCountSpec, PickNotes,
 )
+from csm_core.angle.model import Angle
+from csm_core.angle.filters import effective_filters
 from .plan import BlockResult, PickedVariant
 
 
@@ -105,6 +107,7 @@ def sample_block(
     block, index: VaultIndex, registry: BrandRegistry,
     *, seed: int, user_config: dict[str, int],
     aligned_models: list[str] | None = None,
+    angle: "Angle | None" = None,
 ) -> BlockResult:
     rng = random.Random(f"{seed}-{block.id}")
 

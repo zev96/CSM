@@ -12,6 +12,7 @@ from ..vault.brand_registry import BrandRegistry
 from ..template.schema import (
     Template, ParagraphBlock, TestResultsAlignedSource, TestFrameworkBlock,
 )
+from csm_core.angle.model import Angle
 from .plan import AssemblyPlan, BlockResult
 from .sampler import sample_block
 
@@ -165,6 +166,7 @@ def assemble_plan(
     index: VaultIndex, registry: BrandRegistry,
     seed: int, user_config: dict[str, int],
     core_keyword: str | None = None,
+    angle: Angle | None = None,
 ) -> AssemblyPlan:
     """Assemble a draft plan.
 
@@ -187,7 +189,7 @@ def assemble_plan(
             aligned = _resolve_aligned_models(p.id, p.source, results_by_id)
         r = sample_block(
             p, index, registry, seed=seed, user_config=user_config,
-            aligned_models=aligned,
+            aligned_models=aligned, angle=angle,
         )
         missing = [pk for pk in r.picks if pk.meta.get("missing")]
         if missing:
@@ -220,12 +222,15 @@ def assemble_plan(
             results_by_id[b.id] = r
             top.append(r)
         else:
-            r = sample_block(b, index, registry, seed=seed, user_config=user_config)
+            r = sample_block(
+                b, index, registry, seed=seed, user_config=user_config,
+                angle=angle,
+            )
             results_by_id[b.id] = r
             top.append(r)
 
     return AssemblyPlan(
         keyword=keyword, core_keyword=core_keyword,
         template_id=template.id, seed=seed,
-        results=top, warnings=warnings,
+        results=top, warnings=warnings, angle=angle,
     )
