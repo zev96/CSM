@@ -32,6 +32,7 @@ import ProgressBar from "@/components/ui/ProgressBar.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 import TiptapEditor from "@/components/article/TiptapEditor.vue";
+import FactCheckPanel from "@/components/article/FactCheckPanel.vue";
 
 import { useArticle } from "@/stores/article";
 import { useConfig } from "@/stores/config";
@@ -508,6 +509,24 @@ async function refreshDensity() {
 type ExportFormat = "markdown" | "docx" | "txt";
 const showExportModal = ref(false);
 const exportFormat = ref<ExportFormat>("markdown");
+
+// 事实核对审查面板 —— 生成被 Plan 3 硬门禁拦下（factcheck.blocked）时自动弹，
+// 列违规项给用户改文案/勾放行后重核导出。未拦时 factcheck=null，导出走原弹窗。
+const showFactcheck = ref(false);
+watch(
+  () => article.factcheck?.blocked,
+  (blocked) => {
+    if (blocked) showFactcheck.value = true;
+  },
+);
+// 导出按钮：被门禁拦下时改走审查面板（重核通过才导出），否则开常规导出弹窗。
+function onExportClick() {
+  if (article.factcheck?.blocked) {
+    showFactcheck.value = true;
+    return;
+  }
+  showExportModal.value = true;
+}
 
 const EXPORT_OPTIONS: {
   value: ExportFormat;
@@ -1995,10 +2014,10 @@ const tabSectionLabel = computed(() => {
                   color: 'var(--card)',
                   border: '1px solid var(--dark)',
                 }"
-                @click="showExportModal = true"
+                @click="onExportClick"
               >
                 <Icon name="copy" :size="12" />
-                <span>导出文章</span>
+                <span>{{ article.factcheck?.blocked ? "核对并导出" : "导出文章" }}</span>
               </button>
             </div>
           </div>
@@ -2011,6 +2030,12 @@ const tabSectionLabel = computed(() => {
       现在两个视图都直接 swap 在右侧 质检报告 Card 内部（panelMode 控制），
       不再额外占整页右侧空间。导出弹窗保留。
     -->
+
+    <!--
+      事实核对审查面板 —— 生成被 Plan 3 门禁拦下时弹（watcher 自动 / 导出按钮
+      被拦时也走它）。Dialog 内部自带 Teleport，挂这层即可。
+    -->
+    <FactCheckPanel v-model:open="showFactcheck" />
 
     <!--
       导出弹窗 —— 严格按 V1 设计稿（精简版）：标签 + 大标题 + 关闭 X，
