@@ -185,7 +185,7 @@ const SECTIONS: SectionDef[] = [
   { k: "general", l: "通用", icon: "settings", sub: "外观 · 行为 · 通知 · 导出", group: "basics" },
   { k: "paths", l: "存储路径", icon: "folder", sub: "Vault · 导出 · 模板 · Skills 目录", group: "basics" },
   { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL", group: "workflow" },
-  { k: "brand-memory", l: "品牌记忆", icon: "vault", sub: "型号注入 · 事实核对 · 自有品牌", group: "workflow" },
+  { k: "brand-memory", l: "品牌记忆", icon: "stack", sub: "型号注入 · 事实核对 · 自有品牌", group: "workflow" },
   { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建", group: "workflow" },
   { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie", group: "workflow" },
   { k: "baidu-scrape", l: "百度抓取", icon: "radar", sub: "Native Chrome profile · 降低风控", group: "workflow" },

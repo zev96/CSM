@@ -68,7 +68,7 @@ function commitEndorsementCap(v: number | string | null) {
   <div class="rounded-card" :style="{ background: 'var(--card-2)', padding: '16px' }">
     <div class="flex items-center gap-2">
       <span class="inline-flex h-7 w-7 items-center justify-center rounded-lg" :style="{ background: 'var(--card)' }">
-        <Icon name="vault" :size="15" />
+        <Icon name="stack" :size="15" />
       </span>
       <div>
         <div class="font-display text-[13.5px] font-semibold">品牌记忆</div>
