@@ -135,6 +135,15 @@ def test_update_skill_changes_role_when_given(tmp_path):
     assert skills_service.get_skill(tmp_path, "p").role == "persona"
 
 
+def test_update_skill_preserves_role_when_blank(tmp_path):
+    # 防 Plan 5 前端清空 role 字段（传 ""）误降级：空串与省略同义=保留现值。
+    skills_service.create_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", role="humanize", body="x")
+    skills_service.update_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", body="y", role="")
+    assert skills_service.get_skill(tmp_path, "hz").role == "humanize"
+
+
 def test_route_create_and_get_round_trips_role(client: TestClient, tmp_path):
     skill_dir = tmp_path / "skills"
     client.patch("/api/config", json={"skill_dir": str(skill_dir)})

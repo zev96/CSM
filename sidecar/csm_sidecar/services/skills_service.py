@@ -158,7 +158,7 @@ def update_skill(
     md = skill_dir / f"{skill_id}.md"
     if not md.exists():
         raise FileNotFoundError(f"skill not found: {skill_id}")
-    if role is None:                        # 前端未传 role → 保留现值，不回退
+    if not role:                            # 前端未传 / 传空 role → 保留现值，不回退
         current = get_skill(skill_dir, skill_id)
         role = current.role if current else "persona"
     _write_skill(skill_dir, skill_id, name, desc, tone, role, body)
