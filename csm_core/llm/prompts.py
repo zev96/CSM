@@ -62,3 +62,16 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
         f"{constraint}"
     )
     return system, user
+
+
+def build_refine_prompt(skill_body: str | None, prev_text: str) -> tuple[str, str]:
+    """链 step[1:] 的精修 prompt：按 skill 风格改写上段输出，保守约束
+    （保信息点/数字/单位/认证，只改文风）。step[0] 仍用 build_prompt。"""
+    system = (skill_body or "").strip()
+    user = (
+        f"【待改写正文】\n{prev_text}\n\n"
+        "请按上面的风格指引改写这段正文：保留所有信息点、段落要点与全部"
+        "数字/单位/认证名称，只改进措辞、语感与风格一致性；不新增虚构事实，"
+        "不删减关键信息，不改动任何参数数字或认证。"
+    )
+    return system, user
