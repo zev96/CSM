@@ -20,9 +20,11 @@ import { useRouter } from "vue-router";
 import Btn from "@/components/ui/Btn.vue";
 import Dropdown from "@/components/ui/Dropdown.vue";
 import Icon from "@/components/ui/Icon.vue";
+import AnglePicker from "@/components/article/AnglePicker.vue";
 import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
+import type { Angle } from "@/stores/article";
 
 interface Chip {
   id: string;
@@ -42,6 +44,34 @@ const templates = ref<Chip[]>(FALLBACK_TEMPLATES);
 const skills = ref<Chip[]>(FALLBACK_SKILLS);
 const tplId = ref<string>(FALLBACK_TEMPLATES[0].id);
 const skillId = ref<string>(FALLBACK_SKILLS[0].id);
+
+// 角度（人群/卖点/语调）+ 标题 —— 起飞时扁平进 query，由 ArticleView 重建。
+// 默认 null/空 = 不传角度 = 今天行为。
+const angle = ref<Angle | null>(null);
+const title = ref<string>("");
+const showAnglePicker = ref(false);
+
+// 角度是否有任一 facet 被设置 —— 控制 chip 的"已设置"高亮 + 摘要文案。
+const angleActive = computed(() => {
+  const a = angle.value;
+  return Boolean(a && (a.audience || a.sellpoints.length > 0 || a.tone));
+});
+// chip 上显示的角度摘要（如「铲屎官·防缠绕…·口语」），未设置时显示「角度」。
+const angleSummary = computed(() => {
+  const a = angle.value;
+  if (!a) return "角度";
+  const parts: string[] = [];
+  if (a.audience) parts.push(a.audience);
+  if (a.sellpoints.length > 0) parts.push(`${a.sellpoints.length} 卖点`);
+  if (a.tone) parts.push(a.tone);
+  return parts.length ? parts.join(" · ") : "角度";
+});
+
+function onPickTemplate(id: string) {
+  // AnglePicker 选了带 template_id 的预设 —— 同步更新模板选择。
+  // 即便当前列表没有该 id 也接受（ArticleView 会再校验）。
+  tplId.value = id;
+}
 
 const greeting = computed(() => {
   const h = new Date().getHours();
@@ -106,15 +136,26 @@ function takeoff() {
   const realSkill = skillId.value.startsWith("_demo_")
     ? undefined
     : skillId.value;
-  router.push({
-    name: "article",
-    query: {
-      keyword: keyword.value.trim(),
-      template_id: realTpl,
-      skill_id: realSkill,
-    },
-  });
+
+  // 角度扁平进 query —— audience / sellpoints(逗号连) / tone / title，
+  // 空的不入 query（保持 URL 干净 + ArticleView 重建时空 facet → null）。
+  const query: Record<string, string> = {
+    keyword: keyword.value.trim(),
+  };
+  if (realTpl) query.template_id = realTpl;
+  if (realSkill) query.skill_id = realSkill;
+  const a = angle.value;
+  if (a?.audience) query.audience = a.audience;
+  if (a?.sellpoints?.length) query.sellpoints = a.sellpoints.join(",");
+  if (a?.tone) query.tone = a.tone;
+  if (title.value.trim()) query.title = title.value.trim();
+
+  router.push({ name: "article", query });
 }
+
+// 给测试（@vue/test-utils vm）访问内部 state/方法 —— <script setup> 默认
+// 闭合，不 expose 测不到 takeoff/angle/title。
+defineExpose({ keyword, angle, title, tplId, takeoff, onPickTemplate });
 </script>
 
 <template>
@@ -264,8 +305,107 @@ function takeoff() {
           </button>
         </template>
       </Dropdown>
+
+      <!--
+        角度 chip —— 与 模板 / 风格 平级，但点击打开 AnglePicker 弹层
+        （角度选项多，不适合塞 Dropdown）。已设置任一 facet 时高亮 +
+        显示摘要（「铲屎官 · 2 卖点 · 口语」）。
+      -->
+      <button
+        type="button"
+        class="inline-flex items-center gap-2"
+        :style="{
+          height: '32px',
+          padding: '0 12px',
+          background: angleActive ? 'var(--primary-soft)' : 'var(--frosted-bg)',
+          backdropFilter: 'blur(12px) saturate(140%)',
+          WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+          border: angleActive ? '1px solid var(--primary)' : '1px solid var(--frosted-border)',
+          borderRadius: 'var(--radius-pill)',
+          fontSize: '12px',
+          color: angleActive ? 'var(--primary-deep)' : 'var(--ink-2)',
+          cursor: 'pointer',
+          boxShadow: '0 2px 6px rgba(var(--shadow-rgb),0.04), 0 1px 2px rgba(var(--shadow-rgb),0.03)',
+        }"
+        @click="showAnglePicker = true"
+      >
+        <span :style="{ color: angleActive ? 'var(--primary-deep)' : 'var(--ink-3)' }">角度</span>
+        <span class="font-semibold">{{ angleActive ? angleSummary : "不限" }}</span>
+        <Icon name="arrowDown" :size="11" />
+      </button>
     </div>
   </div>
+
+  <!--
+    角度选择弹层 —— 居中模态（与创作区导出弹窗同款 Teleport 结构）。
+    AnglePicker 受控：v-model 绑 angle / title。点遮罩或「完成」关闭。
+  -->
+  <Teleport to="body">
+    <div
+      v-if="showAnglePicker"
+      class="fixed inset-0 z-40 flex items-center justify-center"
+      :style="{ background: 'rgba(var(--ink-rgb),0.4)' }"
+      @click.self="showAnglePicker = false"
+    >
+      <div
+        class="anim-up flex flex-col"
+        :style="{
+          width: '560px',
+          maxWidth: '92vw',
+          maxHeight: '86vh',
+          borderRadius: 'var(--radius-card)',
+          background: 'var(--bg-inner)',
+          border: '1px solid var(--line)',
+          boxShadow: '0 18px 50px rgba(var(--shadow-rgb),0.18)',
+        }"
+      >
+        <div
+          class="flex flex-shrink-0 items-start justify-between"
+          :style="{ padding: '20px 22px 14px' }"
+        >
+          <div>
+            <div :style="{ fontSize: '11.5px', color: 'var(--ink-3)', marginBottom: '4px' }">
+              写作角度
+            </div>
+            <div
+              class="font-display"
+              :style="{ fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }"
+            >
+              选人群 / 卖点 / 语调 / 标题
+            </div>
+          </div>
+          <button
+            type="button"
+            class="inline-flex items-center justify-center transition hover:brightness-95"
+            :style="{
+              width: '28px',
+              height: '28px',
+              borderRadius: '999px',
+              background: 'var(--card-2)',
+              color: 'var(--ink-2)',
+              border: '1px solid var(--line)',
+            }"
+            @click="showAnglePicker = false"
+          >
+            <Icon name="x" :size="14" />
+          </button>
+        </div>
+        <div class="min-h-0 flex-1 overflow-y-auto" :style="{ padding: '0 22px 8px' }">
+          <AnglePicker
+            v-model="angle"
+            v-model:title="title"
+            @pick-template="onPickTemplate"
+          />
+        </div>
+        <div
+          class="flex flex-shrink-0 justify-end"
+          :style="{ padding: '14px 22px 20px' }"
+        >
+          <Btn variant="dark" @click="showAnglePicker = false">完成</Btn>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
