@@ -29,6 +29,7 @@ class Skill:
     name: str         # frontmatter.name or id
     desc: str         # frontmatter.desc or ""
     tone: str         # frontmatter.tone or ""
+    role: str         # frontmatter.role or "persona"（人设 persona / 去AI味 humanize）
     path: Path
     body: str         # markdown body without frontmatter
 
@@ -38,6 +39,7 @@ class Skill:
             "name": self.name,
             "desc": self.desc,
             "tone": self.tone,
+            "role": self.role,
             "uses": 0,  # field exists in prototype mock data; sidecar returns 0 (砍 per A2)
         }
         if include_body:
@@ -66,6 +68,7 @@ def list_skills(skill_dir: Path | None) -> list[Skill]:
             name=str(fm.get("name") or md.stem),
             desc=str(fm.get("desc") or ""),
             tone=str(fm.get("tone") or ""),
+            role=str(fm.get("role") or "persona"),
             path=md,
             body=post.content or "",
         ))
@@ -89,6 +92,7 @@ def get_skill(skill_dir: Path | None, skill_id: str) -> Skill | None:
         name=str(fm.get("name") or md.stem),
         desc=str(fm.get("desc") or ""),
         tone=str(fm.get("tone") or ""),
+        role=str(fm.get("role") or "persona"),
         path=md,
         body=post.content or "",
     )
@@ -100,6 +104,7 @@ def _write_skill(
     name: str,
     desc: str,
     tone: str,
+    role: str,
     body: str,
 ) -> Path:
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +115,7 @@ def _write_skill(
             "name": name or skill_id,
             "desc": desc or "",
             "tone": tone or "",
+            "role": role or "persona",
         },
     )
     md.write_bytes(frontmatter.dumps(post).encode("utf-8"))
@@ -124,13 +130,14 @@ def create_skill(
     desc: str,
     tone: str,
     body: str,
+    role: str = "persona",
 ) -> Skill:
     if not skill_dir:
         raise ValueError("skill_dir is not configured")
     md = skill_dir / f"{skill_id}.md"
     if md.exists():
         raise FileExistsError(f"skill id already exists: {skill_id}")
-    _write_skill(skill_dir, skill_id, name, desc, tone, body)
+    _write_skill(skill_dir, skill_id, name, desc, tone, role, body)
     skill = get_skill(skill_dir, skill_id)
     assert skill is not None
     return skill
@@ -144,13 +151,17 @@ def update_skill(
     desc: str,
     tone: str,
     body: str,
+    role: str | None = None,
 ) -> Skill:
     if not skill_dir:
         raise ValueError("skill_dir is not configured")
     md = skill_dir / f"{skill_id}.md"
     if not md.exists():
         raise FileNotFoundError(f"skill not found: {skill_id}")
-    _write_skill(skill_dir, skill_id, name, desc, tone, body)
+    if not role:                            # 前端未传 / 传空 role → 保留现值，不回退
+        current = get_skill(skill_dir, skill_id)
+        role = current.role if current else "persona"
+    _write_skill(skill_dir, skill_id, name, desc, tone, role, body)
     skill = get_skill(skill_dir, skill_id)
     assert skill is not None
     return skill

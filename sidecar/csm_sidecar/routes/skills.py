@@ -33,6 +33,7 @@ class SkillPayload(BaseModel):
     name: str
     desc: str = ""
     tone: str = ""
+    role: str = "persona"
     body: str = ""
 
 
@@ -40,6 +41,7 @@ class SkillUpdatePayload(BaseModel):
     name: str
     desc: str = ""
     tone: str = ""
+    role: str | None = None
     body: str = ""
 
 
@@ -75,6 +77,7 @@ def create_skill(payload: SkillPayload) -> dict[str, Any]:
             name=payload.name,
             desc=payload.desc,
             tone=payload.tone,
+            role=payload.role,
             body=payload.body,
         )
     except FileExistsError as e:
@@ -92,6 +95,7 @@ def update_skill(skill_id: str, payload: SkillUpdatePayload) -> dict[str, Any]:
             name=payload.name,
             desc=payload.desc,
             tone=payload.tone,
+            role=payload.role,
             body=payload.body,
         )
     except FileNotFoundError as e:

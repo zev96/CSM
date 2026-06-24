@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from csm_sidecar.services import skills_service
+
 
 def _write_skill(p: Path, *, name: str, desc: str = "", tone: str = "", body: str = "") -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -89,3 +91,75 @@ def test_skill_falls_back_to_filename_when_name_missing(client: TestClient, tmp_
     resp = client.get("/api/skills/anonymous")
     assert resp.status_code == 200
     assert resp.json()["name"] == "anonymous"
+
+
+def test_skill_role_defaults_persona_when_absent(tmp_path):
+    (tmp_path / "x.md").write_text("# 无 frontmatter\n本体", encoding="utf-8")
+    sk = skills_service.get_skill(tmp_path, "x")
+    assert sk is not None
+    assert sk.role == "persona"
+    assert sk.to_dict()["role"] == "persona"
+
+
+def test_skill_role_parsed_from_frontmatter(tmp_path):
+    (tmp_path / "y.md").write_text(
+        "---\nname: 去AI味\nrole: humanize\n---\n本体", encoding="utf-8")
+    sk = skills_service.get_skill(tmp_path, "y")
+    assert sk is not None
+    assert sk.role == "humanize"
+    assert sk.to_dict()["role"] == "humanize"
+
+
+def test_create_skill_persists_role(tmp_path):
+    skills_service.create_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", role="humanize", body="正文")
+    assert skills_service.get_skill(tmp_path, "hz").role == "humanize"
+
+
+def test_update_skill_preserves_role_when_omitted(tmp_path):
+    skills_service.create_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", role="humanize", body="正文")
+    # 模拟现有前端 PATCH：不带 role
+    skills_service.update_skill(
+        tmp_path, "hz", name="去AI味2", desc="d", tone="", body="新正文")
+    sk = skills_service.get_skill(tmp_path, "hz")
+    assert sk.role == "humanize"      # 关键：保留，不回退 persona
+    assert sk.name == "去AI味2" and sk.body.strip() == "新正文"
+
+
+def test_update_skill_changes_role_when_given(tmp_path):
+    skills_service.create_skill(
+        tmp_path, "p", name="人设", desc="", tone="", role="humanize", body="x")
+    skills_service.update_skill(
+        tmp_path, "p", name="人设", desc="", tone="", body="x", role="persona")
+    assert skills_service.get_skill(tmp_path, "p").role == "persona"
+
+
+def test_update_skill_preserves_role_when_blank(tmp_path):
+    # 防 Plan 5 前端清空 role 字段（传 ""）误降级：空串与省略同义=保留现值。
+    skills_service.create_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", role="humanize", body="x")
+    skills_service.update_skill(
+        tmp_path, "hz", name="去AI味", desc="", tone="", body="y", role="")
+    assert skills_service.get_skill(tmp_path, "hz").role == "humanize"
+
+
+def test_route_create_and_get_round_trips_role(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+    r = client.post("/api/skills", json={
+        "id": "去AI味", "name": "去AI味", "role": "humanize", "body": "正文"})
+    assert r.status_code == 201
+    assert r.json()["role"] == "humanize"
+    g = client.get("/api/skills/去AI味")
+    assert g.json()["role"] == "humanize"
+
+
+def test_route_patch_without_role_preserves(client: TestClient, tmp_path):
+    skill_dir = tmp_path / "skills"
+    client.patch("/api/config", json={"skill_dir": str(skill_dir)})
+    client.post("/api/skills", json={
+        "id": "hz2", "name": "去AI味", "role": "humanize", "body": "a"})
+    r = client.patch("/api/skills/hz2", json={"name": "去AI味", "body": "b"})
+    assert r.status_code == 200
+    assert r.json()["role"] == "humanize"   # PATCH 不带 role → 保留
