@@ -29,11 +29,14 @@ from csm_core.llm.prompts import PromptInputs, build_prompt
 from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
 from csm_core.vault.scanner import scan_vault
+from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
+from csm_core.factcheck import check_facts
 
 from ..event_bus import bus
 from . import (
     assembler_service,
     config_service,
+    factcheck_service,
     llm_factory,
     skills_service,
     templates_service,
@@ -199,6 +202,23 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             )
             return
 
+        # Plan 3: 注入型号记忆 + 事实核对作用域。两个 flag 都关 = 跳过。
+        cfg_bm = cfg.brand_memory
+        scopes: list = []
+        brand_facts: str | None = None
+        if cfg_bm.inject or cfg_bm.factcheck:
+            scopes = resolve_scopes(
+                plan, index, registry,
+                own_brands=set(cfg_bm.own_brands),
+                category=template.product,
+            )
+            if scopes:
+                brand_facts = render_brand_facts(
+                    scopes,
+                    variant_cap=cfg_bm.inject_variant_cap,
+                    endorsement_cap=cfg_bm.inject_endorsement_cap,
+                )
+
         client: LLMClient = llm_factory.build_client(
             provider=req.provider, model=req.model,
         )
@@ -206,11 +226,20 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             user_skill_prompt=skill_prompt,
             keyword=req.keyword,
             draft=draft,
+            brand_facts=brand_facts if cfg_bm.inject else None,
         ))
 
         _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="调用 LLM", index=4, total=6)
         final_text = client.complete(system=system, user=user)
+
+        # 导出前硬门禁：命中越界则缓存待导出 + done(blocked)，不导出。
+        if _maybe_block_for_factcheck(
+            job_id, final_text=final_text, scopes=scopes, draft=draft,
+            brand_facts=brand_facts if cfg_bm.inject else None,
+            cfg=cfg, plan=plan, out_dir=out_dir,
+        ):
+            return
 
         bus.publish(job_id, "stage", stage="导出", index=5, total=6)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -241,6 +270,36 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         with _state_lock:
             _live.discard(job_id)
             _cancelled.discard(job_id)
+
+
+def _maybe_block_for_factcheck(
+    job_id: str, *, final_text: str, scopes: list, draft: str,
+    brand_facts: str | None, cfg, plan, out_dir: Path,
+) -> bool:
+    """导出前事实核对。命中越界 → 缓存待导出 + 以 done(blocked) 收尾、返回
+    True（调用方须在导出前停下）。核对关 / 无型号 / 成稿干净 → False。"""
+    if not cfg.brand_memory.factcheck or not scopes:
+        return False
+    sources = [draft] + ([brand_facts] if brand_facts else [])
+    wl = build_whitelist(scopes, source_texts=sources)
+    report = check_facts(
+        final_text, allowed_numbers=wl.numbers, allowed_certs=wl.certs,
+    )
+    if report.ok:
+        return False
+    factcheck_service.cache_pending(
+        job_id, plan=plan, out_dir=out_dir, keyword=plan.keyword,
+        fmt=cfg.export_format, allowed_numbers=wl.numbers, allowed_certs=wl.certs,
+    )
+    bus.finish(
+        job_id, document=None, plan=_plan_to_dict(plan), draft=draft,
+        final_text=final_text,
+        factcheck={
+            "blocked": True,
+            "violations": [v.model_dump() for v in report.violations],
+        },
+    )
+    return True
 
 
 def _plan_to_dict(plan: Any) -> dict[str, Any]:

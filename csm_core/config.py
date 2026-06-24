@@ -140,6 +140,21 @@ class MonitorConfig(BaseModel):
     baidu_keyword: BaiduKeywordConfig = Field(default_factory=BaiduKeywordConfig)
 
 
+class BrandMemoryConfig(BaseModel):
+    """settings.brand_memory.* —— Phase 1 注入 + 事实核对（默认全关 = 今天行为）。"""
+
+    # 生成时注入型号记忆（参数/认证/话术/背书）到 prompt。
+    inject: bool = False
+    # 导出前事实核对硬门禁（拦编造数字/认证）。
+    factcheck: bool = False
+    # 自家品牌清单 —— 判 主推 vs 竞品（不靠文件夹名猜）。
+    own_brands: list[str] = Field(default_factory=lambda: ["CEWEY"])
+    # token 预算：每个话术维度注入的变体上限。
+    inject_variant_cap: int = 3
+    # token 预算：每个品牌背书注入的条数上限。
+    inject_endorsement_cap: int = 5
+
+
 class AppConfig(BaseModel):
     user_name: str | None = None
     user_product: str | None = None
@@ -185,6 +200,9 @@ class AppConfig(BaseModel):
 
     # ── Monitor (Zhihu / comment-platforms) ────────────────────────────
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)
+
+    # ── Brand/model memory (Phase 1: 注入 + 事实核对) ───────────────────
+    brand_memory: BrandMemoryConfig = Field(default_factory=BrandMemoryConfig)
 
     # ── Outreach AI prompts (Phase 3) ──────────────────────────────────
     # 空字符串 = 用 mining_ai_service 里的内置默认 prompt。用户在设置页
