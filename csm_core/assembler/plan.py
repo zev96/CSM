@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 from pydantic import BaseModel, Field
+from csm_core.angle.model import Angle
 
 
 class PickedVariant(BaseModel):
@@ -51,6 +52,7 @@ class AssemblyPlan(BaseModel):
     core_keyword: str | None = None
     results: list[BlockResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    angle: Angle | None = None         # Phase 2a 角度（旧 JSON 无此字段 → None）
 
     def get_core_keyword(self) -> str:
         """Return the core keyword (always non-empty for valid plans)."""

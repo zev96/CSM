@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import auth, heartbeat, lifespan as _lifespan, logging_setup
 from .routes import aggregation as aggregation_routes
+from .routes import angle as angle_routes
 from .routes import article as article_routes
 from .routes import assembler as assembler_routes
 from .routes import batch as batch_routes
@@ -88,6 +89,7 @@ app.include_router(dedup_routes.router)
 app.include_router(updater_routes.router)
 app.include_router(aggregation_routes.router)
 app.include_router(assembler_routes.router)
+app.include_router(angle_routes.router)
 app.include_router(xhs_routes.router)
 
 
