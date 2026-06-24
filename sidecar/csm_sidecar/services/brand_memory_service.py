@@ -20,11 +20,13 @@ from csm_core.vault.scanner import VaultIndex, scan_vault
 def _resolve_one(
     model_full: str, registry: BrandRegistry, index: VaultIndex,
     category: str, own_brands: set[str],
-) -> tuple[str | None, BrandModelMemory] | None:
+) -> tuple[str, BrandModelMemory] | None:
     brand = registry.brand_of(model_full)
     if brand is None:
         return None
     # registry 存 full-stem（CEWEYDS18）；resolver 期望品牌剥离（DS18）。
+    # 边界：frontmatter-only 的未知品牌 parse 不出前缀 → 回退 full-stem，
+    # resolver spec-match 落空 → 空记忆（coverage.has_specs=False），不崩。
     parsed = parse_brand_model(model_full)
     resolver_model = parsed[1] if parsed is not None else model_full
     mem = resolve_memory(brand, resolver_model, category, index, own_brands=own_brands)
