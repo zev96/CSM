@@ -33,6 +33,17 @@ export interface GenerateRequest {
   model?: string | null;
 }
 
+/** 事实核对违规项（镜像后端 csm_core.factcheck.model.Violation）。
+ * `number` = number 违规的归一值（万已展开），cert 为 null —— 审查面板放行
+ * 万-值时回传它而非 parseFloat(value)。 */
+export interface FactcheckViolation {
+  kind: "number" | "cert";
+  value: string;
+  number: number | null;
+  sentence: string;
+  suggestion: string;
+}
+
 const STAGES = [
   "扫描资料库",
   "加载模板",
@@ -76,6 +87,10 @@ interface ArticleState {
   // Keyword density — refreshed alongside finalText so the quality
   // report reflects edits without per-keystroke API spam.
   keywordDensity: { count: number; density: number } | null;
+  // 事实核对门禁结果 —— 生成被 Plan 3 硬门禁拦下时 SSE `done` 事件带
+  // `factcheck.{blocked, violations}`，存这里给审查面板（FactCheckPanel）。
+  // 未拦 / 无门禁 → null。放行重核（resolveFactcheck）成功后清回 null。
+  factcheck: { blocked: boolean; violations: FactcheckViolation[] } | null;
 }
 
 export const useArticle = defineStore("article", {
@@ -100,6 +115,7 @@ export const useArticle = defineStore("article", {
     dedupReport: null,
     dedupLoading: false,
     keywordDensity: null,
+    factcheck: null,
   }),
   getters: {
     progress(state): number {
@@ -124,6 +140,7 @@ export const useArticle = defineStore("article", {
       this.title = req.keyword;
       this.plan = null;
       this.template = null;
+      this.factcheck = null;
 
       const sidecar = useSidecar();
       try {
@@ -173,6 +190,12 @@ export const useArticle = defineStore("article", {
           this.finalText = d.final_text ?? "";
           this.draftText = d.draft ?? "";
           this.plan = d.plan ?? null;
+          // 生成被 Plan 3 事实核对硬门禁拦下时，done 事件带
+          // factcheck.{blocked, violations} —— 存下来给审查面板；未拦 → null。
+          this.factcheck =
+            d.factcheck && d.factcheck.blocked
+              ? { blocked: true, violations: d.factcheck.violations ?? [] }
+              : null;
           this.stageIndex = STAGES.length;
           this.status = "done";
           useNotifications().push("文章生成完成", {
@@ -387,6 +410,34 @@ export const useArticle = defineStore("article", {
       this.documentPath = resp.data.document ?? this.documentPath;
       this.format = resp.data.format ?? this.format;
       return resp.data;
+    },
+    /** 事实核对放行重核 + 导出（接 Plan 3 门禁）。released* 为用户勾选放行的项。
+     * ok=true → 已导出，清 factcheck；ok=false → 更新剩余 violations。
+     * 用 lastJobId（SSE 收尾会把 jobId 清空，lastJobId 仍在）。无任务 / 网络
+     * 异常时返回 {ok:false, error}，从不抛。*/
+    async resolveFactcheck(
+      finalText: string, releasedNumbers: number[], releasedCerts: string[],
+    ): Promise<{ ok: boolean; violations?: FactcheckViolation[]; error?: string }> {
+      if (!this.lastJobId) return { ok: false, error: "无可核对的任务" };
+      const sidecar = useSidecar();
+      try {
+        const resp = await sidecar.client.post(`/api/generate/${this.lastJobId}/export`, {
+          final_text: finalText,
+          released_numbers: releasedNumbers,
+          released_certs: releasedCerts,
+        });
+        if (resp.data.ok) {
+          this.finalText = finalText;
+          this.documentPath = resp.data.document ?? this.documentPath;
+          this.format = resp.data.format ?? this.format;
+          this.factcheck = null;
+          return { ok: true };
+        }
+        this.factcheck = { blocked: true, violations: resp.data.violations ?? [] };
+        return { ok: false, violations: resp.data.violations ?? [] };
+      } catch (e: any) {
+        return { ok: false, error: e?.response?.data?.detail ?? e?.message ?? String(e) };
+      }
     },
     _teardown() {
       if (this.stop) {
