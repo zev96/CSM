@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from csm_core.angle import Angle, effective_sellpoints, render_angle_directive
 from csm_core.assembler.constraints import assemble_plan
 from csm_core.assembler.render import compose_draft
 from csm_core.export.markdown import export_article
@@ -56,6 +57,9 @@ class GenerateRequest:
     provider: str | None = None
     model: str | None = None
     user_config: dict[str, int] | None = None
+    # Phase 2a: 标题领衔 + 角度选材。两者都空 = 今天行为（零回归）。
+    title: str | None = None
+    angle: Angle | None = None
 
 
 # Pool sized so a typical desktop can run a generate + a batch + a polish
@@ -173,6 +177,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             seed=req.seed,
             user_config=req.user_config or {},
             core_keyword=req.core_keyword,
+            angle=req.angle,
         )
         # Stash the plan so subsequent /api/assembler/reroll calls can
         # operate on it without re-scanning the vault.
@@ -217,6 +222,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
                     scopes,
                     variant_cap=cfg_bm.inject_variant_cap,
                     endorsement_cap=cfg_bm.inject_endorsement_cap,
+                    sellpoints=effective_sellpoints(req.angle),
                 )
 
         client: LLMClient = llm_factory.build_client(
@@ -227,6 +233,8 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             keyword=req.keyword,
             draft=draft,
             brand_facts=brand_facts if cfg_bm.inject else None,
+            title=req.title,
+            angle_directive=render_angle_directive(req.angle),
         ))
 
         _checkpoint(job_id)
@@ -237,7 +245,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         if _maybe_block_for_factcheck(
             job_id, final_text=final_text, scopes=scopes, draft=draft,
             brand_facts=brand_facts if cfg_bm.inject else None,
-            cfg=cfg, plan=plan, out_dir=out_dir,
+            title=req.title, cfg=cfg, plan=plan, out_dir=out_dir,
         ):
             return
 
@@ -274,13 +282,16 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
 def _maybe_block_for_factcheck(
     job_id: str, *, final_text: str, scopes: list, draft: str,
-    brand_facts: str | None, cfg, plan, out_dir: Path,
+    brand_facts: str | None, title: str | None = None, cfg, plan, out_dir: Path,
 ) -> bool:
     """导出前事实核对。命中越界 → 缓存待导出 + 以 done(blocked) 收尾、返回
-    True（调用方须在导出前停下）。核对关 / 无型号 / 成稿干净 → False。"""
+    True（调用方须在导出前停下）。核对关 / 无型号 / 成稿干净 → False。
+
+    白名单源 = 毛坯文 + 标题（若有）+ 已注入品牌事实（若有）：标题往往
+    自带数字（如「220AW 实测」），不纳入会被事实核对误判越界。"""
     if not cfg.brand_memory.factcheck or not scopes:
         return False
-    sources = [draft] + ([brand_facts] if brand_facts else [])
+    sources = [draft] + ([title] if title else []) + ([brand_facts] if brand_facts else [])
     wl = build_whitelist(scopes, source_texts=sources)
     report = check_facts(
         final_text, allowed_numbers=wl.numbers, allowed_certs=wl.certs,
