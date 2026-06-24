@@ -82,6 +82,7 @@ def resolve_scopes(
 def render_brand_facts(
     scopes: list[ModelScope], *,
     variant_cap: int = 3, endorsement_cap: int = 5,
+    sellpoints: list[str] | None = None,
 ) -> str:
     """渲染注入 LLM 的事实块。
 
@@ -89,7 +90,11 @@ def render_brand_facts(
     归一）。scripts 每维度 ≤``variant_cap`` 变体、endorsements ≤
     ``endorsement_cap``（token 预算，spec §4.1）。竞品只给 specs/certs/intro
     （无自家话术）。背书是品牌级，同品牌只渲染一次。
+
+    ``sellpoints`` 命中的话术维度排到其余维度之前并标【主打】（其余不丢）；
+    传空/None 时行为同今天（维度按 scripts 原始顺序、无标记）。
     """
+    primary = set(sellpoints or [])
     blocks: list[str] = []
     brand_endorsed: set[str] = set()
     for sc in scopes:
@@ -100,10 +105,14 @@ def render_brand_facts(
             lines.extend(f"- {sv.field}: {sv.raw}" for sv in m.specs.values())
         if m.certs:
             lines.append(f"认证：{'、'.join(m.certs)}")
-        for dim, variants in m.scripts.items():
+        dim_items = list(m.scripts.items())
+        if primary:
+            dim_items.sort(key=lambda kv: kv[0] not in primary)  # 命中维度排前（稳定）
+        for dim, variants in dim_items:
             shown = variants[:variant_cap]
             if shown:
-                lines.append(f"{dim}：")
+                mark = "【主打】" if dim in primary else ""
+                lines.append(f"{mark}{dim}：")
                 lines.extend(f"- {v}" for v in shown)
         if m.intro:
             lines.append("介绍：")
