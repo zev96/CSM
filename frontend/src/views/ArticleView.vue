@@ -1012,7 +1012,8 @@ const tabSectionLabel = computed(() => {
         </button>
         <span :style="{ width: '1px', height: '18px', background: 'var(--line-2)' }" />
         <Pill>{{ templateName || "未选择模板" }}</Pill>
-        <Pill tone="primary">{{ skillName || "默认 Skill" }}</Pill>
+        <!-- 链 chip 在场时由它呈现 skill；避免和单 skill pill 重复/误标「默认 Skill」 -->
+        <Pill v-if="!chainChipText" tone="primary">{{ skillName || "默认 Skill" }}</Pill>
         <!--
           角度 chip —— 起飞时带了角度（人群/卖点/语调任一）才显示，
           文案如「铲屎官 · 防缠绕 · 口语」。提示用户本篇是带角度生成的。
