@@ -18,6 +18,7 @@ from ..template.schema import (
 )
 from ..vault.scanner import VaultIndex
 from ..vault.note_parser import ParsedNote
+from csm_core.angle.filters import effective_filters
 from .plan import AssemblyPlan, BlockResult, PickedVariant
 
 
@@ -59,7 +60,9 @@ def reroll_pick(
         p.note_id for i, p in enumerate(result.picks) if i != pick_index
     }
 
-    pool = vault_index.query(module=source.module, filters=source.filter)
+    pool = vault_index.query(
+        module=source.module, filters=effective_filters(source, plan.angle),
+    )
 
     # Layer 1: other variants of the same note.
     same_note = next((n for n in pool if n.id == current.note_id), None)
