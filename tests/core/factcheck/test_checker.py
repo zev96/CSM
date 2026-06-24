@@ -36,3 +36,19 @@ def test_multiple_violations_across_sentences():
         "吸力300AW。噪音55dB。", allowed_numbers={220.0}, allowed_certs=set(),
     )
     assert {v.value for v in r.violations} == {"300AW", "55dB"}
+
+
+def test_number_violation_carries_normalized_number():
+    from csm_core.factcheck.checker import check_facts
+    # 成稿写「15万转」(→150000) 不在白名单 → 违规，且 number 应为归一值 150000
+    rep = check_facts("电机 15万转。", allowed_numbers=set(), allowed_certs=set())
+    v = next(v for v in rep.violations if v.kind == "number")
+    assert v.value == "15万转"
+    assert v.number == 150000.0
+
+
+def test_cert_violation_number_is_none():
+    from csm_core.factcheck.checker import check_facts
+    rep = check_facts("通过 CCC 认证。", allowed_numbers=set(), allowed_certs=set())
+    v = next(v for v in rep.violations if v.kind == "cert")
+    assert v.number is None

@@ -18,7 +18,7 @@ def check_facts(
         for value, raw in extract_number_mentions(sentence):
             if value not in allowed_numbers:
                 violations.append(Violation(
-                    kind="number", value=raw, sentence=sentence,
+                    kind="number", value=raw, number=value, sentence=sentence,
                     suggestion="改用注入参数表里的数值，或标为通用表述/本次放行",
                 ))
         for cert in extract_certs(sentence):
