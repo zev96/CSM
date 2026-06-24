@@ -30,6 +30,8 @@ class GenerateBody(BaseModel):
     # Phase 2a：标题领衔 + 角度选材（都为空 = 今天行为）。
     title: str | None = None
     angle: Angle | None = None
+    # Phase 2b：skill 链多-pass（按 role 顺序）。空 = 退回单 skill_id（零回归）。
+    skill_chain: list[str] | None = None
 
 
 class JobAccepted(BaseModel):
