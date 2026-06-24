@@ -218,6 +218,7 @@ function save() {
             :options="[
               { label: '人设（persona）', value: 'persona' },
               { label: '去AI味（humanize）', value: 'humanize' },
+              { label: '平台适配（platform）', value: 'platform' },
             ]"
             width="100%"
           />
