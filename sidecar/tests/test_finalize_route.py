@@ -48,3 +48,10 @@ def test_finalize_422_missing_draft(client: TestClient, monkeypatch):
                         lambda job_id: type("E", (), {"plan": object(), "template_id": "t", "seed": 0})())
     resp = client.post("/api/generate/job-A/finalize", json={"keyword": "k"})
     assert resp.status_code == 422
+
+
+def test_finalize_422_missing_keyword(client: TestClient, monkeypatch):
+    monkeypatch.setattr(assembler_service, "get_plan",
+                        lambda job_id: type("E", (), {"plan": object(), "template_id": "t", "seed": 0})())
+    resp = client.post("/api/generate/job-A/finalize", json={"draft": "毛坯"})
+    assert resp.status_code == 422

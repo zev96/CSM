@@ -278,9 +278,16 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
 def submit_finalize(job_id: str, req: FinalizeRequest) -> str:
     """在既有 takeoff job_id 上重开一条流，提交 finalize worker。
-    调用方（路由）须先确认缓存 plan 存在（否则 404）。"""
+    调用方（路由）须先确认缓存 plan 存在（否则 404）。
+
+    复用 takeoff job_id 的前提：旧的 takeoff SSE 流已关闭（前端 finalize()
+    在 POST 前先 _teardown 关旧 EventSource；takeoff 的 done 也已 reap 旧
+    buffer）。bus.create_job(job_id) 据此对同 id 重开一条干净 buffer。"""
     bus.create_job(job_id)
     with _state_lock:
+        # 干净入场：清掉可能残留的取消标记（如同 id 上一轮 job 的 cancel 未及
+        # 清理），避免 finalize 首个 _checkpoint 误命中陈旧信号而自我取消。
+        _cancelled.discard(job_id)
         _live.add(job_id)
     _get_executor().submit(_finalize_job, job_id, req)
     return job_id
@@ -412,7 +419,7 @@ def finalize_draft(
     return FinalizeOutcome(final_text=final_text, passes=passes, blocked=False)
 
 
-def _resolve_chain(req: GenerateRequest, cfg) -> list[chain_service.ChainStepInput]:
+def _resolve_chain(req: GenerateRequest | FinalizeRequest, cfg) -> list[chain_service.ChainStepInput]:
     """把 req 解析成链 steps（每个 step 带 skill 的 role/name/body）。
 
     零回归边界：
