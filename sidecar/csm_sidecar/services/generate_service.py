@@ -64,6 +64,15 @@ class GenerateRequest:
     skill_chain: list[str] | None = None
 
 
+@dataclass
+class FinalizeOutcome:
+    """finalize_draft 的产出。blocked=True 时 bus 已 finish(blocked-done)，
+    调用方须停下不导出。"""
+    final_text: str
+    passes: list[dict[str, Any]]
+    blocked: bool
+
+
 # Pool sized so a typical desktop can run a generate + a batch + a polish
 # concurrently without thrashing. Provider HTTP clients have their own
 # retry; we don't want unlimited fan-out.
@@ -203,53 +212,23 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             )
             return
 
-        # Plan 3: 注入型号记忆 + 事实核对作用域。两个 flag 都关 = 跳过。
-        cfg_bm = cfg.brand_memory
-        scopes: list = []
-        brand_facts: str | None = None
-        if cfg_bm.inject or cfg_bm.factcheck:
-            scopes = resolve_scopes(
-                plan, index, registry,
-                own_brands=set(cfg_bm.own_brands),
-                category=template.product,
-            )
-            if scopes:
-                brand_facts = render_brand_facts(
-                    scopes,
-                    variant_cap=cfg_bm.inject_variant_cap,
-                    endorsement_cap=cfg_bm.inject_endorsement_cap,
-                    sellpoints=effective_sellpoints(req.angle),
-                )
-
-        # Phase 2b: 单次 build_prompt+complete 升级为 skill 链多-pass。
-        # step0 = 组装 pass（build_prompt：毛坯+事实+角度+标题，与今天一致）；
-        # step1+ = 精修 pass（build_refine_prompt：上段输出+skill）。逐 pass 经
-        # SSE 推给前端，链状态按 job_id 缓存供 /api/chain/rerun 重跑。单步链
-        # （无 skill_chain）的 step0 入参与今天 build_prompt 字节级一致（零回归）。
-        _checkpoint(job_id)
-        bus.publish(job_id, "stage", stage="skill 链润色", index=4, total=6)
-        state = chain_service.run_chain(
-            job_id, chain_steps,
-            draft=draft,
-            keyword=req.keyword,
-            title=req.title,
-            angle_directive=render_angle_directive(req.angle),
-            brand_facts=brand_facts if cfg_bm.inject else None,
+        # Plan 3 + Phase 2b：注入型号事实 + skill 链多-pass + 导出前事实核对，
+        # 抽为 finalize_draft 供交互整篇润色复用。stage_index=4/total=6 复刻原
+        # 「skill 链润色」stage 事件，行为字节级等价（零回归）。
+        outcome = finalize_draft(
+            job_id,
+            chain_steps=chain_steps, draft=draft,
+            plan=plan, index=index, registry=registry, category=template.product,
+            keyword=req.keyword, title=req.title, angle=req.angle,
             provider=req.provider, model=req.model,
+            cfg=cfg, out_dir=out_dir,
             checkpoint=lambda: _checkpoint(job_id),
             on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
+            stage_index=4, stage_total=6,
         )
-        final_text = state.final_text
-        passes = [p.to_dict() for p in state.passes]
-
-        # 导出前硬门禁：命中越界则缓存待导出 + done(blocked)，不导出。
-        if _maybe_block_for_factcheck(
-            job_id, final_text=final_text, scopes=scopes, draft=draft,
-            brand_facts=brand_facts if cfg_bm.inject else None,
-            title=req.title, cfg=cfg, plan=plan, out_dir=out_dir,
-            passes=passes,
-        ):
+        if outcome.blocked:
             return
+        final_text = outcome.final_text
 
         bus.publish(job_id, "stage", stage="导出", index=5, total=6)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -269,7 +248,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             plan=_plan_to_dict(plan),
             draft=draft,
             final_text=final_text,
-            passes=passes,
+            passes=outcome.passes,
         )
     except _CancelledGenerate:
         logger.info("generate job %s cancelled by user", job_id)
@@ -281,6 +260,68 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         with _state_lock:
             _live.discard(job_id)
             _cancelled.discard(job_id)
+
+
+def finalize_draft(
+    job_id: str, *,
+    chain_steps: list["chain_service.ChainStepInput"],
+    draft: str,
+    plan: Any, index: Any, registry: Any, category: str | None,
+    keyword: str, title: str | None, angle: Angle | None,
+    provider: str | None, model: str | None,
+    cfg: Any, out_dir: Path,
+    checkpoint, on_pass,
+    stage_index: int, stage_total: int,
+) -> FinalizeOutcome:
+    """毛坯 → 成稿：注入型号事实 + 角度指令 + skill 链多-pass + 导出前事实核对。
+
+    _run_job（完整生成）与 _finalize_job（交互整篇润色）共用。命中事实核对
+    越界时本函数已发 done(blocked)，返回 blocked=True 让调用方停下。
+    """
+    # Plan 3: 注入型号记忆 + 事实核对作用域。两个 flag 都关 = 跳过。
+    cfg_bm = cfg.brand_memory
+    scopes: list = []
+    brand_facts: str | None = None
+    if cfg_bm.inject or cfg_bm.factcheck:
+        scopes = resolve_scopes(
+            plan, index, registry,
+            own_brands=set(cfg_bm.own_brands),
+            category=category,
+        )
+        if scopes:
+            brand_facts = render_brand_facts(
+                scopes,
+                variant_cap=cfg_bm.inject_variant_cap,
+                endorsement_cap=cfg_bm.inject_endorsement_cap,
+                sellpoints=effective_sellpoints(angle),
+            )
+
+    # Phase 2b: 单次 build_prompt+complete 升级为 skill 链多-pass。
+    # step0 = 组装 pass（build_prompt：毛坯+事实+角度+标题，与今天一致）；
+    # step1+ = 精修 pass（build_refine_prompt：上段输出+skill）。逐 pass 经
+    # SSE 推给前端，链状态按 job_id 缓存供 /api/chain/rerun 重跑。单步链
+    # （无 skill_chain）的 step0 入参与今天 build_prompt 字节级一致（零回归）。
+    checkpoint()
+    bus.publish(job_id, "stage", stage="skill 链润色", index=stage_index, total=stage_total)
+    state = chain_service.run_chain(
+        job_id, chain_steps,
+        draft=draft, keyword=keyword, title=title,
+        angle_directive=render_angle_directive(angle),
+        brand_facts=brand_facts if cfg_bm.inject else None,
+        provider=provider, model=model,
+        checkpoint=checkpoint, on_pass=on_pass,
+    )
+    final_text = state.final_text
+    passes = [p.to_dict() for p in state.passes]
+
+    # 导出前硬门禁：命中越界则缓存待导出 + done(blocked)，不导出。
+    if _maybe_block_for_factcheck(
+        job_id, final_text=final_text, scopes=scopes, draft=draft,
+        brand_facts=brand_facts if cfg_bm.inject else None,
+        title=title, cfg=cfg, plan=plan, out_dir=out_dir, passes=passes,
+    ):
+        return FinalizeOutcome(final_text=final_text, passes=passes, blocked=True)
+    return FinalizeOutcome(final_text=final_text, passes=passes, blocked=False)
 
 
 def _resolve_chain(req: GenerateRequest, cfg) -> list[chain_service.ChainStepInput]:
