@@ -407,20 +407,18 @@ async function polishAll() {
   polishStage.value = POLISH_STAGES[0];
 
   if (article.lastRequest && article.draftText.trim()) {
-    // 真实模式：把组装好的初稿（draftText）整篇喂给 LLM 润色，
-    // 结果写入 finalText 作为成稿。这是整个流程的第二次（也是
-    // 整篇润色环节的唯一一次）LLM 调用。
+    // 真实模式：整篇润色 = finalize（注入型号事实 + 角度指令 + skill 链多-pass）。
+    // SSE 驱动逐 pass，进度由 store.passes / status 呈现；本地 polishing 仅作
+    // 按钮去抖。结果 finalText 由 store done handler 写入。
     try {
-      const out = await article.polishWhole(article.draftText);
-      if (out) {
-        article.setFinalText(out);
-        // 润色完成才把视图切到成稿 tab —— 配合 watch(article.status)
-        // 里 done → "draft" 的语义，组成完整的「初稿 → 润色 → 成稿」流。
+      await article.finalize();
+      if (article.status === "done" && article.finalText) {
         activeTab.value = "final";
         toast.success("整篇润色完成");
-      } else {
-        toast.error("润色失败，未返回结果");
+      } else if (article.status === "error") {
+        toast.error(article.error ?? "整篇润色失败");
       }
+      // factcheck 被拦：status=done 但有 article.factcheck → 审查面板接管，不切 tab
     } finally {
       polishing.value = false;
       polishProgress.value = 0;
@@ -2149,7 +2147,7 @@ const tabSectionLabel = computed(() => {
                   color: '#fff',
                   border: '1px solid var(--primary)',
                 }"
-                :disabled="!article.draftText.trim() || polishing"
+                :disabled="!article.draftText.trim() || polishing || article.isRunning"
                 @click="polishAll"
               >
                 <Spinner v-if="polishing" :size="13" />

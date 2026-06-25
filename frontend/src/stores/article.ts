@@ -213,7 +213,14 @@ export const useArticle = defineStore("article", {
         .then((r) => { this.template = r.data; })
         .catch(() => { this.template = null; });
 
-      this.stop = subscribe(`/api/events/${this.jobId}`, {
+      this._subscribe(this.jobId!);
+    },
+    /** 共享 SSE 订阅 —— submit（起飞）和 finalize（整篇润色）都复用同一套
+     * stage/assembly/pass/done/error handler。订阅 `/api/events/{jobId}` 并把
+     * teardown 句柄存进 this.stop（_teardown 会关）。两条路径走同一份事件
+     * 解析，所以链状态 / factcheck / 重跑此 pass 在起飞和润色下行为一致。 */
+    _subscribe(jobId: string) {
+      this.stop = subscribe(`/api/events/${jobId}`, {
         stage: (d: any) => {
           this.currentStage = d.stage;
           // The sidecar emits {stage, index, total} — fall back to STAGES
@@ -454,19 +461,45 @@ export const useArticle = defineStore("article", {
       if (!anyOk && lastErr) throw lastErr;
       return anyOk;
     },
-    async polishWhole(text: string): Promise<string | null> {
+    /** 整篇润色 = 在用户审过的初稿（draftText）上跑「注入+角度+链」成稿。
+     * 复用 takeoff 的 lastJobId 重开同 id 的 SSE 流（链状态/factcheck/重跑此
+     * pass 自动同源）。轻 reset：保留 draftText（链输入）/plan/lastRequest。
+     * 守卫：未起飞（无 lastJobId/lastRequest）或初稿为空 → 直接 return（demo
+     * 模式由 ArticleView 处理，不调本函数）。从不抛。 */
+    async finalize(): Promise<void> {
+      if (!this.lastJobId || !this.lastRequest || !this.draftText.trim()) return;
+      this._teardown();
+      this.status = "running";
+      this.error = null;
+      this.currentStage = null;
+      this.stageIndex = -1;
+      this.finalText = "";
+      this.passes = [];
+      this.factcheck = null;
+
       const sidecar = useSidecar();
+      const req = this.lastRequest;
       try {
-        const resp = await sidecar.client.post("/api/polish/block", {
-          text,
-          skill_id: this.lastRequest?.skill_id ?? null,
-          provider: this.lastRequest?.provider ?? null,
-          model: this.lastRequest?.model ?? null,
-        });
-        return resp.data.text ?? null;
-      } catch {
-        return null;
+        const resp = await sidecar.client.post(
+          `/api/generate/${this.lastJobId}/finalize`,
+          {
+            draft: this.draftText,
+            keyword: req.keyword,
+            title: req.title ?? null,
+            angle: req.angle ?? null,
+            skill_id: req.skill_id ?? null,
+            skill_chain: req.skill_chain ?? null,
+            provider: req.provider ?? null,
+            model: req.model ?? null,
+          },
+        );
+        this.jobId = resp.data.job_id;
+      } catch (e: any) {
+        this.status = "error";
+        this.error = e?.response?.data?.detail ?? e?.message ?? String(e);
+        return;
       }
+      this._subscribe(this.jobId!);
     },
     async exportArticle(opts: { format: "markdown" | "docx"; include_dedup_report?: boolean }) {
       if (!this.finalText.trim() || !this.lastRequest) return null;
