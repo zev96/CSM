@@ -401,34 +401,22 @@ const POLISH_STAGES = [
 ];
 
 async function polishAll() {
-  if (polishing.value) return;
-  polishing.value = true;
-  polishProgress.value = 0;
-  polishStage.value = POLISH_STAGES[0];
+  // 真实 finalize 进行中（isRunning）或 demo 动画中（polishing）都防重入。
+  if (article.isRunning || polishing.value) return;
 
   if (article.lastRequest && article.draftText.trim()) {
-    // 真实模式：把组装好的初稿（draftText）整篇喂给 LLM 润色，
-    // 结果写入 finalText 作为成稿。这是整个流程的第二次（也是
-    // 整篇润色环节的唯一一次）LLM 调用。
-    try {
-      const out = await article.polishWhole(article.draftText);
-      if (out) {
-        article.setFinalText(out);
-        // 润色完成才把视图切到成稿 tab —— 配合 watch(article.status)
-        // 里 done → "draft" 的语义，组成完整的「初稿 → 润色 → 成稿」流。
-        activeTab.value = "final";
-        toast.success("整篇润色完成");
-      } else {
-        toast.error("润色失败，未返回结果");
-      }
-    } finally {
-      polishing.value = false;
-      polishProgress.value = 0;
-      polishStage.value = "";
-    }
+    // 真实模式：整篇润色 = finalize（SSE 流式，注入+角度+链）。
+    // 进度由 overallProgress(isFinalizing) + 成稿区逐 pass 卡呈现；
+    // 切成稿 tab + 成功/失败提示由 watch(article.status) 统一处理
+    // （finalize 流式早返回，这里不能同步判 status）。
+    await article.finalize();
     return;
   }
 
+  // Demo 模式：阻塞模态 + 假 5 阶段动画（无 lastRequest 时）。
+  polishing.value = true;
+  polishProgress.value = 0;
+  polishStage.value = POLISH_STAGES[0];
   // Demo 模式：模拟 5 阶段进度，每段 ~700ms
   await new Promise<void>((resolve) => {
     const total = POLISH_STAGES.length;
@@ -481,9 +469,9 @@ const overallProgress = computed<number>(() => {
   // 之前这里返回 0-100，>1 的值都被 clamp 到 100% —— 所以 step 2/4
   // 时进度条几乎"满格"显示，跟左侧的 2/4 计数对不上。改回 0-1。
   if (article.status === "idle" || article.status === "error") return 0;
-  if (article.status === "running") return article.progress * 0.5;
+  // running 期间分两态：finalize（润色）固定 75% 占位；起飞按 stage 走 0-50%。
+  if (article.status === "running") return article.isFinalizing ? 0.75 : article.progress * 0.5;
   // status === "done"
-  if (polishing.value) return 0.75;
   if (article.finalText.trim()) return 1;
   return 0.5; // 初稿就绪、等待润色
 });
@@ -491,8 +479,7 @@ const overallProgress = computed<number>(() => {
 const overallLabel = computed<string>(() => {
   if (article.status === "idle") return "暂无生成任务";
   if (article.status === "error") return article.error ?? "生成失败";
-  if (article.status === "running") return article.currentStage ?? "排队中…";
-  if (polishing.value) return polishStage.value || "AI 润色中…";
+  if (article.status === "running") return article.isFinalizing ? "AI 润色中…" : (article.currentStage ?? "排队中…");
   if (article.finalText.trim()) return "已完成";
   return "初稿就绪 · 待润色";
 });
@@ -501,8 +488,7 @@ const overallLabel = computed<string>(() => {
 //   1 组装中 / 2 初稿就绪 / 3 润色中 / 4 成稿完成
 const overallStep = computed<number | null>(() => {
   if (article.status === "idle" || article.status === "error") return null;
-  if (article.status === "running") return 1;
-  if (polishing.value) return 3;
+  if (article.status === "running") return article.isFinalizing ? 3 : 1;
   if (article.finalText.trim()) return 4;
   return 2;
 });
@@ -936,11 +922,20 @@ onUnmounted(() => {
 watch(
   () => article.status,
   async (s, prev) => {
-    // done 时停在初稿 tab —— 让用户先检查组装出来的 draft，再手动
-    // 点"整篇润色"。完成后由 polishAll 在润色成功时把 tab 切到 final。
-    // 不直接跳 final 是因为 draft_only=true 模式下 finalText 是空的，
-    // 跳过去用户只会看到空白成稿，体验更差。
-    if (s === "done") activeTab.value = "draft";
+    // done 分支按结果三分（finalize 流式早返回，切 tab/toast 必须在这里
+    // 等真正 done 才做，不能在 polishAll 里同步判 status）：
+    if (s === "done") {
+      if (article.factcheck?.blocked) {
+        // 被事实核对拦下：审查面板接管，不切 tab。
+      } else if (article.finalText.trim()) {
+        // 整篇润色（finalize）成稿就绪 → 切成稿 tab + 成功提示。
+        activeTab.value = "final";
+        toast.success("整篇润色完成");
+      } else {
+        // draft_only 起飞完成、finalText 还空 → 停初稿 tab 让用户检查后再润色。
+        activeTab.value = "draft";
+      }
+    }
     // 失败时不在创作区里显示红条；直接弹全局失败 modal + 回首页。
     // 注意 prev !== "error" 是去重：watcher 在 reactive 重置时也可
     // 能再触发一次 (status 重新等于 "error")，防止弹两次。
@@ -2149,12 +2144,12 @@ const tabSectionLabel = computed(() => {
                   color: '#fff',
                   border: '1px solid var(--primary)',
                 }"
-                :disabled="!article.draftText.trim() || polishing"
+                :disabled="!article.draftText.trim() || polishing || article.isRunning"
                 @click="polishAll"
               >
-                <Spinner v-if="polishing" :size="13" />
+                <Spinner v-if="polishing || article.isRunning" :size="13" />
                 <Icon v-else name="wand" :size="13" />
-                <span>{{ polishing ? "润色中…" : "整篇润色" }}</span>
+                <span>{{ (polishing || article.isRunning) ? "润色中…" : "整篇润色" }}</span>
               </button>
               <button
                 type="button"
