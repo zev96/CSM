@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -264,13 +265,13 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
 def finalize_draft(
     job_id: str, *,
-    chain_steps: list["chain_service.ChainStepInput"],
+    chain_steps: list[chain_service.ChainStepInput],
     draft: str,
     plan: Any, index: Any, registry: Any, category: str | None,
     keyword: str, title: str | None, angle: Angle | None,
     provider: str | None, model: str | None,
     cfg: Any, out_dir: Path,
-    checkpoint, on_pass,
+    checkpoint: Callable[[], None], on_pass: Callable[[Any], None],
     stage_index: int, stage_total: int,
 ) -> FinalizeOutcome:
     """毛坯 → 成稿：注入型号事实 + 角度指令 + skill 链多-pass + 导出前事实核对。
