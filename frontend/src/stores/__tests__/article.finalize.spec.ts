@@ -85,7 +85,9 @@ describe("article store — finalize（整篇润色=成稿增强）", () => {
     expect(a.status).toBe("done");
   });
 
-  it("finalize 轻 reset：保留 draftText（链输入），重置 finalText/passes", async () => {
+  it("finalize 轻 reset：POST 成功后才清 finalText/passes，draftText（链输入）始终保留", async () => {
+    // 现在 finalText/passes/factcheck 的清空移到 POST 成功之后 —— postMock
+    // resolve 后清空已执行，故 await finalize() 后断言三者已重置。
     postMock.mockResolvedValueOnce({ data: { job_id: "job-A" } });
     const a = useArticle();
     seedAfterTakeoff(a);
@@ -104,5 +106,31 @@ describe("article store — finalize（整篇润色=成稿增强）", () => {
     await expect(a.finalize()).resolves.toBeUndefined();
     expect(a.status).toBe("error");
     expect(a.error).toBe("plan cache miss");
+  });
+
+  it("finalize POST 失败 → 保留旧 finalText/passes（不在 POST 前清空）", async () => {
+    // POST 失败时用户审过的成稿/链预览不能丢 —— 清空推迟到 POST 成功后，
+    // 失败路径不触达清空逻辑。
+    postMock.mockRejectedValueOnce({ response: { data: { detail: "plan cache miss" } } });
+    const a = useArticle();
+    seedAfterTakeoff(a);
+    a.finalText = "旧成稿";
+    a.passes = [{ index: 0, role: "persona", skill_id: "x", skill_name: "x", output: "old", input_chars: 1, output_chars: 1 }];
+    await a.finalize();
+    expect(a.status).toBe("error");
+    expect(a.finalText).toBe("旧成稿");
+    expect(a.passes.length).toBe(1);
+  });
+
+  it("finalize isFinalizing 生命周期：POST 成功后 true（流进行中）→ done 后 false", async () => {
+    postMock.mockResolvedValueOnce({ data: { job_id: "job-A" } });
+    const a = useArticle();
+    seedAfterTakeoff(a);
+    await a.finalize();
+    // POST resolve、_subscribe 已挂、SSE 流进行中 —— isFinalizing 为 true
+    expect(a.isFinalizing).toBe(true);
+    // done 到达 → _teardown 清回 false
+    sseHandlers.done({ final_text: "成稿", passes: [], document: null, draft: "用户编辑后的初稿", title: "T" });
+    expect(a.isFinalizing).toBe(false);
   });
 });

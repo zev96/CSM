@@ -137,6 +137,10 @@ interface ArticleState {
   // Phase 2b skill 链逐 pass 输出 —— SSE `pass` 事件逐个 push，`done`
   // 带完整 `passes` 时整体覆盖。submit 时清空。无链（单 skill 旧路径）→ [].
   passes: ChainPass[];
+  // 整篇润色（finalize）SSE 进行中为 true，驱动 ArticleView 进度卡显示
+  // 「润色中」而非「组装中」。POST 失败 / done / error / cancel 都清回 false。
+  // 起飞（submit）不算润色，所以 submit 的 reset 块里也清成 false。
+  isFinalizing: boolean;
 }
 
 export const useArticle = defineStore("article", {
@@ -164,6 +168,7 @@ export const useArticle = defineStore("article", {
     factcheck: null,
     angleTaxonomy: null,
     passes: [],
+    isFinalizing: false,
   }),
   getters: {
     progress(state): number {
@@ -194,6 +199,7 @@ export const useArticle = defineStore("article", {
       this.template = null;
       this.factcheck = null;
       this.passes = [];
+      this.isFinalizing = false; // 起飞不是润色 —— 清掉残留的润色标志
 
       const sidecar = useSidecar();
       try {
@@ -338,11 +344,6 @@ export const useArticle = defineStore("article", {
         /* 网络异常 —— 事件流自会收尾 */
       }
     },
-    /** Replace the local final text — used by polish results that the
-     * user accepts manually (no auto-write back to disk). */
-    setFinalText(text: string) {
-      this.finalText = text;
-    },
     async fetchTitleCandidates(): Promise<void> {
       if (!this.lastRequest) return;
       const sidecar = useSidecar();
@@ -469,13 +470,11 @@ export const useArticle = defineStore("article", {
     async finalize(): Promise<void> {
       if (!this.lastJobId || !this.lastRequest || !this.draftText.trim()) return;
       this._teardown();
+      this.isFinalizing = true; // 进入润色 —— 进度卡据此显示「润色中」
       this.status = "running";
       this.error = null;
       this.currentStage = null;
       this.stageIndex = -1;
-      this.finalText = "";
-      this.passes = [];
-      this.factcheck = null;
 
       const sidecar = useSidecar();
       const req = this.lastRequest;
@@ -495,10 +494,17 @@ export const useArticle = defineStore("article", {
         );
         this.jobId = resp.data.job_id;
       } catch (e: any) {
+        // POST 失败（如 404 plan cache miss）：保留旧成稿/链预览不清空，
+        // 只回错误态。isFinalizing 复位。
+        this.isFinalizing = false;
         this.status = "error";
         this.error = e?.response?.data?.detail ?? e?.message ?? String(e);
         return;
       }
+      // POST 成功才清旧成稿，准备接收新链输出。
+      this.finalText = "";
+      this.passes = [];
+      this.factcheck = null;
       this._subscribe(this.jobId!);
     },
     async exportArticle(opts: { format: "markdown" | "docx"; include_dedup_report?: boolean }) {
@@ -575,6 +581,9 @@ export const useArticle = defineStore("article", {
       }
       this.stop = null;
       this.jobId = null;
+      // 任何收尾（done / error / cancel）都清润色标志 —— finalize 的
+      // SSE done/error handler 调 _teardown，故润色结束时 isFinalizing 自动归 false。
+      this.isFinalizing = false;
     },
   },
 });
