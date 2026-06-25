@@ -12,7 +12,7 @@ from csm_core.angle import Angle
 
 from ..auth import RequireToken
 from ..event_bus import bus
-from ..services import factcheck_service, generate_service
+from ..services import assembler_service, factcheck_service, generate_service
 
 router = APIRouter(tags=["generate"], dependencies=[RequireToken])
 
@@ -106,3 +106,27 @@ def resolve_factcheck(job_id: str, body: ResolveFactcheckBody) -> dict:
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"no pending fact-check for job {job_id}")
+
+
+class FinalizeBody(BaseModel):
+    draft: str = Field(min_length=1)
+    keyword: str = Field(min_length=1)
+    title: str | None = None
+    angle: Angle | None = None
+    skill_id: str | None = None
+    skill_chain: list[str] | None = None
+    provider: str | None = None
+    model: str | None = None
+
+
+@router.post("/api/generate/{job_id}/finalize", response_model=JobAccepted, status_code=202)
+def finalize_generate(job_id: str, body: FinalizeBody) -> JobAccepted:
+    """在 takeoff 初稿基础上跑「注入+角度+链」成稿。复用 job_id 重开流。
+    缓存 plan 已淘汰 / job_id 未知 → 404（前端提示重新起飞）。"""
+    if assembler_service.get_plan(job_id) is None:
+        raise HTTPException(status_code=404, detail=f"plan cache miss: {job_id}")
+    req = generate_service.FinalizeRequest(
+        **body.model_dump(exclude={"angle"}), angle=body.angle,
+    )
+    generate_service.submit_finalize(job_id, req)
+    return JobAccepted(job_id=job_id, stream_url=f"/api/events/{job_id}")
