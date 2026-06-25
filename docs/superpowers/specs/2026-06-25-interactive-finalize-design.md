@@ -190,8 +190,11 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             raise FileNotFoundError(f"template not found: {entry.template_id}")
         template = load_template(tpl_path)
 
-        # 复用最近一次 vault 扫描（reroll 同款）；registry 重建一次。
-        index = vault_service.cached() or vault_service.scan(vault_root)
+        # 新鲜 scan + registry（与 _run_job 一致）。注意 takeoff 走的是
+        # scan_vault 直调、不写 vault_service._index，故此处不复用
+        # vault_service.cached()（可能为 None / 陈旧），重新扫描保证 scopes
+        # 能命中 plan 选中的型号。vault 扫描非瓶颈（链 LLM 才是）。
+        index = scan_vault(vault_root)
         registry = build_brand_registry(vault_root)
 
         # 链解析复用 _resolve_chain（单 skill_id 找不到抛、多链失效跳过+warning）。
@@ -361,7 +364,7 @@ if (article.status === "done" && article.finalText) {
 ## 9. 边界与风险
 
 - **缓存 plan 淘汰 → 404**：LRU 50 满 / sidecar 重启 → `get_plan` miss → 端点 404。前端 `finalize()` 失败 toast「请重新生成初稿」。可接受（单篇活跃文章场景下罕见）。
-- **vault drift**：finalize 重建 registry 反映**当前** vault，缓存 plan 反映**起飞时** vault。两者间 vault 变动（共享盘）会让 scopes 对不齐型号。罕见、影响小（事实注入/核对略偏），v1 接受并记录。
+- **vault drift**：finalize 新鲜 scan+registry 反映**当前** vault，缓存 plan 反映**起飞时**采样。两者间 vault 变动（共享盘）→ plan 选中的型号在新索引里可能查不到，scopes 缺该型号事实。罕见、影响小（注入/核对略偏，不报错），v1 接受并记录。
 - **并发整篇润色**：`bus.stream` 已拒绝同 job_id 并发流（第二条 attach 被拒 + 自重连）。前端按钮 `article.isRunning` 禁用防重复点击。
 - **takeoff 未起飞就点润色**：`finalize()` 头部 `!lastJobId || !lastRequest || !draftText.trim()` 守卫直接 return（demo 模式仍走假弹窗，不调 finalize）。
 
