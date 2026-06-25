@@ -66,6 +66,19 @@ class GenerateRequest:
 
 
 @dataclass
+class FinalizeRequest:
+    """交互整篇润色入参。draft = 用户审/编辑后的初稿；plan 从缓存取。"""
+    draft: str
+    keyword: str
+    title: str | None = None
+    angle: Angle | None = None
+    skill_id: str | None = None
+    skill_chain: list[str] | None = None
+    provider: str | None = None
+    model: str | None = None
+
+
+@dataclass
 class FinalizeOutcome:
     """finalize_draft 的产出。blocked=True 时 bus 已 finish(blocked-done)，
     调用方须停下不导出。"""
@@ -256,6 +269,80 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         bus.fail(job_id, error="cancelled", cancelled=True)
     except Exception as e:
         logger.exception("generate job %s failed", job_id)
+        bus.fail(job_id, error=f"{type(e).__name__}: {e}")
+    finally:
+        with _state_lock:
+            _live.discard(job_id)
+            _cancelled.discard(job_id)
+
+
+def submit_finalize(job_id: str, req: FinalizeRequest) -> str:
+    """在既有 takeoff job_id 上重开一条流，提交 finalize worker。
+    调用方（路由）须先确认缓存 plan 存在（否则 404）。"""
+    bus.create_job(job_id)
+    with _state_lock:
+        _live.add(job_id)
+    _get_executor().submit(_finalize_job, job_id, req)
+    return job_id
+
+
+def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
+    """整篇润色 worker：缓存 plan + 编辑后 draft → 注入+角度+链 → 成稿（不导出）。"""
+    try:
+        cfg = config_service.load()
+        if not cfg.vault_root:
+            raise ValueError("AppConfig.vault_root is unset")
+        if not cfg.out_dir:
+            raise ValueError("AppConfig.out_dir is unset")
+        vault_root = Path(cfg.vault_root)
+        out_dir = Path(cfg.out_dir)
+
+        entry = assembler_service.get_plan(job_id)
+        if entry is None:
+            raise FileNotFoundError(f"plan cache miss: {job_id}")
+        plan = entry.plan
+
+        tpl_path = templates_service.resolve_dir() / f"{entry.template_id}.json"
+        if not tpl_path.exists():
+            raise FileNotFoundError(f"template not found: {entry.template_id}")
+        template = load_template(tpl_path)
+
+        # 新鲜 scan + registry（与 _run_job 一致；takeoff 走 scan_vault 直调、
+        # 不写 vault_service._index，故不复用 cached，重扫保证 scopes 命中型号）。
+        _checkpoint(job_id)
+        index = scan_vault(vault_root)
+        registry = build_brand_registry(vault_root)
+
+        chain_steps = _resolve_chain(req, cfg)
+
+        _checkpoint(job_id)
+        outcome = finalize_draft(
+            job_id,
+            chain_steps=chain_steps, draft=req.draft,
+            plan=plan, index=index, registry=registry, category=template.product,
+            keyword=req.keyword, title=req.title, angle=req.angle,
+            provider=req.provider, model=req.model,
+            cfg=cfg, out_dir=out_dir,
+            checkpoint=lambda: _checkpoint(job_id),
+            on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
+            stage_index=0, stage_total=1,
+        )
+        if outcome.blocked:
+            return  # finalize_draft 已发 blocked-done
+
+        bus.finish(
+            job_id,
+            document=None,
+            plan=_plan_to_dict(plan),
+            draft=req.draft,
+            final_text=outcome.final_text,
+            passes=outcome.passes,
+        )
+    except _CancelledGenerate:
+        logger.info("finalize job %s cancelled by user", job_id)
+        bus.fail(job_id, error="cancelled", cancelled=True)
+    except Exception as e:
+        logger.exception("finalize job %s failed", job_id)
         bus.fail(job_id, error=f"{type(e).__name__}: {e}")
     finally:
         with _state_lock:
