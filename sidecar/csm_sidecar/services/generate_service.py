@@ -395,6 +395,7 @@ def _rerun_job(job_id: str, pass_index: int) -> None:
         bus.fail(job_id, error="cancelled", cancelled=True)
     except (KeyError, IndexError) as e:
         # 缓存淘汰 / 越界（路由已同步前置校验，这里是竞态兜底）。
+        logger.warning("rerun job %s cache/index error (race): %s", job_id, e)
         bus.fail(job_id, error=f"{type(e).__name__}: {e}")
     except Exception as e:
         logger.exception("rerun job %s failed", job_id)
