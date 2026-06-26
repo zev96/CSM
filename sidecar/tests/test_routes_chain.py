@@ -50,6 +50,7 @@ def test_rerun_200_returns_passes_and_final(client: TestClient, monkeypatch):
     assert len(data["passes"]) == 2
     assert data["passes"][1]["output"] == "RR"
     assert data["final_text"] == data["passes"][-1]["output"]
+    assert data["cost"]["currency"] == "CNY"
 
 
 def test_rerun_404_unknown_job(client: TestClient):
