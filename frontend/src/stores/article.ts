@@ -221,6 +221,8 @@ export const useArticle = defineStore("article", {
   actions: {
     async submit(req: GenerateRequest): Promise<void> {
       this._teardown();
+      _teardownRerun();          // 起新生成 —— 放弃在跑的 rerun 流
+      this.rerunningIndex = null;
       this.lastRequest = req;
       this.status = "running";
       this.error = null;
@@ -509,6 +511,8 @@ export const useArticle = defineStore("article", {
     async finalize(): Promise<void> {
       if (!this.lastJobId || !this.lastRequest || !this.draftText.trim()) return;
       this._teardown();
+      _teardownRerun();          // 进入整篇润色 —— 放弃在跑的 rerun 流
+      this.rerunningIndex = null;
       this.isFinalizing = true; // 进入润色 —— 进度卡据此显示「润色中」
       this.status = "running";
       this.error = null;

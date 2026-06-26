@@ -65,4 +65,15 @@ describe("article store — 流式重跑", () => {
     await a.cancelRerun();
     expect(postMock).toHaveBeenCalledWith("/api/generate/j3/cancel");
   });
+
+  it("SSE error（含 cancelled）→ 清 rerunningIndex（取消链路核心收尾）", async () => {
+    const a = useArticle();
+    a.lastJobId = "j5";
+    a.passes = [mkPass(0, "A")];
+    postMock.mockResolvedValueOnce({ data: { job_id: "j5" } });
+    await a.rerunPass(0);
+    expect(a.rerunningIndex).toBe(0);
+    sseHandlers.error({ cancelled: true });
+    expect(a.rerunningIndex).toBeNull();
+  });
 });
