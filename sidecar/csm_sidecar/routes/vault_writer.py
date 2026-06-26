@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..auth import RequireToken
@@ -23,7 +23,7 @@ class NoteBody(BaseModel):
     rel_folder: str = Field(min_length=1)
     filename: str = Field(min_length=1)
     frontmatter: dict[str, Any] = Field(default_factory=dict)
-    body_shape: str
+    body_shape: Literal["variants", "spec_table"]
     variants: list[str] | None = None
     spec_rows: list[SpecRow] | None = None
 
@@ -44,7 +44,7 @@ def writable_folders() -> dict[str, Any]:
     try:
         return {"folders": vault_writer_service.list_folders()}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("/api/vault/plan")
@@ -56,7 +56,7 @@ def plan(body: NoteBody) -> dict[str, Any]:
             variants=body.variants, spec_rows=_spec_rows(body),
             today=date.today().isoformat())
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("/api/vault/commit")
@@ -68,9 +68,13 @@ def commit(body: NoteBody) -> dict[str, Any]:
             variants=body.variants, spec_rows=_spec_rows(body),
             today=date.today().isoformat())
     except FileExistsError as e:
-        raise HTTPException(status_code=409, detail=f"同名笔记已存在: {e}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"同名笔记已存在: {e}")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except OSError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"写入失败：素材库不可写（共享盘断开或文件被占用）: {e}")
 
 
 @router.post("/api/vault/undo")
@@ -78,4 +82,8 @@ def undo(body: UndoBody) -> dict[str, Any]:
     try:
         return vault_writer_service.undo(body.model_dump())
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except OSError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"撤销失败：素材库不可写（共享盘断开或文件被占用）: {e}")

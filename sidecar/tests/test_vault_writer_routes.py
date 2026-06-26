@@ -81,3 +81,21 @@ def test_path_escape_400(client, tmp_path):
 def test_no_vault_root_400(client):
     config_service.patch({"vault_root": None})
     assert client.get("/api/vault/writable-folders").status_code == 400
+
+
+def test_oserror_maps_to_503(client, tmp_path, monkeypatch):
+    _use_vault(_seed_vault(tmp_path))
+    from csm_sidecar.routes import vault_writer as vw
+    def boom(**kwargs):
+        raise OSError("share offline")
+    monkeypatch.setattr(vw.vault_writer_service, "commit", boom)
+    body = {"rel_folder": "科普模块/吸尘器/挑选攻略", "filename": "吸尘器-y.md",
+            "frontmatter": {"产品": "吸尘器"}, "body_shape": "variants", "variants": ["x"]}
+    assert client.post("/api/vault/commit", json=body).status_code == 503
+
+
+def test_unknown_body_shape_422(client, tmp_path):
+    _use_vault(_seed_vault(tmp_path))
+    body = {"rel_folder": "科普模块/吸尘器/挑选攻略", "filename": "吸尘器-x.md",
+            "frontmatter": {"产品": "吸尘器"}, "body_shape": "banana", "variants": ["x"]}
+    assert client.post("/api/vault/commit", json=body).status_code == 422
