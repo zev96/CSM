@@ -37,20 +37,17 @@ def _seed_chain(job_id: str = "j-route", monkeypatch=None):
     )
 
 
-def test_rerun_200_returns_passes_and_final(client: TestClient, monkeypatch):
+def test_rerun_202_accepts_and_submits(client: TestClient, monkeypatch):
     _seed_chain("j-ok")
-    # rerun 时 client=None → 走 build_client；patch 成确定性序列
-    monkeypatch.setattr(chain_service.llm_factory, "build_client",
-                        lambda **k: type("C", (), {
-                            "complete": staticmethod(lambda *, system, user, temperature=None: "RR"),
-                        })())
+    captured: dict = {}
+    monkeypatch.setattr(generate_service, "submit_rerun",
+                        lambda job_id, pass_index: captured.update(job_id=job_id, idx=pass_index) or job_id)
     resp = client.post("/api/chain/rerun", json={"job_id": "j-ok", "pass_index": 1})
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     data = resp.json()
-    assert len(data["passes"]) == 2
-    assert data["passes"][1]["output"] == "RR"
-    assert data["final_text"] == data["passes"][-1]["output"]
-    assert data["cost"]["currency"] == "CNY"
+    assert data["job_id"] == "j-ok"
+    assert data["stream_url"] == "/api/events/j-ok"
+    assert captured == {"job_id": "j-ok", "idx": 1}
 
 
 def test_rerun_404_unknown_job(client: TestClient):
