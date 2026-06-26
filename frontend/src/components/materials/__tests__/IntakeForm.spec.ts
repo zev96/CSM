@@ -40,4 +40,16 @@ describe("IntakeForm", () => {
     const prod = w.find('[data-fm="产品"]').element as HTMLInputElement;
     expect(prod.value).toBe("吸尘器");
   });
+
+  it("commit 成功后保持 folder 选中且撤销按钮可达", async () => {
+    const w = mount(IntakeForm);
+    await new Promise((r) => setTimeout(r));
+    await w.find('[data-folder="科普模块/吸尘器/挑选攻略"]').trigger("click");
+    await w.find('[data-filename]').setValue("吸尘器-x.md");
+    postMock.mockResolvedValue({ data: { created_rel: "科普模块/吸尘器/挑选攻略/吸尘器-x.md", content_sha: "s", index_rel: null, index_line: null } });
+    await w.find('[data-submit]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(w.find('[data-undo]').exists()).toBe(true);   // 撤销 still rendered
+    expect(w.find('[data-filename]').exists()).toBe(true); // form not collapsed to placeholder
+  });
 });

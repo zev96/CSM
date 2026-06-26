@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import Pill from "@/components/ui/Pill.vue";
 import { useMaterials, type FolderProfile, type NotePayload } from "@/stores/materials";
@@ -13,6 +13,7 @@ const filename = ref("");
 const fm = reactive<Record<string, string>>({});
 const variants = ref<string[]>([""]);
 const specRows = ref<{ group: string; key: string; value: string }[]>([{ group: "", key: "", value: "" }]);
+const submitting = ref(false);
 
 onMounted(() => m.loadFolders());
 
@@ -55,6 +56,8 @@ watch([selected, filename, fm, variants, specRows], () => {
   }, 350);
 }, { deep: true });
 
+onUnmounted(() => { if (_t) clearTimeout(_t); });
+
 const filenameError = computed(() => {
   const v = filename.value.trim();
   if (!v) return "";
@@ -65,10 +68,15 @@ const filenameError = computed(() => {
 
 async function submit(): Promise<void> {
   const p = buildPayload();
-  if (!p || filenameError.value || m.currentPlan?.conflict) return;
-  if (await m.commitNote(p)) {
-    notify.push(`已入库：${p.filename}`, { tone: "success" });
-    selected.value = null;
+  if (!p || filenameError.value || m.currentPlan?.conflict || submitting.value) return;
+  submitting.value = true;
+  try {
+    if (await m.commitNote(p)) {
+      notify.push(`已入库：${p.filename}`, { tone: "success" });
+      if (selected.value) pick(selected.value);   // reset fields, keep folder + 撤销 可达
+    }
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -151,12 +159,13 @@ function rmSpecRow(i: number): void { specRows.value.splice(i, 1); }
 
         <div class="flex items-center gap-2 pt-2">
           <button
+            data-submit
             class="rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
-            :style="{ background: 'var(--accent, #2563eb)' }"
-            :disabled="!!filenameError || !!m.currentPlan?.conflict"
+            :style="{ background: 'var(--primary)' }"
+            :disabled="!!filenameError || !!m.currentPlan?.conflict || submitting"
             @click="submit"
           >确认入库</button>
-          <button v-if="m.lastReceipt" class="rounded-lg px-3 py-1.5 text-sm text-ink/70" @click="undo">
+          <button v-if="m.lastReceipt" data-undo class="rounded-lg px-3 py-1.5 text-sm text-ink/70" @click="undo">
             撤销上次写入
           </button>
         </div>
