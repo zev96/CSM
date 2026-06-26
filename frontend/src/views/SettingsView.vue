@@ -29,6 +29,7 @@ import Spinner from "@/components/ui/Spinner.vue";
 import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
 import XhsPromptsCard from "@/components/settings/XhsPromptsCard.vue";
 import BrandMemoryCard from "@/components/settings/BrandMemoryCard.vue";
+import PricingCard from "@/components/settings/PricingCard.vue";
 import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection.vue";
 import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
@@ -1247,6 +1248,10 @@ async function saveAccountEdit() {
           <!-- ━━━━━━━━ 品牌记忆 ━━━━━━━━ -->
           <template v-else-if="section === 'brand-memory'">
             <BrandMemoryCard />
+            <!-- 模型单价 —— 改 AppConfig.pricing.*，供成稿区「≈¥」成本估算用 -->
+            <div class="mt-4">
+              <PricingCard />
+            </div>
           </template>
 
           <!-- 导出 section 已合并到「通用」，「导出后操作」默认无动作。 -->

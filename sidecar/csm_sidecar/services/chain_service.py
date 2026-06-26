@@ -11,6 +11,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from csm_core.llm import pricing
 from csm_core.llm.prompts import PromptInputs, build_prompt, build_refine_prompt
 
 from . import llm_factory
@@ -38,6 +39,8 @@ class ChainPass:
             "index": self.index, "skill_id": self.skill_id, "role": self.role,
             "skill_name": self.skill_name,
             "input_chars": len(self.input), "output_chars": len(self.output),
+            "input_tokens": pricing.estimate_tokens(self.input),
+            "output_tokens": pricing.estimate_tokens(self.output),
             "output": self.output,
         }
 

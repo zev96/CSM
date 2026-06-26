@@ -184,6 +184,9 @@ class AppConfig(BaseModel):
     concurrency: int = 3
     upload_training_hints: bool = False
     export_format: Literal["markdown", "docx"] = "markdown"
+    # 模型单价覆盖（¥/1M tokens）。空 = 用 csm_core.llm.pricing.DEFAULT_PRICES。
+    # key=model 名，value={"input": float, "output": float}。设置页可改、深合并 patch。
+    pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
     close_action: CloseAction = "minimize_to_tray"
     tray_first_minimize_shown: bool = False
 

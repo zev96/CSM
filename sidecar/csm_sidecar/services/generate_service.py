@@ -31,6 +31,7 @@ from csm_core.vault.brand_registry import build_brand_registry
 from csm_core.vault.scanner import scan_vault
 from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
 from csm_core.factcheck import check_facts
+from csm_core.llm import pricing
 
 from ..event_bus import bus
 from . import (
@@ -85,6 +86,9 @@ class FinalizeOutcome:
     final_text: str
     passes: list[dict[str, Any]]
     blocked: bool
+    # 链成本摘要（{input_tokens, output_tokens, cost, currency}）。在 finalize_draft
+    # 算一次，blocked 与非 blocked done 共用，调用方原样塞进 bus.finish。
+    cost: dict[str, Any]
 
 
 # Pool sized so a typical desktop can run a generate + a batch + a polish
@@ -263,6 +267,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             draft=draft,
             final_text=final_text,
             passes=outcome.passes,
+            cost=outcome.cost,
         )
     except _CancelledGenerate:
         logger.info("generate job %s cancelled by user", job_id)
@@ -344,6 +349,7 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             draft=req.draft,
             final_text=outcome.final_text,
             passes=outcome.passes,
+            cost=outcome.cost,
         )
     except _CancelledGenerate:
         logger.info("finalize job %s cancelled by user", job_id)
@@ -409,14 +415,20 @@ def finalize_draft(
     final_text = state.final_text
     passes = [p.to_dict() for p in state.passes]
 
+    # 链成本：在此算一次（吃 to_dict 出的 input_tokens/output_tokens），blocked 与
+    # 非 blocked done 共用。实际 model = 显式 model 否则该 provider 默认 model。
+    cost = pricing.chain_cost(
+        passes, _effective_model(model, provider, cfg), cfg.pricing)
+
     # 导出前硬门禁：命中越界则缓存待导出 + done(blocked)，不导出。
     if _maybe_block_for_factcheck(
         job_id, final_text=final_text, scopes=scopes, draft=draft,
         brand_facts=brand_facts if cfg_bm.inject else None,
         title=title, cfg=cfg, plan=plan, out_dir=out_dir, passes=passes,
+        cost=cost,
     ):
-        return FinalizeOutcome(final_text=final_text, passes=passes, blocked=True)
-    return FinalizeOutcome(final_text=final_text, passes=passes, blocked=False)
+        return FinalizeOutcome(final_text=final_text, passes=passes, blocked=True, cost=cost)
+    return FinalizeOutcome(final_text=final_text, passes=passes, blocked=False, cost=cost)
 
 
 def _resolve_chain(req: GenerateRequest | FinalizeRequest, cfg) -> list[chain_service.ChainStepInput]:
@@ -453,6 +465,7 @@ def _maybe_block_for_factcheck(
     job_id: str, *, final_text: str, scopes: list, draft: str,
     brand_facts: str | None, title: str | None = None, cfg, plan, out_dir: Path,
     passes: list[dict[str, Any]] | None = None,
+    cost: dict[str, Any] | None = None,
 ) -> bool:
     """导出前事实核对。命中越界 → 缓存待导出 + 以 done(blocked) 收尾、返回
     True（调用方须在导出前停下）。核对关 / 无型号 / 成稿干净 → False。
@@ -478,12 +491,21 @@ def _maybe_block_for_factcheck(
         job_id, document=None, plan=_plan_to_dict(plan), draft=draft,
         final_text=final_text,
         passes=passes or [],
+        cost=cost,
         factcheck={
             "blocked": True,
             "violations": [v.model_dump() for v in report.violations],
         },
     )
     return True
+
+
+def _effective_model(model: str | None, provider: str | None, cfg: Any) -> str | None:
+    """成本用的实际 model：显式 model 优先，否则取该 provider 的默认 model。"""
+    if model:
+        return model
+    prov = provider or cfg.default_provider
+    return cfg.default_model.get(prov) if prov else None
 
 
 def _plan_to_dict(plan: Any) -> dict[str, Any]:

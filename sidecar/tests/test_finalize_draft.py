@@ -146,3 +146,7 @@ def test_finalize_draft_blocked_carries_passes(tmp_path: Path, monkeypatch):
     assert fin["factcheck"]["blocked"] is True
     assert fin["document"] is None
     assert len(fin["passes"]) == 1
+    # 被事实核对拦下的 blocked done 也带 cost（成本已花，带上更准）；
+    # outcome 与 blocked done 共用同一份 cost。
+    assert outcome.cost["currency"] == "CNY"
+    assert fin["cost"]["currency"] == "CNY"
