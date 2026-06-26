@@ -22,6 +22,13 @@ import { subscribe } from "@/api/client";
 import { useSidecar } from "./sidecar";
 import { useNotifications } from "@/composables/useNotifications";
 
+// rerun 流的 teardown 句柄（独立于 generate/finalize 的 this.stop）。Pinia state
+// 不宜放函数，用模块级变量存。
+let _rerunStop: (() => void) | null = null;
+function _teardownRerun() {
+  if (_rerunStop) { try { _rerunStop(); } catch { /* ignore */ } _rerunStop = null; }
+}
+
 /** 每次请求的选材意图（人群/卖点/语调），镜像后端 csm_core.angle.model.Angle。
  * 全可空：audience/tone 为 null、sellpoints 为 [] ⇔「不传角度」= 今天行为。 */
 export interface Angle {
@@ -158,6 +165,12 @@ interface ArticleState {
   // 「润色中」而非「组装中」。POST 失败 / done / error / cancel 都清回 false。
   // 起飞（submit）不算润色，所以 submit 的 reset 块里也清成 false。
   isFinalizing: boolean;
+  // 正在重跑的 pass index —— 流式重跑（rerunPass）进行中存该 pass index，
+  // 驱动 pass 卡的 loading / 取消按钮 + 互斥（同时只跑一个）。POST 失败 /
+  // SSE done / error 都清回 null。从 ArticleView 本地 ref 上提到 store，
+  // 因为流式下 store rerunPass 早返回（订阅后即 await 结束），本地 finally
+  // 会过早清掉 loading 态。
+  rerunningIndex: number | null;
 }
 
 export const useArticle = defineStore("article", {
@@ -187,6 +200,7 @@ export const useArticle = defineStore("article", {
     passes: [],
     cost: null,
     isFinalizing: false,
+    rerunningIndex: null,
   }),
   getters: {
     progress(state): number {
@@ -207,6 +221,8 @@ export const useArticle = defineStore("article", {
   actions: {
     async submit(req: GenerateRequest): Promise<void> {
       this._teardown();
+      _teardownRerun();          // 起新生成 —— 放弃在跑的 rerun 流
+      this.rerunningIndex = null;
       this.lastRequest = req;
       this.status = "running";
       this.error = null;
@@ -495,6 +511,8 @@ export const useArticle = defineStore("article", {
     async finalize(): Promise<void> {
       if (!this.lastJobId || !this.lastRequest || !this.draftText.trim()) return;
       this._teardown();
+      _teardownRerun();          // 进入整篇润色 —— 放弃在跑的 rerun 流
+      this.rerunningIndex = null;
       this.isFinalizing = true; // 进入润色 —— 进度卡据此显示「润色中」
       this.status = "running";
       this.error = null;
@@ -577,27 +595,43 @@ export const useArticle = defineStore("article", {
         return { ok: false, error: e?.response?.data?.detail ?? e?.message ?? String(e) };
       }
     },
-    /** 重跑链上第 `index` 个 pass（后端从该 pass 起级联其后所有 pass）。
-     * POST /api/chain/rerun {job_id, pass_index} → 用返回的 passes +
-     * final_text 覆盖本地。仿 resolveFactcheck：从不抛 —— 缓存淘汰 404 /
-     * 越界 400 / 网络异常都静默吞掉（调用方按需自行 toast）。 */
+    /** 重跑链上第 `index` 个 pass —— 异步流式（POST→202→订阅 SSE）。后端从该
+     * pass 级联其后所有 pass，逐 pass 经 SSE `pass` 实时替换 passes[index]，
+     * `done` 覆盖全量 + cost。轻量订阅（不碰 status/通知/tab）。从不抛。 */
     async rerunPass(index: number): Promise<void> {
       if (!this.lastJobId) return;
+      _teardownRerun();
+      this.rerunningIndex = index;
       const sidecar = useSidecar();
+      let jobId: string;
       try {
         const resp = await sidecar.client.post("/api/chain/rerun", {
-          job_id: this.lastJobId,
-          pass_index: index,
+          job_id: this.lastJobId, pass_index: index,
         });
-        if (Array.isArray(resp.data?.passes)) {
-          this.passes = resp.data.passes as ChainPass[];
-        }
-        this.finalText = resp.data?.final_text ?? this.finalText;
-        // 重跑后端重算整链成本 —— 响应带 cost 时更新（无则保持旧值）。
-        if (resp.data?.cost) this.cost = resp.data.cost as ChainCost;
+        jobId = resp.data.job_id;
       } catch {
-        /* 静默 —— 缓存淘汰 / 越界 / 网络异常，本地状态保持不变 */
+        this.rerunningIndex = null;  // 404/400/网络 静默（同今天从不抛）
+        return;
       }
+      _rerunStop = subscribe(`/api/events/${jobId}`, {
+        pass: (d: any) => { this.passes[d.index] = d as ChainPass; },
+        done: (d: any) => {
+          if (Array.isArray(d.passes)) this.passes = d.passes as ChainPass[];
+          if (d.cost) this.cost = d.cost as ChainCost;
+          if (typeof d.final_text === "string") this.finalText = d.final_text;
+          this.rerunningIndex = null;
+          _teardownRerun();
+        },
+        error: () => { this.rerunningIndex = null; _teardownRerun(); },  // 含 cancelled，静默
+      });
+    },
+    /** 取消进行中的重跑（复用 generate 的协作式取消端点，对 _live 里的同 job 生效）。
+     * 从不抛；真正收尾由 SSE error(cancelled) → 上面 error handler 清 rerunningIndex。 */
+    async cancelRerun(): Promise<void> {
+      if (this.lastJobId == null || this.rerunningIndex == null) return;
+      const sidecar = useSidecar();
+      try { await sidecar.client.post(`/api/generate/${this.lastJobId}/cancel`); }
+      catch { /* 网络异常 —— 事件流自会收尾 */ }
     },
     _teardown() {
       if (this.stop) {

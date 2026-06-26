@@ -48,13 +48,15 @@ describe("article store — 链成本", () => {
     expect(a.cost).toBeNull();
   });
 
-  it("rerunPass 成功带 cost → 更新 cost", async () => {
+  it("rerunPass 流式 done 带 cost → 更新 cost", async () => {
     postMock.mockResolvedValueOnce({ data: { job_id: "j4" } });
     const a = useArticle();
     await a.submit({ keyword: "k", template_id: "t", skill_chain: ["p"] });
     a.passes = [{ index: 0, role: "persona", skill_id: "p", skill_name: "x", output: "A", input_chars: 1, output_chars: 1, input_tokens: 1, output_tokens: 1 }];
-    postMock.mockResolvedValueOnce({ data: { passes: a.passes, final_text: "A", cost: { input_tokens: 5, output_tokens: 5, cost: 0.001, currency: "CNY" } } });
+    // 流式：POST 返回 {job_id}，cost 由 done 事件带来（不再同步从 resp 读）
+    postMock.mockResolvedValueOnce({ data: { job_id: "j4", stream_url: "/api/events/j4" } });
     await a.rerunPass(0);
+    sseHandlers.done({ passes: a.passes, final_text: "A", cost: { input_tokens: 5, output_tokens: 5, cost: 0.001, currency: "CNY" } });
     expect(a.cost?.cost).toBe(0.001);
   });
 });

@@ -111,34 +111,38 @@ describe("article store — skill 链 passes", () => {
     expect(a.finalText).toBe("成稿");
   });
 
-  it("rerunPass POSTs /api/chain/rerun 并更新 passes + finalText", async () => {
+  it("rerunPass POST→订阅 SSE，done 覆盖 passes + finalText", async () => {
     postMock.mockResolvedValueOnce({ data: { job_id: "j7" } });
     const a = useArticle();
     await a.submit({ keyword: "k", template_id: "t", skill_chain: ["p", "h"] });
     a.passes = [mkPass({ index: 0, output: "A" }), mkPass({ index: 1, output: "B" })];
-    const updated = [
-      mkPass({ index: 0, output: "A" }),
-      mkPass({ index: 1, output: "B2", output_chars: 2 }),
-    ];
-    postMock.mockResolvedValueOnce({ data: { passes: updated, final_text: "B2" } });
+    // 流式：POST 返回 {job_id}，passes 由 done 事件覆盖（不再同步从 resp 读）
+    postMock.mockResolvedValueOnce({ data: { job_id: "j7", stream_url: "/api/events/j7" } });
     await a.rerunPass(1);
     expect(postMock).toHaveBeenLastCalledWith("/api/chain/rerun", {
       job_id: "j7",
       pass_index: 1,
     });
+    const updated = [
+      mkPass({ index: 0, output: "A" }),
+      mkPass({ index: 1, output: "B2", output_chars: 2 }),
+    ];
+    sseHandlers.done({ passes: updated, final_text: "B2" });
     expect(a.passes[1].output).toBe("B2");
     expect(a.finalText).toBe("B2");
+    expect(a.rerunningIndex).toBeNull();
   });
 
-  it("rerunPass 从不抛 —— 网络异常静默吞掉", async () => {
+  it("rerunPass 从不抛 —— POST 失败静默吞掉", async () => {
     postMock.mockResolvedValueOnce({ data: { job_id: "j8" } });
     const a = useArticle();
     await a.submit({ keyword: "k", template_id: "t", skill_chain: ["p"] });
     a.passes = [mkPass({ index: 0, output: "A" })];
     postMock.mockRejectedValueOnce(new Error("boom"));
     await expect(a.rerunPass(0)).resolves.toBeUndefined();
-    // unchanged on failure
+    // POST 失败 → passes 不变、rerunningIndex 清回 null
     expect(a.passes[0].output).toBe("A");
+    expect(a.rerunningIndex).toBeNull();
   });
 
   it("成本 getter callCount / totalChars", async () => {

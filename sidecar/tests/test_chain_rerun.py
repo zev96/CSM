@@ -45,3 +45,28 @@ def test_rerun_index_out_of_range(fake_chain_client, chain_steps):
     _run_two(fake_chain_client, chain_steps)
     with pytest.raises(IndexError):
         chain_service.rerun("j", 9)
+
+
+def test_rerun_on_pass_per_pass(fake_chain_client, chain_steps):
+    _run_two(fake_chain_client, chain_steps)
+    seen = []
+    from csm_sidecar.services import chain_service as cs
+
+    class _Seq:
+        def __init__(self): self.n = 0
+        def complete(self, *, system, user, temperature=None):
+            self.n += 1; return f"R{self.n}"
+    cs.rerun("j", 0, client=_Seq(), on_pass=lambda p: seen.append(p.index))
+    assert seen == [0, 1]  # 从 pass0 级联 → 两段都回调，按序
+
+
+def test_rerun_checkpoint_cancels(fake_chain_client, chain_steps):
+    _run_two(fake_chain_client, chain_steps)
+    from csm_sidecar.services import chain_service as cs
+    import pytest
+
+    def _boom(): raise RuntimeError("cancelled-here")
+    with pytest.raises(RuntimeError, match="cancelled-here"):
+        cs.rerun("j", 0, client=type("C", (), {
+            "complete": staticmethod(lambda *, system, user, temperature=None: "x")})(),
+            checkpoint=_boom)

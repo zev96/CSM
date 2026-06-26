@@ -363,6 +363,49 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             _cancelled.discard(job_id)
 
 
+def submit_rerun(job_id: str, pass_index: int) -> str:
+    """在既有链 job_id 上重开一条流，提交 rerun worker（复用 job_id：链状态/cost
+    /取消都按同 id 同源）。调用方（路由）须先同步校验 job 存在 + pass_index 合法。"""
+    bus.create_job(job_id)
+    with _state_lock:
+        _cancelled.discard(job_id)
+        _live.add(job_id)
+    _get_executor().submit(_rerun_job, job_id, pass_index)
+    return job_id
+
+
+def _rerun_job(job_id: str, pass_index: int) -> None:
+    """rerun worker：从 pass_index 级联重跑，逐 pass 经 SSE 推，done 带 passes
+    + final_text + cost。复用 chain_service.rerun（流式回调）。"""
+    try:
+        cfg = config_service.load()
+        res = chain_service.rerun(
+            job_id, pass_index,
+            checkpoint=lambda: _checkpoint(job_id),
+            on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
+        )
+        state = chain_service.get_state(job_id)
+        model = _effective_model(
+            state.model if state else None,
+            state.provider if state else None, cfg) if state else None
+        cost = pricing.chain_cost(res["passes"], model, cfg.pricing)
+        bus.finish(job_id, passes=res["passes"], final_text=res["final_text"], cost=cost)
+    except _CancelledGenerate:
+        logger.info("rerun job %s cancelled by user", job_id)
+        bus.fail(job_id, error="cancelled", cancelled=True)
+    except (KeyError, IndexError) as e:
+        # 缓存淘汰 / 越界（路由已同步前置校验，这里是竞态兜底）。
+        logger.warning("rerun job %s cache/index error (race): %s", job_id, e)
+        bus.fail(job_id, error=f"{type(e).__name__}: {e}")
+    except Exception as e:
+        logger.exception("rerun job %s failed", job_id)
+        bus.fail(job_id, error=f"{type(e).__name__}: {e}")
+    finally:
+        with _state_lock:
+            _live.discard(job_id)
+            _cancelled.discard(job_id)
+
+
 def finalize_draft(
     job_id: str, *,
     chain_steps: list[chain_service.ChainStepInput],

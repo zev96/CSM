@@ -133,8 +133,15 @@ def run_chain(
     return state
 
 
-def rerun(job_id: str, pass_index: int, *, client: Any | None = None) -> dict[str, Any]:
-    """从 pass_index 起重跑（级联 pass_index..N），更新缓存，返回 {passes, final_text}。"""
+def rerun(
+    job_id: str, pass_index: int, *, client: Any | None = None,
+    checkpoint: Callable[[], None] = lambda: None,
+    on_pass: Callable[[ChainPass], None] = lambda p: None,
+) -> dict[str, Any]:
+    """从 pass_index 起重跑（级联 pass_index..N），更新缓存，返回 {passes, final_text}。
+
+    on_pass 逐段回调（流式）；checkpoint 每段前调（可取消）。两者默认 no-op =
+    同步调用零回归。"""
     state = get_state(job_id)
     if state is None:
         raise KeyError(f"unknown job_id: {job_id} (chain cache miss)")
@@ -145,12 +152,15 @@ def rerun(job_id: str, pass_index: int, *, client: Any | None = None) -> dict[st
     # 末段之前的输出即 pass_index 的 prev（step0 的 prev 不参与，_prompt_for 自取 draft）
     prev = state.passes[pass_index - 1].output if pass_index >= 1 else ""
     for idx in range(pass_index, len(state.passes)):
+        checkpoint()
         system, user, input_text = _prompt_for(state, idx, prev)
         out = client.complete(system=system, user=user)
         old = state.passes[idx]
-        state.passes[idx] = ChainPass(
+        p = ChainPass(
             index=idx, skill_id=old.skill_id, role=old.role,
             skill_name=old.skill_name, input=input_text, output=out)
+        state.passes[idx] = p
+        on_pass(p)
         prev = out
     _cache_put(state)
     return {"passes": [p.to_dict() for p in state.passes], "final_text": state.final_text}
