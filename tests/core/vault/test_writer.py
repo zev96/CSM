@@ -2,6 +2,7 @@ import hashlib
 from pathlib import Path
 import pytest
 from csm_core.vault import writer
+from csm_core.vault.note_parser import parse_note
 
 
 def _index_vault(root: Path) -> None:
@@ -117,3 +118,45 @@ def test_undo_skips_when_modified(tmp_path):
     warnings = writer.undo_write(receipt, tmp_path)
     assert (tmp_path / p.rel_path).exists()             # 没删
     assert any("已被改动" in w for w in warnings)
+
+
+def test_frontmatter_roundtrips_special_chars(tmp_path):
+    (tmp_path / "f").mkdir()
+    p = writer.plan_note(
+        tmp_path, rel_folder="f", filename="吸尘器-x.md",
+        frontmatter={"产品": "吸尘器", "描述": "吸力: 强劲", "型号": "3.10",
+                     "核心关键词": ["噪音: 低", "续航"]},
+        body_shape="variants", variants=["a"], today="2026-06-26")
+    writer.commit_note(p, tmp_path)
+    note = parse_note(tmp_path / p.rel_path)
+    assert note.frontmatter["描述"] == "吸力: 强劲"
+    assert note.frontmatter["型号"] == "3.10"          # stays string, not 3.1
+    assert note.frontmatter["核心关键词"] == ["噪音: 低", "续航"]
+
+
+def test_variants_over_cap_raises(tmp_path):
+    (tmp_path / "f").mkdir()
+    with pytest.raises(ValueError):
+        writer.plan_note(
+            tmp_path, rel_folder="f", filename="吸尘器-x.md",
+            frontmatter={"产品": "吸尘器"}, body_shape="variants",
+            variants=["x"] * 21, today="2026-06-26")
+
+
+def test_index_dedup_by_wikilink_across_dates(tmp_path):
+    _index_vault(tmp_path)
+    p1 = _plan(tmp_path)
+    writer.commit_note(p1, tmp_path)
+    (tmp_path / p1.rel_path).unlink()       # 删文件但留索引行
+    p2 = writer.plan_note(
+        tmp_path,
+        rel_folder="科普模块/吸尘器/挑选攻略",
+        filename="吸尘器-噪音选购.md",
+        frontmatter={"产品": "吸尘器", "素材类型": "科普选购", "核心关键词": ["噪音"]},
+        body_shape="variants",
+        variants=["看噪音分贝", "看降噪结构"],
+        today="2026-07-01",        # 不同日期
+    )
+    writer.commit_note(p2, tmp_path)
+    idx_text = (tmp_path / p2.index_rel).read_text(encoding="utf-8")
+    assert idx_text.count("[[吸尘器-噪音选购]]") == 1   # 按链接去重，不因换日期重复

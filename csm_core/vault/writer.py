@@ -9,6 +9,7 @@ and refuses to overwrite; undo_write is best-effort single-level.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,28 @@ from typing import Any
 from .note_parser import VARIANT_MARKERS
 
 _APP_BLOCK = "## App 新增（待人工归入）"
+_YAML_BARE_BOOL_NULL = {"true", "false", "null", "yes", "no", "on", "off", "~"}
+
+
+def _needs_quote(s: str) -> bool:
+    if s == "" or s != s.strip():
+        return True
+    if re.search(r":(\s|$)", s):          # colon-space or trailing colon
+        return True
+    if s[0] in "[]{}#&*!|>%@`\"',?-":      # YAML-special leading chars
+        return True
+    if re.fullmatch(r"[+-]?\d+(\.\d+)?", s):   # number-literal → keep as string
+        return True
+    if s.lower() in _YAML_BARE_BOOL_NULL:
+        return True
+    return False
+
+
+def _yaml_scalar(v: object) -> str:
+    s = str(v)
+    if _needs_quote(s):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
 
 
 @dataclass(frozen=True)
@@ -46,9 +69,9 @@ def _render_frontmatter(fm: dict[str, Any]) -> str:
     for k, v in fm.items():
         if isinstance(v, list):
             lines.append(f"{k}:")
-            lines.extend(f"  - {item}" for item in v)
+            lines.extend(f"  - {_yaml_scalar(item)}" for item in v)
         else:
-            lines.append(f"{k}: {v}")
+            lines.append(f"{k}: {_yaml_scalar(v)}")
     lines.append("---")
     return "\n".join(lines)
 
@@ -56,6 +79,8 @@ def _render_frontmatter(fm: dict[str, Any]) -> str:
 def _render_body(body_shape, variants, spec_rows) -> str:
     if body_shape == "variants":
         items = variants or []
+        if len(items) > len(VARIANT_MARKERS):
+            raise ValueError(f"变体数 {len(items)} 超过上限 {len(VARIANT_MARKERS)}")
         return "\n\n".join(
             f"{VARIANT_MARKERS[i]} {str(t).strip()}" for i, t in enumerate(items))
     if body_shape == "spec_table":
@@ -97,6 +122,13 @@ def plan_note(
     variants: list[str] | None = None,
     spec_rows: list[dict[str, Any]] | None = None,
 ) -> NotePlan:
+    """Render a structured note into a NotePlan (pure — no disk write).
+
+    Callers MUST pre-validate input: ``filename`` non-empty, ends with ``.md``,
+    no path separators; ``rel_folder`` non-empty. The engine assumes sanitized
+    input (the sidecar service enforces this) — 3b reuses the engine, so keep
+    that contract.
+    """
     vault_root = Path(vault_root)
     warnings: list[str] = []
     rel_path = f"{rel_folder}/{filename}"
@@ -124,8 +156,10 @@ def plan_note(
 def _append_index_line(idx_path: Path, line: str) -> None:
     raw = idx_path.read_text(encoding="utf-8-sig")
     lines = raw.splitlines()
-    if line in lines:
-        return  # idempotent
+    m = re.search(r"\[\[([^\]]+)\]\]", line)
+    link = f"[[{m.group(1)}]]" if m else line
+    if any(link in l for l in lines):
+        return  # idempotent by wikilink
     try:
         h = next(i for i, l in enumerate(lines) if l.strip() == _APP_BLOCK)
     except StopIteration:
