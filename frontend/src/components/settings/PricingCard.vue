@@ -4,7 +4,7 @@
  * 读写走 useConfig；PATCH /api/config 对嵌套 dict 深合并，每个 model 只发自己那条。
  * 单价用于成稿区「≈¥」成本估算（token 为本地 CJK 估算，非真实分词）。
  */
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 
 import Icon from "@/components/ui/Icon.vue";
 import Spinner from "@/components/ui/Spinner.vue";
@@ -27,15 +27,16 @@ const loading = ref(false);
 // 每 model 的当前覆盖值（空串=未覆盖，用默认占位）。
 const prices = reactive<Record<string, { input: string; output: string }>>({});
 
-function modelList(): string[] {
+// KNOWN ∪ cfg.default_model 的值，去重。computed 避免 template v-for 每次渲染新建数组。
+const models = computed<string[]>(() => {
   const dm = (cfg.data?.default_model ?? {}) as Record<string, string>;
   const fromCfg = Object.values(dm).filter(Boolean);
   return Array.from(new Set([...Object.keys(KNOWN), ...fromCfg]));
-}
+});
 
 function syncFromConfig() {
   const pr = (cfg.data?.pricing ?? {}) as Record<string, { input?: number; output?: number }>;
-  for (const m of modelList()) {
+  for (const m of models.value) {
     prices[m] = {
       input: pr[m]?.input != null ? String(pr[m].input) : "",
       output: pr[m]?.output != null ? String(pr[m].output) : "",
@@ -53,11 +54,15 @@ onMounted(async () => {
 
 async function commit(model: string) {
   const row = prices[model];
-  // 两格都空 = 不覆盖（删除该 model 的覆盖：发空对象会被深合并保留旧值，故只在有值时发）。
+  // 两格都填非负数才发 patch（0 = 零价/免费）。负数/非数/空格挡掉，避免后端
+  // 算出负成本。注：v1 不支持从 UI「清除覆盖回默认」（深合并保留旧值），
+  // 改官方调价时直接覆盖新值即可。
   const input = Number(row.input);
   const output = Number(row.output);
-  if (!row.input.trim() || !row.output.trim() || Number.isNaN(input) || Number.isNaN(output)) {
-    toast.info("单价两格都填正数才生效");
+  if (!row.input.trim() || !row.output.trim()
+      || Number.isNaN(input) || Number.isNaN(output)
+      || input < 0 || output < 0) {
+    toast.info("单价两格都填非负数才生效");
     return;
   }
   try {
@@ -89,7 +94,7 @@ async function commit(model: string) {
     </div>
 
     <div v-else class="mt-4 flex flex-col gap-3">
-      <div v-for="m in modelList()" :key="m" class="flex items-center gap-3">
+      <div v-for="m in models" :key="m" class="flex items-center gap-3">
         <span class="text-[12px] font-mono flex-1 truncate" :title="m">{{ m }}</span>
         <FormInput :data-price-input="m" :model-value="prices[m]?.input" type="number" width="80" debounce="blur"
           :placeholder="String(KNOWN[m]?.input ?? '')"

@@ -1485,7 +1485,7 @@ const tabSectionLabel = computed(() => {
                 <!-- 链成本 —— 有 passes 时显示「调用 N 次 · ≈X tokens · ≈¥Y」；
                      未知 model 无价（cost.cost==null）回退只显 token。 -->
                 <span v-if="article.passes.length" data-chain-cost>
-                  调用 {{ article.callCount }} 次 · ≈{{ article.tokenTotal }} tokens<template v-if="article.cost && article.cost.cost != null"> · ≈¥{{ article.cost.cost }}</template>
+                  调用 {{ article.callCount }} 次 · ≈{{ article.tokenTotal }} tokens<template v-if="article.cost && article.cost.cost != null"> · ≈¥{{ article.cost.cost.toFixed(4) }}</template>
                 </span>
               </div>
               <div class="mt-3" :style="{ height: '1px', background: 'var(--line)' }" />
