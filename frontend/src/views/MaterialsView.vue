@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import SplitPane from "@/components/ui/SplitPane.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import Pill from "@/components/ui/Pill.vue";
 import { useMaterials, type BrandModelRow } from "@/stores/materials";
+import IntakeForm from "@/components/materials/IntakeForm.vue";
 
 const m = useMaterials();
+const tab = ref<"models" | "intake">("models");
 onMounted(() => m.list());
 
 const hero = computed(() => m.models.filter((r) => r.role === "主推"));
@@ -26,12 +28,17 @@ function gaps(r: BrandModelRow): string[] {
     <div class="mb-4 flex items-baseline gap-3">
       <h1 class="text-lg font-semibold">素材库</h1>
       <div class="flex gap-2 text-sm">
-        <span class="rounded-full bg-ink/10 px-3 py-1 font-medium">品牌型号</span>
+        <button :data-tab="'models'" class="rounded-full px-3 py-1 font-medium"
+          :style="{ background: tab === 'models' ? 'var(--ink)' : 'transparent', color: tab === 'models' ? '#fff' : 'inherit' }"
+          @click="tab = 'models'">品牌型号</button>
+        <button :data-tab="'intake'" class="rounded-full px-3 py-1 font-medium"
+          :style="{ background: tab === 'intake' ? 'var(--ink)' : 'transparent', color: tab === 'intake' ? '#fff' : 'inherit' }"
+          @click="tab = 'intake'">录入</button>
         <span class="px-3 py-1 text-ink/35">浏览（建设中）</span>
-        <span class="px-3 py-1 text-ink/35">录入（建设中）</span>
       </div>
     </div>
 
+    <template v-if="tab === 'models'">
     <SplitPane leftWidth="300px" gap="18px">
       <template #left>
         <div class="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto">
@@ -150,5 +157,8 @@ function gaps(r: BrandModelRow): string[] {
         </div>
       </template>
     </SplitPane>
+    </template>
+
+    <IntakeForm v-else-if="tab === 'intake'" />
   </div>
 </template>
