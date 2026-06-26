@@ -6,19 +6,28 @@ token 是**估算值**（CJK 启发式，非真实分词），UI 须以「≈」
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass
 from typing import Any
 
-# CJK 统一表意 + 扩展A + 兼容 + CJK标点 + 全角（够覆盖中文正文；只求稳定估算）。
-_CJK = re.compile(r"[㐀-䶿一-鿿豈-﫿　-〿＀-￯]")
+# CJK 码点区段：统一表意(4E00-9FFF) + 扩展A(3400-4DBF) + 兼容(F900-FAFF)
+# + CJK标点(3000-303F) + 全角(FF00-FFEF)。用 ord 数值判定而非字面字符/正则 ——
+# 纯 ASCII 源码，不受工具链编码（GBK 误读）影响，边界稳定。
+_CJK_RANGES = (
+    (0x3000, 0x303F), (0x3400, 0x4DBF), (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF), (0xFF00, 0xFFEF),
+)
+
+
+def _is_cjk(ch: str) -> bool:
+    o = ord(ch)
+    return any(lo <= o <= hi for lo, hi in _CJK_RANGES)
 
 
 def estimate_tokens(text: str) -> int:
     """CJK 感知 token 估算：中文 ~0.6 token/字、其余 ~0.25 token/字符。"""
     if not text:
         return 0
-    cjk = len(_CJK.findall(text))
+    cjk = sum(1 for ch in text if _is_cjk(ch))
     other = len(text) - cjk
     return math.ceil(cjk * 0.6 + other * 0.25)
 
