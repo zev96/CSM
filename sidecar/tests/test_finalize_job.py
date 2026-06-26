@@ -81,6 +81,10 @@ def test_finalize_job_happy(tmp_path: Path, monkeypatch):
     assert fin["passes"][0]["role"] == "persona"
     assert fin["draft"] == "用户编辑后的初稿"
     assert any(k == "pass" for k, _ in cap["events"])
+    # 整篇润色 done 带 cost 摘要（model 未指定 → 无默认 provider → cost=None，
+    # 但 token 仍汇总、currency 恒在）。证明 _finalize_job done 这条 emit 接了 cost。
+    assert fin["cost"]["currency"] == "CNY"
+    assert fin["cost"]["output_tokens"] >= 0
 
 
 def test_finalize_job_reuses_job_id_for_rerun(tmp_path: Path, monkeypatch):

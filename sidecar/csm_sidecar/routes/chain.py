@@ -32,8 +32,11 @@ def chain_rerun(body: ChainRerunBody) -> dict[str, Any]:
     except IndexError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     cfg = config_service.load()
+    # state 理论上必在（rerun 刚成功并回写缓存）；极端 LRU 淘汰竞态下为 None
+    # → model=None → cost=None 降级（只显 token，不显 ¥），不崩。
     state = chain_service.get_state(body.job_id)
-    model = (state.model if state else None) or cfg.default_model.get(
-        (state.provider if state else None) or cfg.default_provider or "")
+    model = None
+    if state is not None:
+        model = state.model or cfg.default_model.get(state.provider or cfg.default_provider or "")
     res["cost"] = pricing.chain_cost(res["passes"], model, cfg.pricing)
     return res
