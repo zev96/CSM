@@ -58,8 +58,10 @@ export interface ChainPass {
   input_chars: number;
   output_chars: number;
   // 链成本（Task A/B）—— 每 pass 的 token 计量（本地 CJK 估算，非真实分词）。
-  input_tokens: number;
-  output_tokens: number;
+  // 可选：后端 to_dict 必带，但前端只消费 cost 汇总（ChainCost），per-pass token
+  // 暂未用于渲染；设可选让 mock/测试 fixture 不必逐个填（将来要展示再用）。
+  input_tokens?: number;
+  output_tokens?: number;
 }
 
 /** 链成本摘要（镜像后端 pricing.chain_cost）。cost=null = 未知 model 无价。 */
