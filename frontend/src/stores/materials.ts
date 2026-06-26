@@ -31,6 +31,30 @@ export interface ModelDetail {
   inject_preview: string;
 }
 
+export interface FolderProfile {
+  rel_folder: string;
+  frontmatter_keys: string[];
+  defaults: Record<string, string>;
+  body_shape: "variants" | "spec_table" | "unknown";
+  sample_count: number;
+  material_types: string[];
+}
+export interface NotePlan {
+  rel_folder: string; filename: string; rel_path: string;
+  frontmatter: Record<string, unknown>; body: string; backlink_tail: string;
+  full_text: string; index_rel: string | null; index_line: string | null;
+  conflict: boolean; warnings: string[];
+}
+export interface WriteReceipt {
+  created_rel: string; content_sha: string;
+  index_rel: string | null; index_line: string | null;
+}
+export interface NotePayload {
+  rel_folder: string; filename: string;
+  frontmatter: Record<string, unknown>; body_shape: string;
+  variants?: string[]; spec_rows?: { group: string; key: string; value: string }[];
+}
+
 function errMsg(e: any): string {
   return e?.response?.data?.detail ?? e?.message ?? String(e);
 }
@@ -42,6 +66,11 @@ export const useMaterials = defineStore("materials", () => {
   const selectedModel = ref<string | null>(null);
   const detail = ref<ModelDetail | null>(null);
   const detailLoading = ref(false);
+  const writableFolders = ref<FolderProfile[]>([]);
+  const foldersLoading = ref(false);
+  const currentPlan = ref<NotePlan | null>(null);
+  const lastReceipt = ref<WriteReceipt | null>(null);
+  const intakeError = ref<string | null>(null);
 
   async function list(): Promise<void> {
     loading.value = true; error.value = null;
@@ -65,5 +94,52 @@ export const useMaterials = defineStore("materials", () => {
     } finally { detailLoading.value = false; }
   }
 
-  return { models, loading, error, selectedModel, detail, detailLoading, list, select };
+  async function loadFolders(): Promise<void> {
+    foldersLoading.value = true; intakeError.value = null;
+    try {
+      const r = await useSidecar().client.get("/api/vault/writable-folders");
+      writableFolders.value = r.data.folders ?? [];
+    } catch (e: any) {
+      intakeError.value = errMsg(e); writableFolders.value = [];
+    } finally { foldersLoading.value = false; }
+  }
+
+  async function planNote(payload: NotePayload): Promise<void> {
+    intakeError.value = null;
+    try {
+      const r = await useSidecar().client.post("/api/vault/plan", payload);
+      currentPlan.value = r.data;
+    } catch (e: any) {
+      intakeError.value = errMsg(e); currentPlan.value = null;
+    }
+  }
+
+  async function commitNote(payload: NotePayload): Promise<boolean> {
+    intakeError.value = null;
+    try {
+      const r = await useSidecar().client.post("/api/vault/commit", payload);
+      lastReceipt.value = r.data;
+      return true;
+    } catch (e: any) {
+      intakeError.value = errMsg(e);
+      return false;
+    }
+  }
+
+  async function undoLast(): Promise<void> {
+    if (!lastReceipt.value) return;
+    try {
+      await useSidecar().client.post("/api/vault/undo", lastReceipt.value);
+    } catch (e: any) {
+      intakeError.value = errMsg(e);
+    } finally {
+      lastReceipt.value = null;
+    }
+  }
+
+  return {
+    models, loading, error, selectedModel, detail, detailLoading, list, select,
+    writableFolders, foldersLoading, currentPlan, lastReceipt, intakeError,
+    loadFolders, planNote, commitNote, undoLast,
+  };
 });
