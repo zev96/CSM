@@ -110,18 +110,9 @@ function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role;
 }
 
-// 正在重跑的 pass index —— 按钮 loading 态 + 互斥（同时只跑一个）。
-const rerunningPass = ref<number | null>(null);
-async function rerunPass(index: number) {
-  if (rerunningPass.value !== null) return;
-  rerunningPass.value = index;
-  try {
-    await article.rerunPass(index);
-    toast.success(`已重跑第 ${index + 1} 段`);
-  } finally {
-    rerunningPass.value = null;
-  }
-}
+// 重跑 loading / 取消 由 store 的 article.rerunningIndex 驱动 —— 流式下
+// store rerunPass 订阅后即早返回，本地包装的 finally 会过早清 loading 态，
+// 故把「正在重跑哪个 pass」上提到 store，由 SSE done/error 收尾时清回 null。
 
 interface TemplateRow { id: string; name: string }
 interface SkillRow { id: string; name: string; desc?: string }
@@ -1531,25 +1522,34 @@ const tabSectionLabel = computed(() => {
                     {{ p.output_chars }} 字
                   </span>
                   <span class="flex-1" />
+                  <!-- 流式重跑按钮：正在跑的这个 pass 上变「取消」（点 cancelRerun），
+                       其它情况是「重跑此 pass」（点 article.rerunPass）。别的 pass 在
+                       跑时禁用本按钮（互斥），但正在跑的这个要可点取消。
+                       data-rerun-pass 保留在重跑态供测试 / E2E 定位。 -->
                   <button
                     type="button"
-                    data-rerun-pass
-                    :title="rerunningPass === p.index ? '正在重跑…' : '重跑此 pass（级联其后）'"
-                    :disabled="rerunningPass !== null"
+                    :data-rerun-pass="article.rerunningIndex === p.index ? undefined : ''"
+                    :data-cancel-pass="article.rerunningIndex === p.index ? '' : undefined"
+                    :title="article.rerunningIndex === p.index
+                      ? '取消重跑'
+                      : '重跑此 pass（级联其后）'"
+                    :disabled="article.rerunningIndex !== null && article.rerunningIndex !== p.index"
                     class="inline-flex items-center gap-1 text-[11px] transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
                     :style="{
                       height: '26px',
                       padding: '0 9px',
                       borderRadius: '7px',
-                      background: 'var(--card-white)',
-                      color: 'var(--ink-2)',
-                      border: '1px solid var(--line)',
+                      background: article.rerunningIndex === p.index ? 'var(--danger-soft, #fef2f2)' : 'var(--card-white)',
+                      color: article.rerunningIndex === p.index ? 'var(--danger, #dc2626)' : 'var(--ink-2)',
+                      border: article.rerunningIndex === p.index
+                        ? '1px solid var(--danger, #dc2626)'
+                        : '1px solid var(--line)',
                     }"
-                    @click="rerunPass(p.index)"
+                    @click="article.rerunningIndex === p.index ? article.cancelRerun() : article.rerunPass(p.index)"
                   >
-                    <Spinner v-if="rerunningPass === p.index" :size="11" />
+                    <Spinner v-if="article.rerunningIndex === p.index" :size="11" />
                     <Icon v-else name="refresh" :size="11" />
-                    <span>重跑此 pass</span>
+                    <span>{{ article.rerunningIndex === p.index ? "取消" : "重跑此 pass" }}</span>
                   </button>
                 </div>
                 <div
