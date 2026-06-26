@@ -57,6 +57,17 @@ export interface ChainPass {
   output: string;
   input_chars: number;
   output_chars: number;
+  // 链成本（Task A/B）—— 每 pass 的 token 计量（本地 CJK 估算，非真实分词）。
+  input_tokens: number;
+  output_tokens: number;
+}
+
+/** 链成本摘要（镜像后端 pricing.chain_cost）。cost=null = 未知 model 无价。 */
+export interface ChainCost {
+  input_tokens: number;
+  output_tokens: number;
+  cost: number | null;
+  currency: string;
 }
 
 /** 角度受控词表（GET /api/angle/taxonomy 的响应，picker 数据源）。
@@ -137,6 +148,10 @@ interface ArticleState {
   // Phase 2b skill 链逐 pass 输出 —— SSE `pass` 事件逐个 push，`done`
   // 带完整 `passes` 时整体覆盖。submit 时清空。无链（单 skill 旧路径）→ [].
   passes: ChainPass[];
+  // 链成本摘要 —— SSE `done` / rerun 响应带 `cost` 时存这里，驱动成稿区
+  // 「≈X tokens · ≈¥Y」成本行。无 cost（旧路径 / 未知 model 无价）→ null。
+  // submit / finalize 起新链时清回 null。
+  cost: ChainCost | null;
   // 整篇润色（finalize）SSE 进行中为 true，驱动 ArticleView 进度卡显示
   // 「润色中」而非「组装中」。POST 失败 / done / error / cancel 都清回 false。
   // 起飞（submit）不算润色，所以 submit 的 reset 块里也清成 false。
@@ -168,6 +183,7 @@ export const useArticle = defineStore("article", {
     factcheck: null,
     angleTaxonomy: null,
     passes: [],
+    cost: null,
     isFinalizing: false,
   }),
   getters: {
@@ -182,6 +198,9 @@ export const useArticle = defineStore("article", {
     callCount: (state) => state.passes.length,
     totalChars: (state) =>
       state.passes.reduce((sum, p) => sum + (p.output_chars ?? 0), 0),
+    // token 合计 —— cost 摘要里的 input+output（无 cost → 0）。
+    tokenTotal: (state) =>
+      state.cost ? state.cost.input_tokens + state.cost.output_tokens : 0,
   },
   actions: {
     async submit(req: GenerateRequest): Promise<void> {
@@ -199,6 +218,7 @@ export const useArticle = defineStore("article", {
       this.template = null;
       this.factcheck = null;
       this.passes = [];
+      this.cost = null; // 起新链 —— 清掉上一轮成本摘要
       this.isFinalizing = false; // 起飞不是润色 —— 清掉残留的润色标志
 
       const sidecar = useSidecar();
@@ -264,6 +284,9 @@ export const useArticle = defineStore("article", {
           // 链模式下 done 带完整 passes（权威全量）—— 覆盖 SSE 增量推送的
           // 部分列表。单 skill 旧路径无 passes 字段，保持 [] 不动（零回归）。
           if (Array.isArray(d.passes)) this.passes = d.passes as ChainPass[];
+          // 链成本摘要 —— 后端在 done 带 cost（含未知 model 的 cost=null）。
+          // 旧路径 / 无链不带 cost 字段，保持上一轮值不动（submit 已清成 null）。
+          if (d.cost) this.cost = d.cost as ChainCost;
           // 生成被 Plan 3 事实核对硬门禁拦下时，done 事件带
           // factcheck.{blocked, violations} —— 存下来给审查面板；未拦 → null。
           this.factcheck =
@@ -505,6 +528,7 @@ export const useArticle = defineStore("article", {
       this.finalText = "";
       this.passes = [];
       this.factcheck = null;
+      this.cost = null; // 起新链 —— 清掉上一轮成本摘要
       this._subscribe(this.jobId!);
     },
     async exportArticle(opts: { format: "markdown" | "docx"; include_dedup_report?: boolean }) {
@@ -567,6 +591,8 @@ export const useArticle = defineStore("article", {
           this.passes = resp.data.passes as ChainPass[];
         }
         this.finalText = resp.data?.final_text ?? this.finalText;
+        // 重跑后端重算整链成本 —— 响应带 cost 时更新（无则保持旧值）。
+        if (resp.data?.cost) this.cost = resp.data.cost as ChainCost;
       } catch {
         /* 静默 —— 缓存淘汰 / 越界 / 网络异常，本地状态保持不变 */
       }

@@ -1482,9 +1482,10 @@ const tabSectionLabel = computed(() => {
               <!-- 成稿 tab 只显示"成稿 X 字"（用户反馈：初稿字数 + 阅读时间这里冗余） -->
               <div class="flex items-center gap-3 text-[11px]" :style="{ color: 'var(--ink-3)' }">
                 <span>成稿 {{ (article.finalText || SAMPLE_VARIATIONS[sampleIndex].final).length }} 字</span>
-                <!-- 链成本 —— 有 passes 时显示「调用 N 次 · 共 X 字」 -->
+                <!-- 链成本 —— 有 passes 时显示「调用 N 次 · ≈X tokens · ≈¥Y」；
+                     未知 model 无价（cost.cost==null）回退只显 token。 -->
                 <span v-if="article.passes.length" data-chain-cost>
-                  调用 {{ article.callCount }} 次 · 共 {{ article.totalChars }} 字
+                  调用 {{ article.callCount }} 次 · ≈{{ article.tokenTotal }} tokens<template v-if="article.cost && article.cost.cost != null"> · ≈¥{{ article.cost.cost }}</template>
                 </span>
               </div>
               <div class="mt-3" :style="{ height: '1px', background: 'var(--line)' }" />

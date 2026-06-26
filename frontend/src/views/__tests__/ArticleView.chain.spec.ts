@@ -149,7 +149,7 @@ describe("ArticleView — skill 链", () => {
     expect(w.find("[data-chain-chip]").text()).toContain("→");
   });
 
-  it("有 passes 时成稿区显示成本行「调用 N 次 · 共 X 字」", async () => {
+  it("有 passes 时成稿区显示成本行「调用 N 次 · ≈X tokens」", async () => {
     routeQuery = { keyword: "k", template_id: "tpl-a" };
     const w = mount(ArticleView, { global: { stubs: { teleport: true } } });
     await flushPromises();
@@ -162,7 +162,9 @@ describe("ArticleView — skill 链", () => {
     await flushPromises();
     const txt = w.text();
     expect(txt).toContain("调用 2 次");
-    expect(txt).toContain("320 字");
+    // 成本行文案升级为「≈X tokens」（旧「共 X 字」已淘汰）
+    expect(txt).toContain("≈");
+    expect(txt).toContain("tokens");
   });
 
   it("无 passes（单 skill 旧路径）→ 成稿区不渲染 pass 卡 / 链 chip", async () => {
