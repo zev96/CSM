@@ -56,4 +56,15 @@ describe("article lint", () => {
     expect(a.lint).toBeNull();
     expect(a.lintBlocking).toBe(false);
   });
+
+  it("runLint 丢弃非 lint 形状响应（无 hits）→ lint=null 不崩", async () => {
+    // 自动 runLint 在既有 finalize/ArticleView 测试里会收到通用 mock（无 hits）；
+    // 必须当成无结果，否则 lintBlocking 求值时 .hits 为 undefined 崩（跨文件回归守卫）。
+    post.mockResolvedValue({ data: { job_id: "x" } });
+    const a = useArticle();
+    await a.runLint("最佳");
+    expect(a.lint).toBeNull();
+    expect(a.lintBlocking).toBe(false);
+    expect(a.lintUnresolved).toBe(0);
+  });
 });

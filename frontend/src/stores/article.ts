@@ -233,16 +233,22 @@ export const useArticle = defineStore("article", {
       state.cost ? state.cost.input_tokens + state.cost.output_tokens : 0,
     // 禁区 lint 门禁 —— true=有未放行命中，软拦导出。
     lintBlocking: (state) =>
-      !!state.lint && state.lint.hits.some((h) => !state.lintReleased.includes(lintKey(h))),
+      !!state.lint?.hits && state.lint.hits.some((h) => !state.lintReleased.includes(lintKey(h))),
     lintUnresolved: (state) =>
-      state.lint ? state.lint.hits.filter((h) => !state.lintReleased.includes(lintKey(h))).length : 0,
+      state.lint?.hits ? state.lint.hits.filter((h) => !state.lintReleased.includes(lintKey(h))).length : 0,
   },
   actions: {
     async runLint(text: string): Promise<void> {
       if (!text.trim()) { this.lint = null; this.lintReleased = []; return; }
       try {
         const r = await useSidecar().client.post("/api/lint", { text });
-        this.lint = r.data;          // {hits, fixed_text}，snake_case 零映射
+        // 只接受形如 {hits[], fixed_text} 的 lint 报告 —— 非该形状（端点异常返回、
+        // 或测试里通用 mock 串味）一律视为无结果（fail-open），避免毒化 lint 让
+        // lintBlocking 求值时 state.lint.hits 为 undefined 崩。snake_case 零映射。
+        const d = r.data;
+        this.lint = d && Array.isArray(d.hits)
+          ? { hits: d.hits, fixed_text: typeof d.fixed_text === "string" ? d.fixed_text : "" }
+          : null;
         this.lintReleased = [];
       } catch {
         this.lint = null;            // fail-open：lint 基建故障不拦导出
