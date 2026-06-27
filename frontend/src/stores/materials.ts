@@ -54,6 +54,16 @@ export interface NotePayload {
   frontmatter: Record<string, unknown>; body_shape: string;
   variants?: string[]; spec_rows?: { group: string; key: string; value: string }[];
 }
+export interface AtomDraft {
+  text: string;
+  rel_folder: string | null;
+  material_type: string;
+  product: string;
+  keyword: string;
+  filename: string;
+  confidence: "high" | "med" | "low";
+  warnings: string[];
+}
 
 function errMsg(e: any): string {
   return e?.response?.data?.detail ?? e?.message ?? String(e);
@@ -137,9 +147,39 @@ export const useMaterials = defineStore("materials", () => {
     }
   }
 
+  async function atomizeText(text: string): Promise<AtomDraft[]> {
+    intakeError.value = null;
+    try {
+      const r = await useSidecar().client.post("/api/vault/atomize", { text });
+      return r.data.atoms ?? [];
+    } catch (e: any) {
+      intakeError.value = errMsg(e); return [];
+    }
+  }
+
+  async function commitAtom(payload: NotePayload): Promise<WriteReceipt | null> {
+    intakeError.value = null;
+    try {
+      const r = await useSidecar().client.post("/api/vault/commit", payload);
+      return r.data;
+    } catch (e: any) {
+      intakeError.value = errMsg(e); return null;
+    }
+  }
+
+  async function undoAtom(receipt: WriteReceipt): Promise<void> {
+    intakeError.value = null;
+    try {
+      await useSidecar().client.post("/api/vault/undo", receipt);
+    } catch (e: any) {
+      intakeError.value = errMsg(e);
+    }
+  }
+
   return {
     models, loading, error, selectedModel, detail, detailLoading, list, select,
     writableFolders, foldersLoading, currentPlan, lastReceipt, intakeError,
     loadFolders, planNote, commitNote, undoLast,
+    atomizeText, commitAtom, undoAtom,
   };
 });
