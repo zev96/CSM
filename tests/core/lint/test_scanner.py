@@ -71,6 +71,15 @@ def test_autofix_collapses_commas():
     # —— 在句末不产生 。，；多个 —— 不堆叠逗号
     assert autofix("结束。——开始", R) == "结束。开始"
     assert autofix("a————b", R) == "a，b"
+    # 句末标点前的多余逗号也要清（对称清理，#2）
+    assert autofix("结束——。开始", R) == "结束。开始"
+
+
+def test_autofix_idempotent_quote_between_dashes():
+    # 引号夹在两段破折号中间：删引号必须先于逗号合并，否则非幂等（#1, spec §4.3）
+    x = "a——" + LQUOTE + "——b"
+    assert autofix(x, R) == "a，b"
+    assert autofix(autofix(x, R), R) == autofix(x, R)
 
 
 def test_build_report_shape():
