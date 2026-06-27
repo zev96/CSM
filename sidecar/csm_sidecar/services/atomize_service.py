@@ -7,6 +7,7 @@ vault_writer_service._root()（同 services 包，同一份存在性校验，避
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 
 from csm_core.vault import folder_profile
@@ -14,7 +15,9 @@ from csm_core.vault.atomizer import build_menu, parse_atoms
 
 from . import config_service, llm_factory, vault_service, vault_writer_service
 
-_MAX_INPUT = 8000   # v1 不分块：超长截断 + warning
+logger = logging.getLogger(__name__)
+
+_MAX_INPUT = 8000   # v1 不分块：超长截断 + 记一条 warning 日志（前端级提示/分块留后续）
 
 ATOMIZE_SYSTEM = (
     "你是家电营销资料的素材拆条助手。把用户给的原文【忠实拆分】成多条可复用的"
@@ -48,6 +51,7 @@ def atomize(text: str) -> list[dict]:
     if not text:
         return []
     if len(text) > _MAX_INPUT:
+        logger.warning("[atomize] 输入超长，截断 %d→%d 字（v1 不分块）", len(text), _MAX_INPUT)
         text = text[:_MAX_INPUT]
     root = vault_writer_service._root()          # 复用 3a 的 vault_root 解析
     index = vault_service.scan(root)

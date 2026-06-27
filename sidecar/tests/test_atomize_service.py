@@ -79,3 +79,14 @@ def test_atomize_no_provider_raises(tmp_path):
     config_service.patch({"vault_root": str(_seed_vault(tmp_path))})   # 不设 provider
     with pytest.raises(LLMConfigError):
         atomize_service.atomize("资料")
+
+
+def test_atomize_long_input_truncated_and_logged(tmp_path, fake, caplog):
+    import logging
+    config_service.patch({"vault_root": str(_seed_vault(tmp_path)), "default_provider": "mock"})
+    fake.resp = "[]"
+    with caplog.at_level(logging.WARNING):
+        atomize_service.atomize("字" * 9000)
+    assert any("截断" in r.message or "truncat" in r.message.lower() for r in caplog.records)
+    # 截断后真正喂给 LLM 的原文长度 ≤ 8000（+200 余量给菜单+提示词包裹）
+    assert len(fake.calls[0]["user"]) <= 8000 + 200

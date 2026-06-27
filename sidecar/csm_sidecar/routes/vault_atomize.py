@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
@@ -20,7 +22,7 @@ class AtomizeBody(BaseModel):
 
 
 @router.post("/api/vault/atomize")
-def atomize(body: AtomizeBody) -> dict:
+def atomize(body: AtomizeBody) -> dict[str, Any]:
     try:
         return {"atoms": atomize_service.atomize(body.text)}
     except LLMConfigError as e:        # 必须先于 ValueError（subclass）
