@@ -48,3 +48,67 @@ def _safe_filename(raw: str, fallback: str) -> str:
     if not s.endswith(".md"):
         s = s + ".md"
     return s
+
+
+def _strip_code_fence(text: str) -> str:
+    """去掉模型偶尔包裹的 ```json ... ``` 围栏（逻辑同 xhs_ai_service，本层自带一份）。"""
+    t = text.strip()
+    if not t.startswith("```"):
+        return t
+    lines = t.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _loads_array(raw: str):
+    """整体解析失败时，正则抠出第一个 [...] 再试；都失败 → None。"""
+    t = _strip_code_fence((raw or "").strip())
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        m = re.search(r"\[.*\]", t, re.DOTALL)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return None
+
+
+def parse_atoms(raw_llm_text: str, folders: list[FolderProfile]) -> list[AtomDraft]:
+    """把 LLM 返回解析+校验成 AtomDraft 列表（忠实拆条 spec §4.1/§5）。
+
+    grounding：建议文件夹必须 ∈ 真实菜单，否则置空 + warning（off-menu 进不了库）。
+    正文空 → 跳过；置信度非 high/med/low → low；文件名 sanitize（空则取关键词/正文首段）。
+    整体非数组 → 返回 []。
+    """
+    data = _loads_array(raw_llm_text)
+    if not isinstance(data, list):
+        return []
+    allowed = {f.rel_folder for f in folders}
+    out: list[AtomDraft] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("正文") or "").strip()
+        if not text:
+            continue
+        warnings: list[str] = []
+        rel = (str(item.get("建议文件夹") or "").strip()) or None
+        if rel is not None and rel not in allowed:
+            warnings.append(f"建议文件夹「{rel}」不在素材库中，请人工选择")
+            rel = None
+        keyword = str(item.get("核心关键词") or "").strip()
+        conf = str(item.get("置信度") or "").strip().lower()
+        if conf not in ("high", "med", "low"):
+            conf = "low"
+        filename = _safe_filename(str(item.get("建议文件名") or ""), keyword or text[:12])
+        out.append(AtomDraft(
+            text=text, rel_folder=rel,
+            material_type=str(item.get("素材类型") or "").strip(),
+            product=str(item.get("产品") or "").strip(),
+            keyword=keyword, filename=filename, confidence=conf, warnings=warnings))
+    return out
