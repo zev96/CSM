@@ -4,6 +4,7 @@ import Spinner from "@/components/ui/Spinner.vue";
 import Pill from "@/components/ui/Pill.vue";
 import { useMaterials, type FolderProfile, type NotePayload } from "@/stores/materials";
 import { useNotifications } from "@/composables/useNotifications";
+import { assembleFrontmatter, filenameError as fnError } from "@/components/materials/payload";
 
 const m = useMaterials();
 const notify = useNotifications();
@@ -32,11 +33,7 @@ const isVariants = computed(() => selected.value?.body_shape !== "spec_table");
 function buildPayload(): NotePayload | null {
   const f = selected.value;
   if (!f || !filename.value.trim()) return null;
-  const frontmatter: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(fm)) {
-    if (k === "核心关键词") frontmatter[k] = String(v).split(/[，,\s]+/).filter(Boolean);
-    else if (v) frontmatter[k] = v;
-  }
+  const frontmatter = assembleFrontmatter(fm);
   const payload: NotePayload = {
     rel_folder: f.rel_folder, filename: filename.value.trim(),
     frontmatter, body_shape: isVariants.value ? "variants" : "spec_table",
@@ -58,13 +55,7 @@ watch([selected, filename, fm, variants, specRows], () => {
 
 onUnmounted(() => { if (_t) clearTimeout(_t); });
 
-const filenameError = computed(() => {
-  const v = filename.value.trim();
-  if (!v) return "";
-  if (/\s/.test(v) || v.includes("/") || v.includes("\\")) return "不能含空格/路径分隔符";
-  if (!v.endsWith(".md")) return "须以 .md 结尾";
-  return "";
-});
+const filenameError = computed(() => fnError(filename.value));
 
 async function submit(): Promise<void> {
   const p = buildPayload();
