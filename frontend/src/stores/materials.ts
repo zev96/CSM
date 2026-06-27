@@ -158,6 +158,7 @@ export const useMaterials = defineStore("materials", () => {
   }
 
   async function commitAtom(payload: NotePayload): Promise<WriteReceipt | null> {
+    intakeError.value = null;
     try {
       const r = await useSidecar().client.post("/api/vault/commit", payload);
       return r.data;
@@ -167,6 +168,7 @@ export const useMaterials = defineStore("materials", () => {
   }
 
   async function undoAtom(receipt: WriteReceipt): Promise<void> {
+    intakeError.value = null;
     try {
       await useSidecar().client.post("/api/vault/undo", receipt);
     } catch (e: any) {

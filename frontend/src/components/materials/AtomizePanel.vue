@@ -29,11 +29,18 @@ async function run(): Promise<void> {
 }
 
 async function commitAll(): Promise<void> {
-  let n = 0;
+  let committed = 0, failed = 0, skipped = 0;
   for (const c of cards.value) {
-    if (c?.commitAuto) { await c.commitAuto(); n++; }
+    if (!c?.commitAuto) continue;
+    const r = await c.commitAuto();
+    if (r === "committed") committed++;
+    else if (r === "failed") failed++;
+    else skipped++;
   }
-  notify.push(`已尝试入库 ${n} 条（low 置信度需逐条确认）`, { tone: "info" });
+  const parts = [`成功入库 ${committed} 条`];
+  if (failed) parts.push(`失败 ${failed} 条`);
+  if (skipped) parts.push(`跳过（低置信/已入库）${skipped} 条`);
+  notify.push(parts.join("，"), { tone: failed ? "warn" : "success" });
 }
 </script>
 
@@ -51,7 +58,7 @@ async function commitAll(): Promise<void> {
           <span v-if="atomizing" class="inline-flex items-center gap-1"><Spinner :size="12" /> 拆条中…</span>
           <span v-else>AI 拆条</span>
         </button>
-        <button v-if="atoms.length" class="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70" @click="commitAll">
+        <button v-if="atoms.length" data-atomize-commit-all class="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70" @click="commitAll">
           全部入库（high/med）
         </button>
       </div>

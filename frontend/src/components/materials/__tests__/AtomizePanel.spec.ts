@@ -39,4 +39,25 @@ describe("AtomizePanel", () => {
     await w.find("[data-atomize-run]").trigger("click");
     expect(postMock).not.toHaveBeenCalled();
   });
+
+  it("全部入库只提交 high/med，跳过 low", async () => {
+    getMock.mockResolvedValue({ data: { folders: [
+      { rel_folder: "科普模块/吸尘器/挑选攻略", frontmatter_keys: [],
+        defaults: {}, body_shape: "variants", sample_count: 1, material_types: [] },
+    ] } });
+    postMock.mockResolvedValueOnce({ data: { atoms: [
+      { text: "高条", rel_folder: "科普模块/吸尘器/挑选攻略", material_type: "", product: "", keyword: "", filename: "a.md", confidence: "high", warnings: [] },
+      { text: "低条", rel_folder: "科普模块/吸尘器/挑选攻略", material_type: "", product: "", keyword: "", filename: "b.md", confidence: "low", warnings: [] },
+    ] } });
+    postMock.mockResolvedValue({ data: { created_rel: "科普模块/吸尘器/挑选攻略/a.md", content_sha: "s", index_rel: null, index_line: null } });
+    const w = mount(AtomizePanel);
+    await new Promise((r) => setTimeout(r));
+    await w.find("[data-atomize-input]").setValue("一些资料");
+    await w.find("[data-atomize-run]").trigger("click");
+    await new Promise((r) => setTimeout(r));
+    await w.find("[data-atomize-commit-all]").trigger("click");
+    await new Promise((r) => setTimeout(r));
+    const commitCalls = postMock.mock.calls.filter((c) => c[0] === "/api/vault/commit");
+    expect(commitCalls.length).toBe(1);   // 只有 high 卡提交，low 被跳过
+  });
 });

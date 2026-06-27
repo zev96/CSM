@@ -47,6 +47,14 @@ describe("materials store — AI 拆条", () => {
     expect(m.intakeError).toContain("同名");
   });
 
+  it("commitAtom 成功清掉残留 intakeError", async () => {
+    postMock.mockResolvedValueOnce({ data: { created_rel: "a/x.md", content_sha: "s" } });
+    const m = useMaterials();
+    m.intakeError = "旧错误";
+    await m.commitAtom({ rel_folder: "a", filename: "x.md", frontmatter: {}, body_shape: "variants", variants: ["y"] });
+    expect(m.intakeError).toBeNull();
+  });
+
   it("undoAtom 打 /undo", async () => {
     postMock.mockResolvedValueOnce({ data: { undone: true, warnings: [] } });
     const m = useMaterials();

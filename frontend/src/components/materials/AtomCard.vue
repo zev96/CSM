@@ -62,9 +62,11 @@ async function undo(): Promise<void> {
   notify.push("已撤销该条", { tone: "info" });
 }
 
-// 面板「全部入库」用：仅 high/med 且未入库才提交。
-async function commitAuto(): Promise<void> {
-  if (["high", "med"].includes(props.atom.confidence) && !receipt.value) await commit();
+// 面板「全部入库」用：仅 high/med 且未入库才提交，返回真实结果供统计。
+async function commitAuto(): Promise<"committed" | "skipped" | "failed"> {
+  if (!["high", "med"].includes(props.atom.confidence) || receipt.value) return "skipped";
+  await commit();
+  return receipt.value ? "committed" : "failed";
 }
 defineExpose({ commitAuto });
 </script>
