@@ -5,9 +5,10 @@ import Spinner from "@/components/ui/Spinner.vue";
 import Pill from "@/components/ui/Pill.vue";
 import { useMaterials, type BrandModelRow } from "@/stores/materials";
 import IntakeForm from "@/components/materials/IntakeForm.vue";
+import AtomizePanel from "@/components/materials/AtomizePanel.vue";
 
 const m = useMaterials();
-const tab = ref<"models" | "intake">("models");
+const tab = ref<"models" | "intake" | "atomize">("models");
 onMounted(() => m.list());
 
 const hero = computed(() => m.models.filter((r) => r.role === "主推"));
@@ -34,6 +35,9 @@ function gaps(r: BrandModelRow): string[] {
         <button :data-tab="'intake'" class="rounded-full px-3 py-1 font-medium"
           :style="{ background: tab === 'intake' ? 'var(--ink)' : 'transparent', color: tab === 'intake' ? '#fff' : 'inherit' }"
           @click="tab = 'intake'">录入</button>
+        <button :data-tab="'atomize'" class="rounded-full px-3 py-1 font-medium"
+          :style="{ background: tab === 'atomize' ? 'var(--ink)' : 'transparent', color: tab === 'atomize' ? '#fff' : 'inherit' }"
+          @click="tab = 'atomize'">AI 拆条</button>
         <span class="px-3 py-1 text-ink/35">浏览（建设中）</span>
       </div>
     </div>
@@ -160,5 +164,6 @@ function gaps(r: BrandModelRow): string[] {
     </template>
 
     <IntakeForm v-else-if="tab === 'intake'" />
+    <AtomizePanel v-else-if="tab === 'atomize'" />
   </div>
 </template>
