@@ -1,7 +1,11 @@
 from csm_core.lint.rules import build_rules
-from csm_core.lint.scanner import scan
+from csm_core.lint.scanner import scan, autofix, build_report
 
 R = build_rules(None)
+
+# U+201C/U+201D — the curly-quote chars that QUOTE_CHARS targets
+LQUOTE = "“"
+RQUOTE = "”"
 
 
 def cats(text):
@@ -14,7 +18,7 @@ def test_hits_each_category():
     assert "meta_speak" in cats("这其实是软文")
     assert "emoji" in cats("好用😀")
     assert "dash" in cats("高效——安静")
-    assert "quote" in cats("所谓“静音”")
+    assert "quote" in cats("所谓" + LQUOTE + "静音" + RQUOTE)
 
 
 def test_absolute_no_false_positive():
@@ -47,3 +51,29 @@ def test_sorted_by_start():
 def test_empty_text():
     assert scan("", R) == []
     assert scan("普通干净的一段文字。", R) == []
+
+
+def test_autofix_mechanical_only():
+    t = "好用😀高效——安静，所谓" + LQUOTE + "静音" + RQUOTE + "模式，业内最佳"
+    fixed = autofix(t, R)
+    assert "😀" not in fixed
+    assert "——" not in fixed and "，安静" in fixed   # —— → ，
+    assert LQUOTE not in fixed and RQUOTE not in fixed and "静音模式" in fixed
+    assert "最佳" in fixed                            # 判断类不动
+
+
+def test_autofix_idempotent():
+    t = "a😀b——c" + LQUOTE + "最强" + RQUOTE
+    assert autofix(autofix(t, R), R) == autofix(t, R)
+
+
+def test_autofix_collapses_commas():
+    # —— 在句末不产生 。，；多个 —— 不堆叠逗号
+    assert autofix("结束。——开始", R) == "结束。开始"
+    assert autofix("a————b", R) == "a，b"
+
+
+def test_build_report_shape():
+    rep = build_report("最佳😀", R)
+    assert any(h.category == "absolute" for h in rep.hits)
+    assert "😀" not in rep.fixed_text and "最佳" in rep.fixed_text
