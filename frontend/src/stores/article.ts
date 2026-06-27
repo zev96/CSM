@@ -250,6 +250,8 @@ export const useArticle = defineStore("article", {
     },
     async autofixLint(): Promise<void> {
       if (!this.lint) return;
+      // 应用上一次扫描的 fixed_text —— 若用户在上次 lint 之后又手改了成稿，
+      // 那些改动会被覆盖。LintPanel 的「重新检查」按当前成稿重扫再修。
       this.finalText = this.lint.fixed_text;
       return this.runLint(this.finalText);
     },

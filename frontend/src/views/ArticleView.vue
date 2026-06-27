@@ -2235,7 +2235,13 @@ const tabSectionLabel = computed(() => {
       被拦时也走它）。Dialog 内部自带 Teleport，挂这层即可。
     -->
     <FactCheckPanel v-model:open="showFactcheck" @lint="showLint = true" />
-    <LintPanel v-model:open="showLint" @proceed="showExportModal = true" />
+    <!--
+      proceed 重入守卫链（onExportClick）而非直接开导出 modal：堵 factcheck+lint
+      双失败旁路 —— lint 清掉后若 factcheck 仍 blocked，重新弹 FactCheckPanel 走
+      gated /generate/{id}/export；都干净才开导出 modal。lintBlocking 此刻已 false
+      不会回环到 lint。
+    -->
+    <LintPanel v-model:open="showLint" @proceed="onExportClick" />
 
     <!--
       导出弹窗 —— 严格按 V1 设计稿（精简版）：标签 + 大标题 + 关闭 X，
