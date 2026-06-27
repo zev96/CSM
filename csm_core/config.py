@@ -140,6 +140,15 @@ class MonitorConfig(BaseModel):
     baidu_keyword: BaiduKeywordConfig = Field(default_factory=BaiduKeywordConfig)
 
 
+class LintConfig(BaseModel):
+    """settings.lint.* —— 禁区 lint 配置（默认全开 = 扫所有六类）。"""
+    enabled: bool = True
+    extra_meta: list[str] = Field(default_factory=list)
+    extra_absolute: list[str] = Field(default_factory=list)
+    extra_traffic: list[str] = Field(default_factory=list)
+    disabled_categories: list[str] = Field(default_factory=list)
+
+
 class BrandMemoryConfig(BaseModel):
     """settings.brand_memory.* —— Phase 1 注入 + 事实核对（默认全关 = 今天行为）。"""
 
@@ -206,6 +215,9 @@ class AppConfig(BaseModel):
 
     # ── Brand/model memory (Phase 1: 注入 + 事实核对) ───────────────────
     brand_memory: BrandMemoryConfig = Field(default_factory=BrandMemoryConfig)
+
+    # ── 禁区 lint（六类确定性扫描 + 一键清） ────────────────────────────
+    lint: LintConfig = Field(default_factory=LintConfig)
 
     # ── Outreach AI prompts (Phase 3) ──────────────────────────────────
     # 空字符串 = 用 mining_ai_service 里的内置默认 prompt。用户在设置页

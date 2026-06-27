@@ -22,6 +22,7 @@ import { useToast } from "@/composables/useToast";
 import { useArticle, type FactcheckViolation } from "@/stores/article";
 
 const open = defineModel<boolean>("open", { default: false });
+const emit = defineEmits<{ lint: [] }>();
 const article = useArticle();
 const toast = useToast();
 
@@ -40,6 +41,7 @@ function isReleased(v: FactcheckViolation) {
 }
 
 async function recheckExport() {
+  if (article.lintBlocking) { emit("lint"); open.value = false; return; }
   submitting.value = true;
   const nums: number[] = [];
   const certs: string[] = [];
