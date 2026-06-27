@@ -64,7 +64,9 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _loads_array(raw: str):
-    """整体解析失败时，正则抠出第一个 [...] 再试；都失败 → None。"""
+    """整体解析失败时，贪婪抠最外层 [...] 再试；都失败 → None。
+    （注：贪婪匹配到最后一个 ]，若数组后还跟含括号的文本会落空 →
+    上层得 []，属安全失败，不污染库。）"""
     t = _strip_code_fence((raw or "").strip())
     try:
         return json.loads(t)

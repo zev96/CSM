@@ -92,3 +92,10 @@ def test_parse_atoms_empty_text_skipped():
 def test_parse_atoms_filename_from_keyword_when_missing():
     raw = _json.dumps([{"正文": "z", "核心关键词": "续航", "置信度": "high"}], ensure_ascii=False)
     assert A.parse_atoms(raw, _folders())[0].filename == "续航.md"
+
+
+def test_parse_atoms_filename_from_text_when_no_keyword():
+    long = "这是一段足够长的中文正文用来测试文件名回退逻辑"
+    raw = _json.dumps([{"正文": long, "置信度": "high"}], ensure_ascii=False)
+    atoms = A.parse_atoms(raw, _folders())
+    assert atoms[0].filename == long[:12] + ".md"
