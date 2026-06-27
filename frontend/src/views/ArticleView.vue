@@ -33,6 +33,7 @@ import Spinner from "@/components/ui/Spinner.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 import TiptapEditor from "@/components/article/TiptapEditor.vue";
 import FactCheckPanel from "@/components/article/FactCheckPanel.vue";
+import LintPanel from "@/components/article/LintPanel.vue";
 
 import { useArticle, type Angle } from "@/stores/article";
 import { useConfig } from "@/stores/config";
@@ -570,12 +571,13 @@ watch(
     if (blocked) showFactcheck.value = true;
   },
 );
-// 导出按钮：被门禁拦下时改走审查面板（重核通过才导出），否则开常规导出弹窗。
+const showLint = ref(false);
+// 成稿被禁区 lint 命中（lintBlocking false→true）自动弹面板。
+watch(() => article.lintBlocking, (b, prev) => { if (b && !prev) showLint.value = true; });
+// 导出按钮：factcheck 门禁 > lint 门禁 > 常规导出弹窗。
 function onExportClick() {
-  if (article.factcheck?.blocked) {
-    showFactcheck.value = true;
-    return;
-  }
+  if (article.factcheck?.blocked) { showFactcheck.value = true; return; }
+  if (article.lintBlocking) { showLint.value = true; return; }
   showExportModal.value = true;
 }
 
@@ -762,6 +764,15 @@ const checkItems = computed<CheckItem[]>(() => {
       tone: "warn",
     });
   }
+
+  // 第 7 项：禁区 lint
+  items.push({
+    label: "禁区",
+    value: article.lint ? (article.lintBlocking ? `${article.lintUnresolved} 处` : "无") : "—",
+    desc: article.lintBlocking ? "有未处理违规，点导出查看" : (article.lint ? "已清/已放行" : "成稿后自动检查"),
+    pass: !article.lintBlocking,
+    tone: article.lintBlocking ? "warn" : "ok",
+  });
 
   return items;
 });
@@ -2223,7 +2234,8 @@ const tabSectionLabel = computed(() => {
       事实核对审查面板 —— 生成被 Plan 3 门禁拦下时弹（watcher 自动 / 导出按钮
       被拦时也走它）。Dialog 内部自带 Teleport，挂这层即可。
     -->
-    <FactCheckPanel v-model:open="showFactcheck" />
+    <FactCheckPanel v-model:open="showFactcheck" @lint="showLint = true" />
+    <LintPanel v-model:open="showLint" @proceed="showExportModal = true" />
 
     <!--
       导出弹窗 —— 严格按 V1 设计稿（精简版）：标签 + 大标题 + 关闭 X，
