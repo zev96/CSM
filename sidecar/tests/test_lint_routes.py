@@ -26,3 +26,10 @@ def test_lint_empty_text_empty_report(client):
     r = client.post("/api/lint", json={"text": ""})
     assert r.status_code == 200
     assert r.json() == {"hits": [], "fixed_text": ""}
+
+
+def test_lint_requires_auth():
+    """无 token → 401/403（与其它路由一致，dependencies=[RequireToken]）。"""
+    with TestClient(app) as c:
+        resp = c.post("/api/lint", json={"text": "最佳"})
+    assert resp.status_code in (401, 403)
