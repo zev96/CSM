@@ -34,6 +34,7 @@ from .routes import updater as updater_routes
 from .routes import vault as vault_routes
 from .routes import vault_writer as vault_writer_routes
 from .routes import vault_atomize as vault_atomize_routes
+from .routes import lint as lint_routes
 from .routes import xhs as xhs_routes
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ app.include_router(config_routes.router)
 app.include_router(vault_routes.router)
 app.include_router(vault_writer_routes.router)
 app.include_router(vault_atomize_routes.router)
+app.include_router(lint_routes.router)
 app.include_router(skills_routes.router)
 app.include_router(brand_memory_routes.router)
 app.include_router(templates_routes.router)
