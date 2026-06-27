@@ -94,6 +94,14 @@ export interface AngleTaxonomy {
   }>;
 }
 
+export type LintCategory = "meta_speak" | "absolute" | "traffic" | "emoji" | "dash" | "quote";
+export interface LintHit {
+  category: LintCategory;
+  text: string; start: number; end: number;
+  sentence: string; fixable: boolean; suggestion: string;
+}
+const lintKey = (h: LintHit) => `${h.category}:${h.start}:${h.text}`;
+
 /** 事实核对违规项（镜像后端 csm_core.factcheck.model.Violation）。
  * `number` = number 违规的归一值（万已展开），cert 为 null —— 审查面板放行
  * 万-值时回传它而非 parseFloat(value)。 */
@@ -171,6 +179,10 @@ interface ArticleState {
   // 因为流式下 store rerunPass 早返回（订阅后即 await 结束），本地 finally
   // 会过早清掉 loading 态。
   rerunningIndex: number | null;
+  // 禁区 lint 门禁 —— 成稿出炉自动扫，结果存这里（{hits, fixed_text}）。
+  // null=未扫 / fail-open。hits 命中放行后存 key 串到 lintReleased。
+  lint: { hits: LintHit[]; fixed_text: string } | null;
+  lintReleased: string[];
 }
 
 export const useArticle = defineStore("article", {
@@ -201,6 +213,8 @@ export const useArticle = defineStore("article", {
     cost: null,
     isFinalizing: false,
     rerunningIndex: null,
+    lint: null,
+    lintReleased: [],
   }),
   getters: {
     progress(state): number {
@@ -217,8 +231,34 @@ export const useArticle = defineStore("article", {
     // token 合计 —— cost 摘要里的 input+output（无 cost → 0）。
     tokenTotal: (state) =>
       state.cost ? state.cost.input_tokens + state.cost.output_tokens : 0,
+    // 禁区 lint 门禁 —— true=有未放行命中，软拦导出。
+    lintBlocking: (state) =>
+      !!state.lint && state.lint.hits.some((h) => !state.lintReleased.includes(lintKey(h))),
+    lintUnresolved: (state) =>
+      state.lint ? state.lint.hits.filter((h) => !state.lintReleased.includes(lintKey(h))).length : 0,
   },
   actions: {
+    async runLint(text: string): Promise<void> {
+      if (!text.trim()) { this.lint = null; this.lintReleased = []; return; }
+      try {
+        const r = await useSidecar().client.post("/api/lint", { text });
+        this.lint = r.data;          // {hits, fixed_text}，snake_case 零映射
+        this.lintReleased = [];
+      } catch {
+        this.lint = null;            // fail-open：lint 基建故障不拦导出
+      }
+    },
+    async autofixLint(): Promise<void> {
+      if (!this.lint) return;
+      this.finalText = this.lint.fixed_text;
+      return this.runLint(this.finalText);
+    },
+    toggleLintRelease(h: LintHit): void {
+      const k = lintKey(h);
+      const i = this.lintReleased.indexOf(k);
+      if (i >= 0) this.lintReleased.splice(i, 1);
+      else this.lintReleased.push(k);
+    },
     async submit(req: GenerateRequest): Promise<void> {
       this._teardown();
       _teardownRerun();          // 起新生成 —— 放弃在跑的 rerun 流
@@ -238,6 +278,7 @@ export const useArticle = defineStore("article", {
       this.passes = [];
       this.cost = null; // 起新链 —— 清掉上一轮成本摘要
       this.isFinalizing = false; // 起飞不是润色 —— 清掉残留的润色标志
+      this.lint = null; this.lintReleased = []; // 起新生成 —— 清掉上轮 lint
 
       const sidecar = useSidecar();
       try {
@@ -318,6 +359,8 @@ export const useArticle = defineStore("article", {
             tone: "success",
             category: "article_success",
           });
+          // 整篇润色成稿出炉 → 自动跑禁区 lint（draft_only 起飞 final_text 空，不触发）。
+          if (this.finalText.trim()) void this.runLint(this.finalText);
           this._teardown();
         },
         error: (d: any) => {
@@ -549,6 +592,7 @@ export const useArticle = defineStore("article", {
       this.passes = [];
       this.factcheck = null;
       this.cost = null; // 起新链 —— 清掉上一轮成本摘要
+      this.lint = null; this.lintReleased = []; // 起新润色 —— 清掉上轮 lint
       this._subscribe(this.jobId!);
     },
     async exportArticle(opts: { format: "markdown" | "docx"; include_dedup_report?: boolean }) {
@@ -621,6 +665,8 @@ export const useArticle = defineStore("article", {
           if (typeof d.final_text === "string") this.finalText = d.final_text;
           this.rerunningIndex = null;
           _teardownRerun();
+          // 重跑改了成稿要重扫禁区 lint。
+          if (this.finalText.trim()) void this.runLint(this.finalText);
         },
         error: () => { this.rerunningIndex = null; _teardownRerun(); },  // 含 cancelled，静默
       });
