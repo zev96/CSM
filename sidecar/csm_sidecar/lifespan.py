@@ -246,7 +246,7 @@ async def _auto_scan_vault() -> None:
         root = Path(cfg.vault_root)
         if not root.is_dir():
             return
-        await run_in_threadpool(vault_service.scan, root)
+        await run_in_threadpool(vault_service.get, root)
         logger.info("auto vault scan completed: %s", root)
     except Exception as e:
         logger.warning("auto vault scan failed: %s", e)

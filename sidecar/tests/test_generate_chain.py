@@ -62,7 +62,7 @@ def _wire(monkeypatch, tmp_path: Path, *, inject: bool, factcheck: bool, skills:
     monkeypatch.setattr(generate_service.templates_service, "resolve_dir", lambda: tmp_path)
     (tmp_path / "t.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(generate_service, "scan_vault", lambda root: object())
+    monkeypatch.setattr(generate_service.vault_service, "get", lambda root: object())
     monkeypatch.setattr(generate_service, "build_brand_registry", lambda root: object())
     monkeypatch.setattr(generate_service, "load_template",
                         lambda p: type("T", (), {"product": "吸尘器"})())

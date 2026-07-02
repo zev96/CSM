@@ -38,7 +38,7 @@ def _validate(root: Path, rel_folder: str, filename: str) -> None:
 
 
 def list_folders() -> list[dict[str, Any]]:
-    idx = vault_service.scan(_root())   # fresh scan for the picker
+    idx = vault_service.get(_root())   # 增量刷新即可：写盘后 invalidate 已保证下次全量
     return [asdict(p) for p in folder_profile.list_writable_folders(idx)]
 
 

@@ -54,7 +54,7 @@ def atomize(text: str) -> list[dict]:
         logger.warning("[atomize] 输入超长，截断 %d→%d 字（v1 不分块）", len(text), _MAX_INPUT)
         text = text[:_MAX_INPUT]
     root = vault_writer_service._root()          # 复用 3a 的 vault_root 解析
-    index = vault_service.scan(root)
+    index = vault_service.get(root)
     folders = folder_profile.list_writable_folders(index)
     menu = build_menu(folders)
     client = llm_factory.build_client()

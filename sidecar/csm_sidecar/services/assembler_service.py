@@ -86,7 +86,7 @@ def reroll(job_id: str, block_id: str, pick_index: int) -> dict[str, Any]:
     # the user just hit reroll seconds after generate completed.
     index = vault_service.cached()
     if index is None:
-        index = vault_service.scan(Path(cfg.vault_root))
+        index = vault_service.get(Path(cfg.vault_root))
 
     try:
         new_plan = reroll_pick(
