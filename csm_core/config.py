@@ -196,6 +196,8 @@ class AppConfig(BaseModel):
     # 模型单价覆盖（¥/1M tokens）。空 = 用 csm_core.llm.pricing.DEFAULT_PRICES。
     # key=model 名，value={"input": float, "output": float}。设置页可改、深合并 patch。
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # 素材库增量索引：stat 巡走仅重解析变更文件；关 = 每次全量重扫（今天行为）。
+    vault_incremental: bool = True
     close_action: CloseAction = "minimize_to_tray"
     tray_first_minimize_shown: bool = False
 
