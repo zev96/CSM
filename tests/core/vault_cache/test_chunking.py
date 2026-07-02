@@ -1,0 +1,52 @@
+from csm_core.vault.chunking import ChunkResult, split_for_atomize
+
+SENT_END = tuple("。！？!?\n")
+
+
+def _nospace(s: str) -> str:
+    return "".join(s.split())
+
+
+def test_short_text_single_chunk():
+    r = split_for_atomize("短文。", max_chars=100)
+    assert r.chunks == ["短文。"] and r.truncated is False and r.dropped_chars == 0
+
+
+def test_empty():
+    assert split_for_atomize("  ") == ChunkResult()
+
+
+def test_chunks_respect_max_and_sentence_boundary():
+    text = "".join(f"第{i}句，测试内容比较长一些。" for i in range(200))
+    r = split_for_atomize(text, max_chars=500)
+    assert len(r.chunks) > 1
+    for c in r.chunks:
+        assert len(c) <= 500
+        assert c.rstrip().endswith(SENT_END) or c is r.chunks[-1]
+
+
+def test_no_content_loss_when_not_truncated():
+    text = "\n\n".join(f"## 标题{i}\n" + "内容句。" * 50 for i in range(6))
+    r = split_for_atomize(text, max_chars=400)
+    assert r.truncated is False
+    assert _nospace("".join(r.chunks)) == _nospace(text)
+
+
+def test_heading_prefers_new_chunk():
+    text = ("引言。" * 120) + "\n\n## 参数详解\n" + ("参数句。" * 120)
+    r = split_for_atomize(text, max_chars=600)
+    assert any(c.lstrip().startswith("## 参数详解") for c in r.chunks)
+
+
+def test_cap_truncates_tail():
+    text = "长句测试内容。" * 4000          # 28000 字
+    r = split_for_atomize(text, max_chars=1000, cap=3)
+    assert len(r.chunks) == 3 and r.truncated is True
+    assert r.dropped_chars > 0
+
+
+def test_pathological_no_punct_hard_cut():
+    text = "字" * 2500
+    r = split_for_atomize(text, max_chars=1000)
+    assert len(r.chunks) == 3
+    assert all(len(c) <= 1000 for c in r.chunks)
