@@ -12,12 +12,13 @@ from dataclasses import asdict
 
 from csm_core.vault import folder_profile
 from csm_core.vault.atomizer import build_menu, parse_atoms
+from csm_core.vault.chunking import ChunkResult, split_for_atomize
 
 from . import config_service, llm_factory, vault_service, vault_writer_service
 
 logger = logging.getLogger(__name__)
 
-_MAX_INPUT = 8000   # v1 不分块：超长截断 + 记一条 warning 日志（前端级提示/分块留后续）
+_MAX_INPUT = 8000   # 单次拆条输入上限；前端超长时先走 /split 分块。直调超长仍截断兜底。
 
 ATOMIZE_SYSTEM = (
     "你是家电营销资料的素材拆条助手。把用户给的原文【忠实拆分】成多条可复用的"
@@ -63,3 +64,8 @@ def atomize(text: str) -> list[dict]:
         user=f"【可选归类菜单】\n{menu}\n\n【待拆分原文】\n{text}",
         temperature=0.2)
     return [asdict(a) for a in parse_atoms(raw, folders)]
+
+
+def split(text: str) -> ChunkResult:
+    """长文预切分（无状态纯计算，不扫库不打 LLM）。单块 ≤ _MAX_INPUT。"""
+    return split_for_atomize(text or "", max_chars=_MAX_INPUT)
