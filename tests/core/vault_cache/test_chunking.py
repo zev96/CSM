@@ -76,3 +76,10 @@ def test_no_empty_chunks_ever():
     text = ("句。\n\n\n\n" + " \n\n" + "词" * 120 + "\n\n## 标\n" + "尾句。") * 3
     r = split_for_atomize(text, max_chars=50)
     assert all(c.strip() for c in r.chunks)
+
+
+def test_no_empty_chunks_small_max_chars_guard_path():
+    # 极小 max_chars 下超长块的尾部空白句会单独撑爆缓冲——去掉空块守卫
+    # 这条会产出空 chunk（变异捕获输入，终审提供）
+    r = split_for_atomize("甲。甲。甲。\n\n乙。乙。乙。乙。", max_chars=4)
+    assert r.chunks and all(c.strip() for c in r.chunks)
