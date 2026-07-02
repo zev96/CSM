@@ -60,7 +60,14 @@ def split_for_atomize(text: str, *, max_chars: int = 8000, cap: int = 8) -> Chun
     text = (text or "").strip()
     if not text:
         return ChunkResult()
-    if len(text) <= max_chars:
+    # CPU 上界：cap 之外的内容注定进截尾，多留 3 倍余量已绰绰有余；
+    # 防病理超长输入把 O(n²) 硬切循环拖成数十秒（sync handler 占线程）。
+    hard_limit = max_chars * cap * 3
+    pre_dropped = 0
+    if len(text) > hard_limit:
+        pre_dropped = len(text) - hard_limit
+        text = text[:hard_limit]
+    if len(text) <= max_chars and pre_dropped == 0:
         return ChunkResult(chunks=[text])
 
     chunks: list[str] = []
@@ -76,6 +83,8 @@ def split_for_atomize(text: str, *, max_chars: int = 8000, cap: int = 8) -> Chun
         chunks.append(buf.strip())
 
     if len(chunks) > cap:
-        dropped = sum(len(c) for c in chunks[cap:])
+        dropped = sum(len(c) for c in chunks[cap:]) + pre_dropped
         return ChunkResult(chunks=chunks[:cap], truncated=True, dropped_chars=dropped)
+    if pre_dropped:
+        return ChunkResult(chunks=chunks, truncated=True, dropped_chars=pre_dropped)
     return ChunkResult(chunks=chunks)

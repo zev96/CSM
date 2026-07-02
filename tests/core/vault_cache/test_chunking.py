@@ -50,3 +50,11 @@ def test_pathological_no_punct_hard_cut():
     r = split_for_atomize(text, max_chars=1000)
     assert len(r.chunks) == 3
     assert all(len(c) <= 1000 for c in r.chunks)
+
+
+def test_hard_limit_bounds_cpu_and_counts_dropped():
+    text = "字" * (8000 * 8 * 3 + 500)     # 超硬上限 500 字
+    r = split_for_atomize(text)             # 默认 max_chars=8000, cap=8
+    assert r.truncated is True
+    assert r.dropped_chars >= 500
+    assert len(r.chunks) == 8
