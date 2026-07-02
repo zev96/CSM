@@ -23,6 +23,9 @@ class _Entry:
 
 
 class IncrementalIndexer:
+    """增量索引器。非线程安全：调用方必须串行化 refresh/reset
+    （sidecar 在 vault_service 层加锁）。同一 root 上 refresh 幂等。"""
+
     def __init__(self) -> None:
         self._root: Path | None = None
         self._files: dict[Path, _Entry] = {}

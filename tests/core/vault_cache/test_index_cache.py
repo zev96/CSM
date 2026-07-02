@@ -72,6 +72,19 @@ def test_modified_file_reparsed_alone(tmp_path, monkeypatch):
     _assert_same(idx, scan_vault(root))
 
 
+def test_same_size_mtime_only_change_detected(tmp_path, monkeypatch):
+    root = _vault(tmp_path)
+    ixr = IncrementalIndexer()
+    ixr.refresh(root)
+    old_size = (root / "a.md").stat().st_size
+    _write(root / "a.md", GOOD.replace("正文①", "正文②"), bump_ns=2_000_000)
+    assert (root / "a.md").stat().st_size == old_size   # 同长度：只有 mtime 变
+    calls = _count_parses(monkeypatch)
+    idx = ixr.refresh(root)
+    assert calls == ["a.md"]
+    assert "正文②" in idx.by_id["a"].variants[0]
+
+
 def test_added_and_deleted(tmp_path, monkeypatch):
     root = _vault(tmp_path)
     ixr = IncrementalIndexer()
