@@ -1,9 +1,10 @@
 """Thin service for the vault writer routes.
 
-Resolves cfg.vault_root, triggers a fresh vault_service.scan for profiling (the
-picker wants current on-disk state), validates folder/filename stay inside the
-root, and delegates to the pure csm_core.vault.writer engine. Invalidates the
-vault cache after writes so the new note shows up in subsequent scans.
+Resolves cfg.vault_root, refreshes the index via vault_service.get (增量刷新；
+refresh 每次 stat 巡走全树，picker 仍看到当前磁盘状态), validates folder/filename
+stay inside the root, and delegates to the pure csm_core.vault.writer engine.
+Invalidates the vault cache after writes so the new note shows up in
+subsequent scans.
 """
 from __future__ import annotations
 

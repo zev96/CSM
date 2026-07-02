@@ -81,9 +81,9 @@ def reroll(job_id: str, block_id: str, pick_index: int) -> dict[str, Any]:
         raise FileNotFoundError(f"template not found: {entry.template_id}")
     template = load_template(tpl_path)
 
-    # Reuse the most-recently-scanned VaultIndex if it's still around — a
-    # fresh scan is cheap (sub-second on small vaults) but pointless when
-    # the user just hit reroll seconds after generate completed.
+    # Reuse the most-recently-scanned VaultIndex if it's still around — an
+    # incremental get() is cheap (stat-walk + changed-file reparse) but even
+    # that is pointless when the user just hit reroll seconds after generate.
     index = vault_service.cached()
     if index is None:
         index = vault_service.get(Path(cfg.vault_root))
