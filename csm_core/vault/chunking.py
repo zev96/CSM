@@ -57,6 +57,8 @@ def _units(text: str, max_chars: int) -> list[tuple[str, bool]]:
 
 
 def split_for_atomize(text: str, *, max_chars: int = 8000, cap: int = 8) -> ChunkResult:
+    if max_chars <= 0 or cap <= 0:
+        raise ValueError("max_chars/cap 必须为正整数")
     text = (text or "").strip()
     if not text:
         return ChunkResult()
@@ -76,7 +78,9 @@ def split_for_atomize(text: str, *, max_chars: int = 8000, cap: int = 8) -> Chun
         over = len(buf) + len(unit) > max_chars
         heading_break = is_heading and len(buf) >= max_chars * 0.6
         if buf and (over or heading_break):
-            chunks.append(buf.strip())
+            stripped = buf.strip()
+            if stripped:
+                chunks.append(stripped)
             buf = ""
         buf += unit
     if buf.strip():

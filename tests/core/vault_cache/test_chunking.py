@@ -1,3 +1,5 @@
+import pytest
+
 from csm_core.vault.chunking import ChunkResult, split_for_atomize
 
 SENT_END = tuple("。！？!?\n")
@@ -58,3 +60,19 @@ def test_hard_limit_bounds_cpu_and_counts_dropped():
     assert r.truncated is True
     assert r.dropped_chars >= 500
     assert len(r.chunks) == 8
+
+
+def test_invalid_params_raise():
+    with pytest.raises(ValueError):
+        split_for_atomize("正文。", max_chars=0)
+    with pytest.raises(ValueError):
+        split_for_atomize("正文。", max_chars=-5)
+    with pytest.raises(ValueError):
+        split_for_atomize("正文。", max_chars=100, cap=0)
+
+
+def test_no_empty_chunks_ever():
+    # 混合空白段/超短段的构造输入：任何配置下不产出空 chunk
+    text = ("句。\n\n\n\n" + " \n\n" + "词" * 120 + "\n\n## 标\n" + "尾句。") * 3
+    r = split_for_atomize(text, max_chars=50)
+    assert all(c.strip() for c in r.chunks)
