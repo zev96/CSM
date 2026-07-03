@@ -34,6 +34,7 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 import TiptapEditor from "@/components/article/TiptapEditor.vue";
 import FactCheckPanel from "@/components/article/FactCheckPanel.vue";
 import LintPanel from "@/components/article/LintPanel.vue";
+import CompletenessPanel from "@/components/article/CompletenessPanel.vue";
 
 import { useArticle, type Angle } from "@/stores/article";
 import { useConfig } from "@/stores/config";
@@ -59,6 +60,10 @@ const seed = ref(0);
 // 对象提交。空 facet → null / []；全空 → angle=null（= 今天行为）。
 const angle = ref<Angle | null>(null);
 const title = ref<string>("");
+
+// Phase 4+ 成文契约档单次覆盖 —— 从 home Hero chip 带过来的 query.contract。
+// 非法值（既非 conservative 也非 aggressive）一律当未设置，不透传给后端。
+const contractMode = ref<"conservative" | "aggressive" | undefined>(undefined);
 
 // Phase 2b skill 链 —— 从 query 的逗号串重建成 id 数组提交。空 = 不传链
 // = 退回单 skill_id（零回归）。
@@ -349,6 +354,8 @@ async function takeoff() {
     ...(title.value.trim() ? { title: title.value.trim() } : {}),
     // skill 链非空才传 —— 空链 = 退回单 skill_id（零回归）。
     ...(skillChain.value.length > 0 ? { skill_chain: skillChain.value } : {}),
+    // 契约档单次覆盖 —— 未设置（含非法 query 值）不传，退回全局默认。
+    ...(contractMode.value ? { contract_mode: contractMode.value } : {}),
   });
   // 顺便用 AI 拉一组标题候选，让用户在初稿 tab 里就能挑标题。这是
   // 整个流程里第一次 LLM 调用。失败不影响初稿展示，仅 toast 提示。
@@ -574,6 +581,8 @@ watch(
 const showLint = ref(false);
 // 成稿被禁区 lint 命中（lintBlocking false→true）自动弹面板。
 watch(() => article.lintBlocking, (b, prev) => { if (b && !prev) showLint.value = true; });
+// 完整性缺失面板 —— 纯信息展示，不自动弹（软提醒，用户从质检卡按钮主动打开）。
+const showCompleteness = ref(false);
 // 导出按钮：factcheck 门禁 > lint 门禁 > 常规导出弹窗。
 function onExportClick() {
   if (article.factcheck?.blocked) { showFactcheck.value = true; return; }
@@ -703,7 +712,8 @@ interface CheckItem {
   value: string;
   desc: string;
   pass: boolean;
-  tone: "ok" | "warn" | "primary";
+  // Phase 4+: 综合评分低分档用 "alert"（Pill 已支持，checkItems 本地类型跟进扩宽）。
+  tone: "ok" | "warn" | "primary" | "alert";
 }
 const checkItems = computed<CheckItem[]>(() => {
   const items: CheckItem[] = [];
@@ -772,6 +782,30 @@ const checkItems = computed<CheckItem[]>(() => {
     desc: article.lintBlocking ? "有未处理违规，点导出查看" : (article.lint ? "已清/已放行" : "成稿后自动检查"),
     pass: !article.lintBlocking,
     tone: article.lintBlocking ? "warn" : "ok",
+  });
+
+  // 第 8 项：完整性（激进契约才核；保守 → "—"）
+  const comp = article.completeness;
+  items.push({
+    label: "完整性",
+    value: comp ? (comp.missing.length ? `缺 ${comp.missing.length} 处` : "无缺失") : "—",
+    desc: comp
+      ? (comp.missing.length ? "主推事实被删，点下方按钮查看" : "主推事实完整保留")
+      : "激进契约生成后自动核对",
+    pass: !comp || comp.missing.length === 0,
+    tone: comp && comp.missing.length ? "warn" : "ok",
+  });
+
+  // 第 9 项：综合评分
+  const sc = article.score;
+  items.push({
+    label: "综合评分",
+    value: sc ? `${sc.total} 分` : "—",
+    desc: sc
+      ? (sc.parts.length ? `扣分：${sc.parts.slice(0, 3).map((p) => `${p.label}-${p.points}`).join("、")}` : "无扣分")
+      : "成稿后自动评分",
+    pass: !sc || sc.total >= 60,
+    tone: !sc ? "warn" : sc.total >= 80 ? "ok" : sc.total >= 60 ? "warn" : "alert",
   });
 
   return items;
@@ -872,6 +906,11 @@ onMounted(async () => {
   title.value = ((route.query.title as string) ?? "").trim();
   skillChain.value = rebuildChainFromQuery();
   if (angle.value) article.fetchAngleTaxonomy();
+
+  // 契约档单次覆盖 —— 只接受 conservative/aggressive，其余（含空/垃圾值）
+  // 一律 undefined = 用全局 cfg.contract.mode（今天行为）。
+  const qc = (route.query.contract as string) ?? "";
+  contractMode.value = qc === "aggressive" || qc === "conservative" ? qc : undefined;
 
   if (!templateId.value && templates.value[0]) {
     templateId.value = templates.value[0].id;
@@ -2182,6 +2221,20 @@ const tabSectionLabel = computed(() => {
                 <span>重新随机</span>
               </button>
             </div>
+            <!--
+              完整性缺失提醒 —— 只在激进契约核对出缺失时显示（软提醒，
+              不拦导出）。点击打开 CompletenessPanel 查看详情。
+            -->
+            <Btn
+              v-if="article.completeness?.missing.length"
+              variant="ghost"
+              small
+              data-open-completeness
+              class="w-full justify-center"
+              @click="showCompleteness = true"
+            >
+              完整性缺失 {{ article.completeness.missing.length }} 处 →
+            </Btn>
             <!-- 行 2：清空 + 导出文章 -->
             <div class="flex gap-2">
               <button
@@ -2242,6 +2295,11 @@ const tabSectionLabel = computed(() => {
       不会回环到 lint。
     -->
     <LintPanel v-model:open="showLint" @proceed="onExportClick" />
+    <!--
+      完整性缺失面板 —— 纯信息展示，无 proceed，不进导出守卫链
+      （PR#148 教训：只约束带 proceed 的门禁面板）。
+    -->
+    <CompletenessPanel v-model:open="showCompleteness" />
 
     <!--
       导出弹窗 —— 严格按 V1 设计稿（精简版）：标签 + 大标题 + 关闭 X，
