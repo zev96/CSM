@@ -30,6 +30,7 @@ import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
 import XhsPromptsCard from "@/components/settings/XhsPromptsCard.vue";
 import BrandMemoryCard from "@/components/settings/BrandMemoryCard.vue";
 import PricingCard from "@/components/settings/PricingCard.vue";
+import ContractCard from "@/components/settings/ContractCard.vue";
 import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection.vue";
 import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
@@ -1251,6 +1252,10 @@ async function saveAccountEdit() {
             <!-- 模型单价 —— 改 AppConfig.pricing.*，供成稿区「≈¥」成本估算用 -->
             <div class="mt-4">
               <PricingCard />
+            </div>
+            <!-- 生成契约 —— 改 AppConfig.contract.mode，控制保守/激进默认档 -->
+            <div class="mt-4">
+              <ContractCard />
             </div>
           </template>
 
