@@ -164,6 +164,20 @@ class BrandMemoryConfig(BaseModel):
     inject_endorsement_cap: int = 5
 
 
+class ContractConfig(BaseModel):
+    """settings.contract.* —— 成文契约档（默认保守 = 今天行为）。"""
+    # conservative=保留所有信息点；aggressive=允许取舍删减（主推事实必须保留，
+    # finalize 后有完整性反向核对软警告兜底）。
+    mode: Literal["conservative", "aggressive"] = "conservative"
+
+
+class ScoringConfig(BaseModel):
+    """settings.scoring.* —— 成稿确定性评分（禁区+AI味+核对信号）。"""
+    enabled: bool = True
+    # 追加进 AI 味套话词表（extend 不替换）。
+    extra_ai_words: list[str] = Field(default_factory=list)
+
+
 class AppConfig(BaseModel):
     user_name: str | None = None
     user_product: str | None = None
@@ -198,6 +212,8 @@ class AppConfig(BaseModel):
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
     # 素材库增量索引：stat 巡走仅重解析变更文件；关 = 每次全量重扫（今天行为）。
     vault_incremental: bool = True
+    contract: ContractConfig = Field(default_factory=ContractConfig)
+    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     close_action: CloseAction = "minimize_to_tray"
     tray_first_minimize_shown: bool = False
 
