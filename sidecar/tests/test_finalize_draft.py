@@ -96,6 +96,7 @@ def test_finalize_draft_clean_returns_outcome(tmp_path: Path, monkeypatch):
         checkpoint=lambda: None,
         on_pass=lambda p: cap["events"].append(("pass", p.to_dict())),
         stage_index=0, stage_total=1,
+        contract_mode="conservative",
     )
     assert outcome.blocked is False
     assert outcome.final_text == "成稿：吸力220AW。"
@@ -115,6 +116,7 @@ def test_finalize_draft_inject_off_no_brand_facts(tmp_path: Path, monkeypatch):
         cfg=cap["cfg"], out_dir=tmp_path,
         checkpoint=lambda: None, on_pass=lambda p: None,
         stage_index=4, stage_total=6,
+        contract_mode="conservative",
     )
     assert cap["run_chain_kwargs"]["brand_facts"] is None
 
@@ -140,6 +142,7 @@ def test_finalize_draft_blocked_carries_passes(tmp_path: Path, monkeypatch):
         cfg=cap["cfg"], out_dir=tmp_path,
         checkpoint=lambda: None, on_pass=lambda p: None,
         stage_index=0, stage_total=1,
+        contract_mode="conservative",
     )
     assert outcome.blocked is True
     fin = cap["finish"]
@@ -150,3 +153,56 @@ def test_finalize_draft_blocked_carries_passes(tmp_path: Path, monkeypatch):
     # outcome 与 blocked done 共用同一份 cost。
     assert outcome.cost["currency"] == "CNY"
     assert fin["cost"]["currency"] == "CNY"
+
+
+class _DropStubClient:
+    """成稿掉了初稿里的主推关键数字（220AW）—— 模拟激进契约取舍删减。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def complete(self, *, system: str, user: str) -> str:
+        self.calls.append((system, user))
+        return "成稿：清洁力强劲，体验出色。"
+
+
+def test_finalize_draft_aggressive_completeness_missing(tmp_path: Path, monkeypatch):
+    """激进契约 + 成稿丢了主推 220AW → outcome.completeness 非空 missing。"""
+    cap = _wire(monkeypatch, tmp_path, inject=True, factcheck=False)
+    monkeypatch.setattr(chain_service.llm_factory, "build_client", lambda **k: _DropStubClient())
+    outcome = generate_service.finalize_draft(
+        "job-aggressive-missing",
+        chain_steps=_steps(), draft="主推吸力220AW，效果拔群。",
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0),
+        index=object(), registry=object(), category="吸尘器",
+        keyword="无线吸尘器", title=None, angle=None,
+        provider=None, model=None,
+        cfg=cap["cfg"], out_dir=tmp_path,
+        checkpoint=lambda: None, on_pass=lambda p: None,
+        stage_index=0, stage_total=1,
+        contract_mode="aggressive",
+    )
+    assert outcome.blocked is False
+    assert outcome.completeness is not None
+    assert outcome.completeness["checked"] is True
+    assert [m["token"] for m in outcome.completeness["missing"]] == ["220AW"]
+
+
+def test_finalize_draft_conservative_completeness_none(tmp_path: Path, monkeypatch):
+    """保守契约（默认）→ 不核完整性，outcome.completeness is None。"""
+    cap = _wire(monkeypatch, tmp_path, inject=True, factcheck=False)
+    monkeypatch.setattr(chain_service.llm_factory, "build_client", lambda **k: _DropStubClient())
+    outcome = generate_service.finalize_draft(
+        "job-conservative-nocheck",
+        chain_steps=_steps(), draft="主推吸力220AW，效果拔群。",
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0),
+        index=object(), registry=object(), category="吸尘器",
+        keyword="无线吸尘器", title=None, angle=None,
+        provider=None, model=None,
+        cfg=cap["cfg"], out_dir=tmp_path,
+        checkpoint=lambda: None, on_pass=lambda p: None,
+        stage_index=0, stage_total=1,
+        contract_mode="conservative",
+    )
+    assert outcome.blocked is False
+    assert outcome.completeness is None
