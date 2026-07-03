@@ -712,8 +712,7 @@ interface CheckItem {
   value: string;
   desc: string;
   pass: boolean;
-  // Phase 4+: 综合评分低分档用 "alert"（Pill 已支持，checkItems 本地类型跟进扩宽）。
-  tone: "ok" | "warn" | "primary" | "alert";
+  tone: "ok" | "warn" | "primary";
 }
 const checkItems = computed<CheckItem[]>(() => {
   const items: CheckItem[] = [];
@@ -784,30 +783,6 @@ const checkItems = computed<CheckItem[]>(() => {
     tone: article.lintBlocking ? "warn" : "ok",
   });
 
-  // 第 8 项：完整性（激进契约才核；保守 → "—"）
-  const comp = article.completeness;
-  items.push({
-    label: "完整性",
-    value: comp ? (comp.missing.length ? `缺 ${comp.missing.length} 处` : "无缺失") : "—",
-    desc: comp
-      ? (comp.missing.length ? "主推事实被删，点下方按钮查看" : "主推事实完整保留")
-      : "激进契约生成后自动核对",
-    pass: !comp || comp.missing.length === 0,
-    tone: comp && comp.missing.length ? "warn" : "ok",
-  });
-
-  // 第 9 项：综合评分
-  const sc = article.score;
-  items.push({
-    label: "综合评分",
-    value: sc ? `${sc.total} 分` : "—",
-    desc: sc
-      ? (sc.parts.length ? `扣分：${sc.parts.slice(0, 3).map((p) => `${p.label}-${p.points}`).join("、")}` : "无扣分")
-      : "成稿后自动评分",
-    pass: !sc || sc.total >= 60,
-    tone: !sc ? "warn" : sc.total >= 80 ? "ok" : sc.total >= 60 ? "warn" : "alert",
-  });
-
   return items;
 });
 // _passCount kept as a derived helper in case the UI brings back a
@@ -817,26 +792,21 @@ const _passCount = computed(() => checkItems.value.filter((c) => c.pass).length)
 void _passCount;
 
 /**
- * 一级页只保留"重复率·历史"和"关键词密度"两张大卡（用户简化设计）；
- * 每条带 key 让 click 时分流到 openDedup / openDensity。标题候选不
- * 进卡片，走底部「标题候选」按钮去二级页。
+ * 一级页质检大卡：重复率·历史 / 关键词密度（可点进二级页）+ Phase 4+
+ * 的完整性 / 综合评分（信息卡；完整性有缺失时可点开 CompletenessPanel）。
+ * 每条带 key 让 click 分流（openPrimaryCheck）；hasDetail=false 的行不
+ * 渲染「详情 →」也不响应点击。标题候选不进卡片，走底部按钮去二级页。
  */
-const primaryChecks = computed<
-  Array<{
-    key: "dedup" | "density";
-    label: string;
-    value: string;
-    pass: boolean;
-    tone: "ok" | "warn" | "primary";
-  }>
->(() => {
-  const out: Array<{
-    key: "dedup" | "density";
-    label: string;
-    value: string;
-    pass: boolean;
-    tone: "ok" | "warn" | "primary";
-  }> = [];
+interface PrimaryCheck {
+  key: "dedup" | "density" | "completeness" | "score";
+  label: string;
+  value: string;
+  pass: boolean;
+  tone: "ok" | "warn" | "primary" | "alert";
+  hasDetail: boolean;
+}
+const primaryChecks = computed<PrimaryCheck[]>(() => {
+  const out: PrimaryCheck[] = [];
   // 重复率·历史
   if (dedupRatio.value !== null) {
     const pct = (dedupRatio.value * 100).toFixed(1);
@@ -847,6 +817,7 @@ const primaryChecks = computed<
       value: `${pct}%`,
       pass: safe,
       tone: safe ? "ok" : "warn",
+      hasDetail: true,
     });
   } else {
     out.push({
@@ -855,6 +826,7 @@ const primaryChecks = computed<
       value: "—",
       pass: false,
       tone: "warn",
+      hasDetail: true,
     });
   }
   // 关键词密度
@@ -868,6 +840,7 @@ const primaryChecks = computed<
       value: `${pct}%`,
       pass: ok,
       tone: ok ? "ok" : "warn",
+      hasDetail: true,
     });
   } else {
     out.push({
@@ -876,13 +849,44 @@ const primaryChecks = computed<
       value: "—",
       pass: false,
       tone: "warn",
+      hasDetail: true,
     });
   }
+  // 完整性（激进契约才核；保守 → "—"）—— 有缺失时可点开 CompletenessPanel
+  const comp = article.completeness;
+  out.push({
+    key: "completeness",
+    label: "完整性",
+    value: comp ? (comp.missing.length ? `缺 ${comp.missing.length} 处` : "无缺失") : "—",
+    pass: !comp || comp.missing.length === 0,
+    tone: comp && comp.missing.length ? "warn" : "ok",
+    hasDetail: !!(comp && comp.missing.length),
+  });
+  // 综合评分（成稿后自动评；scoring 关/未评 → "—"）—— 纯信息卡无二级页
+  const sc = article.score;
+  out.push({
+    key: "score",
+    label: "综合评分",
+    value: sc ? `${sc.total} 分` : "—",
+    pass: !sc || sc.total >= 60,
+    tone: !sc ? "warn" : sc.total >= 80 ? "ok" : sc.total >= 60 ? "warn" : "alert",
+    hasDetail: false,
+  });
   return out;
 });
 const primaryPassCount = computed(
   () => primaryChecks.value.filter((c) => c.pass).length,
 );
+
+/** 一级页大卡点击分流 —— dedup/density 进二级页；完整性有缺失时开
+ * CompletenessPanel；score 无二级页不动作（分值已在卡面）。 */
+function openPrimaryCheck(key: PrimaryCheck["key"]) {
+  if (key === "dedup") { void openDedup(); return; }
+  if (key === "density") { void openDensity(); return; }
+  if (key === "completeness" && article.completeness?.missing.length) {
+    showCompleteness.value = true;
+  }
+}
 
 onMounted(async () => {
   try {
@@ -1805,8 +1809,9 @@ const tabSectionLabel = computed(() => {
                   padding: '14px 14px 12px',
                   borderRadius: 'var(--radius-inner)',
                   border: '1px solid var(--line)',
+                  cursor: r.hasDetail ? 'pointer' : 'default',
                 }"
-                @click="r.key === 'dedup' ? openDedup() : openDensity()"
+                @click="openPrimaryCheck(r.key)"
               >
                 <div class="flex items-center justify-between">
                   <span class="text-[11.5px] font-medium" :style="{ color: 'var(--ink-2)' }">
@@ -1819,6 +1824,7 @@ const tabSectionLabel = computed(() => {
                     {{ r.value }}
                   </div>
                   <span
+                    v-if="r.hasDetail"
                     class="inline-flex items-center gap-0.5 text-[10.5px]"
                     :style="{ color: 'var(--ink-3)' }"
                   >

@@ -53,6 +53,7 @@ vi.mock("@/components/article/FactCheckPanel.vue", () => ({
 }));
 
 import ArticleView from "@/views/ArticleView.vue";
+import { useArticle, type MissingFact, type ScoreReport } from "@/stores/article";
 
 function setupLookups() {
   getMock.mockImplementation((url: string) => {
@@ -113,5 +114,31 @@ describe("ArticleView — 契约 query 透传", () => {
     const genCall = postMock.mock.calls.find((c) => c[0] === "/api/generate");
     const body = genCall![1];
     expect(body.contract_mode).toBeUndefined();
+  });
+
+  it("质检卡真渲染 完整性(warn)与综合评分(alert <60) 两行", async () => {
+    // 审查 Required 修复的可见性钉子：两项必须落在真渲染的 primaryChecks
+    // 大卡（而非无模板消费者的 checkItems 死代码）。
+    routeQuery = {}; // 不带 keyword —— 不自动起飞，idle 下质检卡也常驻
+    const w = mount(ArticleView, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+
+    const a = useArticle();
+    const MISS: MissingFact = { kind: "number", token: "250AW", value: 250, sentence: "吸力 250AW。" };
+    const LOW: ScoreReport = { total: 55, parts: [{ key: "lint", label: "禁区命中", points: 45, detail: "" }] };
+    a.completeness = { checked: true, missing: [MISS] };
+    a.score = LOW;
+    await flushPromises();
+
+    const cards = w.findAll(".qc-primary-card");
+    expect(cards).toHaveLength(4); // 重复率 / 密度 / 完整性 / 综合评分
+    const compCard = cards[2];
+    const scoreCard = cards[3];
+    expect(compCard.text()).toContain("完整性");
+    expect(compCard.text()).toContain("缺 1 处");
+    expect(compCard.html()).toContain("bg-yellow-soft"); // warn Pill
+    expect(scoreCard.text()).toContain("综合评分");
+    expect(scoreCard.text()).toContain("55 分");
+    expect(scoreCard.html()).toContain("bg-red-soft"); // alert Pill（<60）
   });
 });
