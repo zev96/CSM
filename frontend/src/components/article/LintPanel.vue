@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 禁区 lint 审查面板 —— 成稿被禁区 lint 命中时弹（ArticleView 监听
- * article.lintBlocking 自动弹）。机械类（emoji/破折号/双引号）「一键清」
+ * article.lintBlocking 自动弹），也可从质检「禁区」卡点开（含干净报告：
+ * 手改成稿后可「重新检查」）。机械类（emoji/破折号/双引号）「一键清」
  * 批量修；判断类（元话术/绝对化/引流）逐条「本次放行」或回成稿手改。
  * 全部清/放行后「确认并导出」emit proceed（ArticleView 重入 onExportClick
  * 守卫链开导出 modal / 回 factcheck）。命中按 category 固定顺序分组（spec §7.2）。
@@ -26,6 +27,10 @@ const CAT_LABEL: Record<string, string> = {
 const lintKey = (h: LintHit) => `${h.category}:${h.start}:${h.text}`;
 const hits = computed<LintHit[]>(() => article.lint?.hits ?? []);
 const hasMechanical = computed(() => hits.value.some((h) => h.fixable));
+// 零命中（干净报告点卡进来）时标题不能还喊「发现违规」。
+const dialogTitle = computed(() =>
+  hits.value.length ? "禁区检查 — 发现违规措辞/标点" : "禁区检查 — 未发现违规",
+);
 // 按 category 固定顺序分组 —— 只保留有命中的类。
 const groups = computed(() =>
   CAT_ORDER
@@ -40,10 +45,13 @@ function proceed() { emit("proceed"); open.value = false; }
 </script>
 
 <template>
-  <Dialog v-model:open="open" title="禁区检查 — 发现违规措辞/标点" size="lg">
+  <Dialog v-model:open="open" :title="dialogTitle" size="lg">
     <div class="flex flex-col gap-3">
-      <p class="text-ink-3 text-sm">
+      <p v-if="hits.length" class="text-ink-3 text-sm">
         机械类（emoji/破折号/双引号）可「一键清」批量修；判断类（元话术/绝对化/引流）请在「成稿」改写，或勾「本次放行」（确认是合理表述）。全部处理后才可导出。
+      </p>
+      <p v-else class="text-ink-3 text-sm">
+        当前成稿未发现禁区违规。手改成稿后可点「重新检查」复核。
       </p>
       <div v-for="g in groups" :key="g.cat" class="flex flex-col gap-2">
         <div class="text-ink-3 flex items-center gap-2 text-xs font-medium">

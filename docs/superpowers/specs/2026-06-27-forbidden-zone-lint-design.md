@@ -280,6 +280,8 @@ function onExportClick() {
 
 质检卡（`checkItems`）加第 7 项「禁区」：value=`lintUnresolved 处` 或「无」，pass=`!lintBlocking`，tone=pass?ok:warn → 常驻状态，关了面板也能看见。
 
+> **对齐最终实现**：`checkItems` 自监测中心改版（e4de3f0）起已无模板消费者，上述「禁区」项当时对用户不可见。后续修正把该项迁入实际渲染的 `primaryChecks` 一级大卡（key=`lint`，点卡片直接开 LintPanel；未检查时守卫不开空面板），`checkItems` 死代码删除。value/pass/tone 语义与本节一致。
+
 ---
 
 ## 8. 安全红线
