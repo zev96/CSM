@@ -183,6 +183,7 @@ export const useMaterials = defineStore("materials", () => {
       }
     } catch (e: any) {
       intakeError.value = errMsg(e);
+      chunkProgress.value = null;   // 防御：任何早退都不留残留进度态
       return [];
     }
     const seen = new Set<string>();

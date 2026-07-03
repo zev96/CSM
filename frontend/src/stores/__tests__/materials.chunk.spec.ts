@@ -78,4 +78,21 @@ describe("materials 分块拆条", () => {
     expect(out.map((a) => a.text)).toEqual(["a1"]);
     expect(m.intakeError).toBeTruthy();
   });
+
+  it("取消后的新一轮长文照常全跑（cancel 标志复位）", async () => {
+    const m = useMaterials();
+    // 第一轮：块 1 进行中点取消
+    post.mockResolvedValueOnce({ data: { chunks: ["c1", "c2"], truncated: false, dropped_chars: 0 } });
+    post.mockImplementationOnce(async () => {
+      m.cancelAtomize();
+      return { data: { atoms: [] } };
+    });
+    await m.atomizeText("字".repeat(9000));
+    // 第二轮：全部块都应执行到
+    post.mockResolvedValueOnce({ data: { chunks: ["d1", "d2"], truncated: false, dropped_chars: 0 } });
+    post.mockResolvedValueOnce({ data: { atoms: [atom("b1")] } });
+    post.mockResolvedValueOnce({ data: { atoms: [atom("b2", "营销资料库/痛点")] } });
+    const out = await m.atomizeText("字".repeat(9000));
+    expect(out.map((a) => a.text)).toEqual(["b1", "b2"]);
+  });
 });
