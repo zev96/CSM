@@ -298,3 +298,152 @@ def test_skill_chain_two_skills_two_passes_per_candidate(
     assert snap["items"][0]["status"] == "success"
     # candidates=1（默认）× 2 pass/candidate = 2 次 complete
     assert len(seq.calls) == 2
+
+
+# ── 7) 候选级故障隔离：后败不弃先胜 ───────────────────────────────────────
+class _FlakyClient:
+    """第 1 次 complete 成功、之后全 raise —— 模拟候选 2 的 LLM 故障。"""
+
+    def __init__(self, first_out: str):
+        self.first_out = first_out
+        self.calls: list[tuple[str, str]] = []
+
+    def complete(self, *, system: str, user: str, temperature=None) -> str:
+        self.calls.append((system, user))
+        if len(self.calls) == 1:
+            return self.first_out
+        raise ValueError("boom-LLM")
+
+
+def test_candidate_failure_keeps_earlier_winner(
+    client: TestClient, tmp_path: Path, monkeypatch,
+):
+    """候选 2 抛异常不拖垮整词：候选 1 优胜稿照常导出、item=success。"""
+    _setup_world(client, tmp_path, template_id="tpl-plain")
+    flaky = _FlakyClient(CLEAN_HUMAN)
+    _patch_client(monkeypatch, flaky)
+
+    resp = client.post("/api/batch", json={
+        "keywords": ["kw1"], "template_id": "tpl-plain", "candidates": 2,
+    })
+    job_id = resp.json()["job_id"]
+    snap = _wait_for_finished(job_id, timeout=10.0)
+    assert snap is not None
+    item = snap["items"][0]
+    assert item["status"] == "success"          # 候选2失败不弃候选1优胜
+    assert item["error_type"] is None
+    assert item["candidate_scores"] is not None and len(item["candidate_scores"]) == 1
+    assert item["document"] is not None
+    assert "猫毛缠进滚刷" in Path(item["document"]).read_text(encoding="utf-8")
+    assert len(flaky.calls) == 2                # 两个候选都真的尝试过
+    # 失败候选没有产出 → 不该有 candidates/ 落选稿残留
+    cand_dir = tmp_path / "out" / f"batch-{job_id[:8]}" / "candidates"
+    assert not cand_dir.exists()
+
+
+# ── 8a) 取消打断（k=1 已成）→ 该词 success 只带 1 个候选、后续词 cancelled ──
+class _CancelAfterFirstClient:
+    """k=1 的 complete 成功并顺手标记取消 → 内层在 k=2 前退出。"""
+
+    def __init__(self, out: str):
+        self.out = out
+        self.calls = 0
+
+    def complete(self, *, system: str, user: str, temperature=None) -> str:
+        self.calls += 1
+        with batch_service._lock:
+            for st in batch_service._states.values():
+                if st.finished_at is None:
+                    st.cancel_requested = True
+        return self.out
+
+
+def test_cancel_after_first_candidate_keeps_winner_and_cancels_rest(
+    client: TestClient, tmp_path: Path, monkeypatch,
+):
+    """取消落在 k=1 成功之后：该词以候选1成稿 success；第二个词 cancelled 非 failed。"""
+    _setup_world(client, tmp_path, template_id="tpl-plain")
+    cac = _CancelAfterFirstClient(CLEAN_HUMAN)
+    _patch_client(monkeypatch, cac)
+
+    resp = client.post("/api/batch", json={
+        "keywords": ["kw1", "kw2"], "template_id": "tpl-plain", "candidates": 2,
+    })
+    job_id = resp.json()["job_id"]
+    snap = _wait_for_finished(job_id, timeout=10.0)
+    assert snap is not None
+    it1, it2 = snap["items"]
+    assert it1["status"] == "success"           # 已花钱的候选1保住
+    assert len(it1["candidate_scores"]) == 1    # k=2 没跑
+    assert cac.calls == 1                       # 只有 1 次 complete
+    assert it2["status"] == "cancelled"         # 第二个词是取消，不是失败
+    assert it2["error_type"] is None
+
+
+# ── 8b) 取消打断且零成稿 → cancelled 不是 failed ───────────────────────────
+class _FailAndCancelClient:
+    """complete 即标记取消并 raise —— 候选1败 + 取消打断候选2 → 零成稿。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, *, system: str, user: str, temperature=None) -> str:
+        self.calls += 1
+        with batch_service._lock:
+            for st in batch_service._states.values():
+                if st.finished_at is None:
+                    st.cancel_requested = True
+        raise ValueError("boom-then-cancel")
+
+
+def test_cancel_with_no_candidate_marks_cancelled_not_failed(
+    client: TestClient, tmp_path: Path, monkeypatch,
+):
+    """取消打断且一个成稿都没有 → item 标 cancelled（不误报 failed）。"""
+    _setup_world(client, tmp_path, template_id="tpl-plain")
+    fc = _FailAndCancelClient()
+    _patch_client(monkeypatch, fc)
+
+    resp = client.post("/api/batch", json={
+        "keywords": ["kw1"], "template_id": "tpl-plain", "candidates": 2,
+    })
+    job_id = resp.json()["job_id"]
+    snap = _wait_for_finished(job_id, timeout=10.0)
+    assert snap is not None
+    item = snap["items"][0]
+    assert item["status"] == "cancelled"        # 用户取消，不是失败
+    assert item["error_type"] is None
+    assert item["document"] is None
+    assert fc.calls == 1                        # 候选2被取消打断，没有再调
+
+
+# ── 9) 全候选失败 → failed 且带真实错误（非内部 RuntimeError 文案）─────────
+class _AlwaysBoomClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, *, system: str, user: str, temperature=None) -> str:
+        self.calls += 1
+        raise ValueError("boom-LLM-always")
+
+
+def test_all_candidates_fail_marks_failed_with_real_error(
+    client: TestClient, tmp_path: Path, monkeypatch,
+):
+    """所有候选都失败 → item=failed，error_* 是真实底层异常，且每个候选都尝试过。"""
+    _setup_world(client, tmp_path, template_id="tpl-plain")
+    boom = _AlwaysBoomClient()
+    _patch_client(monkeypatch, boom)
+
+    resp = client.post("/api/batch", json={
+        "keywords": ["kw1"], "template_id": "tpl-plain", "candidates": 2,
+    })
+    job_id = resp.json()["job_id"]
+    snap = _wait_for_finished(job_id, timeout=10.0)
+    assert snap is not None
+    item = snap["items"][0]
+    assert item["status"] == "failed"
+    assert item["error_type"] == "ValueError"
+    assert "boom-LLM-always" in (item["error_message"] or "")
+    assert boom.calls == 2                      # 候选级隔离：两个候选都尝试过
+    assert snap["finished_at"] is not None      # 批任务整体正常收尾

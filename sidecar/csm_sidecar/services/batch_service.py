@@ -305,55 +305,66 @@ def _run_job(job_id: str) -> None:
             try:
                 best: dict | None = None       # {final_text, plan, score_report, fc_n}
                 cand_scores: list[float] = []
+                last_exc: Exception | None = None   # 全候选失败时把真因抛给 per-item except
+                was_cancelled = False
                 total_cost_acc = state_cost_acc   # 外层累计器（每链 pass_dicts）
                 for k in range(1, state.candidates + 1):
                     with _lock:
                         if state.cancel_requested:
+                            was_cancelled = True
                             break
-                    plan = assemble_plan(
-                        keyword=item.keyword, template=template,
-                        index=index, registry=registry,
-                        seed=state.seed + (k - 1) * 1000, user_config={},
-                    )
-                    draft = compose_draft(plan)
-                    # 注入（与 finalize_draft 同条件：inject 或 factcheck 开才解析 scopes）
-                    scopes: list = []
-                    brand_facts = None
-                    if cfg.brand_memory.inject or cfg.brand_memory.factcheck:
-                        scopes = resolve_scopes(
-                            plan, index, registry,
-                            own_brands=set(cfg.brand_memory.own_brands),
-                            category=template.product)
-                        if scopes and cfg.brand_memory.inject:
-                            brand_facts = render_brand_facts(
-                                scopes,
-                                variant_cap=cfg.brand_memory.inject_variant_cap,
-                                endorsement_cap=cfg.brand_memory.inject_endorsement_cap)
-                    chain_state = chain_service.run_chain(
-                        f"{job_id}:{item.index}:{k}", chain_steps,
-                        draft=draft, keyword=item.keyword, title=None,
-                        angle_directive=None, brand_facts=brand_facts,
-                        provider=state.provider, model=state.model,
-                        client=client, contract_mode=effective_contract,
-                        cache=False)
-                    final_k = chain_state.final_text
-                    pass_dicts = [p.to_dict() for p in chain_state.passes]
-                    total_cost_acc.append(pass_dicts)
-                    # 核对信号（计数不拦）
-                    fc_n = 0
-                    if cfg.brand_memory.factcheck and scopes:
-                        sources = [draft] + ([brand_facts] if brand_facts else [])
-                        wl = build_whitelist(scopes, source_texts=sources)
-                        fc_n = len(check_facts(
-                            final_k, allowed_numbers=wl.numbers,
-                            allowed_certs=wl.certs).violations)
-                    comp_n = 0
-                    if effective_contract == "aggressive" and scopes:
-                        comp_n = len(check_completeness(draft, final_k, scopes).missing)
-                    report = score_article(
-                        final_k, lint_report=lint_report_for(final_k, lint_rules),
-                        factcheck_violations=fc_n, completeness_missing=comp_n,
-                        config=cfg.scoring)
+                    # 候选级故障隔离：单候选失败只丢自己，不弃已有优胜、不拖垮整词。
+                    try:
+                        plan = assemble_plan(
+                            keyword=item.keyword, template=template,
+                            index=index, registry=registry,
+                            seed=state.seed + (k - 1) * 1000, user_config={},
+                        )
+                        draft = compose_draft(plan)
+                        # 注入（与 finalize_draft 同条件：inject 或 factcheck 开才解析 scopes）
+                        scopes: list = []
+                        brand_facts = None
+                        if cfg.brand_memory.inject or cfg.brand_memory.factcheck:
+                            scopes = resolve_scopes(
+                                plan, index, registry,
+                                own_brands=set(cfg.brand_memory.own_brands),
+                                category=template.product)
+                            if scopes and cfg.brand_memory.inject:
+                                brand_facts = render_brand_facts(
+                                    scopes,
+                                    variant_cap=cfg.brand_memory.inject_variant_cap,
+                                    endorsement_cap=cfg.brand_memory.inject_endorsement_cap)
+                        chain_state = chain_service.run_chain(
+                            f"{job_id}:{item.index}:{k}", chain_steps,
+                            draft=draft, keyword=item.keyword, title=None,
+                            angle_directive=None, brand_facts=brand_facts,
+                            provider=state.provider, model=state.model,
+                            client=client, contract_mode=effective_contract,
+                            cache=False)
+                        final_k = chain_state.final_text
+                        pass_dicts = [p.to_dict() for p in chain_state.passes]
+                        total_cost_acc.append(pass_dicts)
+                        # 核对信号（计数不拦）
+                        fc_n = 0
+                        if cfg.brand_memory.factcheck and scopes:
+                            sources = [draft] + ([brand_facts] if brand_facts else [])
+                            wl = build_whitelist(scopes, source_texts=sources)
+                            fc_n = len(check_facts(
+                                final_k, allowed_numbers=wl.numbers,
+                                allowed_certs=wl.certs).violations)
+                        comp_n = 0
+                        if effective_contract == "aggressive" and scopes:
+                            comp_n = len(check_completeness(draft, final_k, scopes).missing)
+                        report = score_article(
+                            final_k, lint_report=lint_report_for(final_k, lint_rules),
+                            factcheck_violations=fc_n, completeness_missing=comp_n,
+                            config=cfg.scoring)
+                    except Exception as cand_exc:  # noqa: BLE001 — 候选级边界
+                        logger.warning(
+                            "batch %s item %d candidate %d failed",
+                            job_id, item.index, k, exc_info=True)
+                        last_exc = cand_exc
+                        continue
                     cand_scores.append(report.total)
                     if best is None or report.total > best["score_report"].total:
                         if best is not None:
@@ -364,7 +375,13 @@ def _run_job(job_id: str) -> None:
                         _save_candidate(out_dir, item, {
                             "final_text": final_k, "score_report": report})
                 if best is None:
-                    raise RuntimeError("batch item cancelled before first candidate")
+                    if was_cancelled:
+                        # 用户取消且零成稿 —— 是取消不是失败（error_* 留空）。
+                        item.status = "cancelled"
+                        continue  # finally 仍发 item_finished（status=cancelled）
+                    # 全候选失败：把真实的最后一个异常抛给 per-item except（error_* 取真因）。
+                    raise last_exc if last_exc is not None else RuntimeError(
+                        "batch item produced no candidate")
                 paths = export_article(
                     out_dir=out_dir, keyword=item.keyword,
                     final_text=best["final_text"], plan=best["plan"],
