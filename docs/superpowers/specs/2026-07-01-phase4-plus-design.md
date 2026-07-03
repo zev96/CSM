@@ -35,8 +35,8 @@
 class _Entry:
     mtime_ns: int
     size: int
-    note: ParsedNote
-    warnings: list[str]          # 该文件的解析警告（缓存后可重聚合）
+    note: ParsedNote | None      # None = 警告项（缺 frontmatter/解析失败）
+    warning: str | None          # 实现定稿：每文件至多一条警告（草稿曾写 list[str]）
 
 class IncrementalIndexer:
     def __init__(self) -> None:
@@ -52,7 +52,7 @@ class IncrementalIndexer:
 ```
 
 - 巡走用 `(st_mtime_ns, st_size)` 双键判变——共享盘 mtime 粒度粗时 size 兜底。
-- `scan_vault` 保持纯全量函数不动（csm_core 公共 API 不破坏）；从 scanner 抽出 `parse_one(path) -> tuple[ParsedNote | None, list[str]]` 供两者共用（scan_vault 行为字节级不变）。
+- `scan_vault` 保持纯全量函数不动（csm_core 公共 API 不破坏）；从 scanner 抽出 `parse_one(path) -> tuple[ParsedNote | None, str | None]` 供两者共用（note 与 warning 恰有其一非 None；scan_vault 行为字节级不变）。
 - 警告语义：`VaultIndex.warnings` = 各文件缓存警告按 path 序重聚合，与全量扫结果一致。
 
 `vault_service` 改造（sidecar）：
