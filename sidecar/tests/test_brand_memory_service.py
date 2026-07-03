@@ -26,7 +26,7 @@ def _vault(root: Path) -> None:
        "---\n产品: 吸尘器\n素材类型: 品牌定位\n核心关键词: x\n---\n① CEWEY 技术型品牌。\n")
 
 
-def test_list_models_includes_role_and_coverage(tmp_path):
+def test_list_models_includes_role_and_coverage(tmp_path, settings_path, vault_cache_reset):
     _vault(tmp_path)
     rows = svc.list_models(tmp_path, category="吸尘器", own_brands={"CEWEY"})
     by_model = {r["model"]: r for r in rows}
@@ -36,7 +36,7 @@ def test_list_models_includes_role_and_coverage(tmp_path):
     assert by_model["戴森V12"]["role"] == "竞品"
 
 
-def test_get_model_detail_has_specs_and_inject_preview(tmp_path):
+def test_get_model_detail_has_specs_and_inject_preview(tmp_path, settings_path, vault_cache_reset):
     _vault(tmp_path)
     d = svc.get_model_detail(
         tmp_path, "CEWEYDS18", category="吸尘器", own_brands={"CEWEY"},
@@ -50,7 +50,7 @@ def test_get_model_detail_has_specs_and_inject_preview(tmp_path):
     assert "技术型品牌" in d["inject_preview"]
 
 
-def test_get_model_detail_unknown_returns_none(tmp_path):
+def test_get_model_detail_unknown_returns_none(tmp_path, settings_path, vault_cache_reset):
     _vault(tmp_path)
     assert svc.get_model_detail(
         tmp_path, "杂牌X9", category="吸尘器", own_brands={"CEWEY"},

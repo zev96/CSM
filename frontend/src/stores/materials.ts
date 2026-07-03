@@ -81,6 +81,19 @@ export const useMaterials = defineStore("materials", () => {
   const currentPlan = ref<NotePlan | null>(null);
   const lastReceipt = ref<WriteReceipt | null>(null);
   const intakeError = ref<string | null>(null);
+  const chunkProgress = ref<{ current: number; total: number } | null>(null);
+  const lastAtomizeTruncated = ref<{ dropped: number } | null>(null);
+  const chunkCancelled = ref(false);
+
+  const CHUNK_THRESHOLD = 8000;
+
+  function cancelAtomize(): void {
+    chunkCancelled.value = true;
+  }
+
+  function atomKey(a: AtomDraft): string {
+    return `${a.rel_folder ?? ""}|${a.text.replace(/[\s\p{P}]/gu, "").slice(0, 80)}`;
+  }
 
   async function list(): Promise<void> {
     loading.value = true; error.value = null;
@@ -149,12 +162,54 @@ export const useMaterials = defineStore("materials", () => {
 
   async function atomizeText(text: string): Promise<AtomDraft[]> {
     intakeError.value = null;
-    try {
-      const r = await useSidecar().client.post("/api/vault/atomize", { text });
-      return r.data.atoms ?? [];
-    } catch (e: any) {
-      intakeError.value = errMsg(e); return [];
+    lastAtomizeTruncated.value = null;
+    if (text.length <= CHUNK_THRESHOLD) {
+      try {
+        const r = await useSidecar().client.post("/api/vault/atomize", { text });
+        return r.data.atoms ?? [];
+      } catch (e: any) {
+        intakeError.value = errMsg(e);
+        return [];
+      }
     }
+    // 长文：先切块再逐块拆条（进度可见、块间可取消、跨块去重）
+    chunkCancelled.value = false;
+    let chunks: string[] = [];
+    try {
+      const r = await useSidecar().client.post("/api/vault/atomize/split", { text });
+      chunks = r.data.chunks ?? [];
+      if (r.data.truncated) {
+        lastAtomizeTruncated.value = { dropped: r.data.dropped_chars ?? 0 };
+      }
+    } catch (e: any) {
+      intakeError.value = errMsg(e);
+      chunkProgress.value = null;   // 防御：任何早退都不留残留进度态
+      return [];
+    }
+    const seen = new Set<string>();
+    const merged: AtomDraft[] = [];
+    chunkProgress.value = { current: 0, total: chunks.length };
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        if (chunkCancelled.value) break;
+        chunkProgress.value = { current: i + 1, total: chunks.length };
+        try {
+          const r = await useSidecar().client.post("/api/vault/atomize", { text: chunks[i] });
+          for (const a of (r.data.atoms ?? []) as AtomDraft[]) {
+            const k = atomKey(a);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            merged.push(a);
+          }
+        } catch (e: any) {
+          intakeError.value = errMsg(e);      // 中断但保留已拆的块
+          break;
+        }
+      }
+    } finally {
+      chunkProgress.value = null;
+    }
+    return merged;
   }
 
   async function commitAtom(payload: NotePayload): Promise<WriteReceipt | null> {
@@ -181,5 +236,6 @@ export const useMaterials = defineStore("materials", () => {
     writableFolders, foldersLoading, currentPlan, lastReceipt, intakeError,
     loadFolders, planNote, commitNote, undoLast,
     atomizeText, commitAtom, undoAtom,
+    chunkProgress, lastAtomizeTruncated, cancelAtomize,
   };
 });

@@ -33,10 +33,9 @@ from csm_core.llm.client import LLMClient
 from csm_core.llm.prompts import PromptInputs, build_prompt
 from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
-from csm_core.vault.scanner import scan_vault
 
 from ..event_bus import bus
-from . import config_service, llm_factory, skills_service, templates_service
+from . import config_service, llm_factory, skills_service, templates_service, vault_service
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +221,7 @@ def _run_job(job_id: str) -> None:
         )
 
         # One-time heavy reads — done outside the per-keyword loop.
-        index = scan_vault(vault_root)
+        index = vault_service.get(vault_root)
         registry = build_brand_registry(vault_root)
         template = load_template(tpl_path)
         # If no per-batch skill picked, fall back to template default

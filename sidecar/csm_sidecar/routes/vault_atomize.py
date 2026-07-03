@@ -33,3 +33,13 @@ def atomize(body: AtomizeBody) -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"拆条失败：素材库不可读（共享盘断开或文件被占用）: {e}")
+
+
+class SplitBody(BaseModel):
+    text: str
+
+
+@router.post("/api/vault/atomize/split")
+def split(body: SplitBody) -> dict[str, Any]:
+    """长文预切分：纯计算无副作用，不需要 LLM/vault，无 503/400 映射。"""
+    return atomize_service.split(body.text).model_dump()

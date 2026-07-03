@@ -48,7 +48,7 @@ def _wire(monkeypatch, tmp_path: Path, *, skills: dict, client):
     plan = AssemblyPlan(keyword="无线吸尘器", template_id="t", seed=0)
     monkeypatch.setattr(generate_service.assembler_service, "get_plan",
                         lambda job_id: type("E", (), {"plan": plan, "template_id": "t", "seed": 0})())
-    monkeypatch.setattr(generate_service, "scan_vault", lambda root: object())
+    monkeypatch.setattr(generate_service.vault_service, "get", lambda root: object())
     monkeypatch.setattr(generate_service, "build_brand_registry", lambda root: object())
     monkeypatch.setattr(generate_service, "load_template",
                         lambda p: type("T", (), {"product": "吸尘器"})())

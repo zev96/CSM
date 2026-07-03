@@ -21,6 +21,9 @@ async function run(): Promise<void> {
   atomizing.value = true; atoms.value = []; cards.value = [];
   try {
     const a = await m.atomizeText(text.value);
+    if (m.lastAtomizeTruncated) {
+      notify.push(`原文超长，已截尾 ${m.lastAtomizeTruncated.dropped} 字（最多 8 块）`, { tone: "warn" });
+    }
     a.sort((x, y) => ORDER[x.confidence] - ORDER[y.confidence]);   // low 置顶
     atoms.value = a;
   } finally {
@@ -55,8 +58,17 @@ async function commitAll(): Promise<void> {
         <button data-atomize-run
           class="rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
           :style="{ background: 'var(--primary)' }" :disabled="!text.trim() || atomizing" @click="run">
-          <span v-if="atomizing" class="inline-flex items-center gap-1"><Spinner :size="12" /> 拆条中…</span>
+          <span v-if="atomizing || m.chunkProgress" class="inline-flex items-center gap-1">
+            <Spinner :size="12" />
+            <template v-if="m.chunkProgress">分块 {{ m.chunkProgress.current }}/{{ m.chunkProgress.total }} 拆条中…</template>
+            <template v-else>拆条中…</template>
+          </span>
           <span v-else>AI 拆条</span>
+        </button>
+        <button v-if="m.chunkProgress" data-atomize-cancel
+          class="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70"
+          @click="m.cancelAtomize()">
+          取消
         </button>
         <button v-if="atoms.length" data-atomize-commit-all class="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70" @click="commitAll">
           全部入库（high/med）

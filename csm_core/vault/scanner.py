@@ -53,16 +53,28 @@ class VaultIndex:
         ]
 
 
+def parse_one(md_path: Path) -> tuple[ParsedNote | None, str | None]:
+    """单文件解析：返回 (note, warning)，二者恰有其一非 None。
+
+    与 scan_vault 的逐文件逻辑等价：缺 frontmatter → (None, 警告)；
+    解析异常 → (None, 警告)。供全量扫与增量索引共用。
+    """
+    try:
+        note = parse_note(md_path)
+    except Exception as exc:
+        return None, f"{md_path.name}: 解析失败 — {exc}"
+    if not note.frontmatter:
+        return None, f"{md_path.name}: 缺少 frontmatter"
+    return note, None
+
+
 def scan_vault(root: Path) -> VaultIndex:
     index = VaultIndex(root=root)
     for md_path in sorted(root.rglob("*.md")):
-        try:
-            note = parse_note(md_path)
-            if not note.frontmatter:
-                index.warnings.append(f"{md_path.name}: 缺少 frontmatter")
-                continue
+        note, warning = parse_one(md_path)
+        if warning:
+            index.warnings.append(warning)
+        if note is not None:
             index.notes.append(note)
             index.by_id[note.id] = note
-        except Exception as exc:
-            index.warnings.append(f"{md_path.name}: 解析失败 — {exc}")
     return index

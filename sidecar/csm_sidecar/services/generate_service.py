@@ -28,7 +28,6 @@ from csm_core.assembler.render import compose_draft
 from csm_core.export.markdown import export_article
 from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
-from csm_core.vault.scanner import scan_vault
 from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
 from csm_core.factcheck import check_facts
 from csm_core.llm import pricing
@@ -42,6 +41,7 @@ from . import (
     llm_factory,
     skills_service,
     templates_service,
+    vault_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -183,7 +183,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
         _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="扫描资料库", index=0, total=6)
-        index = scan_vault(vault_root)
+        index = vault_service.get(vault_root)
         registry = build_brand_registry(vault_root)
 
         _checkpoint(job_id)
@@ -319,10 +319,10 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             raise FileNotFoundError(f"template not found: {entry.template_id}")
         template = load_template(tpl_path)
 
-        # 新鲜 scan + registry（与 _run_job 一致；takeoff 走 scan_vault 直调、
-        # 不写 vault_service._index，故不复用 cached，重扫保证 scopes 命中型号）。
+        # 新鲜索引 + registry（与 _run_job 一致）。get() 是增量刷新：
+        # 未变更文件复用缓存、变更即时可见，保证 scopes 命中型号。
         _checkpoint(job_id)
-        index = scan_vault(vault_root)
+        index = vault_service.get(vault_root)
         registry = build_brand_registry(vault_root)
 
         chain_steps = _resolve_chain(req, cfg)
