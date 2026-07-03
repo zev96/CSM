@@ -52,6 +52,8 @@ export interface GenerateRequest {
   // Phase 2b skill 链多-pass —— 按 role 顺序的 skill id 列表（人设→去AI味→平台）。
   // 不传 / 空 = 退回单 skill_id（零回归）。
   skill_chain?: string[] | null;
+  // Phase 4+ 成文契约档单次覆盖。不传 = 用全局 cfg.contract.mode。
+  contract_mode?: "conservative" | "aggressive";
 }
 
 /** 链上单 pass 的预览数据（镜像后端 chain_service.ChainPass.to_dict）。
@@ -112,6 +114,16 @@ export interface FactcheckViolation {
   sentence: string;
   suggestion: string;
 }
+
+/** 完整性缺失项（镜像 csm_core.factcheck.completeness.MissingFact）。 */
+export interface MissingFact {
+  kind: "number" | "cert";
+  token: string;
+  value: number | null;
+  sentence: string;
+}
+export interface ScorePart { key: string; label: string; points: number; detail: string }
+export interface ScoreReport { total: number; parts: ScorePart[] }
 
 const STAGES = [
   "扫描资料库",
@@ -183,6 +195,10 @@ interface ArticleState {
   // null=未扫 / fail-open。hits 命中放行后存 key 串到 lintReleased。
   lint: { hits: LintHit[]; fixed_text: string } | null;
   lintReleased: string[];
+  // Phase 4+: 激进契约完整性反向核对（软警告）。null=保守/未核/fail-open。
+  completeness: { checked: boolean; missing: MissingFact[] } | null;
+  // Phase 4+: 成稿确定性评分（禁区+AI味+核对，0-100）。null=未评/scoring 关/fail-open。
+  score: ScoreReport | null;
 }
 
 export const useArticle = defineStore("article", {
@@ -215,6 +231,8 @@ export const useArticle = defineStore("article", {
     rerunningIndex: null,
     lint: null,
     lintReleased: [],
+    completeness: null,
+    score: null,
   }),
   getters: {
     progress(state): number {
@@ -267,6 +285,23 @@ export const useArticle = defineStore("article", {
       if (i >= 0) this.lintReleased.splice(i, 1);
       else this.lintReleased.push(k);
     },
+    async runScore(text: string): Promise<void> {
+      if (!text.trim()) { this.score = null; return; }
+      try {
+        const r = await useSidecar().client.post("/api/score", {
+          text,
+          factcheck_violations: this.factcheck?.violations.length ?? 0,
+          completeness_missing: this.completeness?.missing.length ?? 0,
+        });
+        const d = r.data;
+        // scoring 关（total:null）或形状不对 → null（fail-open）
+        this.score = d && typeof d.total === "number" && Array.isArray(d.parts)
+          ? { total: d.total, parts: d.parts }
+          : null;
+      } catch {
+        this.score = null;
+      }
+    },
     async submit(req: GenerateRequest): Promise<void> {
       this._teardown();
       _teardownRerun();          // 起新生成 —— 放弃在跑的 rerun 流
@@ -287,6 +322,7 @@ export const useArticle = defineStore("article", {
       this.cost = null; // 起新链 —— 清掉上一轮成本摘要
       this.isFinalizing = false; // 起飞不是润色 —— 清掉残留的润色标志
       this.lint = null; this.lintReleased = []; // 起新生成 —— 清掉上轮 lint
+      this.completeness = null; this.score = null; // 起新生成 —— 清掉上轮完整性/评分
 
       const sidecar = useSidecar();
       try {
@@ -360,6 +396,11 @@ export const useArticle = defineStore("article", {
             d.factcheck && d.factcheck.blocked
               ? { blocked: true, violations: d.factcheck.violations ?? [] }
               : null;
+          // Phase 4+: 激进契约的完整性软警告（保守/未核 → null）。
+          this.completeness =
+            d.completeness && d.completeness.checked
+              ? { checked: true, missing: d.completeness.missing ?? [] }
+              : null;
           this.stageIndex = STAGES.length;
           this.status = "done";
           useNotifications().push("文章生成完成", {
@@ -367,8 +408,11 @@ export const useArticle = defineStore("article", {
             tone: "success",
             category: "article_success",
           });
-          // 整篇润色成稿出炉 → 自动跑禁区 lint（draft_only 起飞 final_text 空，不触发）。
-          if (this.finalText.trim()) void this.runLint(this.finalText);
+          // 整篇润色成稿出炉 → 自动跑禁区 lint + 评分（draft_only 起飞 final_text 空，不触发）。
+          if (this.finalText.trim()) {
+            void this.runLint(this.finalText);
+            void this.runScore(this.finalText);
+          }
           this._teardown();
         },
         error: (d: any) => {
@@ -601,6 +645,7 @@ export const useArticle = defineStore("article", {
       this.factcheck = null;
       this.cost = null; // 起新链 —— 清掉上一轮成本摘要
       this.lint = null; this.lintReleased = []; // 起新润色 —— 清掉上轮 lint
+      this.completeness = null; this.score = null; // 起新润色 —— 清掉上轮完整性/评分
       this._subscribe(this.jobId!);
     },
     async exportArticle(opts: { format: "markdown" | "docx"; include_dedup_report?: boolean }) {
@@ -673,8 +718,11 @@ export const useArticle = defineStore("article", {
           if (typeof d.final_text === "string") this.finalText = d.final_text;
           this.rerunningIndex = null;
           _teardownRerun();
-          // 重跑改了成稿要重扫禁区 lint。
-          if (this.finalText.trim()) void this.runLint(this.finalText);
+          // 重跑改了成稿要重扫禁区 lint + 评分。
+          if (this.finalText.trim()) {
+            void this.runLint(this.finalText);
+            void this.runScore(this.finalText);
+          }
         },
         error: () => { this.rerunningIndex = null; _teardownRerun(); },  // 含 cancelled，静默
       });
