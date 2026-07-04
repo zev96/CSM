@@ -152,3 +152,42 @@ def test_summary_lists_endorsements_and_leading_neutral():
 def test_summary_empty_without_primary():
     b = _scope("Dyson", "V12", "竞品", specs={"吸力(AW)": "150"})
     assert _summary([b]) == ""
+
+
+from csm_core.comparison.compose import compose_comparison_draft
+
+
+def test_compose_full_draft_sections_present_and_ordered():
+    a = _scope("CEWEY", "CEWEYDS18", "主推",
+               specs={"吸力(AW)": "220"}, scripts={"动力系统": ["强劲"]},
+               certs=["CE"], endorsements=["老牌"], tests={"噪音测试": "安静"})
+    b = _scope("Dyson", "V12", "竞品",
+               specs={"吸力(AW)": "150"}, tests={"噪音测试": "略吵"})
+    out = compose_comparison_draft([a, b], keyword="无线吸尘器怎么选", title=None)
+    # 引言点名两型号 + 关键词
+    assert "无线吸尘器怎么选" in out
+    assert "CEWEY CEWEYDS18" in out and "Dyson V12" in out
+    # 五段按序
+    i_param = out.index("## 参数对照")
+    i_high = out.index("## 各型号亮点")
+    i_test = out.index("## 实测对比")
+    i_sum = out.index("## 总结")
+    assert i_param < i_high < i_test < i_sum
+
+
+def test_compose_title_prepended_as_h1():
+    a = _scope("CEWEY", "CEWEYDS18", "主推", specs={"吸力(AW)": "220"})
+    b = _scope("Dyson", "V12", "竞品", specs={"吸力(AW)": "150"})
+    out = compose_comparison_draft([a, b], keyword="吸尘器", title="三款横评")
+    assert out.startswith("# 三款横评\n\n")
+
+
+def test_compose_omits_empty_sections():
+    # 无 scripts/certs/tests → 亮点、实测节整块不出现，但参数/总结在
+    a = _scope("CEWEY", "CEWEYDS18", "主推", specs={"吸力(AW)": "220"})
+    b = _scope("Dyson", "V12", "竞品", specs={"吸力(AW)": "150"})
+    out = compose_comparison_draft([a, b], keyword="吸尘器", title=None)
+    assert "## 参数对照" in out
+    assert "## 各型号亮点" not in out
+    assert "## 实测对比" not in out
+    assert "## 总结" in out

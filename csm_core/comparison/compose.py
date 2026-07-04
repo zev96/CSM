@@ -136,8 +136,24 @@ def _summary(scopes: list[ModelScope]) -> str:
     return "\n".join(lines)
 
 
+def _intro(scopes: list[ModelScope], keyword: str, title: str | None) -> str:
+    names = "、".join(_model_label(sc) for sc in scopes)
+    kw = keyword.strip() or "这几款产品"
+    lead = f"{kw}？本文把 {names} 放在一起，从参数、亮点到实测逐项对比。"
+    if title:
+        return f"# {title}\n\n{lead}"
+    return lead
+
+
 def compose_comparison_draft(
     scopes: list[ModelScope], *, keyword: str, title: str | None,
 ) -> str:
-    """占位：Task A2–A5 逐段填充。"""
-    raise NotImplementedError
+    """多型号对比文章骨架（零 LLM）。空节自动省略。"""
+    parts = [
+        _intro(scopes, keyword, title),
+        _param_table(scopes),
+        _highlights(scopes),
+        _test_comparison(scopes),
+        _summary(scopes),
+    ]
+    return "\n\n".join(p for p in parts if p)
