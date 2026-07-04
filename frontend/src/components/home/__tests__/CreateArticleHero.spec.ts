@@ -26,6 +26,12 @@ vi.mock("@/components/article/AnglePicker.vue", () => ({
   default: { name: "AnglePicker", template: "<div class='angle-picker-stub' />" },
 }));
 
+// ComparisonPicker（横评型号多选）拉品牌记忆 —— stub materials store 让
+// Hero spec 不打 sidecar（本 spec 只验 takeoff query 组装）。
+vi.mock("@/stores/materials", () => ({
+  useMaterials: () => ({ models: [], loading: false, error: null, list: vi.fn() }),
+}));
+
 import CreateArticleHero from "@/components/home/CreateArticleHero.vue";
 
 const TEMPLATES = { templates: [{ id: "tpl-a", name: "模板A" }, { id: "tpl-b", name: "模板B" }] };
@@ -157,5 +163,29 @@ describe("CreateArticleHero — 角度 chip + query", () => {
     (w.vm as any).takeoff();
     const query = pushMock.mock.calls[0][0].query;
     expect(query.contract).toBe("aggressive");
+  });
+
+  it("横评模式 takeoff → query 带 mode=comparison + models", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    (w.vm as any).mode = "comparison";
+    (w.vm as any).compModels = ["A", "B"];
+    (w.vm as any).keyword = "怎么选";
+    (w.vm as any).takeoff();
+    const query = pushMock.mock.calls.at(-1)![0].query;
+    expect(query.mode).toBe("comparison");
+    expect(query.models).toBe("A,B");
+    expect(query.keyword).toBe("怎么选");
+  });
+
+  it("横评模式 <2 型号时 takeoff 不跳转", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    (w.vm as any).mode = "comparison";
+    (w.vm as any).compModels = ["A"];
+    (w.vm as any).keyword = "k";
+    pushMock.mockClear();
+    (w.vm as any).takeoff();
+    expect(pushMock).not.toHaveBeenCalled();
   });
 });

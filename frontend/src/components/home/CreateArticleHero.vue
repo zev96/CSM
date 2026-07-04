@@ -22,6 +22,7 @@ import Dropdown from "@/components/ui/Dropdown.vue";
 import Icon from "@/components/ui/Icon.vue";
 import AnglePicker from "@/components/article/AnglePicker.vue";
 import SkillChainPicker from "@/components/article/SkillChainPicker.vue";
+import ComparisonPicker from "@/components/home/ComparisonPicker.vue";
 import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
@@ -67,6 +68,11 @@ const CONTRACT_ITEMS = [
 const contractMode = ref<string>("");
 const contractLabel = computed(() =>
   contractMode.value === "aggressive" ? "激进" : contractMode.value === "conservative" ? "保守" : "全局");
+
+// 创作模式：常规单篇 | 横评多型号对比。
+const mode = ref<"normal" | "comparison">("normal");
+const compModels = ref<string[]>([]);
+const showCompPicker = ref(false);
 
 // 角度是否有任一 facet 被设置 —— 控制 chip 的"已设置"高亮 + 摘要文案。
 const angleActive = computed(() => {
@@ -152,6 +158,24 @@ onMounted(async () => {
 
 function takeoff() {
   if (!keyword.value.trim()) return;
+
+  // 横评模式：不选模板，改带 mode=comparison + 逗号连的 models（2–4）。
+  // 其余可选项（skill 链 / 语调 / 标题 / 契约）与常规路径同样扁平进 query。
+  if (mode.value === "comparison") {
+    if (compModels.value.length < 2) return;      // 需 2-4 型号
+    const q: Record<string, string> = {
+      mode: "comparison",
+      models: compModels.value.join(","),
+      keyword: keyword.value.trim(),
+    };
+    if (skillChain.value.length > 0) q.skill_chain = skillChain.value.join(",");
+    if (angle.value?.tone) q.tone = angle.value.tone;
+    if (title.value.trim()) q.title = title.value.trim();
+    if (contractMode.value) q.contract = contractMode.value;
+    router.push({ name: "article", query: q });
+    return;
+  }
+
   // _demo_ 前缀仅用于占位，不要传给 sidecar，否则 ArticleView 找不到模板。
   const realTpl = tplId.value.startsWith("_demo_") ? undefined : tplId.value;
 
@@ -177,7 +201,7 @@ function takeoff() {
 
 // 给测试（@vue/test-utils vm）访问内部 state/方法 —— <script setup> 默认
 // 闭合，不 expose 测不到 takeoff/angle/title。
-defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, contractMode, takeoff, onPickTemplate });
+defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, contractMode, mode, compModels, showCompPicker, takeoff, onPickTemplate });
 </script>
 
 <template>
@@ -205,6 +229,23 @@ defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, contra
       >
         {{ dateLabel }}
       </div>
+    </div>
+
+    <!--
+      模式切换：常规 | 横评 —— house 风格 chip 二选一。横评时输入条下方
+      chip 行把「模板」下拉换成「选择对比型号」按钮，起飞带 mode=comparison。
+    -->
+    <div class="flex gap-2" :style="{ marginBottom: '2px' }">
+      <button type="button" :data-mode-normal="mode === 'normal'"
+        :style="{ padding: '5px 12px', borderRadius: '999px', fontSize: '12px',
+          border: '1px solid var(--line)',
+          background: mode === 'normal' ? 'var(--primary-soft)' : 'transparent' }"
+        @click="mode = 'normal'">常规</button>
+      <button type="button" :data-mode-comparison="mode === 'comparison'"
+        :style="{ padding: '5px 12px', borderRadius: '999px', fontSize: '12px',
+          border: '1px solid var(--line)',
+          background: mode === 'comparison' ? 'var(--primary-soft)' : 'transparent' }"
+        @click="mode = 'comparison'">横评</button>
     </div>
 
     <!--
@@ -252,7 +293,20 @@ defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, contra
       落在同一 cell，叠在 hidden 上面正常显示。纯 CSS，无 JS measure。
     -->
     <div class="flex flex-wrap items-center gap-2">
-      <Dropdown :items="tplItems" @select="(k: string) => (tplId = k)">
+      <!--
+        横评模式：模板下拉换成「选择对比型号」按钮（点开 ComparisonPicker）。
+        选了型号高亮 + 显示已选个数；起飞时带 mode=comparison + models。
+      -->
+      <button v-if="mode === 'comparison'" type="button" data-comp-models-trigger
+        :style="{ padding: '6px 12px', borderRadius: '10px', fontSize: '12px',
+          border: '1px solid var(--line)',
+          background: compModels.length ? 'var(--primary-soft)' : 'var(--frosted-bg)' }"
+        @click="showCompPicker = true">
+        {{ compModels.length ? `已选 ${compModels.length} 个型号` : "选择对比型号" }}
+      </button>
+      <ComparisonPicker v-model="compModels" v-model:open="showCompPicker" />
+
+      <Dropdown v-if="mode !== 'comparison'" :items="tplItems" @select="(k: string) => (tplId = k)">
         <template #trigger>
           <button
             type="button"
