@@ -403,9 +403,45 @@ def _run_comparison_job(job_id: str, req: ComparisonRequest) -> None:
             _cancelled.discard(job_id)
 
 
-def _run_comparison_finalize(job_id, *, req, draft, scopes, cfg, out_dir,
-                             keyword, title, category):
-    raise NotImplementedError  # Task B4
+def _run_comparison_finalize(
+    job_id: str, *, req: "FinalizeRequest | ComparisonRequest", draft: str,
+    scopes: list, cfg, out_dir: Path, keyword: str, title: str | None,
+    category: str, tone: str | None = None, contract_mode: str | None = None,
+) -> None:
+    """横评成稿：合成 plan（供 factcheck/export）→ finalize_draft（scopes 旁路 +
+    对比指令块）→ 导出 + finish。plan 恒 None 发给前端。"""
+    chain_steps = _resolve_chain(req, cfg)
+    synthetic = AssemblyPlan(
+        keyword=keyword or "型号对比", template_id="__comparison__",
+        seed=0, core_keyword=keyword or "型号对比")
+    primary = next((sc for sc in scopes if getattr(sc, "role", "") == "主推"), None)
+    primary_label = (f"{primary.brand} {primary.model}".strip()
+                     if primary is not None else None)
+    directive = build_comparison_directive(primary_label=primary_label, tone=tone)
+    resolved_contract = contract_mode or cfg.contract.mode
+
+    _checkpoint(job_id)
+    outcome = finalize_draft(
+        job_id, chain_steps=chain_steps, draft=draft,
+        plan=synthetic, index=None, registry=None, category=category,
+        keyword=keyword, title=title, angle=None,
+        provider=getattr(req, "provider", None), model=getattr(req, "model", None),
+        cfg=cfg, out_dir=out_dir,
+        checkpoint=lambda: _checkpoint(job_id),
+        on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
+        stage_index=0, stage_total=1, contract_mode=resolved_contract,
+        scopes=scopes, angle_directive=directive)
+    if outcome.blocked:
+        return
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = export_article(out_dir=out_dir, keyword=keyword,
+                           final_text=outcome.final_text, plan=synthetic,
+                           fmt=cfg.export_format)
+    bus.finish(job_id, document=paths["document"], format=paths["format"],
+               title=paths["title"], plan=None, draft=draft,
+               final_text=outcome.final_text, passes=outcome.passes,
+               cost=outcome.cost, completeness=outcome.completeness,
+               comparison={"models": [getattr(sc, "model", "") for sc in scopes]})
 
 
 def submit_finalize(job_id: str, req: FinalizeRequest) -> str:
@@ -435,6 +471,24 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             raise ValueError("AppConfig.out_dir is unset")
         vault_root = Path(cfg.vault_root)
         out_dir = Path(cfg.out_dir)
+
+        # 横评分支：命中横评缓存 → 由 models 重解析 scopes、跳过 plan 路径。
+        # 复用上面的 vault_root/out_dir，命中即 return，不落到下方 plan 路径。
+        meta = comparison_cache.get_comparison(job_id)
+        if meta is not None:
+            _checkpoint(job_id)
+            index = vault_service.get(vault_root)
+            registry = build_brand_registry(vault_root)
+            scopes = _resolve_comparison_scopes(
+                meta.models, index, registry, meta.category,
+                set(cfg.brand_memory.own_brands))
+            _run_comparison_finalize(
+                job_id, req=req, draft=req.draft, scopes=scopes, cfg=cfg,
+                out_dir=out_dir, keyword=meta.keyword, title=req.title or meta.title,
+                category=meta.category, tone=meta.tone,
+                contract_mode=(req.contract_mode or meta.contract_mode
+                               or cfg.contract.mode))
+            return
 
         entry = assembler_service.get_plan(job_id)
         if entry is None:

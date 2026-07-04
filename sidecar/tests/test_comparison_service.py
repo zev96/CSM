@@ -147,3 +147,47 @@ def test_run_comparison_job_too_few_models_errors(monkeypatch, tmp_path):
                                skill_chain=None, contract_mode=None, draft_only=True)
     gs._run_comparison_job("jobE", req)
     assert "型号" in errs["error"]                 # 中文原因
+
+
+def test_finalize_job_comparison_branch_uses_models(monkeypatch, tmp_path):
+    from csm_sidecar.services import comparison_cache as cc
+    cc.reset_for_test()
+    cc.cache_comparison("jobF", models=["A", "B"], category="吸尘器",
+                        keyword="怎么选", title=None, tone="口语",
+                        skill_chain=None, contract_mode="conservative")
+
+    seen = {}
+    def fake_finalize_draft(job_id, **kw):
+        seen["scopes_len"] = len(kw["scopes"]) if kw.get("scopes") else 0
+        seen["directive"] = kw.get("angle_directive")
+        seen["plan_keyword"] = kw["plan"].keyword
+        class _O: final_text="FT"; passes=[]; blocked=False; cost={}; completeness=None
+        return _O()
+    monkeypatch.setattr(gs, "finalize_draft", fake_finalize_draft)
+    monkeypatch.setattr(gs, "_resolve_comparison_scopes",
+                        lambda models, *a, **k: [object() for _ in models])
+    monkeypatch.setattr(gs.vault_service, "get", lambda root: object())
+    monkeypatch.setattr(gs, "build_brand_registry", lambda root: object())
+    monkeypatch.setattr(gs, "export_article",
+                        lambda **k: {"document": str(tmp_path / "x.md"),
+                                     "format": "markdown", "title": "T"})
+    finished = {}
+    monkeypatch.setattr(gs.bus, "finish", lambda job, **d: finished.update(d))
+    monkeypatch.setattr(gs.bus, "publish", lambda *a, **k: None)
+    monkeypatch.setattr(gs, "_checkpoint", lambda job: None)
+    monkeypatch.setattr(gs, "_resolve_chain", lambda req, cfg: [])
+    class _Cfg:
+        vault_root=str(tmp_path); out_dir=str(tmp_path); export_format="markdown"
+        class brand_memory: own_brands=["Br"]
+        class contract: mode="conservative"
+    monkeypatch.setattr(gs.config_service, "load", lambda: _Cfg)
+
+    req = gs.FinalizeRequest(draft="edited draft", keyword="怎么选",
+                             title=None, angle=None, skill_id=None,
+                             skill_chain=None, provider=None, model=None,
+                             contract_mode=None)
+    gs._finalize_job("jobF", req)
+    assert seen["scopes_len"] == 2               # 由 models 重解析
+    assert "横评" in seen["directive"]            # 对比指令块注入
+    assert seen["plan_keyword"] == "怎么选"       # 合成 plan 带 keyword
+    assert finished.get("final_text") == "FT"
