@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<!--
+  Synthetic Baidu SERP fixture — 2026-07 DOM 改版。
+  Keyword: "宠物智能喂食器"
+  依据：用户 2026-07-03 在真实 SERP 上实测验证过的选择器整理。
+
+  相对 2025-05 结构（serp_default_only.html）的三个变化：
+    1. organic 卡 class 不再含 'result' token —— 现在是
+       "c-container xpath-log new-pmd"（旧选择器 contains(@class,'result')
+       因此 0 命中）。
+    2. 新增非文章杂卡 tpl：rel_base_realtime（实时资讯聚合）、
+       b2b_factory_wise_san（B2B 工厂，登录桶）；匿名桶另有 b2b_prod
+       （爱采购商品批发）、recommend_list（相关推荐）等（live 探针
+       2026-07-03，organic tpl=www_index）。
+    3. span.cosc-title-slot 变成普通结果卡的通用标题槽（live 一页 11 个），
+       不再是知识卡专属标记 —— 含它的 organic 卡必须计入（id=7）。
+
+  XPath acceptance criteria:
+    XPATH_DEFAULT matched: 4  (id=1, 4, 7, 8；id=11 子串诱饵必须被拒)
+    XPATH_NEWS matched: 0
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>宠物智能喂食器_百度搜索</title>
+</head>
+<body>
+<div id="wrapper_wrapper">
+  <div id="container">
+    <div id="content_left">
+
+      <!-- Result 1 — organic，新版 class（无 'result' token） -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A1&quot;}" tpl="se_com_default" mu="https://www.zhihu.com/question/2026001" id="1">
+        <div class="c-row">
+          <div class="c-span9">
+            <h3 class="c-title t">
+              <a href="https://www.zhihu.com/question/2026001" data-click="{}" title="宠物智能喂食器怎么选？ - 知乎">
+                宠物智能喂食器怎么选？ - 知乎
+              </a>
+            </h3>
+            <div class="c-abstract">知乎用户关于宠物智能喂食器选购的讨论，覆盖定时投喂、摄像头、App 联动等维度。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result 2 — rel_base_realtime 实时资讯聚合卡，tpl 黑名单排除 -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A2&quot;}" tpl="rel_base_realtime" id="2">
+        <div class="c-row">
+          <h3 class="c-title t">
+            <a href="https://news.example.com/pet-feeder-realtime">
+              [Filtered] 宠物喂食器实时资讯聚合
+            </a>
+          </h3>
+        </div>
+      </div>
+
+      <!-- Result 3 — sp_purc_pc 购物推广卡，tpl 黑名单排除 -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A3&quot;}" tpl="sp_purc_pc" id="3">
+        <div class="c-row">
+          <h3 class="c-title t">
+            <a href="https://ad.example.com/pet-feeder">
+              [Ad] 智能喂食器限时特惠 — 立即购买
+            </a>
+          </h3>
+        </div>
+      </div>
+
+      <!-- Result 4 — organic，class token 顺序被打乱（锁 token 级匹配、顺序无关） -->
+      <div class="new-pmd c-container xpath-log" data-op="{&quot;y&quot;:&quot;2026A4&quot;}" tpl="se_com_default" mu="https://baijiahao.baidu.com/s?id=2026002" id="4">
+        <div class="c-row">
+          <div class="c-span9">
+            <h3 class="c-title t">
+              <a href="https://baijiahao.baidu.com/s?id=2026002" data-click="{}" title="2026 年宠物智能喂食器深度测评 - 百家号">
+                2026 年宠物智能喂食器深度测评 - 百家号
+              </a>
+            </h3>
+            <div class="c-abstract">百家号测评文章：对市面主流宠物智能喂食器做了横向对比。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result 5 — b2b_factory_wise_san B2B 工厂/爱采购卡，tpl 黑名单排除 -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A5&quot;}" tpl="b2b_factory_wise_san" id="5">
+        <div class="c-row">
+          <h3 class="c-title t">
+            <a href="https://b2b.baidu.com/factory/pet-feeder">
+              [Filtered] 宠物喂食器源头工厂批发 — 爱采购
+            </a>
+          </h3>
+        </div>
+      </div>
+
+      <!-- Result 6 — short_video 短视频卡，tpl 黑名单排除 -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A6&quot;}" tpl="short_video" id="6">
+        <div class="c-row">
+          <h3 class="c-title t">
+            <a href="https://haokan.baidu.com/v?vid=zzz">
+              [Filtered] 短视频：喂食器开箱
+            </a>
+          </h3>
+        </div>
+      </div>
+
+      <!-- Result 7 — organic 卡带 cosc-title-slot 通用标题槽（2026-07 起计入：
+           该 span 已不再是知识卡专属标记，排除它会误杀 organic 结果） -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A7&quot;}" tpl="se_com_default" mu="https://www.sohu.com/a/2026004" id="7">
+        <div class="c-row">
+          <div class="c-span9">
+            <h3 class="c-title t">
+              <span class="cosc-title-slot">官方</span>
+              <a href="https://www.sohu.com/a/2026004" data-click="{}" title="智能喂食器全型号横评 - 搜狐号">
+                智能喂食器全型号横评 - 搜狐号
+              </a>
+            </h3>
+            <div class="c-abstract">搜狐号横评：主流智能喂食器出粮精度与堵粮率实测。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result 8 — organic，class 带额外 token（真实 SERP 常见） -->
+      <div class="c-container xpath-log new-pmd sfa-view" data-op="{&quot;y&quot;:&quot;2026A8&quot;}" tpl="se_com_default" mu="https://www.163.com/dy/article/2026003.html" id="8">
+        <div class="c-row">
+          <div class="c-span9">
+            <h3 class="c-title t">
+              <a href="https://www.163.com/dy/article/2026003.html" data-click="{}" title="智能喂食器选购避坑指南 - 网易号">
+                智能喂食器选购避坑指南 - 网易号
+              </a>
+            </h3>
+            <div class="c-abstract">网易号软文：从噪音、容量、断电续喂三个角度分析选购要点。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result 9 — b2b_prod 爱采购商品批发卡（匿名桶，live 实测会抢 rank #1），tpl 黑名单排除 -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A9&quot;}" tpl="b2b_prod" id="9">
+        <div class="c-row">
+          <h3 class="c-title t">
+            <a href="https://b2b.baidu.com/prod/pet-feeder">
+              [Filtered] 智能喂食器 - 商品批发价格 - 百度爱采购
+            </a>
+          </h3>
+        </div>
+      </div>
+
+      <!-- Result 10 — recommend_list 相关推荐卡（匿名桶），tpl 黑名单排除 -->
+      <div class="c-container xpath-log new-pmd" data-op="{&quot;y&quot;:&quot;2026A10&quot;}" tpl="recommend_list" id="10">
+        <div class="c-row">
+          <h3 class="c-title t">
+            <a href="https://www.baidu.com/s?wd=%E5%96%82%E9%A3%9F%E5%99%A8%E6%8E%A8%E8%8D%90">
+              [Filtered] 大家还在搜：喂食器推荐
+            </a>
+          </h3>
+        </div>
+      </div>
+
+      <!-- Result 11 — 子串诱饵卡：class 全是"部分 token"（c-container-promo 等），
+           token 级匹配必须拒绝；若有人把选择器回退成子串 contains 匹配，
+           这张卡会混入结果、测试立刻红 -->
+      <div class="c-container-promo xpath-log-x new-pmd-x" data-op="{&quot;y&quot;:&quot;2026A11&quot;}" tpl="se_com_default" id="11">
+        <div class="c-row">
+          <h3 class="c-title t">
+            <a href="https://decoy.example.com/substring-bait">
+              [Decoy] 子串匹配诱饵卡（不得出现在结果里）
+            </a>
+          </h3>
+        </div>
+      </div>
+
+    </div><!-- end content_left -->
+
+    <div id="content_right">
+      <!-- right rail -->
+    </div>
+  </div>
+
+  <div id="foot">
+    <div id="page">
+      <strong>1</strong>
+      <a href="/s?wd=%E5%AE%A0%E7%89%A9%E6%99%BA%E8%83%BD%E5%96%82%E9%A3%9F%E5%99%A8&pn=10">下一页</a>
+    </div>
+  </div>
+</div>
+</body>
+</html>

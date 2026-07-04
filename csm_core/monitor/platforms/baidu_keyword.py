@@ -2,7 +2,8 @@
 
 策略：
 1. 用 patchright incognito 打开 baidu.com/s?wd=keyword（默认 headless）
-2. 用 spec 给的 XPath 抓「默认搜索」「最新资讯」两个区块的 h3//a href
+2. 抓「默认搜索」「最新资讯」两个区块的 h3//a href（默认区块 2026-07 起用
+   token 级 class 选择器 + tpl 黑名单，另带 content_left 兜底，见 _XPATH_DEFAULT）
 3. 解 baidu.com/link?url=... 跳转拿真实 URL
 4. 对每条 URL：curl_cffi + readability 抓正文，识别失败 fallback 浏览器
 5. 大小写不敏感匹配 target_brand → matches_brand=True
@@ -42,18 +43,84 @@ from ...browser_infra.window_util import surface_window, hide_window
 logger = logging.getLogger(__name__)
 
 
-# 用户提供的两条 XPath（spec 第 1 节末尾）。完整 contains/not 链
-# 跟用户原文一致，仅去掉首尾空白 —— XPath 引擎对空白不挑，但单行更易读。
+# ── 「默认搜索」区块选择器 ──────────────────────────────────────────
+# 本质契约：按 DOM 顺序枚举左栏 organic 结果卡，取每张卡的 h3/a。
+# 稳定信号：c-container class token（多年未变）、tpl 模板名、h3/a 标题链接；
+# 易变信号：class token 的集合与顺序 —— 2026-07 改版把 'result' token 整个
+# 去掉（旧选择器 contains(@class,'result') 因此 0 命中、假报"无排名"），
+# 所以只 token 级匹配仍存在的标记，不依赖顺序、不依赖已消失的 token。
+#
+# 非文章杂卡按 tpl 模板名排除（漏排会污染 rank + 白抓一次正文）。
+# 2026-07 实测发现百度按会话分发**两套模板桶**，杂卡 tpl 两桶都要覆盖：
+#   登录桶（用户日常 Chrome / 副本 profile，adapter 实际运行环境）——
+#     sp_purc_pc            购物 / 推广卡
+#     short_video           短视频卡（两桶都有）
+#     news-realtime         实时资讯卡（2025 旧名，保留防旧结构回滚）
+#     rel_base_realtime     实时资讯卡（2026-07 用户实测观察到的新名）
+#     b2b_factory_wise_san  B2B 工厂卡（爱采购，2026-07 用户实测观察到）
+#   匿名桶（www_index 系模板，2026-07-03 live 探针观察；organic=www_index）——
+#     b2b_prod              爱采购商品批发卡（实测会抢 rank #1）
+#     image_grid_san        图片网格卡
+#     recommend_list        相关推荐 / 大家还在搜
+#     uer_feedback          用户反馈卡
+#     new_baikan_index      百看图文视频聚合
+#     note_lead             笔记类聚合卡
+_EXCLUDED_TPLS: tuple[str, ...] = (
+    "sp_purc_pc",
+    "short_video",
+    "news-realtime",
+    "rel_base_realtime",
+    "b2b_factory_wise_san",
+    "b2b_prod",
+    "image_grid_san",
+    "recommend_list",
+    "uer_feedback",
+    "new_baikan_index",
+    "note_lead",
+)
+
+
+def _class_token(token: str) -> str:
+    """token 级 class 匹配（等价 CSS 的 ``.token``）。
+
+    contains(@class, 'x') 是子串匹配，会把 'x-y' / 'prefix-x' 也算进来；
+    补空格哨兵后只命中完整 token，且与 token 在 class 里的顺序无关。
+    """
+    return f"contains(concat(' ', normalize-space(@class), ' '), ' {token} ')"
+
+
+# tpl 黑名单，主 / 兜底两条选择器共用（单一来源不漂移）。
+#
+# 2026-07 起不再排除含 span.cosc-title-slot 的卡：旧版里它标记知识图谱卡，
+# 但 live 探针实测它已变成普通结果卡的通用标题槽（一页 11 个），保留该
+# 排除会把 6 条 organic 误杀到只剩 1 条杂卡。误杀（区块全空）是灾难性
+# 失败，偶尔混入一张知识卡（1 条 rank 污染 + 1 次白抓）代价小得多 ——
+# 结构性排除只在"标记语义稳定"时才成立。
+# normalize-space 与 class 匹配同款加固：tpl 属性若带意外空白也不绕过黑名单。
+_COMMON_EXCLUDES = " and ".join(
+    f"not(normalize-space(@tpl)='{t}')" for t in _EXCLUDED_TPLS
+)
+
 _XPATH_DEFAULT = (
-    "//div[contains(@class, 'c-container') "
-    "and contains(@class, 'result') "
-    "and contains(@class, 'xpath-log') "
-    "and contains(@class, 'new-pmd') "
-    "and not(@tpl='sp_purc_pc') "
-    "and not(@tpl='news-realtime') "
-    "and not(@tpl='short_video') "
-    "and not(.//span[contains(@class, 'cosc-title-slot')])"
-    "]//h3/a"
+    "//div["
+    + " and ".join((
+        _class_token("c-container"),
+        _class_token("xpath-log"),
+        _class_token("new-pmd"),
+    ))
+    + " and " + _COMMON_EXCLUDES
+    + "]//h3/a"
+)
+
+# 兜底选择器：xpath-log / new-pmd 是"时代标记"（new-pmd 即 2020 改版产物），
+# 下一次改版可能像 'result' 一样消失。主选择器 0 命中时退化为只认
+# c-container token，但收窄到 content_left 主结果列（十余年未变的结构锚点）
+# 控制过抓，右栏杂卡不会混入。
+_XPATH_DEFAULT_RELAXED = (
+    "//div[@id='content_left']//div["
+    + _class_token("c-container")
+    + " and " + _COMMON_EXCLUDES
+    + "]//h3/a"
 )
 
 _XPATH_NEWS = (
@@ -78,22 +145,85 @@ def parse_serp(html: str) -> dict[str, Any]:
     """从一段 SERP HTML 抽取两组 (title, href) 链接。
 
     纯函数：不发请求、不解 redirect、不判断品牌词 —— 只把 DOM 翻成 list。
+
+    ``selector_fallback`` —— True 表示主选择器 0 命中、结果来自兜底
+    c-container 选择器（百度 DOM 大概率又改版了；随 metric 落库留痕，
+    方便回溯是哪天开始走兜底的）。
     """
     if not html or not html.strip():
-        return {"default_links": [], "news_links": [], "news_present": False}
+        return {"default_links": [], "news_links": [], "news_present": False,
+                "selector_fallback": False}
 
     try:
         doc = lxml_html.fromstring(html)
     except Exception as e:
         logger.warning("baidu parse_serp: lxml fromstring raised: %s", e)
-        return {"default_links": [], "news_links": [], "news_present": False}
+        return {"default_links": [], "news_links": [], "news_present": False,
+                "selector_fallback": False}
 
+    selector_fallback = False
     default_links = _extract_a_tags(doc, _XPATH_DEFAULT)
+    # 兜底选择器每次都算（sub-ms）：既是主选择器 0 命中时的替补，也是
+    # "部分漂移哨兵"的对照组 —— 只靠"主 0 才兜底"的开关，看不见
+    # 「部分 organic 卡丢 token、主选择器返回非空子集」这种静默漏抓。
+    relaxed_links = _extract_a_tags(doc, _XPATH_DEFAULT_RELAXED)
+    if not default_links:
+        if relaxed_links:
+            default_links = relaxed_links
+            selector_fallback = True
+            logger.warning(
+                "baidu parse_serp: 主选择器 0 命中，content_left 兜底命中 %d 条 "
+                "—— 百度 SERP DOM 可能已改版，请核对 _XPATH_DEFAULT。tpls=%s",
+                len(relaxed_links), _tpl_inventory(doc),
+            )
+        else:
+            # 真实 SERP 默认区块不可能是空的（无结果页 / 风控漏检除外），
+            # 双选择器 0 命中几乎必是 DOM 改版。把关键统计打进日志留证据 ——
+            # 只返回空 list 的 silent failure 没法区分改版 / 风控 / 空页多种根因。
+            logger.warning(
+                "baidu parse_serp: 默认区块主 + 兜底选择器均 0 命中 "
+                "html_len=%d c-container=%d h3=%d tpls=%s body_first200=%r",
+                len(html),
+                html.count("c-container"),
+                len(doc.xpath("//h3")),
+                _tpl_inventory(doc),
+                _extract_raw_body_text(html)[:200],
+            )
+    else:
+        # 部分漂移哨兵：兜底(只认 c-container)比主选择器多出条目，说明
+        # content_left 里有卡丢了 xpath-log / new-pmd 时代 token —— 主选择器
+        # 正在静默漏抓。行为不变（仍用主选择器结果），只告警留证据。
+        primary_hrefs = {l["href"] for l in default_links}
+        extra = [l for l in relaxed_links if l["href"] not in primary_hrefs]
+        if extra:
+            logger.warning(
+                "baidu parse_serp: 兜底选择器比主选择器多 %d 条（主 %d / 兜底 %d）"
+                "—— 部分结果卡可能丢了时代 token，主选择器或在静默漏抓。"
+                "多出样例=%r tpls=%s",
+                len(extra), len(default_links), len(relaxed_links),
+                [(e["title"][:30], e["href"][:60]) for e in extra[:3]],
+                _tpl_inventory(doc),
+            )
+
     news_links = _extract_a_tags(doc, _XPATH_NEWS)
+    if not news_links:
+        # 资讯区静默死亡观测：cos-space 容器存在但一行都没解出 ≠ 页面没有
+        # 资讯区（后者常见且正常）—— 前者是内层结构（cos-row/h3）漂移信号。
+        try:
+            cos_blocks = int(doc.xpath("count(//div[contains(@class, 'cos-space')])"))
+        except Exception:
+            cos_blocks = 0
+        if cos_blocks:
+            logger.warning(
+                "baidu parse_serp: 页面存在 %d 个 cos-space 资讯容器但解出 0 行 "
+                "—— 资讯区内层结构可能已变更，请核对 _XPATH_NEWS",
+                cos_blocks,
+            )
     return {
         "default_links": default_links,
         "news_links": news_links,
         "news_present": bool(news_links),
+        "selector_fallback": selector_fallback,
     }
 
 
@@ -113,6 +243,23 @@ def _extract_a_tags(doc: Any, xpath: str) -> list[dict[str, str]]:
         title = (a.text_content() or "").strip()
         out.append({"title": title, "href": href})
     return out
+
+
+def _tpl_inventory(doc: Any) -> dict[str, int]:
+    """content_left 里所有带 tpl 的 div 盘点（纯诊断）。
+
+    这套选择器的下一次失效大概率是 tpl 名变化（news-realtime →
+    rel_base_realtime 一年内就发生过）—— 把清单直接打进告警日志，
+    远程看日志就能定位新 organic / 杂卡 tpl 名，不用给用户发 debug 版。
+    """
+    inv: dict[str, int] = {}
+    try:
+        for t in doc.xpath("//div[@id='content_left']//div/@tpl"):
+            key = (t or "").strip() or "(empty)"
+            inv[key] = inv.get(key, 0) + 1
+    except Exception:
+        pass
+    return inv
 
 
 def match_brand(content: str, brands: list[str]) -> str | None:
@@ -703,6 +850,22 @@ class BaiduKeywordAdapter:
         "mbd.baidu.com",
         "mp.baidu.com",
     )
+    # 百度自有垂类 host —— 永不计入排名、不抓正文（精确匹配，2026-07）。
+    # cosc 知识卡结构排除移除后的补偿守卫：百科等垂类页正文天然含品牌词
+    # （搜品牌词出来的词条必然写着品牌名），计入会假报「自家软文排第 N」；
+    # 自搜索链接（www.baidu.com/s?wd=）用 curl 直连还会白白刺激风控。
+    # 注意：① 百家号 baijiahao/mbd/mp 是真实文章宿主，绝不能进此名单；
+    # ② 只做 host 精确匹配、不做后缀匹配（后缀 baidu.com 会误杀百家号）；
+    # ③ 裸 "baidu.com" 条目兜住相对 href 解析失败时的占位 host；
+    # ④ 不随 use_default_excludes 关闭 —— 这是正确性守卫，不是用户偏好。
+    _NON_ARTICLE_HOSTS: frozenset[str] = frozenset({
+        "baidu.com",
+        "www.baidu.com",
+        "baike.baidu.com",
+        "b2b.baidu.com",
+        "image.baidu.com",
+        "haokan.baidu.com",
+    })
 
     def __init__(self) -> None:
         # 真实字段在 apply_settings 里被覆盖。
@@ -1190,6 +1353,7 @@ class BaiduKeywordAdapter:
                     "default_first_rank": -1,
                     "news_first_rank": -1,
                     "news_present": False,
+                    "selector_fallback": False,
                     "fetch_error": None,
                 }
 
@@ -1254,6 +1418,7 @@ class BaiduKeywordAdapter:
 
                 parsed = parse_serp(serp_html)
                 kw_entry["news_present"] = parsed["news_present"]
+                kw_entry["selector_fallback"] = parsed.get("selector_fallback", False)
 
                 # 抓默认搜索 + 最新资讯两组（pass single brand as list）。
                 # exclude_set 过滤 B2B/电商/品牌门户 —— 详见 _check_block。
@@ -1339,6 +1504,16 @@ class BaiduKeywordAdapter:
         for link in links:
             href = resolve_baidu_link(link["href"], session=session)
             host = urlparse(href).netloc or "baidu.com"
+
+            # 百度自有垂类守卫：百科 / 自搜索 / 图片 / 好看等永不是"软文
+            # 文章"本体，直接跳过（不计 rank、不发请求、不调 pacer）。
+            # 见 _NON_ARTICLE_HOSTS 注释。
+            if host.lower() in self._NON_ARTICLE_HOSTS:
+                logger.info(
+                    "baidu _check_block: skip baidu vertical host %s (link %s)",
+                    host, link.get("title", "")[:40],
+                )
+                continue
 
             # 早过滤：命中黑名单直接跳过 —— 既不计 rank 也不发文章请求，
             # 节省 1 次 article HTTP 调用。也不调 pacer.wait，避免在被跳过的
