@@ -24,11 +24,17 @@ from typing import Any
 
 from csm_core.angle import Angle, effective_sellpoints, render_angle_directive
 from csm_core.assembler.constraints import assemble_plan
+from csm_core.assembler.plan import AssemblyPlan
 from csm_core.assembler.render import compose_draft
 from csm_core.export.markdown import export_article
 from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
-from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
+from csm_core.brand_memory.identity import parse_brand_model
+from csm_core.brand_memory.inject import (
+    ModelScope, build_whitelist, render_brand_facts, resolve_scopes,
+)
+from csm_core.brand_memory.resolver import resolve_memory
+from csm_core.comparison import build_comparison_directive, compose_comparison_draft
 from csm_core.factcheck import check_facts
 from csm_core.factcheck.completeness import check_completeness
 from csm_core.llm import pricing
@@ -37,6 +43,7 @@ from ..event_bus import bus
 from . import (
     assembler_service,
     chain_service,
+    comparison_cache,
     config_service,
     factcheck_service,
     llm_factory,
@@ -82,6 +89,21 @@ class FinalizeRequest:
     model: str | None = None
     # Phase 4+: 成文契约档单次覆盖。None = 用全局 cfg.contract.mode。
     contract_mode: str | None = None
+
+
+@dataclass
+class ComparisonRequest:
+    """横评入参。models = 用户点选的型号全名（2–4 个）；draft_only 与常规
+    takeoff 一致（先出确定性骨架、交互润色走 finalize）。"""
+    models: list[str]
+    keyword: str = ""
+    title: str | None = None
+    tone: str | None = None
+    skill_chain: list[str] | None = None
+    contract_mode: str | None = None
+    draft_only: bool = True
+    provider: str | None = None
+    model: str | None = None
 
 
 @dataclass
@@ -288,6 +310,102 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         with _state_lock:
             _live.discard(job_id)
             _cancelled.discard(job_id)
+
+
+def _resolve_comparison_scopes(
+    models: list[str], index, registry, category: str, own_brands: set[str],
+) -> list[ModelScope]:
+    """点名型号 → ModelScope（registry 不识别的跳过；保序去重）。"""
+    scopes: list[ModelScope] = []
+    seen: set[str] = set()
+    for model_full in models:
+        if model_full in seen:
+            continue
+        seen.add(model_full)
+        brand = registry.brand_of(model_full)
+        if brand is None:
+            continue
+        parsed = parse_brand_model(model_full)
+        resolver_model = parsed[1] if parsed is not None else model_full
+        mem = resolve_memory(brand, resolver_model, category, index,
+                             own_brands=own_brands)
+        scopes.append(ModelScope(brand=brand, model=model_full,
+                                 role=mem.role, memory=mem))
+    return scopes
+
+
+def submit_comparison(req: ComparisonRequest) -> str:
+    """Kick off a comparison job, return the ``job_id`` to subscribe via SSE."""
+    job_id = bus.create_job()
+    with _state_lock:
+        _live.add(job_id)
+    _get_executor().submit(_run_comparison_job, job_id, req)
+    return job_id
+
+
+def _run_comparison_job(job_id: str, req: ComparisonRequest) -> None:
+    """横评 worker：扫库 → 解析型号 → 确定性组稿 → 缓存元数据 → draft_only 收尾
+    （或全量 finalize）。事件 shape 与 _run_job 对齐，plan 恒 None。"""
+    try:
+        cfg = config_service.load()
+        if not cfg.vault_root:
+            raise ValueError("AppConfig.vault_root is unset")
+        if not cfg.out_dir:
+            raise ValueError("AppConfig.out_dir is unset")
+        vault_root = Path(cfg.vault_root)
+        out_dir = Path(cfg.out_dir)
+        category = cfg.user_product or "吸尘器"
+        own_brands = set(cfg.brand_memory.own_brands)
+
+        _checkpoint(job_id)
+        bus.publish(job_id, "stage", stage="扫描资料库", index=0, total=3)
+        index = vault_service.get(vault_root)
+        registry = build_brand_registry(vault_root)
+        scopes = _resolve_comparison_scopes(
+            req.models, index, registry, category, own_brands)
+        if len(scopes) < 2:
+            raise ValueError(
+                f"横评需至少 2 个可识别型号，实得 {len(scopes)} 个"
+                f"（型号是否在素材库/registry 里？）")
+
+        _checkpoint(job_id)
+        bus.publish(job_id, "stage", stage="组装对比稿", index=1, total=3)
+        draft = compose_comparison_draft(
+            scopes, keyword=req.keyword, title=req.title)
+        resolved_models = [sc.model for sc in scopes]
+        bus.publish(job_id, "assembly", plan=None, draft=draft,
+                    comparison={"models": resolved_models})
+
+        comparison_cache.cache_comparison(
+            job_id, models=resolved_models, category=category,
+            keyword=req.keyword, title=req.title, tone=req.tone,
+            skill_chain=req.skill_chain, contract_mode=req.contract_mode)
+
+        if req.draft_only:
+            bus.finish(job_id, draft=draft, plan=None, document=None,
+                       comparison={"models": resolved_models})
+            return
+
+        # 非 draft_only（少见）：直接一把 finalize + 导出。
+        _run_comparison_finalize(
+            job_id, req=req, draft=draft, scopes=scopes, cfg=cfg,
+            out_dir=out_dir, keyword=req.keyword, title=req.title,
+            category=category)
+    except _CancelledGenerate:
+        logger.info("comparison job %s cancelled by user", job_id)
+        bus.fail(job_id, error="cancelled", cancelled=True)
+    except Exception as e:
+        logger.exception("comparison job %s failed", job_id)
+        bus.fail(job_id, error=f"{type(e).__name__}: {e}")
+    finally:
+        with _state_lock:
+            _live.discard(job_id)
+            _cancelled.discard(job_id)
+
+
+def _run_comparison_finalize(job_id, *, req, draft, scopes, cfg, out_dir,
+                             keyword, title, category):
+    raise NotImplementedError  # Task B4
 
 
 def submit_finalize(job_id: str, req: FinalizeRequest) -> str:
