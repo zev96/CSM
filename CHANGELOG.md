@@ -2,6 +2,11 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Fixed
+- **百度排名监控「默认搜索」区块 0 命中（定位不到文章）**：2026-07 百度 SERP 改版把结果卡 class 里的 `result` token 整个去掉，旧 XPath 的 `contains(@class,'result')` 条件恒不满足——每个关键词都解析出 0 条默认结果，任务却仍报 `ok`，界面显示假的「无排名」。重写默认区块选择器：① class 改 token 级匹配（顺序无关、不依赖已消失的 token）；② 杂卡排除抽成 `_EXCLUDED_TPLS` tpl 黑名单并补齐两套模板桶的新杂卡（登录桶 `rel_base_realtime` 实时资讯 / `b2b_factory_wise_san` B2B 工厂，匿名桶 `b2b_prod` 爱采购 / `image_grid_san` / `recommend_list` / `uer_feedback` / `new_baikan_index` / `note_lead`）；③ 移除已失效的 `cosc-title-slot` 结构排除（该 span 现已泛化为普通结果卡的通用标题槽，保留会把整页 organic 几乎全数误杀）；④ 新增 content_left 兜底选择器 + `selector_fallback` 落库标记 + 0 命中 WARNING 诊断日志（带页面 tpl 清单，下次漂移直接从日志读出新模板名），并常开「兜底 vs 主选择器」对比哨兵——只有部分结果卡丢 token 的静默漏抓同样会告警；资讯区容器存在但解出 0 行也告警；⑤ 补偿守卫：百科 / 自搜索 / 图片 / 好看视频 / b2b 等百度自有垂类 host 永不计入排名（知识卡词条正文天然含品牌词，计入会假报「自家软文排第 N」；host 精确匹配，不误伤百家号）。
+
 ## [0.6.6] - 2026-06-22
 
 ### Fixed

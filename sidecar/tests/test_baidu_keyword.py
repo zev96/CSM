@@ -26,7 +26,8 @@ def test_parse_serp_default_only_no_news():
     parsed = baidu_keyword.parse_serp(html)
     assert parsed["news_present"] is False
     assert parsed["news_links"] == []
-    assert len(parsed["default_links"]) == 8
+    # 9 = 8 条常规 + 1 条 cosc-title-slot 卡（2026-07 起 cosc 结构排除移除）
+    assert len(parsed["default_links"]) == 9
     # 每个 link 是 dict，包含 title + href
     for link in parsed["default_links"]:
         assert "title" in link
@@ -39,7 +40,8 @@ def test_parse_serp_with_news_extracts_both_blocks():
     parsed = baidu_keyword.parse_serp(html)
     assert parsed["news_present"] is True
     assert len(parsed["news_links"]) == 4
-    assert len(parsed["default_links"]) == 7
+    # 8 = 7 条常规 + 1 条 cosc-title-slot 卡（2026-07 起 cosc 结构排除移除）
+    assert len(parsed["default_links"]) == 8
     # 两个 list 严格分开，不重复
     default_hrefs = {l["href"] for l in parsed["default_links"]}
     news_hrefs = {l["href"] for l in parsed["news_links"]}
@@ -51,6 +53,111 @@ def test_parse_serp_empty_html_returns_empty():
     assert parsed["default_links"] == []
     assert parsed["news_links"] == []
     assert parsed["news_present"] is False
+
+
+def test_parse_serp_2026_dom_result_token_removed():
+    """2026-07 百度改版：organic 卡 class 不再含 'result' token（用户实测）。
+
+    锁五个行为：① token 级匹配（顺序无关）仍抓到全部 organic；
+    ② rel_base_realtime / b2b_factory_wise_san（登录桶）与 b2b_prod /
+    recommend_list（匿名桶）等新杂卡被 tpl 黑名单排除；③ 带
+    cosc-title-slot 通用标题槽的 organic 卡必须计入（该结构排除已移除）；
+    ④ 主选择器命中时不走兜底；⑤ "部分 token" 子串诱饵卡
+    （c-container-promo 等，fixture id=11）必须被拒 —— 谁把选择器回退成
+    子串 contains 匹配，这里立刻红。
+    """
+    html = _load("serp_2026_no_result_token.html")
+    parsed = baidu_keyword.parse_serp(html)
+    hrefs = [l["href"] for l in parsed["default_links"]]
+    assert hrefs == [
+        "https://www.zhihu.com/question/2026001",
+        "https://baijiahao.baidu.com/s?id=2026002",
+        "https://www.sohu.com/a/2026004",
+        "https://www.163.com/dy/article/2026003.html",
+    ]
+    # 主选择器直接命中，不应走兜底
+    assert parsed["selector_fallback"] is False
+    assert parsed["news_present"] is False
+
+
+def test_parse_serp_relaxed_fallback_when_era_tokens_gone():
+    """xpath-log / new-pmd 这类时代标记 token 全消失时，走 content_left
+    兜底选择器：仍按 tpl 黑名单排除杂卡，并置 selector_fallback=True 供观测。"""
+    html = """
+    <html><body><div id="content_left">
+      <div class="c-container" tpl="se_com_default">
+        <h3><a href="https://example.com/a1">A1</a></h3>
+      </div>
+      <div class="c-container" tpl="sp_purc_pc">
+        <h3><a href="https://ad.example.com/x">[Ad] X</a></h3>
+      </div>
+      <div class="c-container" tpl="se_com_default">
+        <h3><a href="https://example.com/a2">A2</a></h3>
+      </div>
+    </div></body></html>
+    """
+    parsed = baidu_keyword.parse_serp(html)
+    assert [l["href"] for l in parsed["default_links"]] == [
+        "https://example.com/a1",
+        "https://example.com/a2",
+    ]
+    assert parsed["selector_fallback"] is True
+
+
+def test_parse_serp_zero_match_logs_diagnostics(caplog):
+    """主 + 兜底全 0 命中 ≈ 百度又改版或风控漏检 —— 必须留 WARNING 证据，
+    不允许静默返回空 list（否则 status=ok + 假"无排名"没法诊断）。"""
+    html = "<html><body><div id='content_left'><p>某种全新结构，没有任何 c-cont 卡片</p></div></body></html>"
+    with caplog.at_level("WARNING"):
+        parsed = baidu_keyword.parse_serp(html)
+    assert parsed["default_links"] == []
+    assert parsed["selector_fallback"] is False
+    assert any("0 命中" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_serp_partial_token_drift_warns(caplog):
+    """部分 organic 卡丢时代 token（如 xpath-log）时主选择器返回非空子集，
+    兜底开关（主 0 才切）看不见这种静默漏抓 —— 常开对照哨兵必须告警。
+    选择行为保持不变：仍只返回主选择器命中的条目、不切兜底。"""
+    html = """
+    <html><body><div id="content_left">
+      <div class="c-container xpath-log new-pmd" tpl="se_com_default">
+        <h3><a href="https://example.com/full-tokens">A</a></h3>
+      </div>
+      <div class="c-container new-pmd" tpl="se_com_default">
+        <h3><a href="https://example.com/lost-xpath-log">B</a></h3>
+      </div>
+    </div></body></html>
+    """
+    with caplog.at_level("WARNING"):
+        parsed = baidu_keyword.parse_serp(html)
+    assert [l["href"] for l in parsed["default_links"]] == [
+        "https://example.com/full-tokens",
+    ]
+    assert parsed["selector_fallback"] is False
+    assert any("兜底选择器比主选择器多" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_serp_news_container_present_but_zero_rows_warns(caplog):
+    """cos-space 资讯容器存在但一行都没解出 = 内层结构漂移信号，必须告警
+    （页面根本没有资讯区是常态，不告警 —— news_present=False 本身无法
+    区分这两种情况）。"""
+    html = """
+    <html><body><div id="content_left">
+      <div class="c-container xpath-log new-pmd" tpl="se_com_default">
+        <h3><a href="https://example.com/a">A</a></h3>
+      </div>
+      <div class="cos-space">
+        <div class="cos-header">最新资讯</div>
+        <div class="cos-line-v2">全新内层结构，没有 cos-row</div>
+      </div>
+    </div></body></html>
+    """
+    with caplog.at_level("WARNING"):
+        parsed = baidu_keyword.parse_serp(html)
+    assert parsed["news_links"] == []
+    assert parsed["news_present"] is False
+    assert any("cos-space" in r.getMessage() for r in caplog.records)
 
 
 # ── 品牌词匹配 ───────────────────────────────────────────────────────────
@@ -816,6 +923,33 @@ def test_check_block_excluded_host_skips_pacer(monkeypatch):
     assert len(out) == 1
     assert out[0]["host"] == "example.com"
     assert calls == ["baidu_keyword:article"]
+
+
+def test_check_block_baidu_vertical_hosts_never_ranked(monkeypatch):
+    """百度自有垂类（百科 / 自搜索 / 图片等）永不计 rank、不抓正文、不调
+    pacer —— cosc 知识卡结构排除移除后的补偿守卫（词条正文天然含品牌词，
+    计入会假报「自家软文排第 N」）。百家号是真实文章宿主，不受影响。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "baike", "href": "https://baike.baidu.com/item/%E5%93%81%E7%89%8C/1"},
+        {"title": "self-search", "href": "https://www.baidu.com/s?wd=%E5%93%81%E7%89%8C"},
+        {"title": "article", "href": "https://example.com/a"},
+        {"title": "bjh", "href": "https://baijiahao.baidu.com/s?id=1"},
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    assert [(r["rank"], r["host"]) for r in out] == [
+        (1, "example.com"),
+        (2, "baijiahao.baidu.com"),
+    ]
+    assert calls == ["baidu_keyword:article", "baidu_keyword:baijiahao"]
 
 
 def test_apply_settings_configures_article_and_baijiahao_pacers(monkeypatch):

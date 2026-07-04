@@ -130,15 +130,17 @@ describe("ArticleView — 契约 query 透传", () => {
     a.score = LOW;
     await flushPromises();
 
+    // 合并 #150（禁区卡进 primaryChecks）后为五卡：重复率 / 密度 / 禁区 /
+    // 完整性 / 综合评分。按文本定位而非固定下标 —— 抗后续再改顺序。
     const cards = w.findAll(".qc-primary-card");
-    expect(cards).toHaveLength(4); // 重复率 / 密度 / 完整性 / 综合评分
-    const compCard = cards[2];
-    const scoreCard = cards[3];
-    expect(compCard.text()).toContain("完整性");
-    expect(compCard.text()).toContain("缺 1 处");
-    expect(compCard.html()).toContain("bg-yellow-soft"); // warn Pill
-    expect(scoreCard.text()).toContain("综合评分");
-    expect(scoreCard.text()).toContain("55 分");
-    expect(scoreCard.html()).toContain("bg-red-soft"); // alert Pill（<60）
+    expect(cards).toHaveLength(5);
+    const compCard = cards.find((c) => c.text().includes("完整性"));
+    const scoreCard = cards.find((c) => c.text().includes("综合评分"));
+    expect(compCard, "完整性卡应渲染").toBeTruthy();
+    expect(scoreCard, "综合评分卡应渲染").toBeTruthy();
+    expect(compCard!.text()).toContain("缺 1 处");
+    expect(compCard!.html()).toContain("bg-yellow-soft"); // warn Pill
+    expect(scoreCard!.text()).toContain("55 分");
+    expect(scoreCard!.html()).toContain("bg-red-soft"); // alert Pill（<60）
   });
 });

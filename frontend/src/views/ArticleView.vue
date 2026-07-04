@@ -11,7 +11,7 @@
  *     - 整篇润色进度条（运行时）
  *     - 内容区：组装预览 / 初稿编辑器 / 成稿编辑器
  *   右侧检查面板（300px）：
- *     - 质检报告卡（盾牌 icon + 标题 + ?快捷键 按钮 + 6 个检查项卡片）
+ *     - 质检报告卡（盾牌 icon + 标题 + 质检大卡（重复率/密度/禁区）+ 底部三按钮）
  *     - AI 润色 Skill 下拉
  *     - 操作卡（整篇润色 primary + 重新随机 / 清空 双按钮 + 导出文章 dark）
  *
@@ -493,7 +493,7 @@ const overallStep = computed<number | null>(() => {
 });
 
 /**
- * 质检报告卡的视图模式 —— 默认 "checks" 渲染六项检查；点击底部
+ * 质检报告卡的视图模式 —— 默认 "checks" 渲染一级质检大卡；点击底部
  * "查重"/"标题候选" 时切到对应的子视图，整张卡内部 swap，不再用
  * Teleport 弹整页 drawer。点回另一个 mode 或顶部"返回"按钮回到列表。
  */
@@ -583,6 +583,18 @@ const showLint = ref(false);
 watch(() => article.lintBlocking, (b, prev) => { if (b && !prev) showLint.value = true; });
 // 完整性缺失面板 —— 纯信息展示，不自动弹（软提醒，用户从质检卡按钮主动打开）。
 const showCompleteness = ref(false);
+// 一级页「禁区」卡点击入口 —— 有报告（含干净报告，面板里可「重新检查」
+// /取消放行）才开面板；lint=null（还没成稿，或检查 fail-open 失败）时
+// 面板无意义，守卫掉、toast 按两种 null 场景分别给话。
+function openLint() {
+  if (!article.lint) {
+    toast.info(article.finalText.trim()
+      ? "暂无禁区检查结果，重新润色成稿后会自动重查"
+      : "成稿后自动检查禁区");
+    return;
+  }
+  showLint.value = true;
+}
 // 导出按钮：factcheck 门禁 > lint 门禁 > 常规导出弹窗。
 function onExportClick() {
   if (article.factcheck?.blocked) { showFactcheck.value = true; return; }
@@ -706,99 +718,16 @@ const skillName = computed(() => {
   return skills.value.find((s) => s.id === skillId.value)?.name ?? "";
 });
 
-// V1 风格的检查项（基于真实数据动态填充；缺失数据用 "—" 占位）
-interface CheckItem {
-  label: string;
-  value: string;
-  desc: string;
-  pass: boolean;
-  tone: "ok" | "warn" | "primary";
-}
-const checkItems = computed<CheckItem[]>(() => {
-  const items: CheckItem[] = [];
-
-  // 字数卡已下线 —— 用户反馈说没决策价值，重复率/标题候选/关键词密度
-  // 才是真正用得上的质检维度。`wordCount` 仍然在 store 里维护，下游
-  // 别处（导出文件名变量等）还会用到。
-
-  // 重复率（vault / history）
-  if (dedupRatio.value !== null) {
-    const pct = (dedupRatio.value * 100).toFixed(1);
-    const safe = dedupRatio.value < 0.3;
-    items.push({
-      label: "重复率（历史）",
-      value: `${pct}%`,
-      desc: safe ? "在 30% 阈值内，安全" : "高于 30%，建议润色",
-      pass: safe,
-      tone: safe ? "ok" : "warn",
-    });
-  } else {
-    items.push({
-      label: "重复率",
-      value: "—",
-      desc: "点击右侧查询",
-      pass: false,
-      tone: "warn",
-    });
-  }
-
-  // 标题候选
-  const tc = article.titleCandidates.length;
-  items.push({
-    label: "标题候选",
-    value: tc > 0 ? `${tc} 个` : "—",
-    desc: tc > 0 ? `AI 已生成 ${tc} 个备选标题` : "尚未生成候选",
-    pass: tc > 0,
-    tone: tc > 0 ? "primary" : "warn",
-  });
-
-  // 关键词密度
-  const kd = article.keywordDensity;
-  if (kd) {
-    const pct = (kd.density * 100).toFixed(1);
-    const ok = kd.density >= 0.015 && kd.density <= 0.04;
-    items.push({
-      label: "关键词密度",
-      value: `${pct}%`,
-      desc: ok ? "在 1.5%-4% 区间" : "建议 1.5%-4%",
-      pass: ok,
-      tone: ok ? "ok" : "warn",
-    });
-  } else {
-    items.push({
-      label: "关键词密度",
-      value: "—",
-      desc: "尚未计算",
-      pass: false,
-      tone: "warn",
-    });
-  }
-
-  // 第 7 项：禁区 lint
-  items.push({
-    label: "禁区",
-    value: article.lint ? (article.lintBlocking ? `${article.lintUnresolved} 处` : "无") : "—",
-    desc: article.lintBlocking ? "有未处理违规，点导出查看" : (article.lint ? "已清/已放行" : "成稿后自动检查"),
-    pass: !article.lintBlocking,
-    tone: article.lintBlocking ? "warn" : "ok",
-  });
-
-  return items;
-});
-// _passCount kept as a derived helper in case the UI brings back a
-// "通过 X / 总数 Y" pill. Currently unused — prefix with _ to silence
-// vue-tsc unused-var warning without losing the intent.
-const _passCount = computed(() => checkItems.value.filter((c) => c.pass).length);
-void _passCount;
-
 /**
- * 一级页质检大卡：重复率·历史 / 关键词密度（可点进二级页）+ Phase 4+
- * 的完整性 / 综合评分（信息卡；完整性有缺失时可点开 CompletenessPanel）。
- * 每条带 key 让 click 分流（openPrimaryCheck）；hasDetail=false 的行不
- * 渲染「详情 →」也不响应点击。标题候选不进卡片，走底部按钮去二级页。
+ * 一级页质检大卡：重复率·历史 / 关键词密度 / 禁区（可点进二级页或开
+ * LintPanel）+ Phase 4+ 的完整性 / 综合评分（完整性有缺失可点开
+ * CompletenessPanel，综合评分为纯信息卡）。每条带 key 让 click 分流
+ * （onPrimaryCheckClick）；hasDetail=false 的行不渲染「详情 →」也不响应
+ * 点击。标题候选不进卡片，走底部「标题候选」按钮去二级页。
  */
+type PrimaryCheckKey = "dedup" | "density" | "lint" | "completeness" | "score";
 interface PrimaryCheck {
-  key: "dedup" | "density" | "completeness" | "score";
+  key: PrimaryCheckKey;
   label: string;
   value: string;
   pass: boolean;
@@ -852,6 +781,16 @@ const primaryChecks = computed<PrimaryCheck[]>(() => {
       hasDetail: true,
     });
   }
+  // 禁区 lint —— 成稿后自动检查；有未放行命中会软拦导出。语义对齐
+  // 导出门禁：不拦（含还没检查）= 通过。点卡片开 LintPanel 处理。
+  out.push({
+    key: "lint",
+    label: "禁区",
+    value: article.lint ? (article.lintBlocking ? `${article.lintUnresolved} 处` : "无") : "—",
+    pass: !article.lintBlocking,
+    tone: article.lintBlocking ? "warn" : "ok",
+    hasDetail: true,
+  });
   // 完整性（激进契约才核；保守 → "—"）—— 有缺失时可点开 CompletenessPanel
   const comp = article.completeness;
   out.push({
@@ -877,15 +816,16 @@ const primaryChecks = computed<PrimaryCheck[]>(() => {
 const primaryPassCount = computed(
   () => primaryChecks.value.filter((c) => c.pass).length,
 );
-
-/** 一级页大卡点击分流 —— dedup/density 进二级页；完整性有缺失时开
- * CompletenessPanel；score 无二级页不动作（分值已在卡面）。 */
-function openPrimaryCheck(key: PrimaryCheck["key"]) {
+// 一级卡点击分流 —— dedup/density 切二级页，lint 开审查面板，完整性
+// 有缺失时开 CompletenessPanel，综合评分为纯信息卡不动作。
+function onPrimaryCheckClick(key: PrimaryCheckKey) {
   if (key === "dedup") { void openDedup(); return; }
   if (key === "density") { void openDensity(); return; }
+  if (key === "lint") { openLint(); return; }
   if (key === "completeness" && article.completeness?.missing.length) {
     showCompleteness.value = true;
   }
+  // score：纯信息卡，无二级页，不动作。
 }
 
 onMounted(async () => {
@@ -1795,9 +1735,10 @@ const tabSectionLabel = computed(() => {
           <!-- body —— 三种 mode 在这里 swap -->
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" :style="{ padding: '12px' }">
             <!--
-              mode: checks（一级页）—— 简化为两张大卡（重复率·历史 /
-              关键词密度），layout: 标题(左上) / 通过徽章(右上) / 大字
-              (左下) / "详情→"(右下)。整卡可点击 hover 上浮+阴影。
+              mode: checks（一级页）—— 五张大卡（重复率·历史 / 关键词密度 /
+              禁区 / 完整性 / 综合评分），layout: 标题(左上) / 通过徽章(右上) /
+              大字(左下) / "详情→"(右下，仅 hasDetail)。有详情的卡可点击 hover
+              上浮+阴影。
             -->
             <div v-if="panelMode === 'checks'" class="flex flex-col gap-2">
               <button
@@ -1811,7 +1752,7 @@ const tabSectionLabel = computed(() => {
                   border: '1px solid var(--line)',
                   cursor: r.hasDetail ? 'pointer' : 'default',
                 }"
-                @click="openPrimaryCheck(r.key)"
+                @click="onPrimaryCheckClick(r.key)"
               >
                 <div class="flex items-center justify-between">
                   <span class="text-[11.5px] font-medium" :style="{ color: 'var(--ink-2)' }">
@@ -2598,7 +2539,7 @@ const tabSectionLabel = computed(() => {
  */
 
 /*
- * 一级页两张大卡：默认 card-2 cream 底，hover 切到 #fbfaf6（用户指定
+ * 一级页质检大卡：默认 card-2 cream 底，hover 切到 #fbfaf6（用户指定
  * 的暖奶白） + 微上浮 + 软阴影。background 从 inline :style 移到这里，
  * inline 特异度 1000 会压死 :hover 的 background 切换（memory:
  * feedback_vue_inline_style_hover_clobber）。
