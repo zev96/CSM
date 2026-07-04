@@ -1746,6 +1746,7 @@ const tabSectionLabel = computed(() => {
                 :key="r.key"
                 type="button"
                 class="qc-primary-card text-left w-full"
+                :class="{ 'qc-primary-card--clickable': r.hasDetail }"
                 :style="{
                   padding: '14px 14px 12px',
                   borderRadius: 'var(--radius-inner)',
@@ -2550,9 +2551,15 @@ const tabSectionLabel = computed(() => {
     background-color 0.14s ease,
     transform 0.14s ease,
     box-shadow 0.14s ease;
+}
+/* 仅 hasDetail 卡（可点：重复率 / 密度 / 禁区 / 有缺失的完整性）给 hover
+ * 上浮+阴影与手型；综合评分卡与"无缺失"完整性卡 hasDetail=false、不可点，
+ * 不上浮（光标由 inline :style 按卡权威给 default，见 onPrimaryCheckClick）。
+ * 未 gating 时五卡都上浮，会给不可点的卡假的"可点"暗示（终审对抗性审查）。 */
+.qc-primary-card--clickable {
   cursor: pointer;
 }
-.qc-primary-card:hover {
+.qc-primary-card--clickable:hover {
   background: #fbfaf6;
   transform: translateY(-2px);
   box-shadow:

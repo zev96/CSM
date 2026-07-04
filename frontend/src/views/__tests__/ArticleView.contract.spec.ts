@@ -142,5 +142,9 @@ describe("ArticleView — 契约 query 透传", () => {
     expect(compCard!.html()).toContain("bg-yellow-soft"); // warn Pill
     expect(scoreCard!.text()).toContain("55 分");
     expect(scoreCard!.html()).toContain("bg-red-soft"); // alert Pill（<60）
+    // hasDetail 门控 hover 可点视觉（终审）：有缺失的完整性卡可点（带
+    // --clickable），综合评分卡恒不可点（不带）—— 防"不可点却上浮"回归。
+    expect(compCard!.classes()).toContain("qc-primary-card--clickable");
+    expect(scoreCard!.classes()).not.toContain("qc-primary-card--clickable");
   });
 });
