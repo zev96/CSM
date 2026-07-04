@@ -175,6 +175,40 @@ def test_candidates_two_picks_higher_score_and_saves_loser(
     assert any(c.isdigit() for c in saved[0].stem.split("-")[-1])
 
 
+# ── 1b) 同分落选稿不互相覆盖（候选序 c{k} 消歧）─────────────────────────────
+def test_two_equal_score_losers_both_saved_not_clobbered(
+    client: TestClient, tmp_path: Path, monkeypatch,
+):
+    """两份内容相同的落选稿 → 分数必然相同。旧实现文件名只含分数会静默
+    覆盖（只剩 1 份），候选序 c{k} 消歧后两份都留档（终审 Minor 回归护栏）。"""
+    _setup_world(client, tmp_path, template_id="tpl-plain")
+    # 候选1 高分（胜者，永不被顶）；候选2/3 同为 AI_HEAVY → 同分落选。
+    seq = _SeqClient([CLEAN_HUMAN, AI_HEAVY, AI_HEAVY])
+    _patch_client(monkeypatch, seq)
+
+    resp = client.post("/api/batch", json={
+        "keywords": ["kw1"], "template_id": "tpl-plain", "candidates": 3,
+    })
+    assert resp.status_code == 202
+    job_id = resp.json()["job_id"]
+    snap = _wait_for_finished(job_id, timeout=10.0)
+    assert snap is not None
+    item = snap["items"][0]
+    assert item["status"] == "success"
+    # 胜者是 CLEAN_HUMAN（高分），两个 AI_HEAVY 同文 → 同分落选。
+    exported = Path(item["document"]).read_text(encoding="utf-8")
+    assert "猫毛缠进滚刷" in exported
+    assert len(item["candidate_scores"]) == 3
+    assert item["candidate_scores"][1] == item["candidate_scores"][2]
+
+    cand_dir = tmp_path / "out" / f"batch-{job_id[:8]}" / "candidates"
+    saved = sorted(p.name for p in cand_dir.glob("*.md"))
+    assert len(saved) == 2, f"同分两落选稿应各留一份，实得 {saved}"
+    # 两文件名只差候选序标记 c2/c3（消歧点），无 c{k} 则会覆盖成 1 份。
+    assert any("-c2-" in n for n in saved), saved
+    assert any("-c3-" in n for n in saved), saved
+
+
 # ── 2) candidates=1（默认）零回归 ──────────────────────────────────────────
 def test_candidates_default_one_zero_regression(
     client: TestClient, tmp_path: Path, monkeypatch,

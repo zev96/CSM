@@ -209,16 +209,19 @@ def _safe_stem(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|\s]+', "_", s)[:20] or "kw"
 
 
-def _save_candidate(out_dir: Path, item: BatchItemState, cand: dict) -> None:
-    """落选稿存 candidates/ 备查（纯 md dump，不走 export_article 的 MMDD-N 槽位）。"""
-    cdir = out_dir / "candidates"
-    cdir.mkdir(exist_ok=True)
+def _save_candidate(out_dir: Path, item: BatchItemState, cand: dict, k: int) -> None:
+    """落选稿存 candidates/ 备查（纯 md dump，不走 export_article 的 MMDD-N 槽位）。
+
+    文件名含候选序 c{k} + 一位小数分 —— 同词多落选稿同分也不互相覆盖（终审 Minor）。
+    mkdir 也在 OSError 守卫内：candidates/ 不可建时降级为日志，绝不把已成优胜拖成 failed。"""
     score = cand["score_report"].total
-    path = cdir / f"{item.index:02d}-{_safe_stem(item.keyword)}-{score:.0f}分.md"
     try:
+        cdir = out_dir / "candidates"
+        cdir.mkdir(exist_ok=True)
+        path = cdir / f"{item.index:02d}-{_safe_stem(item.keyword)}-c{k}-{score:.1f}分.md"
         path.write_text(cand["final_text"], encoding="utf-8")
     except OSError:
-        logger.warning("batch 落选稿写入失败: %s", path, exc_info=True)
+        logger.warning("batch 落选稿写入失败: item=%d c%d", item.index, k, exc_info=True)
 
 
 def _run_job(job_id: str) -> None:
@@ -303,7 +306,7 @@ def _run_job(job_id: str) -> None:
             )
             t0 = time.monotonic()
             try:
-                best: dict | None = None       # {final_text, plan, score_report, fc_n}
+                best: dict | None = None       # {final_text, plan, score_report, fc_n, k}
                 cand_scores: list[float] = []
                 last_exc: Exception | None = None   # 全候选失败时把真因抛给 per-item except
                 was_cancelled = False
@@ -368,12 +371,13 @@ def _run_job(job_id: str) -> None:
                     cand_scores.append(report.total)
                     if best is None or report.total > best["score_report"].total:
                         if best is not None:
-                            _save_candidate(out_dir, item, best)   # 旧优胜者降级为落选稿
+                            # 旧优胜者降级为落选稿，带自己的候选序 best["k"]。
+                            _save_candidate(out_dir, item, best, best["k"])
                         best = {"final_text": final_k, "plan": plan,
-                                "score_report": report, "fc_n": fc_n}
+                                "score_report": report, "fc_n": fc_n, "k": k}
                     else:
                         _save_candidate(out_dir, item, {
-                            "final_text": final_k, "score_report": report})
+                            "final_text": final_k, "score_report": report}, k)
                 if best is None:
                     if was_cancelled:
                         # 用户取消且零成稿 —— 是取消不是失败（error_* 留空）。
