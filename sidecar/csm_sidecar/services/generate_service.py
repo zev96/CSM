@@ -358,7 +358,7 @@ def _run_comparison_job(job_id: str, req: ComparisonRequest) -> None:
         own_brands = set(cfg.brand_memory.own_brands)
 
         _checkpoint(job_id)
-        bus.publish(job_id, "stage", stage="扫描资料库", index=0, total=3)
+        bus.publish(job_id, "stage", stage="扫描资料库", index=0, total=2)
         index = vault_service.get(vault_root)
         registry = build_brand_registry(vault_root)
         scopes = _resolve_comparison_scopes(
@@ -369,7 +369,7 @@ def _run_comparison_job(job_id: str, req: ComparisonRequest) -> None:
                 f"（型号是否在素材库/registry 里？）")
 
         _checkpoint(job_id)
-        bus.publish(job_id, "stage", stage="组装对比稿", index=1, total=3)
+        bus.publish(job_id, "stage", stage="组装对比稿", index=1, total=2)
         draft = compose_comparison_draft(
             scopes, keyword=req.keyword, title=req.title)
         resolved_models = [sc.model for sc in scopes]
@@ -482,6 +482,11 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             scopes = _resolve_comparison_scopes(
                 meta.models, index, registry, meta.category,
                 set(cfg.brand_memory.own_brands))
+            # 与 submit 路径 <2 守卫对称：submit 后素材库变更致型号失识时大声
+            # 失败，绝不静默旁路事实核对（0 scope 会整段跳过 factcheck）产出弱化稿。
+            if len(scopes) < 2:
+                raise ValueError(
+                    "横评型号已不可识别（素材库可能已变更），请回首页重新起飞")
             _run_comparison_finalize(
                 job_id, req=req, draft=req.draft, scopes=scopes, cfg=cfg,
                 out_dir=out_dir, keyword=meta.keyword, title=req.title or meta.title,
@@ -675,7 +680,9 @@ def finalize_draft(
         completeness=completeness)
 
 
-def _resolve_chain(req: GenerateRequest | FinalizeRequest, cfg) -> list[chain_service.ChainStepInput]:
+def _resolve_chain(
+    req: "GenerateRequest | FinalizeRequest | ComparisonRequest", cfg,
+) -> list[chain_service.ChainStepInput]:
     """把 req 解析成链 steps（每个 step 带 skill 的 role/name/body）。
 
     零回归边界：
@@ -685,14 +692,16 @@ def _resolve_chain(req: GenerateRequest | FinalizeRequest, cfg) -> list[chain_se
     - 多条 skill_chain 里某条失效 → 跳过 + warning，链继续（其它步仍跑）。"""
     sdir = Path(cfg.skill_dir) if cfg.skill_dir else None
     if req.skill_chain is None:
-        # 单 skill_id 路径：保留今天的「找不到即抛」契约。
-        if not req.skill_id:
+        # 单 skill_id 路径：保留今天的「找不到即抛」契约。ComparisonRequest 无
+        # skill_id 字段（横评走 skill_chain），getattr 兜底 None → 空链，不 AttributeError。
+        sid = getattr(req, "skill_id", None)
+        if not sid:
             return []
-        skill = skills_service.get_skill(sdir, req.skill_id)
+        skill = skills_service.get_skill(sdir, sid)
         if skill is None:
-            raise FileNotFoundError(f"skill not found: {req.skill_id}")
+            raise FileNotFoundError(f"skill not found: {sid}")
         return [chain_service.ChainStepInput(
-            skill_id=req.skill_id, role=skill.role, name=skill.name, body=skill.body)]
+            skill_id=sid, role=skill.role, name=skill.name, body=skill.body)]
     # 多步链路径：单条失效跳过 + warning（不中断整条链）。
     steps: list[chain_service.ChainStepInput] = []
     for sid in req.skill_chain:

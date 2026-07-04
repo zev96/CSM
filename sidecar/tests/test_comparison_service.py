@@ -191,3 +191,47 @@ def test_finalize_job_comparison_branch_uses_models(monkeypatch, tmp_path):
     assert "横评" in seen["directive"]            # 对比指令块注入
     assert seen["plan_keyword"] == "怎么选"       # 合成 plan 带 keyword
     assert finished.get("final_text") == "FT"
+
+
+def test_resolve_chain_tolerates_comparison_request_without_skill_id():
+    """_resolve_chain 对无 skill_id 字段的 ComparisonRequest 不崩（终审 BUG#1）。
+
+    draft_only=False 横评走 _run_comparison_finalize→_resolve_chain(ComparisonRequest)，
+    而 ComparisonRequest 没有 skill_id 字段。旧实现直接 req.skill_id → AttributeError。"""
+    class _Cfg:
+        skill_dir = None
+    req = gs.ComparisonRequest(models=["A", "B"], skill_chain=None)
+    assert gs._resolve_chain(req, _Cfg) == []     # 无 skill_id/skill_chain → 空链，不崩
+
+
+def test_finalize_job_comparison_too_few_scopes_fails_loud(monkeypatch, tmp_path):
+    """submit 后素材库变更致 <2 型号可识别 → finalize 大声失败，不静默旁路事实
+    核对产出弱化对比稿（终审 medium：0 scope 会整段跳过 factcheck 导出幻觉数字）。"""
+    cc.reset_for_test()
+    cc.cache_comparison("jobG", models=["A", "B"], category="吸尘器",
+                        keyword="k", title=None, tone=None,
+                        skill_chain=None, contract_mode=None)
+    monkeypatch.setattr(gs, "_resolve_comparison_scopes",
+                        lambda *a, **k: [object()])   # 素材库变更后只剩 1 个可识别
+    monkeypatch.setattr(gs.vault_service, "get", lambda root: object())
+    monkeypatch.setattr(gs, "build_brand_registry", lambda root: object())
+    monkeypatch.setattr(gs, "_checkpoint", lambda job: None)
+    called = {"finalize": 0}
+    monkeypatch.setattr(gs, "_run_comparison_finalize",
+                        lambda *a, **k: called.__setitem__("finalize", called["finalize"] + 1))
+    failed = {}
+    monkeypatch.setattr(gs.bus, "fail",
+                        lambda job, error, **d: failed.update({"error": error}))
+    monkeypatch.setattr(gs.bus, "publish", lambda *a, **k: None)
+    class _Cfg:
+        vault_root = str(tmp_path); out_dir = str(tmp_path)
+        class brand_memory: own_brands = []
+        class contract: mode = "conservative"
+    monkeypatch.setattr(gs.config_service, "load", lambda: _Cfg)
+
+    req = gs.FinalizeRequest(draft="d", keyword="k", title=None, angle=None,
+                             skill_id=None, skill_chain=None, provider=None,
+                             model=None, contract_mode=None)
+    gs._finalize_job("jobG", req)
+    assert called["finalize"] == 0               # 守卫拦下，未进 finalize
+    assert "型号" in failed["error"]             # 大声失败带中文原因
