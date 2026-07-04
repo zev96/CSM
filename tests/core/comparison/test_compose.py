@@ -119,3 +119,36 @@ def test_test_comparison_omitted_when_no_common_topic():
     a = _scope("CEWEY", "CEWEYDS18", "主推", tests={"噪音测试": "安静"})
     b = _scope("Dyson", "V12", "竞品", tests={"续航测试": "60min"})
     assert _test_comparison([a, b]) == ""
+
+
+from csm_core.comparison.compose import _summary, _leading_fields
+
+
+def test_leading_fields_unique_or_numerically_distinct():
+    a = _scope("CEWEY", "CEWEYDS18", "主推",
+               specs={"吸力(AW)": "220", "转速": "12万转", "认证检测": "CE"})
+    b = _scope("Dyson", "V12", "竞品",
+               specs={"吸力(AW)": "150"})
+    # 吸力 220≠150 → 领先项；转速 b 无 → 独有项；认证无数字 → 跳过
+    fields = _leading_fields(a.memory.specs, [b.memory.specs])
+    keys = [f for f, _ in fields]
+    assert "吸力(AW)" in keys
+    assert "转速" in keys
+    assert "认证检测" not in keys
+
+
+def test_summary_lists_endorsements_and_leading_neutral():
+    a = _scope("CEWEY", "CEWEYDS18", "主推",
+               specs={"吸力(AW)": "220"}, endorsements=["十年老牌"])
+    b = _scope("Dyson", "V12", "竞品", specs={"吸力(AW)": "150"})
+    out = _summary([a, b])
+    assert out.startswith("## 总结")
+    assert "- 十年老牌" in out
+    assert "吸力(AW)" in out and "220" in out      # 事实陈列
+    # 中性：不出现贬损/比较级断言词
+    assert "秒杀" not in out and "碾压" not in out
+
+
+def test_summary_empty_without_primary():
+    b = _scope("Dyson", "V12", "竞品", specs={"吸力(AW)": "150"})
+    assert _summary([b]) == ""

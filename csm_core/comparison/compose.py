@@ -90,6 +90,52 @@ def _test_comparison(scopes: list[ModelScope]) -> str:
     return "## 实测对比\n\n" + "\n\n".join(blocks)
 
 
+def _leading_fields(
+    primary_specs: dict, competitor_specs: list[dict],
+) -> list[tuple[str, str]]:
+    """主推「独有或数值有别」的数值型 spec 字段（中性事实，不判方向优劣）。
+
+    - 只看有 numbers 的字段（认证/占位跳过）；
+    - 竞品都没这个字段 → 独有，收；
+    - 竞品有但主推 max 与每个竞品 max 都不等 → 数值有别，收。"""
+    out: list[tuple[str, str]] = []
+    for field, sv in primary_specs.items():
+        if not sv.numbers:
+            continue
+        comp_nums = [
+            cs[field].numbers for cs in competitor_specs
+            if field in cs and cs[field].numbers
+        ]
+        p_max = max(sv.numbers)
+        if not comp_nums:
+            out.append((field, sv.raw))
+        elif all(p_max != max(cn) for cn in comp_nums):
+            out.append((field, sv.raw))
+    return out
+
+
+def _summary(scopes: list[ModelScope]) -> str:
+    """主推型号背书（按品牌去重）+ 事实领先/独有 spec 陈列（中性）。无主推 → 空。
+
+    「突出主推优势」的价值判断留给 LLM 润色的对比指令块；本节只陈列事实。"""
+    primary = [sc for sc in scopes if sc.role == "主推"]
+    if not primary:
+        return ""
+    competitor_specs = [sc.memory.specs for sc in scopes if sc.role != "主推"]
+    lines = ["## 总结"]
+    seen_brand: set[str] = set()
+    for sc in primary:
+        if sc.brand in seen_brand:
+            continue
+        seen_brand.add(sc.brand)
+        for e in sc.memory.endorsements:
+            lines.append(f"- {e}")
+    for sc in primary:
+        for field, raw in _leading_fields(sc.memory.specs, competitor_specs):
+            lines.append(f"- {_model_label(sc)} 的 {field}：{raw}")
+    return "\n".join(lines)
+
+
 def compose_comparison_draft(
     scopes: list[ModelScope], *, keyword: str, title: str | None,
 ) -> str:
