@@ -27,6 +27,59 @@ def _scope(brand: str, model: str, role: str, **kw) -> ModelScope:
                       memory=_mem(brand, model, role, **kw))
 
 
+def _scope_sv(brand: str, model: str, role: str,
+              specs: dict[str, SpecValue]) -> ModelScope:
+    """用**预置 SpecValue**（含占位/认证）建 scope —— `_mem` 从 raw 正则抽数字、
+    无法造出 is_placeholder=True，占位/字段序测试需要直接给 SpecValue。"""
+    return ModelScope(brand=brand, model=model, role=role,
+                      memory=BrandModelMemory(brand=brand, model=model,
+                          category="吸尘器", role=role, specs=specs))
+
+
+def test_param_table_placeholder_cell_renders_dash():
+    """占位单元格（is_placeholder=True，如 raw='0'/'未说明'）渲染 — 而非原文（spec §5.1「占位『—』」）。"""
+    from csm_core.comparison.compose import _param_table
+    a = _scope_sv("CEWEY", "CEWEYDS18", "主推", {
+        "续航": SpecValue(field="续航", raw="0", is_placeholder=True),
+        "吸力(AW)": SpecValue(field="吸力(AW)", raw="220", numbers=[220.0]),
+    })
+    b = _scope_sv("Dyson", "V12", "竞品", {
+        "吸力(AW)": SpecValue(field="吸力(AW)", raw="150", numbers=[150.0]),
+    })
+    out = _param_table([a, b])
+    assert "| 续航 | — | — |" in out          # 占位「0」→ —，不把占位当真值印进表
+    assert "| 吸力(AW) | 220 | 150 |" in out
+
+
+def test_param_table_numeric_fields_ordered_before_non_numeric():
+    """字段序：数字型在前（并集首现序），非数值（认证等）在后（spec §5.1「数字型在前」）。"""
+    from csm_core.comparison.compose import _param_table
+    a = _scope_sv("CEWEY", "CEWEYDS18", "主推", {
+        "认证检测": SpecValue(field="认证检测", raw="CE、FCC"),   # 非数值，首现在前
+        "吸力(AW)": SpecValue(field="吸力(AW)", raw="220", numbers=[220.0]),
+    })
+    out = _param_table([a])
+    data = [ln for ln in out.splitlines()
+            if ln.startswith("| ") and not ln.startswith("| 参数 |")
+            and not ln.startswith("| --- |")]
+    assert data[0].startswith("| 吸力(AW) |")     # 数值字段排前
+    assert data[1].startswith("| 认证检测 |")     # 非数值排后
+
+
+def test_summary_primary_present_but_no_content_omitted():
+    """主推存在但无背书且无领先项（数值持平）→ _summary 返回 ""（不吐悬空「## 总结」标题）。"""
+    from csm_core.comparison.compose import _summary
+    a = _scope("CEWEY", "CEWEYDS18", "主推", specs={"吸力(AW)": "150"})  # 无 endorsements
+    b = _scope("Dyson", "V12", "竞品", specs={"吸力(AW)": "150"})        # 同值→非领先
+    assert _summary([a, b]) == ""
+
+
+def test_compose_empty_scopes_returns_empty():
+    """纯函数契约：空 scopes → 空串（不吐无型号名的病态引言）。"""
+    from csm_core.comparison.compose import compose_comparison_draft
+    assert compose_comparison_draft([], keyword="k", title=None) == ""
+
+
 def test_pick_sellpoint_dims_one_variant_cap_three():
     scripts = {
         "动力系统": ["强劲吸力 A", "强劲吸力 B"],

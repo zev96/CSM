@@ -26,8 +26,18 @@ def _pick_sellpoint_dims(
     return out
 
 
+def _is_numeric_field(f: str, scopes: list[ModelScope]) -> bool:
+    """任一型号该字段为真·数值（有 numbers 且非占位）→ 数字型字段。"""
+    for sc in scopes:
+        sv = sc.memory.specs.get(f)
+        if sv is not None and sv.numbers and not sv.is_placeholder:
+            return True
+    return False
+
+
 def _param_table(scopes: list[ModelScope]) -> str:
-    """字段并集（按各型号插入序首现）× 型号列 markdown 表；缺失填 —。"""
+    """字段并集 × 型号列 markdown 表：数字型字段在前（各按并集首现序），
+    非数值/认证在后；缺失或占位单元格填 —（spec §5.1）。"""
     fields: list[str] = []
     seen: set[str] = set()
     for sc in scopes:
@@ -37,6 +47,9 @@ def _param_table(scopes: list[ModelScope]) -> str:
                 fields.append(f)
     if not fields:
         return ""
+    # 数字型在前、非数值在后，各自保持并集首现序。
+    fields = [f for f in fields if _is_numeric_field(f, scopes)] + \
+             [f for f in fields if not _is_numeric_field(f, scopes)]
     labels = [_model_label(sc) for sc in scopes]
     header = "| 参数 | " + " | ".join(labels) + " |"
     sep = "| --- | " + " | ".join("---" for _ in scopes) + " |"
@@ -45,7 +58,8 @@ def _param_table(scopes: list[ModelScope]) -> str:
         cells = []
         for sc in scopes:
             sv = sc.memory.specs.get(f)
-            cells.append(sv.raw if sv is not None else "—")
+            # 缺失（None）或占位（is_placeholder）都填 —，不把占位当真值印进表。
+            cells.append("—" if (sv is None or sv.is_placeholder) else sv.raw)
         rows.append(f"| {f} | " + " | ".join(cells) + " |")
     return "## 参数对照\n\n" + "\n".join(rows)
 
@@ -133,7 +147,8 @@ def _summary(scopes: list[ModelScope]) -> str:
     for sc in primary:
         for field, raw in _leading_fields(sc.memory.specs, competitor_specs):
             lines.append(f"- {_model_label(sc)} 的 {field}：{raw}")
-    return "\n".join(lines)
+    # 无背书且无领先项 → 只剩裸标题，整节省略（同 highlights/test 的空节策略）。
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _intro(scopes: list[ModelScope], keyword: str, title: str | None) -> str:
@@ -148,7 +163,9 @@ def _intro(scopes: list[ModelScope], keyword: str, title: str | None) -> str:
 def compose_comparison_draft(
     scopes: list[ModelScope], *, keyword: str, title: str | None,
 ) -> str:
-    """多型号对比文章骨架（零 LLM）。空节自动省略。"""
+    """多型号对比文章骨架（零 LLM）。空节自动省略。空 scopes → 空串。"""
+    if not scopes:
+        return ""
     parts = [
         _intro(scopes, keyword, title),
         _param_table(scopes),
