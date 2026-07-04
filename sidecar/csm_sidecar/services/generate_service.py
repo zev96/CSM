@@ -428,6 +428,8 @@ def finalize_draft(
     checkpoint: Callable[[], None], on_pass: Callable[[Any], None],
     stage_index: int, stage_total: int,
     contract_mode: str,
+    scopes: list | None = None,
+    angle_directive: str | None = None,
 ) -> FinalizeOutcome:
     """毛坯 → 成稿：注入型号事实 + 角度指令 + skill 链多-pass + 导出前事实核对。
 
@@ -435,22 +437,25 @@ def finalize_draft(
     越界时本函数已发 done(blocked)，返回 blocked=True 让调用方停下。
     """
     # Plan 3: 注入型号记忆 + 事实核对作用域。两个 flag 都关 = 跳过。
+    # 横评旁路：scopes 预置（非 None）时不再内部 resolve；None 时与今天等价。
     cfg_bm = cfg.brand_memory
-    scopes: list = []
     brand_facts: str | None = None
-    if cfg_bm.inject or cfg_bm.factcheck:
-        scopes = resolve_scopes(
-            plan, index, registry,
-            own_brands=set(cfg_bm.own_brands),
-            category=category,
-        )
-        if scopes:
-            brand_facts = render_brand_facts(
-                scopes,
-                variant_cap=cfg_bm.inject_variant_cap,
-                endorsement_cap=cfg_bm.inject_endorsement_cap,
-                sellpoints=effective_sellpoints(angle),
+    if scopes is None:
+        scopes = []
+        if cfg_bm.inject or cfg_bm.factcheck:
+            scopes = resolve_scopes(
+                plan, index, registry,
+                own_brands=set(cfg_bm.own_brands),
+                category=category,
             )
+    # 预置 scopes 时也要渲染 brand_facts —— 故 if scopes 平移到外层。
+    if scopes:
+        brand_facts = render_brand_facts(
+            scopes,
+            variant_cap=cfg_bm.inject_variant_cap,
+            endorsement_cap=cfg_bm.inject_endorsement_cap,
+            sellpoints=effective_sellpoints(angle),
+        )
 
     # Phase 2b: 单次 build_prompt+complete 升级为 skill 链多-pass。
     # step0 = 组装 pass（build_prompt：毛坯+事实+角度+标题，与今天一致）；
@@ -462,7 +467,8 @@ def finalize_draft(
     state = chain_service.run_chain(
         job_id, chain_steps,
         draft=draft, keyword=keyword, title=title,
-        angle_directive=render_angle_directive(angle),
+        angle_directive=(angle_directive if angle_directive is not None
+                         else render_angle_directive(angle)),
         brand_facts=brand_facts if cfg_bm.inject else None,
         provider=provider, model=model,
         checkpoint=checkpoint, on_pass=on_pass,
