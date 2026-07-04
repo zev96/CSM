@@ -6,7 +6,7 @@
   CSS classes are faithful to real Baidu SERP structure as of 2025-05.
 
   XPath acceptance criteria met:
-    XPATH_DEFAULT matched: 8
+    XPATH_DEFAULT matched: 9  (2026-07 起 cosc-title-slot 排除移除，id=10 计入)
     XPATH_NEWS matched: 0
 -->
 <html>
@@ -171,14 +171,15 @@
         </div>
       </div>
 
-      <!-- Result 10 — cosc-title-slot present, excluded by XPath filter -->
+      <!-- Result 10 — cosc-title-slot present；2026-07 起该结构排除移除，此卡计入
+           （live 实测 cosc 槽已泛化到普通结果卡，保留排除会误杀 organic） -->
       <div class="result c-container xpath-log new-pmd" data-op="{"y":"cosc_result"}" tpl="se_com_default" mu="https://www.example.com/cosc-result" id="10">
         <div class="c-row">
           <div class="c-span9">
             <h3 class="c-title t">
               <span class="cosc-title-slot">知识图谱</span>
-              <a href="https://www.example.com/cosc-result" data-click="{}" class="result-op xpath-log" name="b_result_op" title="[Filtered] COSC Knowledge Card Result">
-                [Filtered] COSC Knowledge Card Result
+              <a href="https://www.example.com/cosc-result" data-click="{}" class="result-op xpath-log" name="b_result_op" title="COSC Knowledge Card Result (counted since 2026-07)">
+                COSC Knowledge Card Result (counted since 2026-07)
               </a>
             </h3>
           </div>
