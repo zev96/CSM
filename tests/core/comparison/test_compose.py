@@ -75,3 +75,47 @@ def test_param_table_union_columns_and_placeholder():
 def test_param_table_empty_when_no_specs():
     a = _scope("CEWEY", "CEWEYDS18", "主推")
     assert _param_table([a]) == ""
+
+
+from csm_core.comparison.compose import _highlights, _test_comparison
+
+
+def test_highlights_one_variant_cap3_plus_certs():
+    a = _scope("CEWEY", "CEWEYDS18", "主推",
+               scripts={"动力系统": ["强劲吸力"], "过滤系统": ["HEPA"],
+                        "防缠绕技术": ["防缠"], "噪音大小": ["静音"]},
+               certs=["CE", "FCC"])
+    out = _highlights([a])
+    assert out.startswith("## 各型号亮点")
+    assert "### CEWEY CEWEYDS18" in out
+    assert "- 动力系统：强劲吸力" in out
+    assert "- 过滤系统：HEPA" in out
+    assert "- 防缠绕技术：防缠" in out
+    assert "噪音大小" not in out          # cap 3 维，第 4 维被截
+    assert "- 认证：CE、FCC" in out
+
+
+def test_highlights_omitted_when_no_scripts_no_certs():
+    a = _scope("Dyson", "V12", "竞品")   # 竞品无 scripts、无 certs
+    assert _highlights([a]) == ""
+
+
+def test_test_comparison_common_topics_intersection_and_truncation():
+    long_body = "噪音实测：" + "很安静" * 100     # >200 字
+    a = _scope("CEWEY", "CEWEYDS18", "主推",
+               tests={"噪音测试": long_body, "尘杯测试": "0.6L"})
+    b = _scope("Dyson", "V12", "竞品",
+               tests={"噪音测试": "略吵", "续航测试": "60min"})
+    out = _test_comparison([a, b])
+    assert out.startswith("## 实测对比")
+    assert "### 噪音测试" in out          # 共有话题
+    assert "尘杯测试" not in out          # 非共有
+    assert "续航测试" not in out
+    # 主推正文截断到 200 字
+    assert len([ln for ln in out.splitlines() if ln.startswith("- CEWEY CEWEYDS18：")][0]) <= 200 + len("- CEWEY CEWEYDS18：")
+
+
+def test_test_comparison_omitted_when_no_common_topic():
+    a = _scope("CEWEY", "CEWEYDS18", "主推", tests={"噪音测试": "安静"})
+    b = _scope("Dyson", "V12", "竞品", tests={"续航测试": "60min"})
+    assert _test_comparison([a, b]) == ""

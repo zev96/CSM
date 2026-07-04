@@ -50,6 +50,46 @@ def _param_table(scopes: list[ModelScope]) -> str:
     return "## 参数对照\n\n" + "\n".join(rows)
 
 
+def _highlights(scopes: list[ModelScope]) -> str:
+    """每型号一块：卖点话术（每维 1 变体、≤3 维）+ 认证行。空块（无卖点无认证）跳过。"""
+    blocks: list[str] = []
+    for sc in scopes:
+        m = sc.memory
+        lines = [f"### {_model_label(sc)}"]
+        for dim, variant in _pick_sellpoint_dims(m.scripts):
+            lines.append(f"- {dim}：{variant}")
+        if m.certs:
+            lines.append(f"- 认证：{'、'.join(m.certs)}")
+        if len(lines) > 1:                       # 有内容才收
+            blocks.append("\n".join(lines))
+    if not blocks:
+        return ""
+    return "## 各型号亮点\n\n" + "\n\n".join(blocks)
+
+
+def _test_comparison(scopes: list[ModelScope]) -> str:
+    """共有测试话题（有 tests 的型号取 keys 交集，≥2 个型号才成立）逐话题
+    各型号摘要（每型号 ≤200 字）；无共有话题 → 整节省略。"""
+    with_tests = [sc for sc in scopes if sc.memory.tests]
+    if len(with_tests) < 2:
+        return ""
+    common = set(with_tests[0].memory.tests.keys())
+    for sc in with_tests[1:]:
+        common &= set(sc.memory.tests.keys())
+    if not common:
+        return ""
+    ordered = [t for t in with_tests[0].memory.tests.keys() if t in common]
+    blocks: list[str] = []
+    for topic in ordered:
+        lines = [f"### {topic}"]
+        for sc in with_tests:
+            body = (sc.memory.tests.get(topic) or "").strip()
+            if body:
+                lines.append(f"- {_model_label(sc)}：{body[:_MAX_TEST_CHARS]}")
+        blocks.append("\n".join(lines))
+    return "## 实测对比\n\n" + "\n\n".join(blocks)
+
+
 def compose_comparison_draft(
     scopes: list[ModelScope], *, keyword: str, title: str | None,
 ) -> str:
