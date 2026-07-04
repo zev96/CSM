@@ -871,10 +871,32 @@ onMounted(async () => {
     article.$reset();
   }
 
+  // 横评模式 —— home 横评 takeoff 带 mode=comparison + 逗号连的 models。
+  // 读出来供下方「横评优先」的自动起飞分支判定。
+  const qmode = (route.query.mode as string) ?? "";
+  const qmodels = ((route.query.models as string) ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+
   // 自动起飞：home 带着 ?keyword=... 跳过来时直接发起生成。
   // 此前由顶部的输入条触发，现在那块 UI 已删，所以由 mount 阶段
   // 接管。query 里没 keyword 就保持 idle，等用户回 home 起飞。
+  // 横评优先：mode=comparison + ≥2 型号 → submitComparison（复用单篇流），
+  // 不受 templateId 守卫约束（横评不选模板）。
   if (
+    qmode === "comparison" &&
+    qmodels.length >= 2 &&
+    article.status === "idle" &&
+    !article.finalText
+  ) {
+    void article.submitComparison({
+      models: qmodels,
+      keyword: qk,
+      ...(title.value.trim() ? { title: title.value.trim() } : {}),
+      ...(angle.value?.tone ? { tone: angle.value.tone } : {}),
+      ...(skillChain.value.length > 0 ? { skill_chain: skillChain.value } : {}),
+      ...(contractMode.value ? { contract_mode: contractMode.value } : {}),
+    });
+  } else if (
     qk &&
     article.status === "idle" &&
     !article.finalText &&
