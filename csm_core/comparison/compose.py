@@ -26,6 +26,30 @@ def _pick_sellpoint_dims(
     return out
 
 
+def _param_table(scopes: list[ModelScope]) -> str:
+    """字段并集（按各型号插入序首现）× 型号列 markdown 表；缺失填 —。"""
+    fields: list[str] = []
+    seen: set[str] = set()
+    for sc in scopes:
+        for f in sc.memory.specs.keys():
+            if f not in seen:
+                seen.add(f)
+                fields.append(f)
+    if not fields:
+        return ""
+    labels = [_model_label(sc) for sc in scopes]
+    header = "| 参数 | " + " | ".join(labels) + " |"
+    sep = "| --- | " + " | ".join("---" for _ in scopes) + " |"
+    rows = [header, sep]
+    for f in fields:
+        cells = []
+        for sc in scopes:
+            sv = sc.memory.specs.get(f)
+            cells.append(sv.raw if sv is not None else "—")
+        rows.append(f"| {f} | " + " | ".join(cells) + " |")
+    return "## 参数对照\n\n" + "\n".join(rows)
+
+
 def compose_comparison_draft(
     scopes: list[ModelScope], *, keyword: str, title: str | None,
 ) -> str:
