@@ -57,6 +57,7 @@ class ChainState:
     model: str | None
     steps: list[ChainStepInput]
     passes: list[ChainPass] = field(default_factory=list)
+    contract_mode: str = "conservative"   # rerun 复用缓存值，保持同契约重跑
 
     @property
     def final_text(self) -> str:
@@ -97,6 +98,7 @@ def _prompt_for(state: ChainState, idx: int, prev_output: str) -> tuple[str, str
             user_skill_prompt=step.body, keyword=state.keyword, draft=state.draft,
             brand_facts=state.brand_facts, title=state.title,
             angle_directive=state.angle_directive,
+            contract_mode=state.contract_mode,
         ))
         return system, user, state.draft
     system, user = build_refine_prompt(step.body, prev_output)
@@ -110,12 +112,14 @@ def run_chain(
     client: Any | None = None,
     checkpoint: Callable[[], None] = lambda: None,
     on_pass: Callable[[ChainPass], None] = lambda p: None,
+    contract_mode: str = "conservative", cache: bool = True,
 ) -> ChainState:
     eff = steps or [ChainStepInput(None, "persona", "", None)]
     state = ChainState(
         job_id=job_id, draft=draft, keyword=keyword, title=title,
         angle_directive=angle_directive, brand_facts=brand_facts,
         provider=provider, model=model, steps=eff,
+        contract_mode=contract_mode,
     )
     if client is None:
         client = llm_factory.build_client(provider=provider, model=model)
@@ -129,7 +133,8 @@ def run_chain(
         state.passes.append(p)
         on_pass(p)
         prev = out
-    _cache_put(state)
+    if cache:
+        _cache_put(state)
     return state
 
 

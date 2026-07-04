@@ -19,6 +19,22 @@ export interface BatchItem {
   document: string | null;
   error_type: string | null;
   error_message: string | null;
+  // Phase 4+: 确定性评分（免费）+ 多候选选优信号。旧事件不带这些键时
+  // 落到 refreshSnapshot 的 to_dict 快照也天然带（后端 dataclass 默认值）。
+  score: number | null;
+  score_parts: { key: string; label: string; points: number; detail: string }[];
+  candidate_scores: number[];
+  factcheck_violations: number;
+}
+
+/** 批量总成本汇总（镜像后端 done 事件 total_cost）。
+ * 注意：这是本批「全部候选」的真实花费（含落选者），不是单篇成本 ——
+ * 渲染时务必标「本批实际消耗」而非按篇均摊。 */
+export interface BatchTotalCost {
+  input_tokens: number;
+  output_tokens: number;
+  cost: number | null;
+  currency: string;
 }
 
 interface BatchState {
@@ -35,9 +51,13 @@ interface BatchState {
   templateId: string;
   skillId: string;
   provider: string | null;
+  // Phase 4+: 每关键词候选数（1-3），费用与候选数线性。默认 1 = 零回归。
+  candidates: number;
   // Summary on done.
   byStatus: Record<string, number>;
   totalDuration: number;
+  // Phase 4+: 本批总成本（含落选候选，见 BatchTotalCost 注释）。null=未知/旧事件。
+  totalCost: BatchTotalCost | null;
 }
 
 export const useBatch = defineStore("batch", {
@@ -54,8 +74,10 @@ export const useBatch = defineStore("batch", {
     templateId: "",
     skillId: "",
     provider: null,
+    candidates: 1,
     byStatus: {},
     totalDuration: 0,
+    totalCost: null,
   }),
   getters: {
     isRunning: (state) => state.status === "running",
@@ -75,6 +97,7 @@ export const useBatch = defineStore("batch", {
       this.items = [];
       this.byStatus = {};
       this.totalDuration = 0;
+      this.totalCost = null; // 起新批 —— 清掉上一轮成本汇总
       this.outDir = null;
       this.finishedAt = null;
       this.startedAt = new Date().toISOString();
@@ -86,6 +109,7 @@ export const useBatch = defineStore("batch", {
           template_id: this.templateId,
           skill_id: this.skillId || undefined,
           provider: this.provider ?? undefined,
+          candidates: this.candidates,
         });
         this.jobId = resp.data.job_id;
         this.total = resp.data.total ?? keywords.length;
@@ -114,6 +138,12 @@ export const useBatch = defineStore("batch", {
             it.document = d.document ?? null;
             it.error_type = d.error_type ?? null;
             it.error_message = d.error_message ?? null;
+            // Phase 4+: 评分/候选信号 —— 旧事件（未升级 sidecar）不带这些
+            // 键，fallback 到 null/[]/0（不崩、不误报有信号）。
+            it.score = typeof d.score === "number" ? d.score : null;
+            it.score_parts = Array.isArray(d.score_parts) ? d.score_parts : [];
+            it.candidate_scores = Array.isArray(d.candidate_scores) ? d.candidate_scores : [];
+            it.factcheck_violations = typeof d.factcheck_violations === "number" ? d.factcheck_violations : 0;
           }
         },
         cancel_requested: () => {
@@ -123,6 +153,8 @@ export const useBatch = defineStore("batch", {
           this.status = "done";
           this.byStatus = d.by_status ?? {};
           this.totalDuration = d.total_duration_seconds ?? 0;
+          // Phase 4+: 本批总成本（含落选候选）。旧事件无该键 → 保持 null。
+          this.totalCost = d.total_cost ?? null;
           this.finishedAt = new Date().toISOString();
           const byStatus = (d.by_status ?? {}) as Record<string, number>;
           const failedCount = Number(byStatus.failed ?? 0);

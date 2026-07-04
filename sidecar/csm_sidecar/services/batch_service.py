@@ -16,6 +16,7 @@ progress because EventBus reaps streams once consumed.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import uuid
@@ -28,14 +29,20 @@ from typing import Literal
 
 from csm_core.assembler.constraints import assemble_plan
 from csm_core.assembler.render import compose_draft
+from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
 from csm_core.export.markdown import export_article
+from csm_core.factcheck import check_facts
+from csm_core.factcheck.completeness import check_completeness
+from csm_core.lint import build_report as lint_report_for
+from csm_core.lint import build_rules
+from csm_core.llm import pricing
 from csm_core.llm.client import LLMClient
-from csm_core.llm.prompts import PromptInputs, build_prompt
+from csm_core.scoring import score_article
 from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
 
 from ..event_bus import bus
-from . import config_service, llm_factory, skills_service, templates_service, vault_service
+from . import chain_service, config_service, llm_factory, skills_service, templates_service, vault_service
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +59,10 @@ class BatchItemState:
     document: str | None = None
     error_type: str | None = None
     error_message: str | None = None
+    score: float | None = None
+    score_parts: list[dict] = field(default_factory=list)      # top3 扣分明细
+    candidate_scores: list[float] = field(default_factory=list)
+    factcheck_violations: int = 0
 
 
 @dataclass
@@ -67,6 +78,9 @@ class BatchState:
     finished_at: str | None = None
     cancel_requested: bool = False
     items: list[BatchItemState] = field(default_factory=list)
+    skill_chain: list[str] | None = None
+    candidates: int = 1
+    contract_mode: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +95,9 @@ class BatchState:
             "finished_at": self.finished_at,
             "cancel_requested": self.cancel_requested,
             "items": [vars(it) for it in self.items],
+            "skill_chain": self.skill_chain,
+            "candidates": self.candidates,
+            "contract_mode": self.contract_mode,
         }
 
 
@@ -92,6 +109,9 @@ class BatchRequest:
     seed: int = 0
     provider: str | None = None
     model: str | None = None
+    skill_chain: list[str] | None = None
+    candidates: int = 1
+    contract_mode: str | None = None
 
 
 # Process-global state. Keyed by job_id. Lock guards both dict mutation
@@ -143,6 +163,9 @@ def submit(req: BatchRequest) -> str:
         seed=req.seed,
         started_at=datetime.now().isoformat(timespec="seconds"),
         items=[BatchItemState(index=i, keyword=kw) for i, kw in enumerate(keywords, start=1)],
+        skill_chain=req.skill_chain,
+        candidates=max(1, min(3, req.candidates)),
+        contract_mode=req.contract_mode,
     )
     with _lock:
         _states[job_id] = state
@@ -179,6 +202,26 @@ def _dedup_keywords(keywords: list[str]) -> list[str]:
         seen.add(k)
         out.append(k)
     return out
+
+
+def _safe_stem(s: str) -> str:
+    """Windows 安全文件名片段：非法字符与空白 → _，截 20 字。"""
+    return re.sub(r'[\\/:*?"<>|\s]+', "_", s)[:20] or "kw"
+
+
+def _save_candidate(out_dir: Path, item: BatchItemState, cand: dict, k: int) -> None:
+    """落选稿存 candidates/ 备查（纯 md dump，不走 export_article 的 MMDD-N 槽位）。
+
+    文件名含候选序 c{k} + 一位小数分 —— 同词多落选稿同分也不互相覆盖（终审 Minor）。
+    mkdir 也在 OSError 守卫内：candidates/ 不可建时降级为日志，绝不把已成优胜拖成 failed。"""
+    score = cand["score_report"].total
+    try:
+        cdir = out_dir / "candidates"
+        cdir.mkdir(exist_ok=True)
+        path = cdir / f"{item.index:02d}-{_safe_stem(item.keyword)}-c{k}-{score:.1f}分.md"
+        path.write_text(cand["final_text"], encoding="utf-8")
+    except OSError:
+        logger.warning("batch 落选稿写入失败: item=%d c%d", item.index, k, exc_info=True)
 
 
 def _run_job(job_id: str) -> None:
@@ -233,6 +276,25 @@ def _run_job(job_id: str) -> None:
             if tpl_skill is not None:
                 skill_prompt = tpl_skill.body
 
+        # 链 steps：skill_chain 优先；None 退化 [skill_id]（找不到已在上面 fail-fast）；
+        # 两者皆空且模板有默认 skill → 单步默认链（沿用今天回退语义）。
+        chain_steps: list[chain_service.ChainStepInput] = []
+        if state.skill_chain:
+            sdir = Path(cfg.skill_dir) if cfg.skill_dir else None
+            for sid in state.skill_chain:
+                sk = skills_service.get_skill(sdir, sid)
+                if sk is None:
+                    logger.warning("batch skill_chain: 跳过失效 skill %s", sid)
+                    continue
+                chain_steps.append(chain_service.ChainStepInput(
+                    skill_id=sid, role=sk.role, name=sk.name, body=sk.body))
+        elif skill_prompt is not None:
+            chain_steps = [chain_service.ChainStepInput(
+                skill_id=state.skill_id, role="persona", name="", body=skill_prompt)]
+        effective_contract = state.contract_mode or cfg.contract.mode
+        lint_rules = build_rules(cfg.lint)
+        state_cost_acc: list[list[dict]] = []    # 每链的 pass_dicts，done 时求 total_cost
+
         for item in state.items:
             with _lock:
                 if state.cancel_requested:
@@ -244,25 +306,95 @@ def _run_job(job_id: str) -> None:
             )
             t0 = time.monotonic()
             try:
-                plan = assemble_plan(
-                    keyword=item.keyword, template=template,
-                    index=index, registry=registry,
-                    seed=state.seed, user_config={},
-                )
-                draft = compose_draft(plan)
-                system, user = build_prompt(PromptInputs(
-                    user_skill_prompt=skill_prompt,
-                    keyword=item.keyword, draft=draft,
-                ))
-                final_text = client.complete(system=system, user=user)
+                best: dict | None = None       # {final_text, plan, score_report, fc_n, k}
+                cand_scores: list[float] = []
+                last_exc: Exception | None = None   # 全候选失败时把真因抛给 per-item except
+                was_cancelled = False
+                total_cost_acc = state_cost_acc   # 外层累计器（每链 pass_dicts）
+                for k in range(1, state.candidates + 1):
+                    with _lock:
+                        if state.cancel_requested:
+                            was_cancelled = True
+                            break
+                    # 候选级故障隔离：单候选失败只丢自己，不弃已有优胜、不拖垮整词。
+                    try:
+                        plan = assemble_plan(
+                            keyword=item.keyword, template=template,
+                            index=index, registry=registry,
+                            seed=state.seed + (k - 1) * 1000, user_config={},
+                        )
+                        draft = compose_draft(plan)
+                        # 注入（与 finalize_draft 同条件：inject 或 factcheck 开才解析 scopes）
+                        scopes: list = []
+                        brand_facts = None
+                        if cfg.brand_memory.inject or cfg.brand_memory.factcheck:
+                            scopes = resolve_scopes(
+                                plan, index, registry,
+                                own_brands=set(cfg.brand_memory.own_brands),
+                                category=template.product)
+                            if scopes and cfg.brand_memory.inject:
+                                brand_facts = render_brand_facts(
+                                    scopes,
+                                    variant_cap=cfg.brand_memory.inject_variant_cap,
+                                    endorsement_cap=cfg.brand_memory.inject_endorsement_cap)
+                        chain_state = chain_service.run_chain(
+                            f"{job_id}:{item.index}:{k}", chain_steps,
+                            draft=draft, keyword=item.keyword, title=None,
+                            angle_directive=None, brand_facts=brand_facts,
+                            provider=state.provider, model=state.model,
+                            client=client, contract_mode=effective_contract,
+                            cache=False)
+                        final_k = chain_state.final_text
+                        pass_dicts = [p.to_dict() for p in chain_state.passes]
+                        total_cost_acc.append(pass_dicts)
+                        # 核对信号（计数不拦）
+                        fc_n = 0
+                        if cfg.brand_memory.factcheck and scopes:
+                            sources = [draft] + ([brand_facts] if brand_facts else [])
+                            wl = build_whitelist(scopes, source_texts=sources)
+                            fc_n = len(check_facts(
+                                final_k, allowed_numbers=wl.numbers,
+                                allowed_certs=wl.certs).violations)
+                        comp_n = 0
+                        if effective_contract == "aggressive" and scopes:
+                            comp_n = len(check_completeness(draft, final_k, scopes).missing)
+                        report = score_article(
+                            final_k, lint_report=lint_report_for(final_k, lint_rules),
+                            factcheck_violations=fc_n, completeness_missing=comp_n,
+                            config=cfg.scoring)
+                    except Exception as cand_exc:  # noqa: BLE001 — 候选级边界
+                        logger.warning(
+                            "batch %s item %d candidate %d failed",
+                            job_id, item.index, k, exc_info=True)
+                        last_exc = cand_exc
+                        continue
+                    cand_scores.append(report.total)
+                    if best is None or report.total > best["score_report"].total:
+                        if best is not None:
+                            # 旧优胜者降级为落选稿，带自己的候选序 best["k"]。
+                            _save_candidate(out_dir, item, best, best["k"])
+                        best = {"final_text": final_k, "plan": plan,
+                                "score_report": report, "fc_n": fc_n, "k": k}
+                    else:
+                        _save_candidate(out_dir, item, {
+                            "final_text": final_k, "score_report": report}, k)
+                if best is None:
+                    if was_cancelled:
+                        # 用户取消且零成稿 —— 是取消不是失败（error_* 留空）。
+                        item.status = "cancelled"
+                        continue  # finally 仍发 item_finished（status=cancelled）
+                    # 全候选失败：把真实的最后一个异常抛给 per-item except（error_* 取真因）。
+                    raise last_exc if last_exc is not None else RuntimeError(
+                        "batch item produced no candidate")
                 paths = export_article(
-                    out_dir=out_dir,
-                    keyword=item.keyword,
-                    final_text=final_text,
-                    plan=plan,
-                    fmt=cfg.export_format,
-                )
+                    out_dir=out_dir, keyword=item.keyword,
+                    final_text=best["final_text"], plan=best["plan"],
+                    fmt=cfg.export_format)
                 item.document = paths["document"]
+                item.score = best["score_report"].total
+                item.score_parts = [p.model_dump() for p in best["score_report"].parts[:3]]
+                item.candidate_scores = cand_scores
+                item.factcheck_violations = best["fc_n"]
                 item.status = "success"
             except Exception as exc:  # noqa: BLE001 — per-item boundary
                 logger.exception("batch %s item %d failed", job_id, item.index)
@@ -281,6 +413,9 @@ def _run_job(job_id: str) -> None:
                     document=item.document,
                     error_type=item.error_type,
                     error_message=item.error_message,
+                    score=item.score, score_parts=item.score_parts,
+                    candidate_scores=item.candidate_scores,
+                    factcheck_violations=item.factcheck_violations,
                 )
 
         # Anything still queued at the end was cancelled mid-run.
@@ -292,6 +427,20 @@ def _run_job(job_id: str) -> None:
             state.finished_at = datetime.now().isoformat(timespec="seconds")
 
         summary = _summary(state)
+        model_name = state.model or (
+            cfg.default_model.get(state.provider or cfg.default_provider or "")
+            if (state.provider or cfg.default_provider) else None)
+        agg = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0, "currency": "CNY"}
+        any_cost = False
+        for pass_dicts in state_cost_acc:
+            c = pricing.chain_cost(pass_dicts, model_name, cfg.pricing)
+            agg["input_tokens"] += c["input_tokens"]
+            agg["output_tokens"] += c["output_tokens"]
+            if c["cost"] is not None:
+                agg["cost"] += c["cost"]; any_cost = True
+        if not any_cost:
+            agg["cost"] = None
+        summary["total_cost"] = agg
         bus.finish(job_id, **summary)
     except Exception as e:
         logger.exception("batch %s crashed", job_id)

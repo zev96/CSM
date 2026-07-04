@@ -1,7 +1,7 @@
 """Batch generation routes."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -19,6 +19,9 @@ class BatchBody(BaseModel):
     seed: int = 0
     provider: str | None = None
     model: str | None = None
+    skill_chain: list[str] | None = None
+    candidates: int = Field(default=1, ge=1, le=3)
+    contract_mode: Literal["conservative", "aggressive"] | None = None
 
 
 class BatchAccepted(BaseModel):
@@ -35,9 +38,11 @@ def start_batch(body: BatchBody) -> BatchAccepted:
     - ``started``: ``total``, ``out_dir``
     - ``item_started``: ``index``, ``keyword``
     - ``item_finished``: ``index``, ``keyword``, ``status``,
-      ``duration_seconds``, ``document``, ``error_*``
+      ``duration_seconds``, ``document``, ``error_*``, ``score``,
+      ``score_parts``, ``candidate_scores``, ``factcheck_violations``
+      (Phase 4+: 评分 + 多候选选优信号；旧字段位置不变)
     - ``cancel_requested``: when POST /api/batch/{id}/cancel is called
-    - ``done``: ``total``, ``by_status``, ``total_duration_seconds``
+    - ``done``: ``total``, ``by_status``, ``total_duration_seconds``, ``total_cost``
     - ``error``: terminal failure outside the per-item loop
     """
     try:

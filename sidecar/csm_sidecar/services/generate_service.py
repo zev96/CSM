@@ -30,6 +30,7 @@ from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
 from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
 from csm_core.factcheck import check_facts
+from csm_core.factcheck.completeness import check_completeness
 from csm_core.llm import pricing
 
 from ..event_bus import bus
@@ -64,6 +65,8 @@ class GenerateRequest:
     # Phase 2b: skill 链多-pass（人设→去AI味→平台适配）。空 = 退回单 skill_id
     # 1 步链 = 今天行为（零回归）。
     skill_chain: list[str] | None = None
+    # Phase 4+: 成文契约档单次覆盖。None = 用全局 cfg.contract.mode。
+    contract_mode: str | None = None
 
 
 @dataclass
@@ -77,6 +80,8 @@ class FinalizeRequest:
     skill_chain: list[str] | None = None
     provider: str | None = None
     model: str | None = None
+    # Phase 4+: 成文契约档单次覆盖。None = 用全局 cfg.contract.mode。
+    contract_mode: str | None = None
 
 
 @dataclass
@@ -89,6 +94,8 @@ class FinalizeOutcome:
     # 链成本摘要（{input_tokens, output_tokens, cost, currency}）。在 finalize_draft
     # 算一次，blocked 与非 blocked done 共用，调用方原样塞进 bus.finish。
     cost: dict[str, Any]
+    # Phase 4+: 激进契约的完整性反向核对（软警告，不拦）。None=未核（保守/无主推）。
+    completeness: dict[str, Any] | None = None
 
 
 # Pool sized so a typical desktop can run a generate + a batch + a polish
@@ -243,6 +250,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             checkpoint=lambda: _checkpoint(job_id),
             on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
             stage_index=4, stage_total=6,
+            contract_mode=(req.contract_mode or cfg.contract.mode),
         )
         if outcome.blocked:
             return
@@ -268,6 +276,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             final_text=final_text,
             passes=outcome.passes,
             cost=outcome.cost,
+            completeness=outcome.completeness,
         )
     except _CancelledGenerate:
         logger.info("generate job %s cancelled by user", job_id)
@@ -338,6 +347,7 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             checkpoint=lambda: _checkpoint(job_id),
             on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
             stage_index=0, stage_total=1,
+            contract_mode=(req.contract_mode or cfg.contract.mode),
         )
         if outcome.blocked:
             return  # finalize_draft 已发 blocked-done
@@ -350,6 +360,7 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             final_text=outcome.final_text,
             passes=outcome.passes,
             cost=outcome.cost,
+            completeness=outcome.completeness,
         )
     except _CancelledGenerate:
         logger.info("finalize job %s cancelled by user", job_id)
@@ -416,6 +427,7 @@ def finalize_draft(
     cfg: Any, out_dir: Path,
     checkpoint: Callable[[], None], on_pass: Callable[[Any], None],
     stage_index: int, stage_total: int,
+    contract_mode: str,
 ) -> FinalizeOutcome:
     """毛坯 → 成稿：注入型号事实 + 角度指令 + skill 链多-pass + 导出前事实核对。
 
@@ -454,6 +466,7 @@ def finalize_draft(
         brand_facts=brand_facts if cfg_bm.inject else None,
         provider=provider, model=model,
         checkpoint=checkpoint, on_pass=on_pass,
+        contract_mode=contract_mode,
     )
     final_text = state.final_text
     passes = [p.to_dict() for p in state.passes]
@@ -463,15 +476,25 @@ def finalize_draft(
     cost = pricing.chain_cost(
         passes, _effective_model(model, provider, cfg), cfg.pricing)
 
+    # Phase 4+: 激进契约的完整性反向核对（软警告，不拦）。
+    completeness: dict[str, Any] | None = None
+    if contract_mode == "aggressive":
+        comp = check_completeness(draft, final_text, scopes)
+        completeness = comp.model_dump()
+
     # 导出前硬门禁：命中越界则缓存待导出 + done(blocked)，不导出。
     if _maybe_block_for_factcheck(
         job_id, final_text=final_text, scopes=scopes, draft=draft,
         brand_facts=brand_facts if cfg_bm.inject else None,
         title=title, cfg=cfg, plan=plan, out_dir=out_dir, passes=passes,
-        cost=cost,
+        cost=cost, completeness=completeness,
     ):
-        return FinalizeOutcome(final_text=final_text, passes=passes, blocked=True, cost=cost)
-    return FinalizeOutcome(final_text=final_text, passes=passes, blocked=False, cost=cost)
+        return FinalizeOutcome(
+            final_text=final_text, passes=passes, blocked=True, cost=cost,
+            completeness=completeness)
+    return FinalizeOutcome(
+        final_text=final_text, passes=passes, blocked=False, cost=cost,
+        completeness=completeness)
 
 
 def _resolve_chain(req: GenerateRequest | FinalizeRequest, cfg) -> list[chain_service.ChainStepInput]:
@@ -509,6 +532,7 @@ def _maybe_block_for_factcheck(
     brand_facts: str | None, title: str | None = None, cfg, plan, out_dir: Path,
     passes: list[dict[str, Any]] | None = None,
     cost: dict[str, Any] | None = None,
+    completeness: dict[str, Any] | None = None,
 ) -> bool:
     """导出前事实核对。命中越界 → 缓存待导出 + 以 done(blocked) 收尾、返回
     True（调用方须在导出前停下）。核对关 / 无型号 / 成稿干净 → False。
@@ -539,6 +563,7 @@ def _maybe_block_for_factcheck(
             "blocked": True,
             "violations": [v.model_dump() for v in report.violations],
         },
+        completeness=completeness,
     )
     return True
 

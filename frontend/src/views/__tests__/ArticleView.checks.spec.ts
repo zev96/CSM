@@ -84,13 +84,15 @@ describe("ArticleView — 一级质检卡渲染（primaryChecks）", () => {
     h.routeQuery.value = {};
   });
 
-  it("渲染三张大卡：重复率·历史 / 关键词密度 / 禁区（钉住 PR#148 禁区项可见性）", async () => {
+  it("渲染五张大卡：重复率·历史 / 关键词密度 / 禁区 / 完整性 / 综合评分（禁区钉 PR#148 可见性，完整性/综合评分为 Phase 4+）", async () => {
     const w = await mountView();
     const texts = findCards(w).map((c) => c.text());
     expect(texts.some((t) => t.includes("重复率"))).toBe(true);
     expect(texts.some((t) => t.includes("关键词密度"))).toBe(true);
     expect(texts.some((t) => t.includes("禁区"))).toBe(true);
-    expect(texts).toHaveLength(3);
+    expect(texts.some((t) => t.includes("完整性"))).toBe(true);
+    expect(texts.some((t) => t.includes("综合评分"))).toBe(true);
+    expect(texts).toHaveLength(5);
   });
 
   it("禁区卡未检查（lint=null）→ 值为 — 且徽章「通过」（不软拦导出即通过）", async () => {

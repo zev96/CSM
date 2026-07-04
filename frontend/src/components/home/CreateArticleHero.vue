@@ -57,6 +57,17 @@ const angle = ref<Angle | null>(null);
 const title = ref<string>("");
 const showAnglePicker = ref(false);
 
+// Phase 4+ 成文契约档单次覆盖 —— 默认「跟随全局」（不入 query = 今天行为，
+// ArticleView 退回 cfg.contract.mode）。
+const CONTRACT_ITEMS = [
+  { key: "", label: "跟随全局" },
+  { key: "conservative", label: "保守（保留全部信息点）" },
+  { key: "aggressive", label: "激进（允许删减更精炼）" },
+];
+const contractMode = ref<string>("");
+const contractLabel = computed(() =>
+  contractMode.value === "aggressive" ? "激进" : contractMode.value === "conservative" ? "保守" : "全局");
+
 // 角度是否有任一 facet 被设置 —— 控制 chip 的"已设置"高亮 + 摘要文案。
 const angleActive = computed(() => {
   const a = angle.value;
@@ -159,13 +170,14 @@ function takeoff() {
   if (a?.sellpoints?.length) query.sellpoints = a.sellpoints.join(",");
   if (a?.tone) query.tone = a.tone;
   if (title.value.trim()) query.title = title.value.trim();
+  if (contractMode.value) query.contract = contractMode.value;
 
   router.push({ name: "article", query });
 }
 
 // 给测试（@vue/test-utils vm）访问内部 state/方法 —— <script setup> 默认
 // 闭合，不 expose 测不到 takeoff/angle/title。
-defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, takeoff, onPickTemplate });
+defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, contractMode, takeoff, onPickTemplate });
 </script>
 
 <template>
@@ -273,6 +285,37 @@ defineExpose({ keyword, angle, title, tplId, skillChain, showChainPicker, takeof
               >
               <span class="dd-label-current">{{ tplLabel }}</span>
             </span>
+            <Icon name="arrowDown" :size="11" />
+          </button>
+        </template>
+      </Dropdown>
+
+      <!--
+        契约 chip —— 生成契约档单次覆盖（保守/激进/跟随全局默认）。
+        与「模板」同 Dropdown 结构；起飞时非「跟随全局」才入 query。
+      -->
+      <Dropdown :items="CONTRACT_ITEMS" @select="(k: string) => (contractMode = k)">
+        <template #trigger>
+          <button
+            type="button"
+            data-contract-chip-trigger
+            class="inline-flex items-center gap-2"
+            :style="{
+              height: '32px',
+              padding: '0 12px',
+              background: contractMode ? 'var(--primary-soft)' : 'var(--frosted-bg)',
+              backdropFilter: 'blur(12px) saturate(140%)',
+              WebkitBackdropFilter: 'blur(12px) saturate(140%)',
+              border: contractMode ? '1px solid var(--primary)' : '1px solid var(--frosted-border)',
+              borderRadius: 'var(--radius-pill)',
+              fontSize: '12px',
+              color: contractMode ? 'var(--primary-deep)' : 'var(--ink-2)',
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(var(--shadow-rgb),0.04), 0 1px 2px rgba(var(--shadow-rgb),0.03)',
+            }"
+          >
+            <span :style="{ color: contractMode ? 'var(--primary-deep)' : 'var(--ink-3)' }">契约</span>
+            <span class="font-semibold">{{ contractLabel }}</span>
             <Icon name="arrowDown" :size="11" />
           </button>
         </template>

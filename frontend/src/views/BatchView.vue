@@ -13,7 +13,7 @@ import ProgressBar from "@/components/ui/ProgressBar.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormSelect from "@/components/forms/FormSelect.vue";
 
-import { useBatch } from "@/stores/batch";
+import { useBatch, type BatchItem } from "@/stores/batch";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
@@ -79,6 +79,15 @@ async function cancel() {
   toast.info("已请求取消，运行中的任务会跑完当前一篇。");
 }
 
+// Phase 4+: 评分列 hover 提示 —— 扣分明细 + 多候选分（tooltip 承载信息，
+// 表格无展开行基建，v1 用 title 属性零基建呈现同等信息量）。
+function scoreTooltip(it: BatchItem): string {
+  const parts = (it.score_parts ?? []).map((p) => `${p.label} -${p.points}`).join("；");
+  const cands = (it.candidate_scores ?? []).length > 1
+    ? `候选分：${it.candidate_scores.map((s) => s.toFixed(0)).join(" / ")}` : "";
+  return [parts, cands].filter(Boolean).join("\n") || "无扣分";
+}
+
 const STATUS_TONE: Record<string, "ok" | "warn" | "alert" | "info" | "primary"> = {
   queued: "info",
   running: "primary",
@@ -140,6 +149,19 @@ onMounted(async () => {
               @update:model-value="(v) => (batch.skillId = String(v))"
             />
           </div>
+          <div>
+            <div class="text-ink-3 mb-1">每词候选数</div>
+            <FormSelect
+              :model-value="batch.candidates"
+              :options="[
+                { label: '1（默认）', value: 1 },
+                { label: '2（费用×2）', value: 2 },
+                { label: '3（费用×3）', value: 3 },
+              ]"
+              :disabled="batch.isRunning"
+              @update:model-value="(v) => (batch.candidates = Number(v))"
+            />
+          </div>
           <div class="text-ink-3 mt-2">
             待提交：
             <span class="font-mono text-ink tabular-nums">{{ parsedKeywords.length }}</span> 条
@@ -186,6 +208,7 @@ onMounted(async () => {
             <th class="py-2 font-medium">#</th>
             <th class="py-2 font-medium">关键词</th>
             <th class="py-2 font-medium">状态</th>
+            <th class="py-2 text-right font-medium">评分</th>
             <th class="py-2 text-right font-medium">耗时</th>
             <th class="py-2 text-right font-medium">文档</th>
           </tr>
@@ -202,6 +225,13 @@ onMounted(async () => {
               <Pill :tone="STATUS_TONE[it.status] ?? 'info'">
                 {{ STATUS_LABEL[it.status] ?? it.status }}
               </Pill>
+            </td>
+            <td class="py-2 text-right">
+              <Pill v-if="it.score != null" :tone="it.score >= 80 ? 'ok' : it.score >= 60 ? 'warn' : 'alert'"
+                    :title="scoreTooltip(it)">
+                {{ it.score.toFixed(0) }}
+              </Pill>
+              <span v-else class="text-ink-3">—</span>
             </td>
             <td class="font-mono py-2 text-right tabular-nums">
               {{ it.duration_seconds > 0 ? `${it.duration_seconds.toFixed(1)}s` : "—" }}
@@ -238,6 +268,14 @@ onMounted(async () => {
         <span v-if="batch.byStatus.cancelled">取消 <span class="font-mono">{{ batch.byStatus.cancelled }}</span></span>
         <span class="text-ink-3">|</span>
         <span>总耗时 <span class="font-mono">{{ batch.totalDuration.toFixed(1) }}s</span></span>
+      </div>
+      <!--
+        本批实际消耗 —— total_cost 是全部候选（含落选者）的真实花费，
+        不是按篇均摊的单价，标签必须写「本批实际消耗」避免误读成单篇成本。
+      -->
+      <div v-if="batch.totalCost" class="text-ink-3 mt-2 text-[11.5px]">
+        本批实际消耗 · ≈{{ batch.totalCost.input_tokens + batch.totalCost.output_tokens }} tokens
+        · ≈¥{{ batch.totalCost.cost?.toFixed(2) ?? "—" }}
       </div>
       <div v-if="batch.outDir" class="font-mono text-ink-3 mt-3 text-[11px]">
         out_dir: {{ batch.outDir }}

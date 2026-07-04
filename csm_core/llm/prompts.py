@@ -16,6 +16,9 @@ class PromptInputs:
     # Phase 2a: 标题领衔 + 角度指令块。两者都空 = 今天行为（零回归）。
     title: str | None = None
     angle_directive: str | None = None
+    # Phase 4+: 成文契约档。"conservative"（默认）= 今天行为字节级不变；
+    # "aggressive" = 允许取舍删减（主推事实必须保留，另有完整性核对兜底）。
+    contract_mode: str = "conservative"
 
 
 def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
@@ -39,18 +42,33 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
         if inputs.angle_directive else ""
     )
 
+    aggressive = inputs.contract_mode == "aggressive"
     if title_block or angle_block:
-        # 保守契约：保信息点 + 按角度调侧重/顺序/详略/语调 + 标题领衔；不取舍删减、不增改事实
-        instruction = (
-            "请按上面【写作角度】组织成文：保留所有信息点，可调整侧重、顺序、详略与语调；"
-            + ("围绕标题开篇点题、贯穿全文；" if title_block else "")
-            + "不新增虚构事实，不改动任何数字、单位、认证，不删减关键信息点。"
-        )
+        if aggressive:
+            instruction = (
+                "请按上面【写作角度】组织成文：可取舍删减次要或重复的信息点、"
+                "让篇幅更精炼；但主推型号的参数、认证与标题承诺的卖点必须完整保留；"
+                "不新增虚构事实，不改动任何数字、单位、认证。"
+            )
+        else:
+            # 保守契约：保信息点 + 按角度调侧重/顺序/详略/语调 + 标题领衔；不取舍删减、不增改事实
+            instruction = (
+                "请按上面【写作角度】组织成文：保留所有信息点，可调整侧重、顺序、详略与语调；"
+                + ("围绕标题开篇点题、贯穿全文；" if title_block else "")
+                + "不新增虚构事实，不改动任何数字、单位、认证，不删减关键信息点。"
+            )
     else:
-        instruction = (
-            "请按**润色模式**重写：保留所有信息点和段落结构，只改进文字流畅度、"
-            "衔接和风格一致性；不新增虚构事实，不删减关键信息。"
-        )
+        if aggressive:
+            instruction = (
+                "请按**精炼模式**重写：可删减次要或重复内容、合并冗余段落；"
+                "但所有型号参数、认证与核心卖点必须完整保留；"
+                "不新增虚构事实，不改动任何数字、单位、认证。"
+            )
+        else:
+            instruction = (
+                "请按**润色模式**重写：保留所有信息点和段落结构，只改进文字流畅度、"
+                "衔接和风格一致性；不新增虚构事实，不删减关键信息。"
+            )
 
     user = (
         f"【关键词】{inputs.keyword}\n\n"

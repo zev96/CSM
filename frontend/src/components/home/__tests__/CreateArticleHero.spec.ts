@@ -132,4 +132,30 @@ describe("CreateArticleHero — 角度 chip + query", () => {
     const query = pushMock.mock.calls[0][0].query;
     expect(query.skill_chain).toBeUndefined();
   });
+
+  it("渲染「契约」chip（默认跟随全局）", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    expect(w.text()).toContain("契约");
+    expect(w.text()).toContain("全局");
+  });
+
+  it("默认（跟随全局）时 takeoff query 不带 contract（零回归）", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    (w.vm as any).keyword = "k";
+    (w.vm as any).takeoff();
+    const query = pushMock.mock.calls[0][0].query;
+    expect(query.contract).toBeUndefined();
+  });
+
+  it("选了 aggressive 时 takeoff query 含 contract=aggressive", async () => {
+    const w = mount(CreateArticleHero, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    (w.vm as any).keyword = "k";
+    (w.vm as any).contractMode = "aggressive";
+    (w.vm as any).takeoff();
+    const query = pushMock.mock.calls[0][0].query;
+    expect(query.contract).toBe("aggressive");
+  });
 });

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -32,6 +32,8 @@ class GenerateBody(BaseModel):
     angle: Angle | None = None
     # Phase 2b：skill 链多-pass（按 role 顺序）。空 = 退回单 skill_id（零回归）。
     skill_chain: list[str] | None = None
+    # Phase 4+：成文契约档单次覆盖（None=用全局设置）。
+    contract_mode: Literal["conservative", "aggressive"] | None = None
 
 
 class JobAccepted(BaseModel):
@@ -117,6 +119,8 @@ class FinalizeBody(BaseModel):
     skill_chain: list[str] | None = None
     provider: str | None = None
     model: str | None = None
+    # Phase 4+：成文契约档单次覆盖（None=用全局设置）。
+    contract_mode: Literal["conservative", "aggressive"] | None = None
 
 
 @router.post("/api/generate/{job_id}/finalize", response_model=JobAccepted, status_code=202)

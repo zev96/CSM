@@ -34,6 +34,7 @@ import FormSelect from "@/components/forms/FormSelect.vue";
 import TiptapEditor from "@/components/article/TiptapEditor.vue";
 import FactCheckPanel from "@/components/article/FactCheckPanel.vue";
 import LintPanel from "@/components/article/LintPanel.vue";
+import CompletenessPanel from "@/components/article/CompletenessPanel.vue";
 
 import { useArticle, type Angle } from "@/stores/article";
 import { useConfig } from "@/stores/config";
@@ -59,6 +60,10 @@ const seed = ref(0);
 // 对象提交。空 facet → null / []；全空 → angle=null（= 今天行为）。
 const angle = ref<Angle | null>(null);
 const title = ref<string>("");
+
+// Phase 4+ 成文契约档单次覆盖 —— 从 home Hero chip 带过来的 query.contract。
+// 非法值（既非 conservative 也非 aggressive）一律当未设置，不透传给后端。
+const contractMode = ref<"conservative" | "aggressive" | undefined>(undefined);
 
 // Phase 2b skill 链 —— 从 query 的逗号串重建成 id 数组提交。空 = 不传链
 // = 退回单 skill_id（零回归）。
@@ -349,6 +354,8 @@ async function takeoff() {
     ...(title.value.trim() ? { title: title.value.trim() } : {}),
     // skill 链非空才传 —— 空链 = 退回单 skill_id（零回归）。
     ...(skillChain.value.length > 0 ? { skill_chain: skillChain.value } : {}),
+    // 契约档单次覆盖 —— 未设置（含非法 query 值）不传，退回全局默认。
+    ...(contractMode.value ? { contract_mode: contractMode.value } : {}),
   });
   // 顺便用 AI 拉一组标题候选，让用户在初稿 tab 里就能挑标题。这是
   // 整个流程里第一次 LLM 调用。失败不影响初稿展示，仅 toast 提示。
@@ -574,6 +581,8 @@ watch(
 const showLint = ref(false);
 // 成稿被禁区 lint 命中（lintBlocking false→true）自动弹面板。
 watch(() => article.lintBlocking, (b, prev) => { if (b && !prev) showLint.value = true; });
+// 完整性缺失面板 —— 纯信息展示，不自动弹（软提醒，用户从质检卡按钮主动打开）。
+const showCompleteness = ref(false);
 // 一级页「禁区」卡点击入口 —— 有报告（含干净报告，面板里可「重新检查」
 // /取消放行）才开面板；lint=null（还没成稿，或检查 fail-open 失败）时
 // 面板无意义，守卫掉、toast 按两种 null 场景分别给话。
@@ -710,17 +719,20 @@ const skillName = computed(() => {
 });
 
 /**
- * 一级页质检大卡（用户简化设计）：重复率·历史 / 关键词密度 / 禁区，
- * 每条带 key 让 click 时分流到 openDedup / openDensity / openLint。
- * 标题候选不进卡片，走底部「标题候选」按钮去二级页。
+ * 一级页质检大卡：重复率·历史 / 关键词密度 / 禁区（可点进二级页或开
+ * LintPanel）+ Phase 4+ 的完整性 / 综合评分（完整性有缺失可点开
+ * CompletenessPanel，综合评分为纯信息卡）。每条带 key 让 click 分流
+ * （onPrimaryCheckClick）；hasDetail=false 的行不渲染「详情 →」也不响应
+ * 点击。标题候选不进卡片，走底部「标题候选」按钮去二级页。
  */
-type PrimaryCheckKey = "dedup" | "density" | "lint";
+type PrimaryCheckKey = "dedup" | "density" | "lint" | "completeness" | "score";
 interface PrimaryCheck {
   key: PrimaryCheckKey;
   label: string;
   value: string;
   pass: boolean;
-  tone: "ok" | "warn" | "primary";
+  tone: "ok" | "warn" | "primary" | "alert";
+  hasDetail: boolean;
 }
 const primaryChecks = computed<PrimaryCheck[]>(() => {
   const out: PrimaryCheck[] = [];
@@ -734,6 +746,7 @@ const primaryChecks = computed<PrimaryCheck[]>(() => {
       value: `${pct}%`,
       pass: safe,
       tone: safe ? "ok" : "warn",
+      hasDetail: true,
     });
   } else {
     out.push({
@@ -742,6 +755,7 @@ const primaryChecks = computed<PrimaryCheck[]>(() => {
       value: "—",
       pass: false,
       tone: "warn",
+      hasDetail: true,
     });
   }
   // 关键词密度
@@ -755,6 +769,7 @@ const primaryChecks = computed<PrimaryCheck[]>(() => {
       value: `${pct}%`,
       pass: ok,
       tone: ok ? "ok" : "warn",
+      hasDetail: true,
     });
   } else {
     out.push({
@@ -763,6 +778,7 @@ const primaryChecks = computed<PrimaryCheck[]>(() => {
       value: "—",
       pass: false,
       tone: "warn",
+      hasDetail: true,
     });
   }
   // 禁区 lint —— 成稿后自动检查；有未放行命中会软拦导出。语义对齐
@@ -773,17 +789,43 @@ const primaryChecks = computed<PrimaryCheck[]>(() => {
     value: article.lint ? (article.lintBlocking ? `${article.lintUnresolved} 处` : "无") : "—",
     pass: !article.lintBlocking,
     tone: article.lintBlocking ? "warn" : "ok",
+    hasDetail: true,
+  });
+  // 完整性（激进契约才核；保守 → "—"）—— 有缺失时可点开 CompletenessPanel
+  const comp = article.completeness;
+  out.push({
+    key: "completeness",
+    label: "完整性",
+    value: comp ? (comp.missing.length ? `缺 ${comp.missing.length} 处` : "无缺失") : "—",
+    pass: !comp || comp.missing.length === 0,
+    tone: comp && comp.missing.length ? "warn" : "ok",
+    hasDetail: !!(comp && comp.missing.length),
+  });
+  // 综合评分（成稿后自动评；scoring 关/未评 → "—"）—— 纯信息卡无二级页
+  const sc = article.score;
+  out.push({
+    key: "score",
+    label: "综合评分",
+    value: sc ? `${sc.total} 分` : "—",
+    pass: !sc || sc.total >= 60,
+    tone: !sc ? "warn" : sc.total >= 80 ? "ok" : sc.total >= 60 ? "warn" : "alert",
+    hasDetail: false,
   });
   return out;
 });
 const primaryPassCount = computed(
   () => primaryChecks.value.filter((c) => c.pass).length,
 );
-// 一级卡点击分流 —— dedup/density 切二级页，lint 开审查面板。
+// 一级卡点击分流 —— dedup/density 切二级页，lint 开审查面板，完整性
+// 有缺失时开 CompletenessPanel，综合评分为纯信息卡不动作。
 function onPrimaryCheckClick(key: PrimaryCheckKey) {
-  if (key === "dedup") void openDedup();
-  else if (key === "density") void openDensity();
-  else openLint();
+  if (key === "dedup") { void openDedup(); return; }
+  if (key === "density") { void openDensity(); return; }
+  if (key === "lint") { openLint(); return; }
+  if (key === "completeness" && article.completeness?.missing.length) {
+    showCompleteness.value = true;
+  }
+  // score：纯信息卡，无二级页，不动作。
 }
 
 onMounted(async () => {
@@ -808,6 +850,11 @@ onMounted(async () => {
   title.value = ((route.query.title as string) ?? "").trim();
   skillChain.value = rebuildChainFromQuery();
   if (angle.value) article.fetchAngleTaxonomy();
+
+  // 契约档单次覆盖 —— 只接受 conservative/aggressive，其余（含空/垃圾值）
+  // 一律 undefined = 用全局 cfg.contract.mode（今天行为）。
+  const qc = (route.query.contract as string) ?? "";
+  contractMode.value = qc === "aggressive" || qc === "conservative" ? qc : undefined;
 
   if (!templateId.value && templates.value[0]) {
     templateId.value = templates.value[0].id;
@@ -1688,9 +1735,10 @@ const tabSectionLabel = computed(() => {
           <!-- body —— 三种 mode 在这里 swap -->
           <div class="flex min-h-0 flex-1 flex-col overflow-y-auto" :style="{ padding: '12px' }">
             <!--
-              mode: checks（一级页）—— 三张大卡（重复率·历史 / 关键词
-              密度 / 禁区），layout: 标题(左上) / 通过徽章(右上) / 大字
-              (左下) / "详情→"(右下)。整卡可点击 hover 上浮+阴影。
+              mode: checks（一级页）—— 五张大卡（重复率·历史 / 关键词密度 /
+              禁区 / 完整性 / 综合评分），layout: 标题(左上) / 通过徽章(右上) /
+              大字(左下) / "详情→"(右下，仅 hasDetail)。有详情的卡可点击 hover
+              上浮+阴影。
             -->
             <div v-if="panelMode === 'checks'" class="flex flex-col gap-2">
               <button
@@ -1698,10 +1746,12 @@ const tabSectionLabel = computed(() => {
                 :key="r.key"
                 type="button"
                 class="qc-primary-card text-left w-full"
+                :class="{ 'qc-primary-card--clickable': r.hasDetail }"
                 :style="{
                   padding: '14px 14px 12px',
                   borderRadius: 'var(--radius-inner)',
                   border: '1px solid var(--line)',
+                  cursor: r.hasDetail ? 'pointer' : 'default',
                 }"
                 @click="onPrimaryCheckClick(r.key)"
               >
@@ -1716,6 +1766,7 @@ const tabSectionLabel = computed(() => {
                     {{ r.value }}
                   </div>
                   <span
+                    v-if="r.hasDetail"
                     class="inline-flex items-center gap-0.5 text-[10.5px]"
                     :style="{ color: 'var(--ink-3)' }"
                   >
@@ -2118,6 +2169,20 @@ const tabSectionLabel = computed(() => {
                 <span>重新随机</span>
               </button>
             </div>
+            <!--
+              完整性缺失提醒 —— 只在激进契约核对出缺失时显示（软提醒，
+              不拦导出）。点击打开 CompletenessPanel 查看详情。
+            -->
+            <Btn
+              v-if="article.completeness?.missing.length"
+              variant="ghost"
+              small
+              data-open-completeness
+              class="w-full justify-center"
+              @click="showCompleteness = true"
+            >
+              完整性缺失 {{ article.completeness.missing.length }} 处 →
+            </Btn>
             <!-- 行 2：清空 + 导出文章 -->
             <div class="flex gap-2">
               <button
@@ -2178,6 +2243,11 @@ const tabSectionLabel = computed(() => {
       不会回环到 lint。
     -->
     <LintPanel v-model:open="showLint" @proceed="onExportClick" />
+    <!--
+      完整性缺失面板 —— 纯信息展示，无 proceed，不进导出守卫链
+      （PR#148 教训：只约束带 proceed 的门禁面板）。
+    -->
+    <CompletenessPanel v-model:open="showCompleteness" />
 
     <!--
       导出弹窗 —— 严格按 V1 设计稿（精简版）：标签 + 大标题 + 关闭 X，
@@ -2481,9 +2551,15 @@ const tabSectionLabel = computed(() => {
     background-color 0.14s ease,
     transform 0.14s ease,
     box-shadow 0.14s ease;
+}
+/* 仅 hasDetail 卡（可点：重复率 / 密度 / 禁区 / 有缺失的完整性）给 hover
+ * 上浮+阴影与手型；综合评分卡与"无缺失"完整性卡 hasDetail=false、不可点，
+ * 不上浮（光标由 inline :style 按卡权威给 default，见 onPrimaryCheckClick）。
+ * 未 gating 时五卡都上浮，会给不可点的卡假的"可点"暗示（终审对抗性审查）。 */
+.qc-primary-card--clickable {
   cursor: pointer;
 }
-.qc-primary-card:hover {
+.qc-primary-card--clickable:hover {
   background: #fbfaf6;
   transform: translateY(-2px);
   box-shadow:
