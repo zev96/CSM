@@ -263,6 +263,16 @@ def get_fact_snapshots_for_record(record_id: int) -> list[FactSnapshot]:
     ]
 
 
+def get_latest_snapshot_specs(model: str) -> str | None:
+    """某型号最近一次成稿时的 specs_json（供 §7.3 hover diff：上次写它时 vs 当前）。"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT specs_json FROM fact_snapshots WHERE model=? ORDER BY created_at DESC LIMIT 1",
+        (model,),
+    ).fetchone()
+    return row["specs_json"] if row else None
+
+
 def _row_to_record(row: sqlite3.Row) -> CreationRecord:
     return CreationRecord(
         id=row["id"], job_id=row["job_id"], mode=row["mode"], keyword=row["keyword"],

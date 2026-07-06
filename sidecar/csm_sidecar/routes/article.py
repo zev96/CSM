@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..auth import RequireToken
-from ..services import export_service, polish_service, title_service
+from ..services import export_service, feedback_service, polish_service, title_service
 from ..services.llm_factory import LLMConfigError
 
 router = APIRouter(tags=["article"], dependencies=[RequireToken])
@@ -58,6 +58,11 @@ class ExportBody(BaseModel):
     out_dir: str | None = None
     include_dedup_report: bool = False
     template_name: str | None = None
+    # 反馈采集（§6）—— 关联 job + 质检卡已算的分数/未决禁区；后端不回传、纯落库。
+    job_id: str | None = None
+    score: float | None = None
+    score_json: str | None = None
+    lint_unresolved: int = 0
 
 
 @router.post("/api/export/{fmt}")
@@ -68,8 +73,23 @@ def export_article_route(fmt: str, body: ExportBody) -> dict[str, Any]:
             detail=f"unsupported export format: {fmt} (use 'markdown' or 'docx')",
         )
     try:
-        return export_service.export(fmt=fmt, **body.model_dump())  # type: ignore[arg-type]
+        # 显式传 export_service 认识的字段 —— 别 **model_dump() 把反馈字段泄给它。
+        result = export_service.export(
+            fmt=fmt, keyword=body.keyword, final_text=body.final_text,
+            out_dir=body.out_dir, include_dedup_report=body.include_dedup_report,
+            template_name=body.template_name,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    # 导出成功后采集（record_export 自身 fail-open，路由无需再包 try）。
+    # document_path 优先存 history 镜像路径 —— list_recent 扫的是镜像，据此 join（§7.3）。
+    feedback_service.record_export(
+        body.job_id,
+        document_path=result.get("history_path") or result.get("document", ""),
+        fmt=result.get("format", fmt), final_text=body.final_text,
+        score=body.score, score_json=body.score_json,
+        lint_unresolved=body.lint_unresolved, factcheck_blocked=0,
+    )
+    return result

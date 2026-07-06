@@ -47,7 +47,49 @@ def list_recent(*, limit: int = 5, days: int = 7) -> dict[str, Any]:
             "format": "docx" if f.suffix.lower() == ".docx" else "markdown",
         })
     items.sort(key=lambda d: d["modified_at"], reverse=True)
-    return {"count": len(items[:limit]), "documents": items[:limit]}
+    top = items[:limit]
+    _enrich_stale(top)
+    return {"count": len(top), "documents": top}
+
+
+def _enrich_stale(items: list[dict[str, Any]]) -> None:
+    """§7.3：按 path 关联 creation_record → 快照指纹 != 当前基线则标过期。
+
+    追加 facts_stale/stale_models/record 三字段（旧前端不读、形状兼容）。全程
+    fail-safe：先给每项设默认，再尝试增强 —— 反馈层任何故障都不影响最近文档列表。
+    """
+    for it in items:
+        it["facts_stale"] = False
+        it["stale_models"] = []
+        it["record"] = None
+    if not items:
+        return
+    try:
+        from csm_core.feedback import storage as feedback_storage
+        baseline = feedback_storage.get_model_fingerprints()  # model -> (fp, specs_json)
+    except Exception:
+        logger.debug("stale enrich: baseline 加载失败（monitor.db 未就绪？）", exc_info=True)
+        return
+    for it in items:
+        try:
+            rec = feedback_storage.find_creation_by_document(it["path"])
+            if rec is None:
+                continue
+            stale = [
+                snap.model
+                for snap in feedback_storage.get_fact_snapshots_for_record(rec.id)
+                if (cur := baseline.get(snap.model)) is not None and cur[0] != snap.fingerprint
+            ]
+            it["facts_stale"] = bool(stale)
+            it["stale_models"] = stale
+            it["record"] = {
+                "keyword": rec.keyword, "template_id": rec.template_id, "title": rec.title,
+                "angle_json": rec.angle_json, "skill_chain_json": rec.skill_chain_json,
+                "mode": rec.mode, "models_json": rec.models_json,
+                "contract_mode": rec.contract_mode,
+            }
+        except Exception:
+            logger.debug("stale enrich 失败：%s", it.get("path"), exc_info=True)
 
 
 def _doc_title(path: Path) -> str:

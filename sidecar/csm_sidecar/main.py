@@ -37,6 +37,7 @@ from .routes import vault_atomize as vault_atomize_routes
 from .routes import lint as lint_routes
 from .routes import score as score_routes
 from .routes import xhs as xhs_routes
+from .routes import feedback as feedback_routes
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ app.include_router(aggregation_routes.router)
 app.include_router(assembler_routes.router)
 app.include_router(angle_routes.router)
 app.include_router(xhs_routes.router)
+app.include_router(feedback_routes.router)
 
 
 def run() -> None:

@@ -14,6 +14,7 @@ event loop.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -33,8 +34,10 @@ from csm_core.brand_memory.identity import parse_brand_model
 from csm_core.brand_memory.inject import (
     ModelScope, build_whitelist, render_brand_facts, resolve_scopes,
 )
+from csm_core.brand_memory.fingerprint import spec_fingerprint
 from csm_core.brand_memory.resolver import resolve_memory
 from csm_core.comparison import build_comparison_directive, compose_comparison_draft
+from csm_core.feedback.model import FactSnapshot
 from csm_core.factcheck import check_facts
 from csm_core.factcheck.completeness import check_completeness
 from csm_core.llm import pricing
@@ -46,6 +49,7 @@ from . import (
     comparison_cache,
     config_service,
     factcheck_service,
+    feedback_service,
     llm_factory,
     skills_service,
     templates_service,
@@ -180,11 +184,44 @@ def shutdown() -> None:
         _executor = None
 
 
+def _angle_json(angle: Any) -> str | None:
+    if angle is None:
+        return None
+    if hasattr(angle, "model_dump"):
+        return json.dumps(angle.model_dump(), ensure_ascii=False)
+    try:
+        return json.dumps(asdict(angle), ensure_ascii=False)
+    except TypeError:
+        return None
+
+
+def _snapshot_normal(req: GenerateRequest) -> dict:
+    """归一化请求快照（反馈采集回填 creation_record 字段）。normal 与 comparison 共形。"""
+    return {
+        "mode": "normal", "keyword": req.keyword, "template_id": req.template_id,
+        "title": req.title, "angle_json": _angle_json(req.angle),
+        "skill_chain_json": json.dumps(req.skill_chain, ensure_ascii=False) if req.skill_chain else None,
+        "models_json": None, "contract_mode": req.contract_mode,
+    }
+
+
+def _snapshot_comparison(req: ComparisonRequest) -> dict:
+    # 横评无 audience/sellpoints，把 tone 塞进 angle_json 供 §7.3 重生成取回。
+    return {
+        "mode": "comparison", "keyword": req.keyword, "template_id": "__comparison__",
+        "title": req.title,
+        "angle_json": json.dumps({"tone": req.tone}, ensure_ascii=False) if req.tone else None,
+        "skill_chain_json": json.dumps(req.skill_chain, ensure_ascii=False) if req.skill_chain else None,
+        "models_json": json.dumps(req.models, ensure_ascii=False), "contract_mode": req.contract_mode,
+    }
+
+
 def submit(req: GenerateRequest) -> str:
     """Kick off a job, return the ``job_id`` to subscribe via SSE."""
     job_id = bus.create_job()
     with _state_lock:
         _live.add(job_id)
+    feedback_service.stash_request(job_id, _snapshot_normal(req))
     _get_executor().submit(_run_job, job_id, req)
     return job_id
 
@@ -230,6 +267,8 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             user_config=req.user_config or {},
             core_keyword=req.core_keyword,
             angle=req.angle,
+            # rank 关时 get_note_weights() 返回 {} → sampler 走零回归分支（今天行为）。
+            note_weights=feedback_service.get_note_weights(),
         )
         # Stash the plan so subsequent /api/assembler/reroll calls can
         # operate on it without re-scanning the vault.
@@ -339,6 +378,7 @@ def submit_comparison(req: ComparisonRequest) -> str:
     job_id = bus.create_job()
     with _state_lock:
         _live.add(job_id)
+    feedback_service.stash_request(job_id, _snapshot_comparison(req))
     _get_executor().submit(_run_comparison_job, job_id, req)
     return job_id
 
@@ -633,6 +673,23 @@ def finalize_draft(
             endorsement_cap=cfg_bm.inject_endorsement_cap,
             sellpoints=effective_sellpoints(angle),
         )
+    # 反馈：把本次成稿用到的型号事实指纹存进 feedback 缓存（导出时落 fact_snapshots；
+    # 不重解析、无漂移 —— 复用刚 resolve 的 scope.memory）。一处覆盖 normal 与 comparison
+    # 两条 finalize 路径。fail-safe：指纹失败绝不打断 finalize。
+    if scopes:
+        try:
+            snaps = []
+            for sc in scopes:
+                mem = getattr(sc, "memory", None)
+                if mem is None:
+                    continue
+                fp, canonical = spec_fingerprint(mem)
+                snaps.append(FactSnapshot(
+                    model=getattr(sc, "model", ""), fingerprint=fp, specs_json=canonical))
+            if snaps:
+                feedback_service.stash_scopes(job_id, snaps)
+        except Exception:
+            logger.debug("stash_scopes failed for job %s (ignored)", job_id, exc_info=True)
 
     # Phase 2b: 单次 build_prompt+complete 升级为 skill 链多-pass。
     # step0 = 组装 pass（build_prompt：毛坯+事实+角度+标题，与今天一致）；
