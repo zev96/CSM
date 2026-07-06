@@ -729,6 +729,12 @@ export const useArticle = defineStore("article", {
         // 后端 aggregation_service 读 `template` 字段渲染首页"最近文档"
         // 的「模板」列。
         template_name: this.lastRequest.template_id ?? null,
+        // Phase 4+ 反馈采集（§6）：关联 job + 质检卡已算的分数/未决禁区。
+        // 后端 record_export 纯落库、不回传、fail-open。
+        job_id: this.lastJobId ?? null,
+        score: this.score?.total ?? null,
+        score_json: this.score ? JSON.stringify(this.score) : null,
+        lint_unresolved: this.lintUnresolved ?? 0,
       });
       this.documentPath = resp.data.document ?? this.documentPath;
       this.format = resp.data.format ?? this.format;

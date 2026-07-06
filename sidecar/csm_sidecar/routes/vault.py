@@ -1,14 +1,19 @@
 """Vault scanning + note query routes."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from csm_core.vault.brand_registry import build_brand_registry
+
 from ..auth import RequireToken
-from ..services import config_service, vault_service
+from ..services import config_service, fact_service, vault_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["vault"], dependencies=[RequireToken])
 
@@ -41,6 +46,12 @@ def scan_vault(body: VaultScanRequest) -> VaultScanResponse:
             detail=f"vault root not found: {root}",
         )
     index = vault_service.scan(root)
+    # 事实传导（§7.2）：重建索引后检测型号参数变更，入 pending 队列供前端拉
+    # /api/facts/changes → 通知。fail-safe：检测失败不影响扫描结果。
+    try:
+        fact_service.detect_changes(index, build_brand_registry(root))
+    except Exception:
+        logger.debug("vault scan fact detect failed", exc_info=True)
     return VaultScanResponse(**vault_service.index_summary(index))
 
 

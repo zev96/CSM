@@ -25,7 +25,8 @@ import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Spinner from "@/components/ui/Spinner.vue";
-import { listRecent } from "@/api/client";
+import { listRecent, factsDiff, type CreationRecordRef } from "@/api/client";
+import { buildRegenerateQuery } from "@/utils/regenerateQuery";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
@@ -42,6 +43,38 @@ interface Doc {
   words: number;
   modified_at: string;
   format: "markdown" | "docx";
+  // Phase 4+ §7.3：vault 参数变更后过期标记 + 一键重生成的原始参数。
+  facts_stale?: boolean;
+  stale_models?: string[];
+  record?: CreationRecordRef | null;
+}
+
+/** §7.3 一键重新生成：用记录参数预填 Hero/横评 query 跳创作流（key 对齐 ArticleView）。 */
+function regenerate(d: Doc) {
+  if (!d.record) return;
+  const r = buildRegenerateQuery(d.record);
+  if (!r.ok) {
+    toast.error(r.error);
+    return;
+  }
+  router.push({ name: "article", query: r.query });
+}
+
+/** §7.3 hover/点击：按需取「上次成稿快照 vs 当前 vault」字段级 diff，toast 展示。 */
+async function showFactsDiff(d: Doc) {
+  const models = d.stale_models ?? [];
+  if (!models.length) return;
+  try {
+    const parts: string[] = [];
+    for (const model of models) {
+      const r = await factsDiff(model);
+      const fields = r.changed.map((c) => `${c.field} ${c.old ?? "—"}→${c.new ?? "—"}`);
+      if (fields.length) parts.push(`${model}：${fields.join("；")}`);
+    }
+    toast.info(parts.length ? parts.join(" ｜ ") : "参数已更新（无字段级明细）", 8000);
+  } catch {
+    toast.error("获取变更详情失败");
+  }
 }
 
 const docs = ref<Doc[]>([]);
@@ -308,6 +341,11 @@ onMounted(reload);
               <Pill :tone="d.format === 'docx' ? 'primary' : 'info'">
                 {{ d.format === "docx" ? "DOCX" : "Markdown" }}
               </Pill>
+              <button v-if="d.facts_stale" type="button" class="cursor-pointer"
+                :title="`点击看变更详情 · 已变更型号：${(d.stale_models ?? []).join('、')}`"
+                @click="showFactsDiff(d)">
+                <Pill tone="warn">参数已变更</Pill>
+              </button>
               <span>{{ d.template_name ?? "—" }}</span>
               <span>·</span>
               <span>{{ d.words.toLocaleString() }} 字</span>
@@ -316,6 +354,11 @@ onMounted(reload);
             </div>
           </div>
           <div class="flex flex-shrink-0 items-center gap-2">
+            <Btn v-if="d.facts_stale && d.record" variant="ghost" small
+              :title="'用原参数重新生成，取当前最新型号参数'" @click="regenerate(d)">
+              <Icon name="refresh" :size="12" />
+              <span>重新生成</span>
+            </Btn>
             <Btn variant="ghost" small @click="openLocation(d)">
               <Icon name="folder" :size="12" />
               <span>打开位置</span>

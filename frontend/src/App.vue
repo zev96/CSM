@@ -24,6 +24,8 @@ import { useTweaks } from "./composables/useTweaks";
 import { useConfig } from "./stores/config";
 import { useMonitorStatus } from "./stores/monitorStatus";
 import { useSidecarReady } from "./composables/useSidecarReady";
+import { useFactsChanges } from "./stores/factsChanges";
+import { useNotifications } from "./composables/useNotifications";
 
 // Boot tweaks (loads radius/density/primary from localStorage and
 // applies CSS). Still needed even though the Tweaks panel is gone —
@@ -134,6 +136,17 @@ onMounted(async () => {
     import("./composables/useUpdateFlow")
       .then(({ runUpdateCheck }) => runUpdateCheck({ silent: true }))
       .catch(() => {});
+    // §7.2 事实传导：启动拉一次型号参数变更 → 通知 + 素材库 Pill。fire-and-forget，
+    // pull() 内部 fail-safe（非关键数据，失败静默）。
+    void useFactsChanges().pull().then((changes) => {
+      if (changes.length) {
+        useNotifications().push(`${changes.length} 个型号参数已更新`, {
+          body: changes.map((c) => c.model).join("、"),
+          tone: "info",
+          category: "system",
+        });
+      }
+    });
   }
 });
 </script>

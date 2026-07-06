@@ -178,6 +178,14 @@ class ScoringConfig(BaseModel):
     extra_ai_words: list[str] = Field(default_factory=list)
 
 
+class FeedbackConfig(BaseModel):
+    """settings.feedback.* —— 反馈学习闭环（record 默认开静默采集、rank 默认关）。"""
+    record: bool = True
+    rank: bool = False
+    min_samples: int = Field(default=5, ge=1)
+    alpha: float = Field(default=0.5, ge=0.0, le=2.0)
+
+
 class AppConfig(BaseModel):
     user_name: str | None = None
     user_product: str | None = None
@@ -214,6 +222,7 @@ class AppConfig(BaseModel):
     vault_incremental: bool = True
     contract: ContractConfig = Field(default_factory=ContractConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
+    feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
     close_action: CloseAction = "minimize_to_tray"
     tray_first_minimize_shown: bool = False
 

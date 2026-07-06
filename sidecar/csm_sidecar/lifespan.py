@@ -246,7 +246,17 @@ async def _auto_scan_vault() -> None:
         root = Path(cfg.vault_root)
         if not root.is_dir():
             return
-        await run_in_threadpool(vault_service.get, root)
+        index = await run_in_threadpool(vault_service.get, root)
         logger.info("auto vault scan completed: %s", root)
+        # 事实传导（§7.2）：首扫建型号指纹基线，之后 vault 改动即报变更。此时
+        # monitor.db 已由 monitor_lifecycle.start()（yield 前同步跑完）初始化。
+        # fail-safe：检测失败不影响扫描本身。
+        try:
+            from csm_core.vault.brand_registry import build_brand_registry
+            from .services import fact_service
+            registry = await run_in_threadpool(build_brand_registry, root)
+            await run_in_threadpool(fact_service.detect_changes, index, registry)
+        except Exception as e:
+            logger.warning("startup fact detect failed: %s", e)
     except Exception as e:
         logger.warning("auto vault scan failed: %s", e)

@@ -16,6 +16,7 @@ from ..services import (
     assembler_service,
     comparison_cache,
     factcheck_service,
+    feedback_service,
     generate_service,
 )
 
@@ -122,7 +123,7 @@ def resolve_factcheck(job_id: str, body: ResolveFactcheckBody) -> dict:
     返回 {"ok": True, document/format/title} 或 {"ok": False, violations}。
     """
     try:
-        return factcheck_service.resolve_and_export(
+        result = factcheck_service.resolve_and_export(
             job_id,
             final_text=body.final_text,
             released_numbers=body.released_numbers,
@@ -131,6 +132,14 @@ def resolve_factcheck(job_id: str, body: ResolveFactcheckBody) -> dict:
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"no pending fact-check for job {job_id}")
+    # 放行导出成功后同样采集（factcheck_blocked=1：这稿曾被事实核对拦下、用户放行）。
+    if result.get("ok"):
+        feedback_service.record_export(
+            job_id, document_path=result.get("document", ""),
+            fmt=result.get("format", "markdown"), final_text=body.final_text,
+            factcheck_blocked=1,
+        )
+    return result
 
 
 class FinalizeBody(BaseModel):

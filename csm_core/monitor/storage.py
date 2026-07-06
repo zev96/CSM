@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -149,6 +149,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # v8: 品牌预筛列 — videos.brand_comment_hits / exclude_reason +
     #     mining_jobs.brand_keywords_json。
     mining_storage.apply_v8_migration(conn)
+    # v9: 反馈学习闭环四表（creation_records / creation_note_usage /
+    #     fact_snapshots / model_fingerprints）。同 v3-v8 lazy import + 幂等。
+    from csm_core.feedback import storage as feedback_storage
+    feedback_storage.apply_v9_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),
