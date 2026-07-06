@@ -167,6 +167,7 @@ def assemble_plan(
     seed: int, user_config: dict[str, int],
     core_keyword: str | None = None,
     angle: Angle | None = None,
+    note_weights: dict[str, float] | None = None,
 ) -> AssemblyPlan:
     """Assemble a draft plan.
 
@@ -189,7 +190,7 @@ def assemble_plan(
             aligned = _resolve_aligned_models(p.id, p.source, results_by_id)
         r = sample_block(
             p, index, registry, seed=seed, user_config=user_config,
-            aligned_models=aligned, angle=angle,
+            aligned_models=aligned, angle=angle, note_weights=note_weights,
         )
         missing = [pk for pk in r.picks if pk.meta.get("missing")]
         if missing:
@@ -224,7 +225,7 @@ def assemble_plan(
         else:
             r = sample_block(
                 b, index, registry, seed=seed, user_config=user_config,
-                angle=angle,
+                angle=angle, note_weights=note_weights,
             )
             results_by_id[b.id] = r
             top.append(r)
