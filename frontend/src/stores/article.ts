@@ -628,6 +628,9 @@ export const useArticle = defineStore("article", {
             skill_chain: req.skill_chain ?? null,
             provider: req.provider ?? null,
             model: req.model ?? null,
+            // takeoff 是 draft_only（不跑 LLM），真正的润色在这一步 —— 必须带上
+            // per-article 契约档覆盖，否则后端回退全局、用户选的激进/保守被忽略。
+            contract_mode: req.contract_mode ?? null,
           },
         );
         this.jobId = resp.data.job_id;
