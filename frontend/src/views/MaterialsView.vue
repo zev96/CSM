@@ -6,10 +6,14 @@ import Pill from "@/components/ui/Pill.vue";
 import { useMaterials, type BrandModelRow } from "@/stores/materials";
 import IntakeForm from "@/components/materials/IntakeForm.vue";
 import AtomizePanel from "@/components/materials/AtomizePanel.vue";
+import FeedbackStatsPanel from "@/components/materials/FeedbackStatsPanel.vue";
+import { useFactsChanges } from "@/stores/factsChanges";
 
 const m = useMaterials();
-const tab = ref<"models" | "intake" | "atomize">("models");
-onMounted(() => m.list());
+const facts = useFactsChanges();
+const tab = ref<"models" | "intake" | "atomize" | "feedback">("models");
+// list() 拉型号；pull() 累积「参数已更新」变更（如刚重建过索引，进这页即显 Pill）。
+onMounted(() => { m.list(); facts.pull(); });
 
 const hero = computed(() => m.models.filter((r) => r.role === "主推"));
 const rivals = computed(() => m.models.filter((r) => r.role !== "主推"));
@@ -38,6 +42,9 @@ function gaps(r: BrandModelRow): string[] {
         <button :data-tab="'atomize'" class="rounded-full px-3 py-1 font-medium"
           :style="{ background: tab === 'atomize' ? 'var(--ink)' : 'transparent', color: tab === 'atomize' ? '#fff' : 'inherit' }"
           @click="tab = 'atomize'">AI 拆条</button>
+        <button :data-tab="'feedback'" class="rounded-full px-3 py-1 font-medium"
+          :style="{ background: tab === 'feedback' ? 'var(--ink)' : 'transparent', color: tab === 'feedback' ? '#fff' : 'inherit' }"
+          @click="tab = 'feedback'">使用反馈</button>
         <span class="px-3 py-1 text-ink/35">浏览（建设中）</span>
       </div>
     </div>
@@ -71,6 +78,7 @@ function gaps(r: BrandModelRow): string[] {
               >
                 <div class="flex items-center gap-2 text-sm font-medium">
                   <span>{{ r.brand }} · {{ r.model }}</span>
+                  <Pill v-if="facts.isStale(r.model)" tone="warn">参数已更新</Pill>
                 </div>
                 <div class="flex flex-wrap gap-1">
                   <Pill v-for="g in gaps(r)" :key="g" class="text-[10px]">{{ g }}</Pill>
@@ -165,5 +173,6 @@ function gaps(r: BrandModelRow): string[] {
 
     <IntakeForm v-else-if="tab === 'intake'" />
     <AtomizePanel v-else-if="tab === 'atomize'" />
+    <FeedbackStatsPanel v-else-if="tab === 'feedback'" />
   </div>
 </template>

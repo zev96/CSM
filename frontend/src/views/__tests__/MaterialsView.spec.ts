@@ -27,6 +27,9 @@ const state: any = {
   list: listMock, select: selectMock,
 };
 vi.mock("@/stores/materials", () => ({ useMaterials: () => state }));
+vi.mock("@/stores/factsChanges", () => ({
+  useFactsChanges: () => ({ pull: vi.fn().mockResolvedValue([]), isStale: () => false }),
+}));
 
 import MaterialsView from "@/views/MaterialsView.vue";
 

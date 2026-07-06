@@ -39,18 +39,79 @@ export async function keyringDelete(provider: string) {
 }
 
 // ── /api/recent ────────────────────────────────────────────────────────────
+/** §7.3：成稿记录引用（供历史页「重新生成」预填 Hero/横评 query）。 */
+export interface CreationRecordRef {
+  keyword: string | null;
+  template_id: string | null;
+  title: string | null;
+  angle_json: string | null;
+  skill_chain_json: string | null;
+  mode: string;
+  models_json: string | null;
+  contract_mode: string | null;
+}
+
+export interface RecentDoc {
+  path: string;
+  filename: string;
+  title: string;
+  template_name: string | null;
+  words: number;
+  modified_at: string;
+  format: "markdown" | "docx";
+  // Phase 4+ §7.3（新前端读、旧后端不返回时 undefined，均兼容）。
+  facts_stale?: boolean;
+  stale_models?: string[];
+  record?: CreationRecordRef | null;
+}
+
 export async function listRecent(limit = 5, days = 7) {
   return (await client().get("/api/recent", { params: { limit, days } })).data as {
     count: number;
-    documents: Array<{
-      path: string;
-      filename: string;
-      title: string;
-      template_name: string | null;
-      words: number;
-      modified_at: string;
-      format: "markdown" | "docx";
-    }>;
+    documents: RecentDoc[];
+  };
+}
+
+// ── /api/feedback + /api/facts（Phase 4+ §6.4 / §7.2-7.3）────────────────────
+export interface NoteStat {
+  note_id: string;
+  uses: number;
+  avg_edit_ratio: number | null;
+  avg_score: number | null;
+  keep_score: number | null;
+}
+export interface AngleStat {
+  audience: string | null;
+  sellpoints: string[];
+  tone: string | null;
+  uses: number;
+  avg_score: number | null;
+  avg_edit_ratio: number | null;
+}
+export async function feedbackStats() {
+  return (await client().get("/api/feedback/stats")).data as {
+    notes: NoteStat[];
+    angles: AngleStat[];
+  };
+}
+
+export interface FieldChange {
+  field: string;
+  old: string | null;
+  new: string | null;
+}
+export interface ModelChange {
+  model: string;
+  changed: FieldChange[];
+  detected_at: string;
+}
+export async function factsChanges() {
+  return (await client().get("/api/facts/changes")).data as { changes: ModelChange[] };
+}
+export async function factsDiff(model: string) {
+  return (await client().get("/api/facts/diff", { params: { model } })).data as {
+    model: string;
+    changed: FieldChange[];
   };
 }
 

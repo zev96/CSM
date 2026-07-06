@@ -31,6 +31,7 @@ import XhsPromptsCard from "@/components/settings/XhsPromptsCard.vue";
 import BrandMemoryCard from "@/components/settings/BrandMemoryCard.vue";
 import PricingCard from "@/components/settings/PricingCard.vue";
 import ContractCard from "@/components/settings/ContractCard.vue";
+import FeedbackCard from "@/components/settings/FeedbackCard.vue";
 import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection.vue";
 import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
@@ -1256,6 +1257,10 @@ async function saveAccountEdit() {
             <!-- 生成契约 —— 改 AppConfig.contract.mode，控制保守/激进默认档 -->
             <div class="mt-4">
               <ContractCard />
+            </div>
+            <!-- 反馈学习 —— 改 AppConfig.feedback.*，导出后采集 + 可选采样反哺 -->
+            <div class="mt-4">
+              <FeedbackCard />
             </div>
           </template>
 
