@@ -25,7 +25,7 @@ import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Spinner from "@/components/ui/Spinner.vue";
-import { listRecent, type CreationRecordRef } from "@/api/client";
+import { listRecent, factsDiff, type CreationRecordRef } from "@/api/client";
 import { buildRegenerateQuery } from "@/utils/regenerateQuery";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
@@ -58,6 +58,23 @@ function regenerate(d: Doc) {
     return;
   }
   router.push({ name: "article", query: r.query });
+}
+
+/** §7.3 hover/点击：按需取「上次成稿快照 vs 当前 vault」字段级 diff，toast 展示。 */
+async function showFactsDiff(d: Doc) {
+  const models = d.stale_models ?? [];
+  if (!models.length) return;
+  try {
+    const parts: string[] = [];
+    for (const model of models) {
+      const r = await factsDiff(model);
+      const fields = r.changed.map((c) => `${c.field} ${c.old ?? "—"}→${c.new ?? "—"}`);
+      if (fields.length) parts.push(`${model}：${fields.join("；")}`);
+    }
+    toast.info(parts.length ? parts.join(" ｜ ") : "参数已更新（无字段级明细）", 8000);
+  } catch {
+    toast.error("获取变更详情失败");
+  }
 }
 
 const docs = ref<Doc[]>([]);
@@ -324,10 +341,11 @@ onMounted(reload);
               <Pill :tone="d.format === 'docx' ? 'primary' : 'info'">
                 {{ d.format === "docx" ? "DOCX" : "Markdown" }}
               </Pill>
-              <Pill v-if="d.facts_stale" tone="warn"
-                :title="`已变更型号：${(d.stale_models ?? []).join('、')}`">
-                参数已变更
-              </Pill>
+              <button v-if="d.facts_stale" type="button" class="cursor-pointer"
+                :title="`点击看变更详情 · 已变更型号：${(d.stale_models ?? []).join('、')}`"
+                @click="showFactsDiff(d)">
+                <Pill tone="warn">参数已变更</Pill>
+              </button>
               <span>{{ d.template_name ?? "—" }}</span>
               <span>·</span>
               <span>{{ d.words.toLocaleString() }} 字</span>
