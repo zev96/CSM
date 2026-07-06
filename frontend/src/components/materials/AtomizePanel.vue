@@ -48,42 +48,71 @@ async function commitAll(): Promise<void> {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 gap-4">
-    <!-- 左：粘贴 + 拆条 -->
-    <div class="flex w-96 min-w-0 flex-col gap-2">
-      <label class="text-xs text-ink/50">粘贴一篇家电营销资料，AI 忠实拆条 + 归类</label>
-      <textarea v-model="text" data-atomize-input rows="12" placeholder="把文章/资料整段贴这里…"
-        class="w-full flex-1 rounded-lg border border-ink/15 px-2 py-1.5 text-sm" />
-      <div class="flex items-center gap-2">
-        <button data-atomize-run
-          class="rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
-          :style="{ background: 'var(--primary)' }" :disabled="!text.trim() || atomizing" @click="run">
-          <span v-if="atomizing || m.chunkProgress" class="inline-flex items-center gap-1">
-            <Spinner :size="12" />
-            <template v-if="m.chunkProgress">分块 {{ m.chunkProgress.current }}/{{ m.chunkProgress.total }} 拆条中…</template>
-            <template v-else>拆条中…</template>
-          </span>
-          <span v-else>AI 拆条</span>
-        </button>
-        <button v-if="m.chunkProgress" data-atomize-cancel
-          class="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70"
-          @click="m.cancelAtomize()">
-          取消
-        </button>
-        <button v-if="atoms.length" data-atomize-commit-all class="rounded-lg border border-ink/15 px-3 py-1.5 text-sm text-ink/70" @click="commitAll">
-          全部入库（high/med）
-        </button>
+  <div class="anim-up flex min-h-0 flex-1 gap-d">
+    <!-- 左：原文输入 -->
+    <section class="mat-panel flex flex-none flex-col overflow-hidden" style="width: 460px">
+      <div class="flex-none px-[var(--density-pad)] pb-2 pt-4">
+        <div class="text-[13px] font-bold">原文</div>
+        <div class="mt-1 text-[11.5px]" style="color: var(--ink-4)">粘贴一篇家电营销资料，AI 忠实拆条 + 归类，不改写原文</div>
       </div>
-      <p v-if="m.intakeError" class="text-xs" :style="{ color: 'var(--red)' }">{{ m.intakeError }}</p>
-    </div>
+      <div class="flex min-h-0 flex-1 px-[var(--density-pad)] pt-2">
+        <textarea
+          v-model="text" data-atomize-input placeholder="在这里粘贴营销资料原文…"
+          class="mat-input flex-1 resize-none leading-[1.9]" style="padding: 14px; border-radius: 14px"
+        />
+      </div>
+      <div class="flex flex-none items-center gap-3 px-[var(--density-pad)] pb-[18px] pt-3">
+        <button data-atomize-run class="mat-btn" :disabled="!text.trim() || atomizing" @click="run">
+          <template v-if="atomizing || m.chunkProgress">
+            <Spinner :size="13" />
+            <span v-if="m.chunkProgress">分块 {{ m.chunkProgress.current }}/{{ m.chunkProgress.total }} 拆条中…</span>
+            <span v-else>拆条中…</span>
+          </template>
+          <template v-else>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 4V2" /><path d="M15 16v-2" /><path d="M8 9h2" /><path d="M20 9h2" /><path d="M17.8 11.8L19 13" /><path d="M17.8 6.2L19 5" /><path d="M3 21l9-9" /><path d="M12.2 6.2L11 5" />
+            </svg>
+            AI 拆条
+          </template>
+        </button>
+        <button v-if="m.chunkProgress" data-atomize-cancel class="mat-btn-border" @click="m.cancelAtomize()">取消</button>
+        <span class="text-[11.5px]" style="color: var(--ink-4)">{{ text.length }} 字</span>
+      </div>
+    </section>
 
-    <!-- 右：原子卡列表 -->
-    <div class="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
-      <div v-if="!atoms.length && !atomizing" class="grid h-full place-items-center text-sm text-ink/40">
-        拆条结果会出现在这里（低置信度置顶，请重点核对）
+    <!-- 右：拆条结果 -->
+    <section class="mat-panel flex min-w-0 flex-1 flex-col overflow-hidden">
+      <!-- idle -->
+      <div v-if="!atoms.length && !atomizing && !m.chunkProgress" class="flex flex-1 flex-col items-center justify-center gap-3.5 p-10 text-center">
+        <div class="flex h-[58px] w-[58px] items-center justify-center rounded-full" style="background: rgba(238, 106, 42, 0.1); color: var(--primary)">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 4V2" /><path d="M15 16v-2" /><path d="M8 9h2" /><path d="M20 9h2" /><path d="M17.8 11.8L19 13" /><path d="M17.8 6.2L19 5" /><path d="M3 21l9-9" /><path d="M12.2 6.2L11 5" />
+          </svg>
+        </div>
+        <div class="text-[14px] font-bold">拆条结果会出现在这里</div>
+        <div class="max-w-[320px] text-[12.5px] leading-[1.8]" style="color: var(--ink-3)">AI 会把原文按素材树归类拆成独立条目；低置信度条目置顶，请重点核对后再入库。</div>
       </div>
-      <AtomCard v-for="(a, i) in atoms" :key="i" :ref="(el) => (cards[i] = el)"
-        :atom="a" :folders="m.writableFolders" />
-    </div>
+
+      <!-- loading -->
+      <div v-else-if="atomizing || m.chunkProgress" class="flex flex-1 flex-col items-center justify-center gap-3.5">
+        <Spinner :size="26" />
+        <div class="text-[12.5px]" style="color: var(--ink-3)">
+          <template v-if="m.chunkProgress">分块 {{ m.chunkProgress.current }}/{{ m.chunkProgress.total }} · 忠实原文，不做改写…</template>
+          <template v-else>正在拆条 · 忠实原文，不做改写…</template>
+        </div>
+      </div>
+
+      <!-- done -->
+      <template v-else>
+        <div class="flex flex-none items-center gap-2.5 px-[var(--density-pad)] pb-2.5 pt-4">
+          <span class="text-[13px] font-bold">拆出 {{ atoms.length }} 条</span>
+          <span class="text-[11.5px]" style="color: var(--ink-4)">低置信度已置顶 — 核对归类是否正确、数字是否与原文一致，再入库</span>
+          <button data-atomize-commit-all class="mat-btn-dark ml-auto" @click="commitAll">全部入库</button>
+        </div>
+        <div class="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-[var(--density-pad)] pb-[var(--density-pad)] pt-1">
+          <AtomCard v-for="(a, i) in atoms" :key="i" :ref="(el) => (cards[i] = el)" :atom="a" :folders="m.writableFolders" />
+        </div>
+      </template>
+    </section>
   </div>
 </template>
