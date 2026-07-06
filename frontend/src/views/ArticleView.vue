@@ -863,19 +863,22 @@ onMounted(async () => {
     skillId.value = cfg.data.preferred_skill_id;
   }
 
-  // 带 ?keyword=... 进来 = home 发起的新一次起飞。这里清掉残留的
-  // error 状态（不然 watcher 因为 status 没变 → 不会触发 alert，用户
-  // 看到的就是一片空白的创作区）。reset 之后 status 一定是 "idle"，
-  // takeoff 才能跑。
-  if (qk && article.status === "error") {
-    article.$reset();
-  }
-
   // 横评模式 —— home 横评 takeoff 带 mode=comparison + 逗号连的 models。
-  // 读出来供下方「横评优先」的自动起飞分支判定。
+  // 读出来供下方「横评优先」的自动起飞分支判定 + 下面的 reset 意图判定。
   const qmode = (route.query.mode as string) ?? "";
   const qmodels = ((route.query.models as string) ?? "")
     .split(",").map((s) => s.trim()).filter(Boolean);
+
+  // 带 takeoff 意图的 query（新 keyword 或横评 mode+≥2 型号）= 用户发起新一次
+  // 生成。清掉残留的**非运行态** store（done/error）—— 否则「刚导出完一篇、
+  // store=done」时走「重新生成」/home 起飞进来，下方自动起飞守卫（status==='idle'
+  // && !finalText）全假 → submit 根本不发、用户点了没反应（§7.3 闭环断裂，终审 P1）。
+  // 只保护正在运行的生成（running 不动）；reset 后 status='idle'、finalText='' 守卫
+  // 才能过。原来只清 error 是这个 bug 的根：done 态永远漏网。
+  const hasTakeoffQuery = (qmode === "comparison" && qmodels.length >= 2) || !!qk;
+  if (hasTakeoffQuery && article.status !== "idle" && article.status !== "running") {
+    article.$reset();
+  }
 
   // 自动起飞：home 带着 ?keyword=... 跳过来时直接发起生成。
   // 此前由顶部的输入条触发，现在那块 UI 已删，所以由 mount 阶段
