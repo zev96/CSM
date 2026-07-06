@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import Spinner from "@/components/ui/Spinner.vue";
-import Pill from "@/components/ui/Pill.vue";
 import { useMaterials, type FolderProfile, type NotePayload } from "@/stores/materials";
 import { useNotifications } from "@/composables/useNotifications";
 import { assembleFrontmatter, filenameError as fnError } from "@/components/materials/payload";
@@ -30,6 +29,21 @@ function pick(f: FolderProfile): void {
 
 const isVariants = computed(() => selected.value?.body_shape !== "spec_table");
 
+// 素材树：由可写文件夹扁平列表按路径深度缩进渲染（真实数据无中间可写节点）。
+const treeRows = computed(() =>
+  m.writableFolders.map((f) => {
+    const segs = f.rel_folder.split("/");
+    return {
+      folder: f,
+      label: segs[segs.length - 1],
+      pad: 10 + (segs.length - 1) * 13,
+      isTable: f.body_shape === "spec_table",
+      count: f.sample_count,
+      tip: f.rel_folder + (f.material_types.length ? "\n" + f.material_types.join("/") : ""),
+    };
+  }),
+);
+
 function buildPayload(): NotePayload | null {
   const f = selected.value;
   if (!f || !filename.value.trim()) return null;
@@ -56,6 +70,7 @@ watch([selected, filename, fm, variants, specRows], () => {
 onUnmounted(() => { if (_t) clearTimeout(_t); });
 
 const filenameError = computed(() => fnError(filename.value));
+const previewName = computed(() => m.currentPlan?.filename || (filename.value.trim() ? filename.value.trim() : "预览"));
 
 async function submit(): Promise<void> {
   const p = buildPayload();
@@ -83,98 +98,129 @@ function rmSpecRow(i: number): void { specRows.value.splice(i, 1); }
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 gap-4">
-    <!-- 左：文件夹选择 -->
-    <div class="flex w-72 min-w-0 flex-col overflow-y-auto border-r border-ink/10 pr-3">
-      <div v-if="m.foldersLoading" class="flex items-center gap-2 p-3 text-sm text-ink/50">
-        <Spinner :size="14" /> 加载文件夹…
+  <div class="anim-up flex min-h-0 flex-1 gap-d">
+    <!-- 左：素材树 -->
+    <aside class="mat-panel flex flex-none flex-col overflow-hidden" style="width: 292px">
+      <div class="flex flex-none items-baseline gap-2 px-4.5 pb-2 pt-4">
+        <span class="text-[13px] font-bold">素材树</span>
+        <span class="text-[11px]" style="color: var(--ink-4)">选择入库位置</span>
       </div>
-      <div v-else-if="!m.writableFolders.length" class="p-3 text-sm text-ink/50">
-        素材库无可写文件夹。请在「设置」确认素材库路径。
-      </div>
-      <button
-        v-for="f in m.writableFolders" :key="f.rel_folder" :data-folder="f.rel_folder"
-        class="flex flex-col gap-1 rounded-lg px-2 py-2 text-left transition-colors"
-        :style="{ background: selected?.rel_folder === f.rel_folder ? 'var(--card-2, rgba(0,0,0,0.05))' : 'transparent' }"
-        @click="pick(f)"
-      >
-        <span class="text-sm font-medium">{{ f.rel_folder }}</span>
-        <div class="flex flex-wrap items-center gap-1 text-[10px] text-ink/50">
-          <Pill>{{ f.body_shape === "spec_table" ? "参数表" : "变体" }}</Pill>
-          <span>{{ f.sample_count }} 篇</span>
-          <span v-if="f.material_types.length">· {{ f.material_types.join("/") }}</span>
+      <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        <div v-if="m.foldersLoading" class="flex items-center gap-2 p-3 text-sm" style="color: var(--ink-3)">
+          <Spinner :size="14" /> 加载文件夹…
         </div>
-      </button>
-    </div>
+        <div v-else-if="!m.writableFolders.length" class="p-3 text-[12px]" style="color: var(--ink-3)">
+          素材库无可写文件夹。请在「设置」确认素材库路径。
+        </div>
+        <button
+          v-for="t in treeRows" :key="t.folder.rel_folder" :data-folder="t.folder.rel_folder" :title="t.tip"
+          class="mat-row" :class="{ 'mat-row--sel': selected?.rel_folder === t.folder.rel_folder }"
+          :style="{ paddingLeft: t.pad + 'px' }"
+          @click="pick(t.folder)"
+        >
+          <svg class="flex-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          <span class="min-w-0 flex-1 truncate text-[12.5px] font-semibold" style="color: var(--ink)">{{ t.label }}</span>
+          <span v-if="t.isTable" class="mat-tag-table flex-none">参数表</span>
+          <span class="flex-none text-[11px] tabular-nums" style="color: var(--ink-4)">{{ t.count }}</span>
+        </button>
+      </div>
+    </aside>
 
-    <!-- 中：表单 -->
-    <div class="flex w-96 min-w-0 flex-col gap-3 overflow-y-auto">
-      <div v-if="!selected" class="grid h-full place-items-center text-sm text-ink/40">
+    <!-- 中：录入表单 -->
+    <section class="mat-panel flex flex-none flex-col overflow-hidden" style="width: 430px">
+      <div v-if="!selected" class="grid flex-1 place-items-center text-sm" style="color: var(--ink-4)">
         选择左侧文件夹开始录入
       </div>
       <template v-else>
-        <div>
-          <label class="mb-1 block text-xs text-ink/50">文件名</label>
-          <input v-model="filename" data-filename placeholder="吸尘器-描述-核心词.md"
-            class="w-full rounded-lg border border-ink/15 px-2 py-1.5 text-sm" />
-          <p v-if="filenameError" class="mt-1 text-xs" :style="{ color: 'var(--red)' }">{{ filenameError }}</p>
-        </div>
-        <div v-for="k in selected.frontmatter_keys" :key="k">
-          <label class="mb-1 block text-xs text-ink/50">{{ k }}</label>
-          <input v-model="fm[k]" :data-fm="k"
-            class="w-full rounded-lg border border-ink/15 px-2 py-1.5 text-sm" />
+        <div class="flex flex-none items-center gap-2 px-[var(--density-pad)] pb-1 pt-4">
+          <span class="text-[13px] font-bold">录入素材</span>
+          <span class="mat-dir-pill">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="flex-none">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <span class="truncate">{{ selected.rel_folder }}</span>
+          </span>
         </div>
 
-        <!-- 变体 body -->
-        <div v-if="isVariants" class="flex flex-col gap-2">
-          <label class="text-xs text-ink/50">正文变体（①②③）</label>
-          <div v-for="(_, i) in variants" :key="i" data-variant-row class="flex gap-1">
-            <textarea v-model="variants[i]" rows="2"
-              class="flex-1 rounded-lg border border-ink/15 px-2 py-1.5 text-sm" />
-            <button class="text-xs text-ink/40" @click="rmVariant(i)">✕</button>
+        <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-[var(--density-pad)] pb-1.5 pt-3">
+          <div class="flex flex-col gap-1.5">
+            <label class="text-[11.5px] font-semibold" style="color: var(--ink-3)">文件名<span class="font-normal" style="color: var(--ink-4)">（建议：产品-描述-核心词）</span></label>
+            <input v-model="filename" data-filename placeholder="吸尘器-描述-核心词.md" class="mat-input" />
+            <p v-if="filenameError" class="text-[11px]" style="color: var(--red)">{{ filenameError }}</p>
           </div>
-          <button class="self-start text-xs text-ink/60" @click="addVariant">+ 加变体</button>
-        </div>
 
-        <!-- 参数表 body -->
-        <div v-else class="flex flex-col gap-2">
-          <label class="text-xs text-ink/50">参数（分组/参数/数值）</label>
-          <div v-for="(row, i) in specRows" :key="i" data-spec-row class="flex gap-1">
-            <input v-model="row.group" placeholder="分组" class="w-20 rounded border border-ink/15 px-1.5 py-1 text-xs" />
-            <input v-model="row.key" placeholder="参数" class="w-24 rounded border border-ink/15 px-1.5 py-1 text-xs" />
-            <input v-model="row.value" placeholder="数值" class="flex-1 rounded border border-ink/15 px-1.5 py-1 text-xs" />
-            <button class="text-xs text-ink/40" @click="rmSpecRow(i)">✕</button>
+          <div v-for="k in selected.frontmatter_keys" :key="k" class="flex flex-col gap-1.5">
+            <label class="text-[11.5px] font-semibold" style="color: var(--ink-3)">{{ k }}</label>
+            <input v-model="fm[k]" :data-fm="k" class="mat-input" />
           </div>
-          <button class="self-start text-xs text-ink/60" @click="addSpecRow">+ 加行</button>
+
+          <!-- 变体 body -->
+          <div v-if="isVariants" class="flex flex-col gap-2 pt-0.5">
+            <label class="text-[11.5px] font-semibold" style="color: var(--ink-3)">正文变体（①②③）</label>
+            <div v-for="(_, i) in variants" :key="i" data-variant-row class="flex gap-1.5">
+              <textarea v-model="variants[i]" rows="2" class="mat-input flex-1 resize-none" />
+              <button class="mat-icon-rm self-start" title="删除此变体" @click="rmVariant(i)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              </button>
+            </div>
+            <button class="mat-btn-add" @click="addVariant">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>加变体
+            </button>
+          </div>
+
+          <!-- 参数表 body -->
+          <div v-else class="flex flex-col gap-2 pt-0.5">
+            <div class="grid items-center gap-2" style="grid-template-columns: 96px 1fr 1fr 26px">
+              <span class="text-[11.5px] font-semibold" style="color: var(--ink-3)">参数</span>
+              <span class="text-[10.5px]" style="color: var(--ink-4)">参数名</span>
+              <span class="text-[10.5px]" style="color: var(--ink-4)">数值</span>
+              <span />
+            </div>
+            <div v-for="(row, i) in specRows" :key="i" data-spec-row class="grid items-center gap-2" style="grid-template-columns: 96px 1fr 1fr 26px">
+              <input v-model="row.group" placeholder="分组" class="mat-input mat-input--sm" />
+              <input v-model="row.key" placeholder="参数" class="mat-input mat-input--sm" />
+              <input v-model="row.value" placeholder="数值" class="mat-input mat-input--sm" />
+              <button class="mat-icon-rm" title="删除此行" @click="rmSpecRow(i)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              </button>
+            </div>
+            <button class="mat-btn-add" @click="addSpecRow">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>加一行
+            </button>
+          </div>
         </div>
 
-        <div class="flex items-center gap-2 pt-2">
+        <div class="flex flex-none items-center gap-3 px-[var(--density-pad)] pb-4 pt-3" style="border-top: 1px solid rgba(var(--ink-rgb), 0.06)">
           <button
-            data-submit
-            class="rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
-            :style="{ background: 'var(--primary)' }"
+            data-submit class="mat-btn"
             :disabled="!!filenameError || !!m.currentPlan?.conflict || submitting"
             @click="submit"
-          >确认入库</button>
-          <button v-if="m.lastReceipt" data-undo class="rounded-lg px-3 py-1.5 text-sm text-ink/70" @click="undo">
-            撤销上次写入
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+            确认入库
           </button>
+          <button v-if="m.lastReceipt" data-undo class="mat-btn-ghost" @click="undo">撤销上次写入</button>
+          <span v-else class="text-[11.5px]" style="color: var(--ink-4)">写入后立即可在「品牌型号」页引用</span>
         </div>
-        <p v-if="m.intakeError" class="text-xs" :style="{ color: 'var(--red)' }">{{ m.intakeError }}</p>
+        <p v-if="m.intakeError" class="px-[var(--density-pad)] pb-3 text-[11px]" style="color: var(--red)">{{ m.intakeError }}</p>
       </template>
-    </div>
+    </section>
 
-    <!-- 右：diff 预览 -->
-    <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
-      <label class="mb-1 text-xs text-ink/50">预览（将写入的 .md 全文）</label>
-      <p v-if="m.currentPlan?.conflict" class="mb-2 text-xs" :style="{ color: 'var(--red)' }">
-        ⚠ 同名笔记已存在，不可覆盖——请改文件名
-      </p>
-      <p v-for="w in m.currentPlan?.warnings || []" :key="w" class="mb-1 text-xs text-amber-600">⚠ {{ w }}</p>
-      <pre class="flex-1 whitespace-pre-wrap rounded-lg bg-ink/5 p-3 text-xs leading-relaxed text-ink/80">{{ m.currentPlan?.full_text || "填写后实时预览…" }}</pre>
-      <div v-if="m.currentPlan?.index_line" class="mt-2 text-[11px] text-ink/50">
-        将登记到索引：<code>{{ m.currentPlan.index_line }}</code>
+    <!-- 右：实时预览（固定暗色 code 面板） -->
+    <section class="md-preview flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div class="flex flex-none items-center gap-2.5 px-[var(--density-pad)] pb-2.5 pt-4">
+        <span class="text-[12px] font-bold" style="color: #f6f0e1">预览</span>
+        <span class="text-[11px]" style="color: #a89f8d">将写入的 .md 全文</span>
+        <span class="font-mono ml-auto truncate text-[11px]" style="color: #ee6a2a">{{ previewName }}</span>
       </div>
-    </div>
+      <p v-if="m.currentPlan?.conflict" class="px-[var(--density-pad)] pb-1 text-[11px]" style="color: #e59a8c">⚠ 同名笔记已存在，不可覆盖——请改文件名</p>
+      <p v-for="w in m.currentPlan?.warnings || []" :key="w" class="px-[var(--density-pad)] pb-1 text-[11px]" style="color: #e0b96a">⚠ {{ w }}</p>
+      <pre class="font-mono min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-[var(--density-pad)] pb-[var(--density-pad)] pt-1.5 text-[12px] leading-[1.9]" style="margin: 0; color: #d9d1bd">{{ m.currentPlan?.full_text || "填写后实时预览…" }}</pre>
+      <div v-if="m.currentPlan?.index_line" class="px-[var(--density-pad)] pb-3 text-[11px]" style="color: #a89f8d">
+        将登记到索引：<code class="font-mono" style="color: #d9d1bd">{{ m.currentPlan.index_line }}</code>
+      </div>
+    </section>
   </div>
 </template>

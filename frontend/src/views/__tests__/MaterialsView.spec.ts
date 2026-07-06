@@ -37,8 +37,10 @@ describe("MaterialsView", () => {
   it("挂载即拉列表 + 渲染主推/竞品分组行", () => {
     const w = mount(MaterialsView);
     expect(listMock).toHaveBeenCalled();
-    expect(w.text()).toContain("CEWEYDS18");
-    expect(w.text()).toContain("戴森V12");
+    // V2：型号行剥离品牌前缀显示（戴森V12 → 品牌头「戴森」+ 行「V12」），
+    // 按 data-model 断言行存在（不依赖跨元素文本连续）。
+    expect(w.find("[data-model='CEWEYDS18']").exists()).toBe(true);
+    expect(w.find("[data-model='戴森V12']").exists()).toBe(true);
     expect(w.text()).toContain("主推");
     expect(w.text()).toContain("竞品");
   });
