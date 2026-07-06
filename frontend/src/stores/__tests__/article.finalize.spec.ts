@@ -57,7 +57,20 @@ describe("article store — finalize（整篇润色=成稿增强）", () => {
       skill_chain: ["人设", "去味"],
       provider: "deepseek",
       model: "deepseek-chat",
+      contract_mode: null, // seedAfterTakeoff 未设 → null（跟随全局）
     });
+  });
+
+  it("finalize 带上 lastRequest 的 contract_mode（per-article 契约覆盖不丢，PR-B 遗留修复）", async () => {
+    // takeoff 存了 contract_mode，但真正的 LLM 润色在 finalize —— 若 finalize
+    // body 不带 contract_mode，后端回退全局，用户选的激进/保守被静默忽略。
+    postMock.mockResolvedValueOnce({ data: { job_id: "job-A" } });
+    const a = useArticle();
+    seedAfterTakeoff(a);
+    (a.lastRequest as any).contract_mode = "aggressive";
+    await a.finalize();
+    const body = postMock.mock.calls[0][1];
+    expect(body.contract_mode).toBe("aggressive");
   });
 
   it("finalize 守卫：无 lastJobId / lastRequest / draftText 时不 POST", async () => {
