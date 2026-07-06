@@ -56,6 +56,18 @@ export interface GenerateRequest {
   contract_mode?: "conservative" | "aggressive";
 }
 
+/** 横评（多型号对比）提交意图 —— POST /api/generate/comparison 的 body 形。
+ * 一次横评产出**一篇**对比文章（非多候选），后端确定性从品牌记忆拼骨架，
+ * 前端复用单篇 store 流（_subscribe / draftText / plan=null / finalize）。 */
+export interface ComparisonRequest {
+  models: string[];
+  keyword?: string;
+  title?: string | null;
+  tone?: string | null;
+  skill_chain?: string[] | null;
+  contract_mode?: "conservative" | "aggressive";
+}
+
 /** 链上单 pass 的预览数据（镜像后端 chain_service.ChainPass.to_dict）。
  * SSE `pass` 事件逐个推；`done` 事件带完整 `passes` 数组覆盖。 */
 export interface ChainPass {
@@ -342,6 +354,61 @@ export const useArticle = defineStore("article", {
         .then((r) => { this.template = r.data; })
         .catch(() => { this.template = null; });
 
+      this._subscribe(this.jobId!);
+    },
+    /** 横评提交 —— 镜像 submit 的 reset + POST /api/generate/comparison + 复用
+     * _subscribe（横评是一篇文章，事件 shape 与单篇完全一致：assembly plan=null +
+     * draft 骨架、done、error）。lastRequest 存成 GenerateRequest 形，让既有
+     * finalize() 从 lastRequest 取 keyword/title/skill_chain 拼 body 时无需改动；
+     * 横评专属的 models/tone 由后端横评缓存兜住（finalize 命中缓存走 models 分支）。 */
+    async submitComparison(req: ComparisonRequest): Promise<void> {
+      this._teardown();
+      _teardownRerun();
+      this.rerunningIndex = null;
+      // finalize() 从 lastRequest 取 keyword/title/skill_chain 拼 finalize body；
+      // 横评专属的 models/tone 存后端缓存，前端 lastRequest 只需兼容形。
+      this.lastRequest = {
+        keyword: req.keyword ?? "型号对比",
+        template_id: "__comparison__",
+        title: req.title ?? null,
+        skill_chain: req.skill_chain ?? null,
+        contract_mode: req.contract_mode,
+      } as GenerateRequest;
+      this.status = "running";
+      this.error = null;
+      this.currentStage = null;
+      this.stageIndex = -1;
+      this.finalText = "";
+      this.draftText = "";
+      this.documentPath = null;
+      this.title = req.keyword ?? "型号对比";
+      this.plan = null;
+      this.template = null;
+      this.factcheck = null;
+      this.passes = [];
+      this.cost = null;
+      this.isFinalizing = false;
+      this.lint = null; this.lintReleased = [];
+      this.completeness = null; this.score = null;
+
+      const sidecar = useSidecar();
+      try {
+        const resp = await sidecar.client.post("/api/generate/comparison", {
+          models: req.models,
+          keyword: req.keyword ?? "",
+          title: req.title ?? null,
+          tone: req.tone ?? null,
+          skill_chain: req.skill_chain ?? null,
+          ...(req.contract_mode ? { contract_mode: req.contract_mode } : {}),
+          draft_only: true,
+        });
+        this.jobId = resp.data.job_id;
+        this.lastJobId = resp.data.job_id;
+      } catch (e: any) {
+        this.status = "error";
+        this.error = e?.response?.data?.detail ?? e?.message ?? String(e);
+        return;
+      }
       this._subscribe(this.jobId!);
     },
     /** 共享 SSE 订阅 —— submit（起飞）和 finalize（整篇润色）都复用同一套

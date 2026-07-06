@@ -19,7 +19,12 @@ from fastapi.testclient import TestClient
 from csm_core.monitor import storage as monitor_storage
 from csm_sidecar import auth
 from csm_sidecar.main import app
-from csm_sidecar.services import config_service, factcheck_service, vault_service
+from csm_sidecar.services import (
+    comparison_cache,
+    config_service,
+    factcheck_service,
+    vault_service,
+)
 
 
 @pytest.fixture
@@ -104,7 +109,9 @@ def client(settings_path: Path, vault_cache_reset) -> Iterator[TestClient]:
     subsequent request.
     """
     factcheck_service.reset_for_test()
+    comparison_cache.reset_for_test()
     with TestClient(app) as c:
         c.headers["Authorization"] = f"Bearer {auth.get_token()}"
         yield c
     factcheck_service.reset_for_test()
+    comparison_cache.reset_for_test()

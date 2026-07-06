@@ -24,11 +24,17 @@ from typing import Any
 
 from csm_core.angle import Angle, effective_sellpoints, render_angle_directive
 from csm_core.assembler.constraints import assemble_plan
+from csm_core.assembler.plan import AssemblyPlan
 from csm_core.assembler.render import compose_draft
 from csm_core.export.markdown import export_article
 from csm_core.template.loader import load_template
 from csm_core.vault.brand_registry import build_brand_registry
-from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
+from csm_core.brand_memory.identity import parse_brand_model
+from csm_core.brand_memory.inject import (
+    ModelScope, build_whitelist, render_brand_facts, resolve_scopes,
+)
+from csm_core.brand_memory.resolver import resolve_memory
+from csm_core.comparison import build_comparison_directive, compose_comparison_draft
 from csm_core.factcheck import check_facts
 from csm_core.factcheck.completeness import check_completeness
 from csm_core.llm import pricing
@@ -37,6 +43,7 @@ from ..event_bus import bus
 from . import (
     assembler_service,
     chain_service,
+    comparison_cache,
     config_service,
     factcheck_service,
     llm_factory,
@@ -82,6 +89,21 @@ class FinalizeRequest:
     model: str | None = None
     # Phase 4+: 成文契约档单次覆盖。None = 用全局 cfg.contract.mode。
     contract_mode: str | None = None
+
+
+@dataclass
+class ComparisonRequest:
+    """横评入参。models = 用户点选的型号全名（2–4 个）；draft_only 与常规
+    takeoff 一致（先出确定性骨架、交互润色走 finalize）。"""
+    models: list[str]
+    keyword: str = ""
+    title: str | None = None
+    tone: str | None = None
+    skill_chain: list[str] | None = None
+    contract_mode: str | None = None
+    draft_only: bool = True
+    provider: str | None = None
+    model: str | None = None
 
 
 @dataclass
@@ -290,6 +312,138 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             _cancelled.discard(job_id)
 
 
+def _resolve_comparison_scopes(
+    models: list[str], index, registry, category: str, own_brands: set[str],
+) -> list[ModelScope]:
+    """点名型号 → ModelScope（registry 不识别的跳过；保序去重）。"""
+    scopes: list[ModelScope] = []
+    seen: set[str] = set()
+    for model_full in models:
+        if model_full in seen:
+            continue
+        seen.add(model_full)
+        brand = registry.brand_of(model_full)
+        if brand is None:
+            continue
+        parsed = parse_brand_model(model_full)
+        resolver_model = parsed[1] if parsed is not None else model_full
+        mem = resolve_memory(brand, resolver_model, category, index,
+                             own_brands=own_brands)
+        scopes.append(ModelScope(brand=brand, model=model_full,
+                                 role=mem.role, memory=mem))
+    return scopes
+
+
+def submit_comparison(req: ComparisonRequest) -> str:
+    """Kick off a comparison job, return the ``job_id`` to subscribe via SSE."""
+    job_id = bus.create_job()
+    with _state_lock:
+        _live.add(job_id)
+    _get_executor().submit(_run_comparison_job, job_id, req)
+    return job_id
+
+
+def _run_comparison_job(job_id: str, req: ComparisonRequest) -> None:
+    """横评 worker：扫库 → 解析型号 → 确定性组稿 → 缓存元数据 → draft_only 收尾
+    （或全量 finalize）。事件 shape 与 _run_job 对齐，plan 恒 None。"""
+    try:
+        cfg = config_service.load()
+        if not cfg.vault_root:
+            raise ValueError("AppConfig.vault_root is unset")
+        if not cfg.out_dir:
+            raise ValueError("AppConfig.out_dir is unset")
+        vault_root = Path(cfg.vault_root)
+        out_dir = Path(cfg.out_dir)
+        category = cfg.user_product or "吸尘器"
+        own_brands = set(cfg.brand_memory.own_brands)
+
+        _checkpoint(job_id)
+        bus.publish(job_id, "stage", stage="扫描资料库", index=0, total=2)
+        index = vault_service.get(vault_root)
+        registry = build_brand_registry(vault_root)
+        scopes = _resolve_comparison_scopes(
+            req.models, index, registry, category, own_brands)
+        if len(scopes) < 2:
+            raise ValueError(
+                f"横评需至少 2 个可识别型号，实得 {len(scopes)} 个"
+                f"（型号是否在素材库/registry 里？）")
+
+        _checkpoint(job_id)
+        bus.publish(job_id, "stage", stage="组装对比稿", index=1, total=2)
+        draft = compose_comparison_draft(
+            scopes, keyword=req.keyword, title=req.title)
+        resolved_models = [sc.model for sc in scopes]
+        bus.publish(job_id, "assembly", plan=None, draft=draft,
+                    comparison={"models": resolved_models})
+
+        comparison_cache.cache_comparison(
+            job_id, models=resolved_models, category=category,
+            keyword=req.keyword, title=req.title, tone=req.tone,
+            skill_chain=req.skill_chain, contract_mode=req.contract_mode)
+
+        if req.draft_only:
+            bus.finish(job_id, draft=draft, plan=None, document=None,
+                       comparison={"models": resolved_models})
+            return
+
+        # 非 draft_only（少见）：直接一把 finalize + 导出。
+        _run_comparison_finalize(
+            job_id, req=req, draft=draft, scopes=scopes, cfg=cfg,
+            out_dir=out_dir, keyword=req.keyword, title=req.title,
+            category=category)
+    except _CancelledGenerate:
+        logger.info("comparison job %s cancelled by user", job_id)
+        bus.fail(job_id, error="cancelled", cancelled=True)
+    except Exception as e:
+        logger.exception("comparison job %s failed", job_id)
+        bus.fail(job_id, error=f"{type(e).__name__}: {e}")
+    finally:
+        with _state_lock:
+            _live.discard(job_id)
+            _cancelled.discard(job_id)
+
+
+def _run_comparison_finalize(
+    job_id: str, *, req: "FinalizeRequest | ComparisonRequest", draft: str,
+    scopes: list, cfg, out_dir: Path, keyword: str, title: str | None,
+    category: str, tone: str | None = None, contract_mode: str | None = None,
+) -> None:
+    """横评成稿：合成 plan（供 factcheck/export）→ finalize_draft（scopes 旁路 +
+    对比指令块）→ 导出 + finish。plan 恒 None 发给前端。"""
+    chain_steps = _resolve_chain(req, cfg)
+    synthetic = AssemblyPlan(
+        keyword=keyword or "型号对比", template_id="__comparison__",
+        seed=0, core_keyword=keyword or "型号对比")
+    primary = next((sc for sc in scopes if getattr(sc, "role", "") == "主推"), None)
+    primary_label = (f"{primary.brand} {primary.model}".strip()
+                     if primary is not None else None)
+    directive = build_comparison_directive(primary_label=primary_label, tone=tone)
+    resolved_contract = contract_mode or cfg.contract.mode
+
+    _checkpoint(job_id)
+    outcome = finalize_draft(
+        job_id, chain_steps=chain_steps, draft=draft,
+        plan=synthetic, index=None, registry=None, category=category,
+        keyword=keyword, title=title, angle=None,
+        provider=getattr(req, "provider", None), model=getattr(req, "model", None),
+        cfg=cfg, out_dir=out_dir,
+        checkpoint=lambda: _checkpoint(job_id),
+        on_pass=lambda p: bus.publish(job_id, "pass", **p.to_dict()),
+        stage_index=0, stage_total=1, contract_mode=resolved_contract,
+        scopes=scopes, angle_directive=directive)
+    if outcome.blocked:
+        return
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = export_article(out_dir=out_dir, keyword=keyword,
+                           final_text=outcome.final_text, plan=synthetic,
+                           fmt=cfg.export_format)
+    bus.finish(job_id, document=paths["document"], format=paths["format"],
+               title=paths["title"], plan=None, draft=draft,
+               final_text=outcome.final_text, passes=outcome.passes,
+               cost=outcome.cost, completeness=outcome.completeness,
+               comparison={"models": [getattr(sc, "model", "") for sc in scopes]})
+
+
 def submit_finalize(job_id: str, req: FinalizeRequest) -> str:
     """在既有 takeoff job_id 上重开一条流，提交 finalize worker。
     调用方（路由）须先确认缓存 plan 存在（否则 404）。
@@ -317,6 +471,29 @@ def _finalize_job(job_id: str, req: FinalizeRequest) -> None:
             raise ValueError("AppConfig.out_dir is unset")
         vault_root = Path(cfg.vault_root)
         out_dir = Path(cfg.out_dir)
+
+        # 横评分支：命中横评缓存 → 由 models 重解析 scopes、跳过 plan 路径。
+        # 复用上面的 vault_root/out_dir，命中即 return，不落到下方 plan 路径。
+        meta = comparison_cache.get_comparison(job_id)
+        if meta is not None:
+            _checkpoint(job_id)
+            index = vault_service.get(vault_root)
+            registry = build_brand_registry(vault_root)
+            scopes = _resolve_comparison_scopes(
+                meta.models, index, registry, meta.category,
+                set(cfg.brand_memory.own_brands))
+            # 与 submit 路径 <2 守卫对称：submit 后素材库变更致型号失识时大声
+            # 失败，绝不静默旁路事实核对（0 scope 会整段跳过 factcheck）产出弱化稿。
+            if len(scopes) < 2:
+                raise ValueError(
+                    "横评型号已不可识别（素材库可能已变更），请回首页重新起飞")
+            _run_comparison_finalize(
+                job_id, req=req, draft=req.draft, scopes=scopes, cfg=cfg,
+                out_dir=out_dir, keyword=meta.keyword, title=req.title or meta.title,
+                category=meta.category, tone=meta.tone,
+                contract_mode=(req.contract_mode or meta.contract_mode
+                               or cfg.contract.mode))
+            return
 
         entry = assembler_service.get_plan(job_id)
         if entry is None:
@@ -428,6 +605,8 @@ def finalize_draft(
     checkpoint: Callable[[], None], on_pass: Callable[[Any], None],
     stage_index: int, stage_total: int,
     contract_mode: str,
+    scopes: list | None = None,
+    angle_directive: str | None = None,
 ) -> FinalizeOutcome:
     """毛坯 → 成稿：注入型号事实 + 角度指令 + skill 链多-pass + 导出前事实核对。
 
@@ -435,22 +614,25 @@ def finalize_draft(
     越界时本函数已发 done(blocked)，返回 blocked=True 让调用方停下。
     """
     # Plan 3: 注入型号记忆 + 事实核对作用域。两个 flag 都关 = 跳过。
+    # 横评旁路：scopes 预置（非 None）时不再内部 resolve；None 时与今天等价。
     cfg_bm = cfg.brand_memory
-    scopes: list = []
     brand_facts: str | None = None
-    if cfg_bm.inject or cfg_bm.factcheck:
-        scopes = resolve_scopes(
-            plan, index, registry,
-            own_brands=set(cfg_bm.own_brands),
-            category=category,
-        )
-        if scopes:
-            brand_facts = render_brand_facts(
-                scopes,
-                variant_cap=cfg_bm.inject_variant_cap,
-                endorsement_cap=cfg_bm.inject_endorsement_cap,
-                sellpoints=effective_sellpoints(angle),
+    if scopes is None:
+        scopes = []
+        if cfg_bm.inject or cfg_bm.factcheck:
+            scopes = resolve_scopes(
+                plan, index, registry,
+                own_brands=set(cfg_bm.own_brands),
+                category=category,
             )
+    # 预置 scopes 时也要渲染 brand_facts —— 故 if scopes 平移到外层。
+    if scopes:
+        brand_facts = render_brand_facts(
+            scopes,
+            variant_cap=cfg_bm.inject_variant_cap,
+            endorsement_cap=cfg_bm.inject_endorsement_cap,
+            sellpoints=effective_sellpoints(angle),
+        )
 
     # Phase 2b: 单次 build_prompt+complete 升级为 skill 链多-pass。
     # step0 = 组装 pass（build_prompt：毛坯+事实+角度+标题，与今天一致）；
@@ -462,7 +644,8 @@ def finalize_draft(
     state = chain_service.run_chain(
         job_id, chain_steps,
         draft=draft, keyword=keyword, title=title,
-        angle_directive=render_angle_directive(angle),
+        angle_directive=(angle_directive if angle_directive is not None
+                         else render_angle_directive(angle)),
         brand_facts=brand_facts if cfg_bm.inject else None,
         provider=provider, model=model,
         checkpoint=checkpoint, on_pass=on_pass,
@@ -497,7 +680,9 @@ def finalize_draft(
         completeness=completeness)
 
 
-def _resolve_chain(req: GenerateRequest | FinalizeRequest, cfg) -> list[chain_service.ChainStepInput]:
+def _resolve_chain(
+    req: "GenerateRequest | FinalizeRequest | ComparisonRequest", cfg,
+) -> list[chain_service.ChainStepInput]:
     """把 req 解析成链 steps（每个 step 带 skill 的 role/name/body）。
 
     零回归边界：
@@ -507,14 +692,16 @@ def _resolve_chain(req: GenerateRequest | FinalizeRequest, cfg) -> list[chain_se
     - 多条 skill_chain 里某条失效 → 跳过 + warning，链继续（其它步仍跑）。"""
     sdir = Path(cfg.skill_dir) if cfg.skill_dir else None
     if req.skill_chain is None:
-        # 单 skill_id 路径：保留今天的「找不到即抛」契约。
-        if not req.skill_id:
+        # 单 skill_id 路径：保留今天的「找不到即抛」契约。ComparisonRequest 无
+        # skill_id 字段（横评走 skill_chain），getattr 兜底 None → 空链，不 AttributeError。
+        sid = getattr(req, "skill_id", None)
+        if not sid:
             return []
-        skill = skills_service.get_skill(sdir, req.skill_id)
+        skill = skills_service.get_skill(sdir, sid)
         if skill is None:
-            raise FileNotFoundError(f"skill not found: {req.skill_id}")
+            raise FileNotFoundError(f"skill not found: {sid}")
         return [chain_service.ChainStepInput(
-            skill_id=req.skill_id, role=skill.role, name=skill.name, body=skill.body)]
+            skill_id=sid, role=skill.role, name=skill.name, body=skill.body)]
     # 多步链路径：单条失效跳过 + warning（不中断整条链）。
     steps: list[chain_service.ChainStepInput] = []
     for sid in req.skill_chain:
