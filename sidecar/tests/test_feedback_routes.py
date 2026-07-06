@@ -43,3 +43,22 @@ def test_export_route_without_job_id_no_record(client, monitor_db, monkeypatch):
     r = client.post("/api/export/markdown", json={"keyword": "k", "final_text": "成稿正文"})
     assert r.status_code == 200
     assert fb.get_conn().execute("SELECT COUNT(*) FROM creation_records").fetchone()[0] == 0
+
+
+def test_export_route_200_even_when_record_raises(client, monitor_db, monkeypatch):
+    """红线：record_export 内部炸也绝不能把成功导出变 500（对抗审查固化）。"""
+    fbs.reset_for_test()
+    monkeypatch.setattr(export_service, "export", lambda **k: {
+        "document": "/out/c.md", "format": "markdown", "history_path": "/hist/c.md", "title": "C"})
+
+    def _boom(*a, **k):
+        raise RuntimeError("DB exploded")
+
+    monkeypatch.setattr(fb, "record_creation", _boom)
+    fbs.stash_request("jobBoom", {
+        "mode": "normal", "keyword": "k", "template_id": "t", "title": "C",
+        "angle_json": None, "skill_chain_json": None, "models_json": None, "contract_mode": None})
+    r = client.post("/api/export/markdown",
+                    json={"keyword": "k", "final_text": "成稿正文", "job_id": "jobBoom"})
+    assert r.status_code == 200  # 导出成功不受反馈失败影响
+    assert r.json()["document"] == "/out/c.md"

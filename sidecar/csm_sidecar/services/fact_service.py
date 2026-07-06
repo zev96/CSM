@@ -47,10 +47,11 @@ def detect_changes(index, registry) -> list[dict]:
     for brand, model in _iter_models(registry):
         try:
             mem = resolve_memory(brand, model, "", index, own_brands=own)
+            fp, canonical = spec_fingerprint(mem)
         except Exception:
-            logger.debug("resolve_memory failed for %s/%s (skip)", brand, model, exc_info=True)
+            # 单型号 resolve/指纹失败只跳过该型号，不 abort 整轮（其余型号照建基线）。
+            logger.debug("resolve/fingerprint failed for %s/%s (skip)", brand, model, exc_info=True)
             continue
-        fp, canonical = spec_fingerprint(mem)
         old = baseline.get(model)
         if old is None:
             new_rows.append((model, fp, canonical))  # 首建基线，不报变更

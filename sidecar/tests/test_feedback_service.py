@@ -111,3 +111,16 @@ def test_stash_lru_eviction():
         assert len(fbs._request_cache) == fbs.MAX
         assert "j0" not in fbs._request_cache  # 最旧被淘汰
         assert f"j{fbs.MAX + 4}" in fbs._request_cache
+
+
+def test_get_note_weights_fail_open(monitor_db, monkeypatch):
+    # 红线：rank 开 + storage 抛 → 退回 {}（不抛），生成热路径不受反馈层拖垮。
+    cfg = AppConfig()
+    cfg.feedback.rank = True
+    monkeypatch.setattr(config_service, "load", lambda: cfg)
+
+    def _boom(*a, **k):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(fb, "get_note_weights", _boom)
+    assert fbs.get_note_weights() == {}  # fail-open → 均匀采样（零回归）

@@ -126,11 +126,20 @@ def _compute_edit_ratio(job_id: str, export_final: str) -> float | None:
 
 # ── rank / 呈现（读）─────────────────────────────────────────────────────────
 def get_note_weights() -> dict[str, float]:
-    """rank 关 → {}（调用方视作 None，零回归）；开 → storage 聚合权重。"""
-    cfg = config_service.load()
-    if not cfg.feedback.rank:
+    """rank 关 → {}（调用方视作 None，零回归）；开 → storage 聚合权重。
+
+    **fail-open**：这运行在生成热路径（_run_job 的 assemble_plan 参数里），任何失败
+    （DB 锁/损坏/config）都退回 {} = 均匀采样 = 零回归，绝不让反馈层拖垮用户的文章
+    生成。与 record_export 同哲学（对抗审查发现 rank=ON 时的拖垮缺口）。
+    """
+    try:
+        cfg = config_service.load()
+        if not cfg.feedback.rank:
+            return {}
+        return feedback_storage.get_note_weights(cfg.feedback.min_samples, cfg.feedback.alpha)
+    except Exception:
+        logger.exception("get_note_weights failed — 退回均匀采样（零回归）")
         return {}
-    return feedback_storage.get_note_weights(cfg.feedback.min_samples, cfg.feedback.alpha)
 
 
 def get_feedback_stats() -> dict:

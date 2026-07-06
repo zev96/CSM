@@ -105,3 +105,22 @@ def test_diff_for_model(monitor_db, monkeypatch):
 def test_diff_for_model_no_snapshot(monitor_db, monkeypatch):
     monkeypatch.setattr(config_service, "load", lambda: AppConfig())
     assert fact_service.diff_for_model("Nope", None, _Reg(["Nope"])) == []
+
+
+def test_skips_fingerprint_failure(monitor_db, monkeypatch):
+    # spec_fingerprint 对某型号抛 → 跳过该型号，其余照建基线（不 abort 整轮，对抗审查加固）。
+    mems = {"A": _mem("A", {"吸力": "150AW"}), "BAD": _mem("BAD", {"x": "y"})}
+    monkeypatch.setattr(fact_service, "resolve_memory",
+                        lambda brand, model, cat, index, **k: mems[model])
+    real_fp = fact_service.spec_fingerprint
+
+    def _fp(mem):
+        if mem.model == "BAD":
+            raise RuntimeError("fingerprint boom")
+        return real_fp(mem)
+
+    monkeypatch.setattr(fact_service, "spec_fingerprint", _fp)
+    monkeypatch.setattr(config_service, "load", lambda: AppConfig())
+    fact_service.detect_changes(None, _Reg(["A", "BAD"]))
+    base = fb.get_model_fingerprints()
+    assert "A" in base and "BAD" not in base  # 坏型号跳过，好型号照建
