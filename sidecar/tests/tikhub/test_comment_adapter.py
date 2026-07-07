@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 from csm_core.monitor.base import MonitorTask
 from csm_core.monitor.tikhub.comment_adapter import (
-    CommentApiAdapter, DOUYIN_SPEC, BILIBILI_SPEC)
+    CommentApiAdapter, DOUYIN_SPEC, BILIBILI_SPEC, KUAISHOU_SPEC)
 
 def _dtask(cfg=None):
     return MonitorTask(type="douyin_comment", name="t",
@@ -56,3 +56,14 @@ def test_bilibili_id_type_maps_to_param():
     a.fetch(MonitorTask(type="bilibili_comment", name="t", target_url="x",
                         config={"my_comment_text": "z"}))
     assert seen.get("bv_id") == "BV1xx" and seen.get("mode") == 3
+
+def test_kuaishou_pcursor_stops_at_no_more():
+    client = MagicMock()
+    client.get.return_value = {"data": {"result": 1, "pcursor": "no_more",
+        "rootComments": [{"content": "hi", "author_name": "a", "likedCount": 2}]}}
+    a = CommentApiAdapter(KUAISHOU_SPEC, client_factory=lambda: client,
+                          id_extractor=lambda url: ("photoid", ""))
+    r = a.fetch(MonitorTask(type="kuaishou_comment", name="t", target_url="x",
+                            config={"my_comment_text": "hi", "top_n": 5}))
+    assert client.get.call_count == 1        # pcursor=no_more → 单页停
+    assert r.status == "ok" and r.rank == 1

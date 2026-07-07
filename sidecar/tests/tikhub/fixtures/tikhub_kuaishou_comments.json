@@ -1,0 +1,1321 @@
+{
+  "code": 200,
+  "request_id": "b1d73710-ed8b-48a2-a9b5-8c03f9ed6058",
+  "message": "Request successful. This request will incur a charge.",
+  "message_zh": "请求成功，本次请求将被计费。",
+  "support": "Discord: https://discord.gg/aMEAS8Xsvz",
+  "time": "2026-07-07 02:20:42",
+  "time_stamp": 1783416042,
+  "time_zone": "America/Los_Angeles",
+  "docs": "https://api.tikhub.io/#/Kuaishou-App-API/fetch_video_comment_api_v1_kuaishou_app_fetch_video_comment_get",
+  "cache_message": "This response is cached and accessible via the URL below for 24 hours at no extra cost. The cache is for request tracing only — it doesn't affect the API's data freshness and won't be returned through the API again.",
+  "cache_message_zh": "本次响应已缓存，可通过下方 URL 直接查看，有效期 24 小时，访问缓存链接无额外费用。缓存仅用于请求溯源，不影响接口数据的时效性，也不会再次通过接口返回。",
+  "cache_url": "https://cache.tikhub.io/api/v1/cache/public/b1d73710-ed8b-48a2-a9b5-8c03f9ed6058?sign=2914a493116aa725bea0f95f40ae45c7ca724fc53b37144429600a6be30bca9e",
+  "router": "/api/v1/kuaishou/app/fetch_video_comment",
+  "params": {
+    "photo_id": "3xk8ah4qgc27w6y"
+  },
+  "data": {
+    "result": 1,
+    "subCommentsMap": {
+      "1130775111668": {
+        "pcursor": "no_more",
+        "subComments": [
+          {
+            "type": 0,
+            "isKwaiShopItemComment": false,
+            "authorVerified": false,
+            "commentAuthorTags": [],
+            "commentBottomTags": [],
+            "profilePagePrefetchInfo": {
+              "profilePageType": 2
+            },
+            "author_liked": false,
+            "author_name": "靠谱的老王🔥（外贸品牌清货）",
+            "authorArea": "辽宁",
+            "cashTags": {},
+            "photo_id": 5200250388926386983,
+            "headurl": "http://p22.a.yximgs.com/uhead/AB/2025/12/01/11/BMjAyNTEyMDExMTAzMjhfNDUyMjI4NzQ4Ml8xX2hkOTExXzMyMg==_s.jpg",
+            "headurls": [
+              {
+                "cdn": "p22.a.yximgs.com",
+                "url": "http://p22.a.yximgs.com/uhead/AB/2025/12/01/11/BMjAyNTEyMDExMTAzMjhfNDUyMjI4NzQ4Ml8xX2hkOTExXzMyMg==_s.jpg"
+              },
+              {
+                "cdn": "p4.a.yximgs.com",
+                "url": "http://p4.a.yximgs.com/uhead/AB/2025/12/01/11/BMjAyNTEyMDExMTAzMjhfNDUyMjI4NzQ4Ml8xX2hkOTExXzMyMg==_s.jpg"
+              }
+            ],
+            "likedCount": 0,
+            "comment_id": 1130997611943,
+            "content": "好的亲[爱心][玫瑰]",
+            "user_sex": "M",
+            "reply_to": 2325001737,
+            "user_id": 4522287482,
+            "replyToUserName": "宁静的夏天",
+            "time": "2026-05-11 22:50:49",
+            "author_id": 4522287482,
+            "timestamp": 1778511048620
+          },
+          {
+            "type": 0,
+            "isKwaiShopItemComment": false,
+            "authorVerified": false,
+            "commentAuthorTags": [],
+            "commentBottomTags": [],
+            "profilePagePrefetchInfo": {
+              "profilePageType": 1
+            },
+            "author_liked": false,
+            "author_name": "🦁健康快乐🦄824",
+            "authorArea": "山西",
+            "cashTags": {},
+            "photo_id": 5200250388926386983,
+            "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/12/22/21/BMjAxOTEyMjIyMTQ5NDVfMTYzODE5MzEwOV8xX2hkODg4XzQ0OA==_s.jpg",
+            "headurls": [
+              {
+                "cdn": "p22.a.yximgs.com",
+                "url": "http://p22.a.yximgs.com/uhead/AB/2019/12/22/21/BMjAxOTEyMjIyMTQ5NDVfMTYzODE5MzEwOV8xX2hkODg4XzQ0OA==_s.jpg"
+              },
+              {
+                "cdn": "p4.a.yximgs.com",
+                "url": "http://p4.a.yximgs.com/uhead/AB/2019/12/22/21/BMjAxOTEyMjIyMTQ5NDVfMTYzODE5MzEwOV8xX2hkODg4XzQ0OA==_s.jpg"
+              }
+            ],
+            "likedCount": 0,
+            "comment_id": 1144009291967,
+            "content": "好用吗",
+            "user_sex": "F",
+            "reply_to": 2325001737,
+            "user_id": 4522287482,
+            "replyToUserName": "宁静的夏天",
+            "time": "2026-06-21 09:49:03",
+            "author_id": 1638193109,
+            "timestamp": 1782006542749
+          }
+        ]
+      },
+      "1130693412832": {
+        "pcursor": "no_more",
+        "subComments": [
+          {
+            "type": 0,
+            "isKwaiShopItemComment": false,
+            "authorVerified": false,
+            "commentAuthorTags": [],
+            "commentBottomTags": [],
+            "profilePagePrefetchInfo": {
+              "profilePageType": 2
+            },
+            "author_liked": false,
+            "author_name": "靠谱的老王🔥（外贸品牌清货）",
+            "authorArea": "辽宁",
+            "cashTags": {},
+            "photo_id": 5200250388926386983,
+            "headurl": "http://p22.a.yximgs.com/uhead/AB/2025/12/01/11/BMjAyNTEyMDExMTAzMjhfNDUyMjI4NzQ4Ml8xX2hkOTExXzMyMg==_s.jpg",
+            "headurls": [
+              {
+                "cdn": "p22.a.yximgs.com",
+                "url": "http://p22.a.yximgs.com/uhead/AB/2025/12/01/11/BMjAyNTEyMDExMTAzMjhfNDUyMjI4NzQ4Ml8xX2hkOTExXzMyMg==_s.jpg"
+              },
+              {
+                "cdn": "p4.a.yximgs.com",
+                "url": "http://p4.a.yximgs.com/uhead/AB/2025/12/01/11/BMjAyNTEyMDExMTAzMjhfNDUyMjI4NzQ4Ml8xX2hkOTExXzMyMg==_s.jpg"
+              }
+            ],
+            "likedCount": 0,
+            "comment_id": 1130731063211,
+            "content": "我们带麦克风了声音大 实际不会的[爱心][玫瑰]",
+            "user_sex": "M",
+            "reply_to": 1634542388,
+            "user_id": 4522287482,
+            "replyToUserName": "时来运转",
+            "time": "2026-05-10 22:56:27",
+            "author_id": 4522287482,
+            "timestamp": 1778424986964
+          }
+        ]
+      },
+      "1130906657408": {
+        "pcursor": "no_more",
+        "subComments": [
+          {
+            "type": 0,
+            "isKwaiShopItemComment": false,
+            "authorVerified": false,
+            "commentAuthorTags": [],
+            "commentBottomTags": [],
+            "profilePagePrefetchInfo": {
+              "profilePageType": 1
+            },
+            "author_liked": false,
+            "author_name": "柒柒的厨房",
+            "authorArea": "河南",
+            "cashTags": {},
+            "photo_id": 5200250388926386983,
+            "headurl": "http://p22.a.yximgs.com/uhead/AB/2025/09/10/19/BMjAyNTA5MTAxOTM5NDNfMzU3MTY1OTc2NF8yX2hkMjI1XzU3NQ==_s.jpg",
+            "headurls": [
+              {
+                "cdn": "p22.a.yximgs.com",
+                "url": "http://p22.a.yximgs.com/uhead/AB/2025/09/10/19/BMjAyNTA5MTAxOTM5NDNfMzU3MTY1OTc2NF8yX2hkMjI1XzU3NQ==_s.jpg"
+              },
+              {
+                "cdn": "p4.a.yximgs.com",
+                "url": "http://p4.a.yximgs.com/uhead/AB/2025/09/10/19/BMjAyNTA5MTAxOTM5NDNfMzU3MTY1OTc2NF8yX2hkMjI1XzU3NQ==_s.jpg"
+              }
+            ],
+            "likedCount": 0,
+            "comment_id": 1131782712941,
+            "content": "吸力挺大的，车里的零食碎渣都能吸干净，家用完全够。",
+            "user_sex": "U",
+            "reply_to": 1331933066,
+            "user_id": 4522287482,
+            "replyToUserName": "辉22749",
+            "time": "2026-05-15 09:43:21",
+            "author_id": 3571659764,
+            "timestamp": 1778809401477
+          }
+        ]
+      },
+      "1135772001822": {
+        "pcursor": "no_more",
+        "subComments": [
+          {
+            "type": 0,
+            "isKwaiShopItemComment": false,
+            "authorVerified": false,
+            "commentAuthorTags": [],
+            "commentBottomTags": [],
+            "profilePagePrefetchInfo": {
+              "profilePageType": 1
+            },
+            "author_liked": false,
+            "author_name": "唐玄三藏",
+            "authorArea": "辽宁",
+            "cashTags": {},
+            "photo_id": 5200250388926386983,
+            "headurl": "http://p22.a.yximgs.com/uhead/AB/2024/11/14/18/BMjAyNDExMTQxODUyNTdfMjA5NjU3MzA0XzFfaGQxMzVfMjc1_s.jpg",
+            "headurls": [
+              {
+                "cdn": "p22.a.yximgs.com",
+                "url": "http://p22.a.yximgs.com/uhead/AB/2024/11/14/18/BMjAyNDExMTQxODUyNTdfMjA5NjU3MzA0XzFfaGQxMzVfMjc1_s.jpg"
+              },
+              {
+                "cdn": "p4.a.yximgs.com",
+                "url": "http://p4.a.yximgs.com/uhead/AB/2024/11/14/18/BMjAyNDExMTQxODUyNTdfMjA5NjU3MzA0XzFfaGQxMzVfMjc1_s.jpg"
+              }
+            ],
+            "likedCount": 0,
+            "comment_id": 1145709590076,
+            "content": "我买过 不对版 垃圾货",
+            "user_sex": "M",
+            "reply_to": 1639234228,
+            "user_id": 4522287482,
+            "replyToUserName": "寒江雪3080",
+            "time": "2026-06-26 18:55:58",
+            "author_id": 209657304,
+            "timestamp": 1782471357905
+          }
+        ]
+      }
+    },
+    "rootComments": [
+      {
+        "type": 0,
+        "displaySubCommentCount": true,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 1,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "时来运转",
+        "authorArea": "山东",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/12/20/15/BMjAxOTEyMjAxNTU5MTVfMTYzNDU0MjM4OF8yX2hkODIwXzg4Ng==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/12/20/15/BMjAxOTEyMjAxNTU5MTVfMTYzNDU0MjM4OF8yX2hkODIwXzg4Ng==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/12/20/15/BMjAxOTEyMjAxNTU5MTVfMTYzNDU0MjM4OF8yX2hkODIwXzg4Ng==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1130693412832,
+        "content": "以为飞机来了[笑哭][捂脸]",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-10 21:32:32",
+        "author_id": 1634542388,
+        "timestamp": 1778419951673
+      },
+      {
+        "type": 0,
+        "displaySubCommentCount": true,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 2,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "宁静的夏天",
+        "authorArea": "山东",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/02/27/22/BMjAyNjAyMjcyMjI5MjJfMjMyNTAwMTczN18yX2hkODc1Xzc1MQ==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/02/27/22/BMjAyNjAyMjcyMjI5MjJfMjMyNTAwMTczN18yX2hkODc1Xzc1MQ==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/02/27/22/BMjAyNjAyMjcyMjI5MjJfMjMyNTAwMTczN18yX2hkODc1Xzc1MQ==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1130775111668,
+        "content": "拍了一个！速发货",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-11 06:03:14",
+        "author_id": 2325001737,
+        "timestamp": 1778450594133
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "运起财来",
+        "authorArea": "黑龙江",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2022/12/03/11/BMjAyMjEyMDMxMTMyMDJfMTM4NjQ4MTIwOF8yX2hkNzEwXzY1OQ==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2022/12/03/11/BMjAyMjEyMDMxMTMyMDJfMTM4NjQ4MTIwOF8yX2hkNzEwXzY1OQ==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2022/12/03/11/BMjAyMjEyMDMxMTMyMDJfMTM4NjQ4MTIwOF8yX2hkNzEwXzY1OQ==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1130700485325,
+        "content": "有谁买过？实物啥样？",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-10 21:46:14",
+        "author_id": 1386481208,
+        "timestamp": 1778420774278
+      },
+      {
+        "type": 0,
+        "displaySubCommentCount": true,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 1,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "辉22749",
+        "authorArea": "辽宁",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/04/23/12/BMjAxOTA0MjMxMjAyNDhfMTMzMTkzMzA2Nl8yX2hkNTg0Xzk5Mg==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/04/23/12/BMjAxOTA0MjMxMjAyNDhfMTMzMTkzMzA2Nl8yX2hkNTg0Xzk5Mg==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/04/23/12/BMjAxOTA0MjMxMjAyNDhfMTMzMTkzMzA2Nl8yX2hkNTg0Xzk5Mg==_s.jpg"
+          }
+        ],
+        "likedCount": 1,
+        "comment_id": 1130906657408,
+        "content": "多少瓦的吸力大吗",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-11 18:41:00",
+        "author_id": 1331933066,
+        "timestamp": 1778496059597
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "飞翔云天643",
+        "authorArea": "湖南",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/04/15/18/BMjAxOTA0MTUxODE5MzJfMTMyNDgxMjg1N18yX2hkMjMyXzczNQ==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/04/15/18/BMjAxOTA0MTUxODE5MzJfMTMyNDgxMjg1N18yX2hkMjMyXzczNQ==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/04/15/18/BMjAxOTA0MTUxODE5MzJfMTMyNDgxMjg1N18yX2hkMjMyXzczNQ==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1143026742255,
+        "content": "在好也不买日本的产品，支持国货。",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-06-19 07:30:28",
+        "author_id": 1324812857,
+        "timestamp": 1781825427991
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "小小爱495",
+        "authorArea": "辽宁",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/06/19/06/BMjAxOTA2MTkwNjA5NTZfMTM5MzExODEyN18yX2hkOF81Mzg=_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/06/19/06/BMjAxOTA2MTkwNjA5NTZfMTM5MzExODEyN18yX2hkOF81Mzg=_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/06/19/06/BMjAxOTA2MTkwNjA5NTZfMTM5MzExODEyN18yX2hkOF81Mzg=_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1131542228279,
+        "content": "老了有福才是真的有福了！祝晚年健康幸福",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-14 09:32:43",
+        "author_id": 1393118127,
+        "timestamp": 1778722362839
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "简单64723",
+        "authorArea": "新疆",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/06/12/11/BMjAyNjA2MTIxMTM4MDdfOTY3NDI5ODU5XzJfaGQ2NDVfNjU4_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/06/12/11/BMjAyNjA2MTIxMTM4MDdfOTY3NDI5ODU5XzJfaGQ2NDVfNjU4_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/06/12/11/BMjAyNjA2MTIxMTM4MDdfOTY3NDI5ODU5XzJfaGQ2NDVfNjU4_s.jpg"
+          }
+        ],
+        "likedCount": 2,
+        "comment_id": 1130894727198,
+        "content": "行不行？有用过的朋友吗",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-11 17:53:57",
+        "author_id": 967429859,
+        "timestamp": 1778493236687
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "边走边看",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/03/28/10/BMjAyNjAzMjgxMDAxNDlfMjg1NTU2MzUxMl8yX2hkNTY5Xzc3Ng==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/03/28/10/BMjAyNjAzMjgxMDAxNDlfMjg1NTU2MzUxMl8yX2hkNTY5Xzc3Ng==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/03/28/10/BMjAyNjAzMjgxMDAxNDlfMjg1NTU2MzUxMl8yX2hkNTY5Xzc3Ng==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1133224103841,
+        "content": "用着挺顺，插口稳当，拿在手里不晃荡",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-19 03:23:34",
+        "author_id": 2855563512,
+        "timestamp": 1779132214342
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "永远快乐",
+        "authorArea": "辽宁",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/03/05/08/BMjAyNjAzMDUwODEyNTRfMjIzNzY5Mjk4N18yX2hkNzAwXzcyMg==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/03/05/08/BMjAyNjAzMDUwODEyNTRfMjIzNzY5Mjk4N18yX2hkNzAwXzcyMg==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/03/05/08/BMjAyNjAzMDUwODEyNTRfMjIzNzY5Mjk4N18yX2hkNzAwXzcyMg==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1133494950752,
+        "content": "拍了小王认为我是老王[捂脸]",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-20 08:08:04",
+        "author_id": 2237692987,
+        "timestamp": 1779235683998
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "涛哥93000",
+        "authorArea": "内蒙古",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2021/11/12/00/BMjAyMTExMTIwMDEyMzFfMjYyMzgxNDQ0OF8yX2hkMjQxXzI4Ng==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2021/11/12/00/BMjAyMTExMTIwMDEyMzFfMjYyMzgxNDQ0OF8yX2hkMjQxXzI4Ng==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2021/11/12/00/BMjAyMTExMTIwMDEyMzFfMjYyMzgxNDQ0OF8yX2hkMjQxXzI4Ng==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1132911523182,
+        "content": "[赞][赞][赞]",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-17 21:50:07",
+        "author_id": 2623814448,
+        "timestamp": 1779025807186
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "吉祥花",
+        "authorArea": "内蒙古",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2025/11/15/20/BMjAyNTExMTUyMDMyMThfMzM2NDU3NDU3MF8yX2hkODcyXzkxOA==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2025/11/15/20/BMjAyNTExMTUyMDMyMThfMzM2NDU3NDU3MF8yX2hkODcyXzkxOA==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2025/11/15/20/BMjAyNTExMTUyMDMyMThfMzM2NDU3NDU3MF8yX2hkODcyXzkxOA==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1142182307991,
+        "content": "好用",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-06-16 11:24:08",
+        "author_id": 3364574570,
+        "timestamp": 1781580248091
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "晨曦骄阳",
+        "authorArea": "河北",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/03/06/04/BMjAyNjAzMDYwNDIzMjdfMTQxNTE5MzcyOV8yX2hkNl8zNzM=_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/03/06/04/BMjAyNjAzMDYwNDIzMjdfMTQxNTE5MzcyOV8yX2hkNl8zNzM=_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/03/06/04/BMjAyNjAzMDYwNDIzMjdfMTQxNTE5MzcyOV8yX2hkNl8zNzM=_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1131827250100,
+        "content": "头发能用吗？",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-15 13:51:55",
+        "author_id": 1415193729,
+        "timestamp": 1778824314952
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "唯一22463",
+        "authorArea": "山西",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/05/05/11/BMjAxOTA1MDUxMTE4MThfMTM0NDI2MzYxM18xX2hkNTg1XzcwOA==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/05/05/11/BMjAxOTA1MDUxMTE4MThfMTM0NDI2MzYxM18xX2hkNTg1XzcwOA==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/05/05/11/BMjAxOTA1MDUxMTE4MThfMTM0NDI2MzYxM18xX2hkNTg1XzcwOA==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1131287521926,
+        "content": "好用",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-13 07:27:28",
+        "author_id": 1344263613,
+        "timestamp": 1778628447572
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "ℳ̶̶̶̶♡̶҉始于初见",
+        "authorArea": "新疆",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2024/07/28/22/BMjAyNDA3MjgyMjE5MzRfMTA1ODM1ODkyOV8yX2hkMzg1XzY2OQ==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2024/07/28/22/BMjAyNDA3MjgyMjE5MzRfMTA1ODM1ODkyOV8yX2hkMzg1XzY2OQ==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2024/07/28/22/BMjAyNDA3MjgyMjE5MzRfMTA1ODM1ODkyOV8yX2hkMzg1XzY2OQ==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1130699644375,
+        "content": "乌鲁木齐不发货呀[奸笑]",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-10 21:44:35",
+        "author_id": 1058358929,
+        "timestamp": 1778420675336
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "萍87092",
+        "attachments": [
+          {
+            "type": "PICTURE",
+            "id": "image-item-comment-ugc_aW1hZ2UtaXRlbS1jb21tZW50LXVnYzpJVEVNX0NPTU1FTlRfVUdDOjE1MDM2NzA4MDM6TUVSQ0hBTlQ6W0JAMWI0OTc5ZDY6MjAxOTgxOTQ4MDQ4MDM=.jpg",
+            "layout": {
+              "width": 984,
+              "height": 1920,
+              "thumbWidth": 184,
+              "thumbHeight": 360
+            },
+            "content": {
+              "bigUrl": [
+                {
+                  "cdn": "p23-plat.wsukwai.com",
+                  "url": "https://p23-plat.wsukwai.com/kimg/EL7M1y8qogEKBWltYWdlEgdjb21tZW50Go8BaW1hZ2UtaXRlbS1jb21tZW50LXVnY19hVzFoWjJVdGFYUmxiUzFqYjIxdFpXNTBMWFZuWXpwSlZFVk5YME5QVFUxRlRsUmZWVWRET2pFMU1ETTJOekE0TURNNlRVVlNRMGhCVGxRNlcwSkFNV0kwT1RjNVpEWTZNakF4T1RneE9UUTRNRFE0TURNPS5qcGc.heif"
+                },
+                {
+                  "cdn": "p1-plat.wsukwai.com",
+                  "url": "https://p1-plat.wsukwai.com/kimg/EL7M1y8qogEKBWltYWdlEgdjb21tZW50Go8BaW1hZ2UtaXRlbS1jb21tZW50LXVnY19hVzFoWjJVdGFYUmxiUzFqYjIxdFpXNTBMWFZuWXpwSlZFVk5YME5QVFUxRlRsUmZWVWRET2pFMU1ETTJOekE0TURNNlRVVlNRMGhCVGxRNlcwSkFNV0kwT1RjNVpEWTZNakF4T1RneE9UUTRNRFE0TURNPS5qcGc.heif"
+                }
+              ],
+              "smallUrl": [
+                {
+                  "cdn": "p23-plat.wsukwai.com",
+                  "url": "https://p23-plat.wsukwai.com/kimg/ELzM1y8qogEKBWltYWdlEgdjb21tZW50Go8BaW1hZ2UtaXRlbS1jb21tZW50LXVnY19hVzFoWjJVdGFYUmxiUzFqYjIxdFpXNTBMWFZuWXpwSlZFVk5YME5QVFUxRlRsUmZWVWRET2pFMU1ETTJOekE0TURNNlRVVlNRMGhCVGxRNlcwSkFNV0kwT1RjNVpEWTZNakF4T1RneE9UUTRNRFE0TURNPS5qcGc.heif"
+                },
+                {
+                  "cdn": "p1-plat.wsukwai.com",
+                  "url": "https://p1-plat.wsukwai.com/kimg/ELzM1y8qogEKBWltYWdlEgdjb21tZW50Go8BaW1hZ2UtaXRlbS1jb21tZW50LXVnY19hVzFoWjJVdGFYUmxiUzFqYjIxdFpXNTBMWFZuWXpwSlZFVk5YME5QVFUxRlRsUmZWVWRET2pFMU1ETTJOekE0TURNNlRVVlNRMGhCVGxRNlcwSkFNV0kwT1RjNVpEWTZNakF4T1RneE9UUTRNRFE0TURNPS5qcGc.heif"
+                }
+              ]
+            }
+          }
+        ],
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/09/21/18/BMjAxOTA5MjExODA4MjVfMTUwMzY3MDgwM18yX2hkNDk0XzE0NA==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/09/21/18/BMjAxOTA5MjExODA4MjVfMTUwMzY3MDgwM18yX2hkNDk0XzE0NA==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/09/21/18/BMjAxOTA5MjExODA4MjVfMTUwMzY3MDgwM18yX2hkNDk0XzE0NA==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1133901052311,
+        "content": "车载收尘器收到，两档位，收力可以。",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-21 21:04:23",
+        "author_id": 1503670803,
+        "timestamp": 1779368662871
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "ꨄᩚ᭄宋你꧔ꦿᩚ🍊好运",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/02/22/22/BMjAyNjAyMjIyMjEwMzNfNDc2NDE5Mzc1XzJfaGQ0NTBfNDA5_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/02/22/22/BMjAyNjAyMjIyMjEwMzNfNDc2NDE5Mzc1XzJfaGQ0NTBfNDA5_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/02/22/22/BMjAyNjAyMjIyMjEwMzNfNDc2NDE5Mzc1XzJfaGQ0NTBfNDA5_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1148416965506,
+        "content": "吸力确实够用，平时小面积清理没问题。不管是轿车还是SUV，接口都通用，装上就能直接用。不过噪音控制得不错，开吸尘器时车厢里听不见嘈杂声。集尘袋拆卸方便，换洗也快，整体设计紧凑，不占地方，放在后备箱或前排都能灵活收纳。厚度设计得当，不占地，握在手里挺轻的，放后备箱也不怕颠簸，长途自驾也能安心带。售后服务响应快，有问题咨询时能及时得到解决",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-07-03 22:50:31",
+        "author_id": 476419375,
+        "timestamp": 1783090231189
+      },
+      {
+        "type": 0,
+        "displaySubCommentCount": true,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 1,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "寒江雪3080",
+        "authorArea": "湖南",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/12/23/20/BMjAxOTEyMjMyMDAxMDRfMTYzOTIzNDIyOF8yX2hkODA1XzY3Mw==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/12/23/20/BMjAxOTEyMjMyMDAxMDRfMTYzOTIzNDIyOF8yX2hkODA1XzY3Mw==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/12/23/20/BMjAxOTEyMjMyMDAxMDRfMTYzOTIzNDIyOF8yX2hkODA1XzY3Mw==_s.jpg"
+          }
+        ],
+        "likedCount": 2,
+        "comment_id": 1135772001822,
+        "content": "大家不要上当了。他卖的大部分都是国内生产的产品。根本就不是日本产的。我开始也相信了。到了看了都是国内生产的。有的连说明书都没有。我都退货了。",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-27 16:06:14",
+        "author_id": 1639234228,
+        "timestamp": 1779869174167
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "晨曦百分百",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2017/11/04/18/BMjAxNzExMDQxODAzMzFfNzE1OTM5MDg0XzFfaGQyNjBfMzE2_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2017/11/04/18/BMjAxNzExMDQxODAzMzFfNzE1OTM5MDg0XzFfaGQyNjBfMzE2_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2017/11/04/18/BMjAxNzExMDQxODAzMzFfNzE1OTM5MDg0XzFfaGQyNjBfMzE2_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1148371857423,
+        "content": "摸着有质感，不廉价，不过声音确实不算大，日常用着也挺安静的。接头设计很人性化，插拔时几乎没有阻力，操作起来省心。吸力确实给力，灰尘一吸就干净，家里地面扫完能直接看见地板。适配不同车款也稳，体积控制得挺合理，放车里也不占空间，日常通勤携带方便。开关设计简单，一按就启，挺省事的，卖家发货速度挺快，订单确认后隔天就收到了货",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-07-03 21:33:11",
+        "author_id": 715939084,
+        "timestamp": 1783085591201
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "九渡在路上",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2022/08/02/16/BMjAyMjA4MDIxNjU0MTNfMTEzNzg5ODU5OV8yX2hkMTQ3XzMyMg==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2022/08/02/16/BMjAyMjA4MDIxNjU0MTNfMTEzNzg5ODU5OV8yX2hkMTQ3XzMyMg==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2022/08/02/16/BMjAyMjA4MDIxNjU0MTNfMTEzNzg5ODU5OV8yX2hkMTQ3XzMyMg==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1148390926126,
+        "content": "做工细节挺耐看的，吸尘时电机运转稳定，没有异常震动或异响。吸尘时操作简单，随手一按就能清理死角。适配性不错，不同车型都能稳固安装，不影响行驶时的震动感。插头长度刚好够伸到车座，吸尘效率确实挺稳定的。长期使用也没发现故障，配件和电机都挺可靠。吸尘时电机声音不大，但吸力确实够用，日常清理挺省事",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-07-03 22:04:34",
+        "author_id": 1137898599,
+        "timestamp": 1783087474244
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "白🇨🇳545",
+        "authorArea": "辽宁",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2020/01/13/09/BMjAyMDAxMTMwOTIwMzVfMTY3NDM5MjAwN18yX2hkNTUwXzM1Nw==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2020/01/13/09/BMjAyMDAxMTMwOTIwMzVfMTY3NDM5MjAwN18yX2hkNTUwXzM1Nw==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2020/01/13/09/BMjAyMDAxMTMwOTIwMzVfMTY3NDM5MjAwN18yX2hkNTUwXzM1Nw==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1130795221633,
+        "content": "哪位客户用过",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-11 08:17:02",
+        "author_id": 1674392007,
+        "timestamp": 1778458621991
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "刘可坤",
+        "authorArea": "广东",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/05/19/14/BMjAyNjA1MTkxNDA1MDdfNTQ5OTc0MjI3Ml8xX2hkMjU2XzYxNg==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/05/19/14/BMjAyNjA1MTkxNDA1MDdfNTQ5OTc0MjI3Ml8xX2hkMjU2XzYxNg==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/05/19/14/BMjAyNjA1MTkxNDA1MDdfNTQ5OTc0MjI3Ml8xX2hkMjU2XzYxNg==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1137872705902,
+        "content": "最近在整理衣柜，结果发现柜子底下全是灰和毛絮。拿希 喂吸尘器吸了一遍之后干净很多，顺便把床底也一起处理了。",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-06-02 21:06:00",
+        "author_id": 5499742272,
+        "timestamp": 1780405560115
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "婧儿百货",
+        "authorArea": "云南",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2026/05/13/10/BMjAyNjA1MTMxMDMwMTJfNTQyMzEyMjEwMV8yX2hkMjAxXzYyNA==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2026/05/13/10/BMjAyNjA1MTMxMDMwMTJfNTQyMzEyMjEwMV8yX2hkMjAxXzYyNA==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2026/05/13/10/BMjAyNjA1MTMxMDMwMTJfNTQyMzEyMjEwMV8yX2hkMjAxXzYyNA==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1130961660970,
+        "content": "[666][666][666]赞赞赞赞赞",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-11 21:15:50",
+        "author_id": 5423122101,
+        "timestamp": 1778505349955
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "香香",
+        "authorArea": "江西",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p1.a.yximgs.com/kos/nlav12689/head.jpg",
+        "headurls": [
+          {
+            "cdn": "p1.a.yximgs.com",
+            "url": "http://p1.a.yximgs.com/kos/nlav12689/head.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1144389654615,
+        "content": "杂音太大了[捂脸]",
+        "user_sex": "U",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-06-22 06:31:03",
+        "author_id": 5135599854,
+        "timestamp": 1782081063458
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "^_^心想事成^ _ ^",
+        "firstComment": true,
+        "authorArea": "辽宁",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2022/09/08/11/BMjAyMjA5MDgxMTM3MjRfMjkxNDI3NjgyXzJfaGQzNjNfODA=_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2022/09/08/11/BMjAyMjA5MDgxMTM3MjRfMjkxNDI3NjgyXzJfaGQzNjNfODA=_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2022/09/08/11/BMjAyMjA5MDgxMTM3MjRfMjkxNDI3NjgyXzJfaGQzNjNfODA=_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1130656852333,
+        "content": "别卖日本货了，总为他卖命，你傻呀，你是中国人",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-05-10 20:22:07",
+        "author_id": 291427682,
+        "timestamp": 1778415726671
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "凱哥110",
+        "authorArea": "辽宁",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2022/05/23/20/BMjAyMjA1MjMyMDM0MDhfMTUzNjQ4MzIxOF8yX2hkMjgwXzg5OA==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2022/05/23/20/BMjAyMjA1MjMyMDM0MDhfMTUzNjQ4MzIxOF8yX2hkMjgwXzg5OA==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2022/05/23/20/BMjAyMjA1MjMyMDM0MDhfMTUzNjQ4MzIxOF8yX2hkMjgwXzg5OA==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1141904548419,
+        "content": "在好也不买日本的产品，支持国货。",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-06-15 11:02:15",
+        "author_id": 1536483218,
+        "timestamp": 1781492534808
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "安苏633",
+        "authorArea": "江苏",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2019/02/14/15/BMjAxOTAyMTQxNTQzMTNfMTI1Mjk2OTI2MF8yX2hkNDk3XzM1NA==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2019/02/14/15/BMjAxOTAyMTQxNTQzMTNfMTI1Mjk2OTI2MF8yX2hkNDk3XzM1NA==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2019/02/14/15/BMjAxOTAyMTQxNTQzMTNfMTI1Mjk2OTI2MF8yX2hkNDk3XzM1NA==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1142683432915,
+        "content": "@[祈祷][玫瑰][赞][爱心]",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-06-18 08:41:26",
+        "author_id": 1252969260,
+        "timestamp": 1781743285584
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "hot": true,
+        "subCommentCount": 0,
+        "recallType": 1,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "超哥",
+        "authorArea": "辽宁",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p1.a.yximgs.com/kos/nlav12689/head.jpg",
+        "headurls": [
+          {
+            "cdn": "p1.a.yximgs.com",
+            "url": "http://p1.a.yximgs.com/kos/nlav12689/head.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1145280259448,
+        "content": "噪音太大了。",
+        "user_sex": "M",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-06-25 07:45:10",
+        "author_id": 2086270531,
+        "timestamp": 1782344709563
+      },
+      {
+        "type": 0,
+        "isKwaiShopItemComment": false,
+        "authorVerified": false,
+        "commentAuthorTags": [],
+        "commentBottomTags": [],
+        "subCommentCount": 0,
+        "profilePagePrefetchInfo": {
+          "profilePageType": 1
+        },
+        "author_liked": false,
+        "author_name": "泰然",
+        "cashTags": {},
+        "photo_id": 5200250388926386983,
+        "headurl": "http://p22.a.yximgs.com/uhead/AB/2020/07/20/14/BMjAyMDA3MjAxNDI3MjJfMjAyMTI0OTgwNV8yX2hkMzM0Xzg0OQ==_s.jpg",
+        "headurls": [
+          {
+            "cdn": "p22.a.yximgs.com",
+            "url": "http://p22.a.yximgs.com/uhead/AB/2020/07/20/14/BMjAyMDA3MjAxNDI3MjJfMjAyMTI0OTgwNV8yX2hkMzM0Xzg0OQ==_s.jpg"
+          },
+          {
+            "cdn": "p4.a.yximgs.com",
+            "url": "http://p4.a.yximgs.com/uhead/AB/2020/07/20/14/BMjAyMDA3MjAxNDI3MjJfMjAyMTI0OTgwNV8yX2hkMzM0Xzg0OQ==_s.jpg"
+          }
+        ],
+        "likedCount": 0,
+        "comment_id": 1148054744602,
+        "content": "吸力挺稳定，地毯灰尘吸得干净，底部设计稳固，放置在车座上也不易晃动或倾倒。把手位置设计得比较贴合人体工学，握感舒适不费力。外壳材质比较耐刮，日常使用没出现明显磨损迹象。整体品相保存得不错，轻微使用痕迹但不影响外观，日常使用无损。灰尘清理得挺彻底的，下单后物流速度挺快，发货后第二天就收到了",
+        "user_sex": "F",
+        "reply_to": 0,
+        "user_id": 4522287482,
+        "time": "2026-07-03 07:12:26",
+        "author_id": 2021249805,
+        "timestamp": 1783033945824
+      }
+    ],
+    "pcursor": "no_more",
+    "transparentPayload": "{\"kwaiShopItemCmtInjectCnt\":0,\"kwaiShopItemCmtInjectCursor\":0}",
+    "host-name": "public-bjy-c34-kce-node3842.idchb1az2.hb1.kwaidc.com",
+    "commentCount": 33,
+    "extInfo": {
+      "medalSnackBarInfo": {
+        "taskProgressInfoList": []
+      }
+    }
+  }
+}

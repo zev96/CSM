@@ -26,7 +26,8 @@ from typing import Callable
 
 from csm_core.monitor.base import MonitorResult
 from csm_core.monitor.platforms._comment_common import build_match_result
-from .normalize import normalize_douyin_comments, normalize_bilibili_comments
+from .normalize import (
+    normalize_douyin_comments, normalize_bilibili_comments, normalize_kuaishou_comments)
 from .client import paginate
 from .errors import TikHubError
 
@@ -77,6 +78,24 @@ def _bl_parse(raw, first_page):
 
 BILIBILI_SPEC = PlatformSpec("bilibili_comment", "/api/v1/bilibili/app/fetch_video_comments",
                              default_depth=150, depth_cap=200, build_params=_bl_params, parse_page=_bl_parse)
+
+
+# ── 快手(单层 wrapper;pcursor=="no_more" 是翻页到底标记,不做平台级错误检测)──
+def _ks_params(vid, id_type, cursor):
+    p = {"photo_id": vid}
+    if cursor:
+        p["pcursor"] = cursor
+    return p
+
+def _ks_parse(raw, first_page):
+    data = raw.get("data") or {}
+    items = normalize_kuaishou_comments(raw)
+    pcursor = data.get("pcursor")
+    has_more = bool(pcursor) and pcursor != "no_more"
+    return items, (pcursor if has_more else None), has_more
+
+KUAISHOU_SPEC = PlatformSpec("kuaishou_comment", "/api/v1/kuaishou/app/fetch_video_comment",
+                             default_depth=150, depth_cap=200, build_params=_ks_params, parse_page=_ks_parse)
 
 
 class CommentApiAdapter:

@@ -4,6 +4,17 @@ from csm_core.monitor.tikhub.normalize import (
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
 
+def test_kuaishou_real_fixture():
+    from csm_core.monitor.tikhub.normalize import normalize_kuaishou_comments
+    raw = json.loads((FIX / "tikhub_kuaishou_comments.json").read_text(encoding="utf-8"))
+    out = normalize_kuaishou_comments(raw)
+    assert len(out) == 28
+    assert out[0]["text"] == "以为飞机来了[笑哭][捂脸]"
+    assert out[0]["author"] == "时来运转"
+    assert out[0]["likes"] == 0
+    assert all(set(o) == {"rank", "text", "author", "likes"} for o in out)
+    assert all(o["rank"] == i + 1 for i, o in enumerate(out))
+
 def test_douyin_real_fixture():
     raw = json.loads((FIX / "tikhub_douyin_comments.json").read_text(encoding="utf-8"))
     out = normalize_douyin_comments(raw)

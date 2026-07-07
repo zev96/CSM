@@ -89,3 +89,17 @@ def normalize_bilibili_comments(raw: dict, first_page: bool = False) -> list[dic
     for r in (inner.get("replies") or []):
         push(r)
     return [{**c, "rank": i + 1} for i, c in enumerate(rows)]
+
+
+def normalize_kuaishou_comments(raw: dict) -> list[dict]:
+    """快手 App 评论:单层 wrapper,raw.data.rootComments 是评论列表。"""
+    cs = (raw.get("data") or {}).get("rootComments") or []
+    out: list[dict] = []
+    for c in cs:
+        out.append({
+            "rank": len(out) + 1,
+            "text": c.get("content") or "",
+            "author": c.get("author_name"),
+            "likes": c.get("likedCount"),
+        })
+    return out
