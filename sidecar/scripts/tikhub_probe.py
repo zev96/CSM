@@ -30,17 +30,35 @@ KEY = os.environ.get("TIKHUB_API_KEY")
 OUT = pathlib.Path(__file__).resolve().parents[1] / "tests" / "tikhub" / "fixtures"
 
 
+def _resolve(url: str) -> str:
+    """跟随重定向把分享短链(v.douyin.com / v.kuaishou.com / b23.tv 等)展开成
+    含真实 ID 的长链。失败就原样返回。"""
+    try:
+        r = httpx.get(url, follow_redirects=True, timeout=15)
+        return str(r.url)
+    except Exception as e:  # noqa: BLE001
+        print(f"  (短链展开失败,按原样用: {e})")
+        return url
+
+
 def _extract(kind: str, raw: str) -> str:
-    """从视频链接里抽 ID;传进来已经是纯 ID 就原样返回。"""
+    """从视频链接里抽 ID;短链先展开;传进来已经是纯 ID 就原样返回。"""
     raw = (raw or "").strip()
+    if not raw:
+        return raw
+    # 分享短链先展开成长链再抽 ID
+    if raw.startswith("http") and any(
+        s in raw for s in ("v.douyin.com", "v.kuaishou.com", "kuaishou.com/f/", "b23.tv")
+    ):
+        raw = _resolve(raw)
     if kind == "zhihu":
         m = re.search(r"/question/(\d+)", raw)
         return m.group(1) if m else raw
     if kind == "douyin":
-        m = re.search(r"/video/(\d+)", raw)
+        m = re.search(r"/video/(\d+)", raw) or re.search(r"\b(\d{15,})\b", raw)
         return m.group(1) if m else raw
     if kind == "kuaishou":
-        m = re.search(r"/short-video/([\w-]+)", raw)
+        m = re.search(r"/short-video/([\w-]+)", raw) or re.search(r"/f/([\w-]+)", raw)
         return m.group(1) if m else raw
     if kind == "bilibili":
         m = re.search(r"(BV[0-9A-Za-z]+)", raw)
