@@ -31,4 +31,4 @@ def map_error(status: int, code: int | None) -> TikHubError:
         return TikHubError("TikHub 限流", code)
     if status in (401, 403):
         return TikHubError("TikHub 鉴权失败或 Key 无效", code)
-    return TikHubError(f"TikHub API 错误(HTTP {status})", code)
+    return TikHubError(f"TikHub API 错误(code={status})", code)
