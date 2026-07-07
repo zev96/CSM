@@ -29,7 +29,7 @@ Build (from the worktree root):
 """
 from __future__ import annotations
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 
 # ── Data files ─────────────────────────────────────────────────────────────
@@ -65,6 +65,13 @@ datas += collect_data_files("csm_sidecar", include_py_files=False)
 # all domain extraction returns "". Pure-python package; collect_data_files is
 # sufficient (no native binaries).
 datas += collect_data_files("tldextract")
+# keyring (TikHub API key storage, §13 R6 加固): 此前依赖 PyInstaller 自带
+# hook 隐性收集后端 entry points + pywin32-ctypes，实测能跑但失效时静默无
+# 告警。显式 copy_metadata 把 keyring 自己的 dist-info 打进包 —— 部分后端
+# 通过 importlib.metadata entry points 发现（keyring.backend.get_all_keyring）,
+# 缺了 metadata 会导致运行时找不到任何后端、set_password/get_password 静默
+# 退化成 fail.PasswordSetError。
+datas += copy_metadata("keyring")
 
 
 # ── Hidden imports ─────────────────────────────────────────────────────────
@@ -269,6 +276,15 @@ hiddenimports: list[str] = [
     "apscheduler.triggers.interval",
     "keyring",
     "keyring.backends",
+    # keyring on Windows resolves through win32ctypes (pywin32-ctypes) to
+    # reach the native Credential Manager API — keyring.backends.Windows
+    # imports win32ctypes.core lazily, invisible to PyInstaller's static
+    # analyzer. §13 R6: was silently covered by PyInstaller's bundled
+    # keyring/pywin32-ctypes hooks; pin explicitly so a hook regression
+    # fails loudly at build time instead of at runtime.
+    "win32ctypes.core",
+    "win32ctypes.core.ctypes",
+    "keyring.backends.Windows",
 ]
 hiddenimports += collect_submodules("anthropic")
 hiddenimports += collect_submodules("datasketch")

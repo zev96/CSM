@@ -10,6 +10,7 @@ dependencies = [
     "sse-starlette>=2.0",
     "python-multipart>=0.0.9",  # multipart/form-data image uploads (Phase 2 T5)
     "keyring>=24.0",
+    "pywin32-ctypes>=0.2.0; sys_platform == \"win32\"",  # keyring's Windows Credential Manager backend hard-depends on this; pin explicitly (§13 R6)
     "apscheduler>=3.10",
     # Re-stated to make the sidecar a buildable PyInstaller target on its
     # own without importing the GUI optional-deps from the parent.
