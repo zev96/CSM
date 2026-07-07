@@ -485,7 +485,12 @@ class MonitorLoop:
                     ))
                     self._untrack_active(task_id_local)
                     return None
-                result: MonitorResult = _dispatch_fetch()
+                # TikHub 适配器签名统一(fetch(task, cancel_token=, progress_cb=, **_)),
+                # 直接调一次,不走 4 级 TypeError 回退 —— 避免 fetch 体内偶发 TypeError
+                # 触发重调 = 重复付费请求(§9:不自动重试)。
+                result: MonitorResult = adapter.fetch(
+                    task, progress_cb=_progress_cb, cancel_token=cancel_token,
+                )
             else:
                 with slot(task.type, timeout=120.0):
                     result = _dispatch_fetch()
