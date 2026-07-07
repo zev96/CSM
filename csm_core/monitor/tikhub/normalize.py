@@ -40,3 +40,52 @@ def normalize_zhihu_answers(raw: dict) -> list[dict]:
             "url": t.get("url"),
         })
     return out
+
+
+def normalize_douyin_comments(raw: dict) -> list[dict]:
+    """抖音 App 评论:单层 wrapper,raw.data.comments 是评论列表。"""
+    cs = (raw.get("data") or {}).get("comments") or []
+    out: list[dict] = []
+    for c in cs:
+        out.append({
+            "rank": len(out) + 1,
+            "text": c.get("text") or "",
+            "author": (c.get("user") or {}).get("nickname"),
+            "likes": c.get("digg_count"),
+        })
+    return out
+
+
+def _bili_one(node: dict) -> dict:
+    return {
+        "text": (node.get("content") or {}).get("message") or "",
+        "author": (node.get("member") or {}).get("uname"),
+        "likes": node.get("like"),
+    }
+
+
+def normalize_bilibili_comments(raw: dict, first_page: bool = False) -> list[dict]:
+    """B站 App 评论:双层 wrapper(raw.data 是B站信封,raw.data.data 才是真数据)。
+    首屏把置顶(data.data.top.upper / .admin)放最前,再 hots、replies,按文本全局去重。"""
+    inner = ((raw.get("data") or {}).get("data")) or {}
+    rows: list[dict] = []
+    seen: set[str] = set()
+
+    def push(node):
+        if not isinstance(node, dict):
+            return
+        c = _bili_one(node)
+        if c["text"] in seen:
+            return
+        seen.add(c["text"])
+        rows.append(c)
+
+    if first_page:
+        top = inner.get("top") or {}
+        push(top.get("upper"))   # UP 置顶
+        push(top.get("admin"))   # 管理员置顶
+    for h in (inner.get("hots") or []):
+        push(h)
+    for r in (inner.get("replies") or []):
+        push(r)
+    return [{**c, "rank": i + 1} for i, c in enumerate(rows)]
