@@ -10,12 +10,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from csm_core.config import AppConfig
+from csm_core.config import AppConfig, read_api_key
 from csm_core.monitor import storage
 from csm_core.monitor.drivers import browser_driver
 from csm_core.monitor.platforms.baidu_keyword import ADAPTER as BAIDU_ADAPTER
 from csm_core.monitor.platforms.zhihu_question import ADAPTER as ZHIHU_ADAPTER
 from csm_core.monitor.rate_limit import configure_pacing, configure_concurrency
+from csm_core.monitor.tikhub import build_api_adapters
 
 from . import config_service
 from .monitor_loop import MonitorLoop
@@ -106,6 +107,8 @@ def start(*, db_path: Path | None = None) -> MonitorLoop:
         alert_top_n=cfg.monitor.alert_top_n,
         cooldown_hours=cfg.monitor.alert_cooldown_hours,
         # tick_seconds left at default 60 — APScheduler handles drift.
+        api_adapters=build_api_adapters(config_service.load, read_api_key),
+        data_source_mode=cfg.monitor.data_source_mode,
     )
     _loop.start()
     return _loop
@@ -136,7 +139,9 @@ def reconfigure(cfg: AppConfig | None = None) -> None:
     """
     if _loop is None:
         return
-    _apply_runtime_settings(cfg or config_service.load())
+    cfg = cfg or config_service.load()
+    _apply_runtime_settings(cfg)
+    _loop.set_data_source_mode(cfg.monitor.data_source_mode)
 
 
 def get() -> MonitorLoop | None:
