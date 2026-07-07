@@ -32,9 +32,18 @@ OUT = pathlib.Path(__file__).resolve().parents[1] / "tests" / "tikhub" / "fixtur
 
 def _resolve(url: str) -> str:
     """跟随重定向把分享短链(v.douyin.com / v.kuaishou.com / b23.tv 等)展开成
-    含真实 ID 的长链。失败就原样返回。"""
+    含真实 ID 的长链。优先 curl_cffi(impersonate 真浏览器,躲开快手等平台对
+    裸 httpx 的指纹拦截 / SSL 握手超时),失败回退带浏览器 UA 的 httpx。"""
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     try:
-        r = httpx.get(url, follow_redirects=True, timeout=15)
+        from curl_cffi import requests as _cffi  # 项目已有依赖
+        r = _cffi.get(url, impersonate="chrome120", allow_redirects=True, timeout=20)
+        return str(r.url)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        r = httpx.get(url, follow_redirects=True, timeout=20, headers={"User-Agent": ua})
         return str(r.url)
     except Exception as e:  # noqa: BLE001
         print(f"  (短链展开失败,按原样用: {e})")
