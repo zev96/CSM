@@ -123,3 +123,34 @@ class TikHubClient:
             self._fail(biz_code, 200, path, r.text)
 
         return data
+
+
+def paginate(page_fn, target: int, max_pages: int, cancel_token=None):
+    """自适应翻页:反复调用 page_fn(cursor) 直到达到 target 条数或 API 报尽。
+
+    page_fn(cursor) -> (items, next_cursor, has_more)。
+
+    设计依据: docs/superpowers/specs/2026-07-06-tikhub-api-scraping-mode-design.md §7.2
+    - 正常停止:已凑够 target 条 / has_more=False / 本页空。
+    - 异常停止:page_fn 抛异常直接向上传播(**绝不吞掉异常返回残缺列表**——
+      否则会把"评论埋得深/翻页失败"误报成"评论被删");
+      翻了 max_pages 页仍未终止,视为疑似死循环/风控假状态,主动熔断抛 TikHubError。
+    - cancel_token(可选):每页开始前检查一次,置位则提前收工(用户取消属正常路径,
+      返回已抓到的部分不算"残缺失败",与 page_fn 异常的语义不同)。
+    """
+    out: list = []
+    cursor = None
+    pages = 0
+    while len(out) < target:
+        if cancel_token is not None and cancel_token.is_set():
+            break
+        if pages >= max_pages:
+            raise TikHubError(f"翻页超过 {max_pages} 页仍未终止(疑似异常)")
+        items, cursor, has_more = page_fn(cursor)  # 抛异常 = 整体失败,直接向上传播
+        pages += 1
+        if not items:
+            break
+        out.extend(items)
+        if not has_more or cursor is None:
+            break
+    return out[:target]
