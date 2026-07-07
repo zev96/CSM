@@ -309,6 +309,7 @@ onMounted(async () => {
   syncDraftFromCfg();
   refreshKeyringStatus();
   refreshZhihuKey();
+  refreshTikhubKey();
   refreshBaiduLoginStatus();
   RPA_PLATFORMS.forEach((p) => refreshRpaLoginStatus(p.value));
   applyHash(route.hash);
@@ -454,6 +455,37 @@ async function saveZhihuSecret() {
     zhihuHasKey.value = true;
     zhihuSecretDraft.value = API_KEY_MASK;
     toast.success("知乎 Access Secret 已保存");
+  } catch (e: any) {
+    toast.error(`保存失败：${e?.message ?? e}`);
+  }
+}
+
+// ── TikHub 付费 API Key（抓取数据源开关用）─────────────────────
+// 「抓取数据源」开关开启时，知乎问题 + 抖音/B站/快手评论走 TikHub 付费
+// API 而非本地浏览器抓取。走泛型 keyring（provider="tikhub"），后端
+// read_api_key("tikhub") 取用。逻辑完全镜像知乎 Access Secret 那一套。
+const tikhubSecretDraft = ref("");
+const tikhubHasKey = ref(false);
+
+async function refreshTikhubKey() {
+  try {
+    const s = await keyringStatus("tikhub");
+    tikhubHasKey.value = Boolean(s.has_key);
+    tikhubSecretDraft.value = tikhubHasKey.value ? API_KEY_MASK : "";
+  } catch {
+    tikhubHasKey.value = false;
+  }
+}
+function onTikhubFocus() { if (tikhubSecretDraft.value === API_KEY_MASK) tikhubSecretDraft.value = ""; }
+function onTikhubBlur() { if (!tikhubSecretDraft.value.trim() && tikhubHasKey.value) tikhubSecretDraft.value = API_KEY_MASK; }
+async function saveTikhubSecret() {
+  const raw = tikhubSecretDraft.value.trim();
+  if (!raw || raw === API_KEY_MASK) { toast.warn("请先粘贴 TikHub API Key"); return; }
+  try {
+    await keyringSet("tikhub", raw);
+    tikhubHasKey.value = true;
+    tikhubSecretDraft.value = API_KEY_MASK;
+    toast.success("TikHub API Key 已保存");
   } catch (e: any) {
     toast.error(`保存失败：${e?.message ?? e}`);
   }
@@ -1393,6 +1425,73 @@ async function saveAccountEdit() {
           -->
           <template v-else-if="section === 'monitor'">
             <!--
+              「抓取数据源」放监测 section 最顶 —— 决定后面这些抓取相关
+              设置到底作用在哪条路径上：本地浏览器抓取（默认）还是 TikHub
+              付费 API。开关开启时，本地专属设置（浏览器引擎/多账号轮换/
+              每账号任务数/Cookie 冷却）不再生效，灰化提示；Cookie 池和
+              知乎 Access Secret 两条常亮，因为登录态 RPA 平台（微信初列/
+              小红书等）不受此开关影响，且知乎 Secret 是官方 API 凭证，
+              跟 TikHub 抓取路径无关。
+            -->
+            <div class="mb-3 font-display text-[13px] font-semibold" :style="{ color: 'var(--ink)' }">
+              抓取数据源
+            </div>
+            <SettingsRow
+              label="付费 API 抓取（TikHub）"
+              hint="开 = 知乎问题 + 抖音/B站/快手评论走 TikHub 付费 API；关 = 本地浏览器抓取"
+            >
+              <FormToggle
+                :model-value="(get('monitor.data_source_mode') ?? 'local') === 'tikhub_api'"
+                @update:model-value="(v) => setField('monitor.data_source_mode', v ? 'tikhub_api' : 'local')"
+              />
+            </SettingsRow>
+            <template v-if="get('monitor.data_source_mode') === 'tikhub_api'">
+              <SettingsRow
+                label="TikHub API Key"
+                hint="到 tikhub.io 控制台获取。按次计费，需先在 TikHub 账户充值。"
+              >
+                <div class="flex items-center gap-2">
+                  <input
+                    v-model="tikhubSecretDraft"
+                    type="password"
+                    :placeholder="tikhubHasKey ? '已保存 — 点击输入新值可覆盖' : '粘贴 TikHub API Key'"
+                    class="font-mono bg-card-white px-3 outline-none"
+                    :style="{
+                      width: '260px',
+                      height: '34px',
+                      borderRadius: '10px',
+                      border: '1px solid var(--line)',
+                      fontSize: '11.5px',
+                    }"
+                    @focus="onTikhubFocus"
+                    @blur="onTikhubBlur"
+                  />
+                  <span
+                    class="text-[11.5px]"
+                    :style="{ color: tikhubHasKey ? 'var(--success, #16a34a)' : 'var(--ink-3)' }"
+                  >{{ tikhubHasKey ? "已配置" : "未配置" }}</span>
+                  <Btn variant="solid" small @click="saveTikhubSecret">保存</Btn>
+                </div>
+              </SettingsRow>
+              <SettingsRow
+                label="接口区域"
+                hint="大陆用 .dev，海外用 .io。多数人不用改。"
+              >
+                <FormSelect
+                  :model-value="get('monitor.tikhub_base_url') ?? 'https://api.tikhub.dev'"
+                  :options="[
+                    { label: '大陆（api.tikhub.dev）', value: 'https://api.tikhub.dev' },
+                    { label: '海外（api.tikhub.io）', value: 'https://api.tikhub.io' },
+                  ]"
+                  width="200"
+                  @update:model-value="(v) => setField('monitor.tikhub_base_url', String(v))"
+                />
+              </SettingsRow>
+              <div class="text-[11.5px] text-ink-3" :style="{ marginTop: '-8px', marginBottom: '12px' }">
+                按次计费 $0.001/次。评论 = 录入时一次性；知乎 = 按你设的频率。改成高频复算会显著增加费用。
+              </div>
+            </template>
+            <!--
               Cookie 池入口提到监测设置最顶 —— 按用户要求"比较重要且常用"，
               百度账号登录 + 重置浏览器 profile 都融合到了 Cookie 管理器
               modal 里，所以这里点击直接覆盖三项常用操作（百度登录 / 重置 /
@@ -1470,72 +1569,80 @@ async function saveAccountEdit() {
               浏览器引擎选择 —— Patchright 是默认；DrissionPage 兜底。
               切换后需要重启 sidecar 才生效（旧引擎的 Chrome 进程不能热切）。
             -->
-            <SettingsRow
-              label="浏览器引擎"
-              hint="Patchright = 反爬通过率高（推荐，首次跑会下载 Chromium ~170MB）；DrissionPage = 复用本机 Chrome 兜底。切换后请重启 sidecar。"
-            >
-              <FormSelect
-                :model-value="(get('monitor.browser_engine') ?? 'patchright') as string"
-                :options="[
-                  { label: 'Patchright（推荐）', value: 'patchright' },
-                  { label: 'DrissionPage（兜底）', value: 'drission' },
-                ]"
-                width="200"
-                @update:model-value="(v) => setField('monitor.browser_engine', String(v))"
-              />
-            </SettingsRow>
+            <div :style="{ opacity: get('monitor.data_source_mode') === 'tikhub_api' ? 0.5 : 1 }">
+              <SettingsRow
+                label="浏览器引擎"
+                hint="Patchright = 反爬通过率高（推荐，首次跑会下载 Chromium ~170MB）；DrissionPage = 复用本机 Chrome 兜底。切换后请重启 sidecar。（仅本地模式生效）"
+              >
+                <FormSelect
+                  :model-value="(get('monitor.browser_engine') ?? 'patchright') as string"
+                  :options="[
+                    { label: 'Patchright（推荐）', value: 'patchright' },
+                    { label: 'DrissionPage（兜底）', value: 'drission' },
+                  ]"
+                  width="200"
+                  @update:model-value="(v) => setField('monitor.browser_engine', String(v))"
+                />
+              </SettingsRow>
+            </div>
             <!--
               多账号轮换：用户在 Cookie 池里放 2+ 条同平台 cookie 时启用；
               tasks_per_account 控制每条 cookie 连续承担几个 task。
             -->
-            <SettingsRow
-              label="多账号轮换"
-              hint="Cookie 池有 2+ 条时启用 —— 每条连续抓 N 个任务后自动切下一条；命中风控立即切并冷却 30 分钟"
-            >
-              <FormToggle
-                :model-value="get('monitor.multi_account_rotation') ?? false"
-                @update:model-value="(v) => setField('monitor.multi_account_rotation', v)"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="每账号任务数"
-              hint="开启「多账号轮换」时生效；推荐 2~3，太小流量太碎、太大起不到分摊作用"
-            >
-              <input
-                :value="get('monitor.tasks_per_account') ?? 2"
-                type="number"
-                min="1"
-                max="10"
-                :disabled="!(get('monitor.multi_account_rotation') ?? false)"
-                class="bg-card-white px-3 text-[12.5px] outline-none disabled:opacity-50"
-                :style="{
-                  width: '70px',
-                  height: '34px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--line)',
-                }"
-                @change="(e) => setField('monitor.tasks_per_account', Number((e.target as HTMLInputElement).value))"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Cookie 冷却（分钟）"
-              hint="命中 /unhuman / 登录墙时当前 cookie 暂停使用的时长。30 分钟够 zhihu 反爬窗口滑过去"
-            >
-              <input
-                :value="get('monitor.cookie_cooldown_minutes') ?? 30"
-                type="number"
-                min="0"
-                max="240"
-                class="bg-card-white px-3 text-[12.5px] outline-none"
-                :style="{
-                  width: '70px',
-                  height: '34px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--line)',
-                }"
-                @change="(e) => setField('monitor.cookie_cooldown_minutes', Number((e.target as HTMLInputElement).value))"
-              />
-            </SettingsRow>
+            <div :style="{ opacity: get('monitor.data_source_mode') === 'tikhub_api' ? 0.5 : 1 }">
+              <SettingsRow
+                label="多账号轮换"
+                hint="Cookie 池有 2+ 条时启用 —— 每条连续抓 N 个任务后自动切下一条；命中风控立即切并冷却 30 分钟（仅本地模式生效）"
+              >
+                <FormToggle
+                  :model-value="get('monitor.multi_account_rotation') ?? false"
+                  @update:model-value="(v) => setField('monitor.multi_account_rotation', v)"
+                />
+              </SettingsRow>
+            </div>
+            <div :style="{ opacity: get('monitor.data_source_mode') === 'tikhub_api' ? 0.5 : 1 }">
+              <SettingsRow
+                label="每账号任务数"
+                hint="开启「多账号轮换」时生效；推荐 2~3，太小流量太碎、太大起不到分摊作用（仅本地模式生效）"
+              >
+                <input
+                  :value="get('monitor.tasks_per_account') ?? 2"
+                  type="number"
+                  min="1"
+                  max="10"
+                  :disabled="!(get('monitor.multi_account_rotation') ?? false)"
+                  class="bg-card-white px-3 text-[12.5px] outline-none disabled:opacity-50"
+                  :style="{
+                    width: '70px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.tasks_per_account', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+            </div>
+            <div :style="{ opacity: get('monitor.data_source_mode') === 'tikhub_api' ? 0.5 : 1 }">
+              <SettingsRow
+                label="Cookie 冷却（分钟）"
+                hint="命中 /unhuman / 登录墙时当前 cookie 暂停使用的时长。30 分钟够 zhihu 反爬窗口滑过去（仅本地模式生效）"
+              >
+                <input
+                  :value="get('monitor.cookie_cooldown_minutes') ?? 30"
+                  type="number"
+                  min="0"
+                  max="240"
+                  class="bg-card-white px-3 text-[12.5px] outline-none"
+                  :style="{
+                    width: '70px',
+                    height: '34px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--line)',
+                  }"
+                  @change="(e) => setField('monitor.cookie_cooldown_minutes', Number((e.target as HTMLInputElement).value))"
+                />
+              </SettingsRow>
+            </div>
             <SettingsRow
               label="Chrome 路径"
               hint="DrissionPage 引擎下使用；留空 = 自动检测。Patchright 引擎用自己下载的 Chromium，不受此项影响"
