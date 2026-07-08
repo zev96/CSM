@@ -42,6 +42,7 @@ from csm_core.monitor.notify import should_alert
 from csm_core.monitor.platforms import ALL as ADAPTERS
 from csm_core.monitor.rate_limit import slot
 from csm_core.monitor.scheduler import select_due
+from csm_core.monitor.tikhub.client import balance_exhausted, reset_balance_latch
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,8 @@ class MonitorLoop:
         tick_seconds: int = 60,
         max_workers: int = 4,
         adapters: dict[str, Any] | None = None,
+        api_adapters: dict[str, Any] | None = None,
+        data_source_mode: str = "local",
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._event_sink = event_sink
@@ -128,6 +131,8 @@ class MonitorLoop:
         # Adapters are injectable so tests can swap in fakes without
         # touching real curl_cffi / DrissionPage code paths.
         self._adapters = adapters if adapters is not None else dict(ADAPTERS)
+        self._api_adapters = dict(api_adapters) if api_adapters else {}
+        self._data_source_mode = data_source_mode
         # Clock is injectable for the same reason: tests fast-forward
         # without sleeping for 60s.
         # ⚠ 用 utcnow（不是 datetime.now）：storage 把 timestamp 当 UTC 存（标 Z 后缀），
@@ -153,6 +158,21 @@ class MonitorLoop:
         self._active_task_ids: set[int] = set()
         self._cancel_events: dict[int, threading.Event] = {}
         self._running = False
+
+    def set_data_source_mode(self, mode: str) -> None:
+        """reconfigure() 在 config PATCH 后调用,热切数据源模式。"""
+        self._data_source_mode = mode
+
+    def set_api_adapters(self, adapters: dict[str, Any]) -> None:
+        self._api_adapters = dict(adapters or {})
+
+    def _select_adapter(self, task_type: str):
+        """API 模式且该 type 有 API 适配器 → 用 API;否则(含 baidu/geo)回落本地。"""
+        if self._data_source_mode == "tikhub_api":
+            api = self._api_adapters.get(task_type)
+            if api is not None:
+                return api
+        return self._adapters.get(task_type)
 
     # ── public lifecycle ────────────────────────────────────────────────
     def start(self) -> None:
@@ -325,6 +345,7 @@ class MonitorLoop:
     # ── tick / dispatch internals ───────────────────────────────────────
     def _tick(self) -> None:
         """One periodic sweep. Runs on APScheduler's own thread."""
+        reset_balance_latch()
         if not self._tick_lock.acquire(blocking=False):
             logger.warning("MonitorLoop tick overlap — previous tick still running, skipping")
             return
@@ -401,7 +422,7 @@ class MonitorLoop:
         """
         if task.id is None:
             return None
-        adapter = self._adapters.get(task.type)
+        adapter = self._select_adapter(task.type)
         if adapter is None:
             self._publish(MonitorEvent(
                 kind="failed", task_id=task.id, at=self._clock(),
@@ -433,28 +454,46 @@ class MonitorLoop:
             except Exception:
                 logger.exception("progress event publish failed (task %s)", task_id_local)
 
-        try:
-            with slot(task.type, timeout=120.0):
-                # Try the new signature first (with cancel_token + progress_cb +
-                # resume_from); fall back progressively for adapters that haven't
-                # been upgraded yet. TypeError tells us the kwarg is unknown.
+        def _dispatch_fetch() -> MonitorResult:
+            # 4 级签名回退(老适配器没有 resume_from/cancel_token kwarg 时逐级降级)
+            try:
+                return adapter.fetch(
+                    task, progress_cb=_progress_cb, cancel_token=cancel_token,
+                    resume_from=resume_from,
+                )
+            except TypeError:
                 try:
-                    result: MonitorResult = adapter.fetch(
-                        task,
-                        progress_cb=_progress_cb,
-                        cancel_token=cancel_token,
-                        resume_from=resume_from,
+                    return adapter.fetch(
+                        task, progress_cb=_progress_cb, cancel_token=cancel_token,
                     )
                 except TypeError:
                     try:
-                        result = adapter.fetch(
-                            task, progress_cb=_progress_cb, cancel_token=cancel_token,
-                        )
+                        return adapter.fetch(task, progress_cb=_progress_cb)
                     except TypeError:
-                        try:
-                            result = adapter.fetch(task, progress_cb=_progress_cb)
-                        except TypeError:
-                            result = adapter.fetch(task)
+                        return adapter.fetch(task)
+
+        _is_api = (self._data_source_mode == "tikhub_api"
+                   and task.type in self._api_adapters)
+        try:
+            if _is_api:
+                # API 模式:①先查进程级余额闩,置位则本轮短路(不发请求、不刷屏)
+                #           ②不进本地反爬 slot(TikHub 自己扛反爬,本地 5-15s pacing 无意义)
+                if balance_exhausted():
+                    self._publish(MonitorEvent(
+                        kind="failed", task_id=task.id, at=self._clock(),
+                        error="TikHub 余额不足,本轮跳过",
+                    ))
+                    self._untrack_active(task_id_local)
+                    return None
+                # TikHub 适配器签名统一(fetch(task, cancel_token=, progress_cb=, **_)),
+                # 直接调一次,不走 4 级 TypeError 回退 —— 避免 fetch 体内偶发 TypeError
+                # 触发重调 = 重复付费请求(§9:不自动重试)。
+                result: MonitorResult = adapter.fetch(
+                    task, progress_cb=_progress_cb, cancel_token=cancel_token,
+                )
+            else:
+                with slot(task.type, timeout=120.0):
+                    result = _dispatch_fetch()
         except _CancelledFetch as e:
             # Cooperative cancellation: adapter saw cancel_token set and
             # bailed out cleanly. Publish a failed event with a clear

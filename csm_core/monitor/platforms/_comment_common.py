@@ -45,6 +45,7 @@ def build_match_result(
     task: MonitorTask,
     comments: list[dict[str, Any]],
     source: str,
+    scan_limit: int | None = None,
 ) -> MonitorResult:
     """Compute rank + similarity for the user's self-published comment.
 
@@ -53,14 +54,23 @@ def build_match_result(
     that scope / can't be matched at all. The user-facing ``alert_top_n``
     is just an ideal threshold for the UI to color-code "in ideal range"
     vs "fell out of ideal"; it does NOT clip the search window.
+
+    ``scan_limit``: adapters that fetch a bounded window (TikHub API path,
+    fetch depth = ``depth``) MUST pass ``scan_limit=depth`` so the match
+    window == the fetch window. Otherwise the default 150 clips comments
+    the adapter deliberately fetched beyond 150 — a target at fetched-rank
+    151..200 would be found by the adapter's stop-on-match but then dropped
+    here and mis-reported as ``matched=False``. Local adapters pass nothing
+    and keep the config/150 default.
     """
     my_text = (task.config.get("my_comment_text") or "").strip()
     # 用户填的 top_n 现在严格解读为"理想排名"：希望评论出现在前 N 位。
     # 默认 5。命中且 rank <= alert_top_n → 在理想范围，UI 显绿。
     alert_top_n = int(task.config.get("top_n") or 5)
-    # 实际扫描范围，可由 task.config 覆盖（不公开开关），默认 150。
-    # 让 rank=20、rank=80 的评论也能被找到并展示实际位置。
-    scrape_top_n = int(task.config.get("scrape_top_n") or DEFAULT_SCRAPE_TOP_N)
+    # 实际扫描范围。adapter 显式传 scan_limit 时以它为准（保证匹配窗口==抓取深度）；
+    # 否则读 task.config 覆盖，默认 150。让 rank=20、rank=80 的评论也能被找到。
+    scrape_top_n = (int(scan_limit) if scan_limit is not None
+                    else int(task.config.get("scrape_top_n") or DEFAULT_SCRAPE_TOP_N))
     threshold = float(task.config.get("threshold") or DEFAULT_SIMILARITY_THRESHOLD)
 
     if not my_text:
@@ -89,6 +99,9 @@ def build_match_result(
             "my_comment_text": my_text,
             "alert_top_n": alert_top_n,
             "scrape_top_n": scrape_top_n,
+            # depth_cap = 本次检索深度（=scrape_top_n，本地默认 150 / API 传 scan_limit）。
+            # 前端"前 N 名 / 超 N 名外"读它，本地与 API 两条路径都带上，口径一致。
+            "depth_cap": scrape_top_n,
             # 实际比对的条数（小于 scrape_top_n 表示评论区没那么多 hot 评论）
             "scope_total": len(hot_slice),
             "threshold": threshold,

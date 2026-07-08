@@ -38,6 +38,18 @@ def test_match_within_alert_top_n_returns_actual_rank():
     assert res.metric["scrape_top_n"] == DEFAULT_SCRAPE_TOP_N
 
 
+def test_depth_cap_emitted_for_both_local_and_api_paths():
+    """depth_cap 必须随 metric 返回 —— 本地路径(无 scan_limit)= DEFAULT_SCRAPE_TOP_N,
+    API 路径(scan_limit=N)= N。前端 scanDepth 读它决定'前 N 名'文案,两条路径口径要一致。
+    (审查发现:此前只有 API 适配器写 depth_cap,本地默认模式前端拿不到真实深度 → desync)"""
+    comments = _comments(["a", "b", "c"])
+    task = _make_task(my_text="zzz-absent-target")
+    res_local = build_match_result(task, comments, source="curl_cffi")
+    assert res_local.metric["depth_cap"] == DEFAULT_SCRAPE_TOP_N   # 本地默认 150
+    res_api = build_match_result(task, comments, source="tikhub", scan_limit=100)
+    assert res_api.metric["depth_cap"] == 100                     # API 传入即 = depth
+
+
 def test_match_beyond_alert_top_n_but_within_scrape_returns_actual_rank():
     """Comment at position 20, alert_top_n=5 → rank=20 (not -1).
 

@@ -30,6 +30,54 @@ SPEC_PATH = SIDECAR_DIR / "csm-sidecar.spec"
 DEFAULT_DIST = REPO_ROOT / "frontend" / "src-tauri" / "binaries"
 
 
+def _smoke_test_keyring() -> int:
+    """Post-build keyring round-trip smoke test (§13 R6).
+
+    Scope note: this runs against the *build machine's* Python/keyring
+    stack, not the bundled onefile exe itself. Exercising the actual built
+    exe would need a dedicated CLI test-mode entrypoint in
+    csm_sidecar/__main__.py, which is out of scope here (this script only
+    touches the packaging step). What this test *does* guarantee: the
+    keyring backend + its native dependency (pywin32-ctypes on Windows)
+    are importable and functional in the same environment PyInstaller just
+    analyzed to build the bundle — if the backend is broken or missing
+    here, the spec's ``copy_metadata('keyring')`` / hiddenimports had
+    nothing correct to bundle in the first place. It will NOT catch a
+    packaging-only regression (e.g. PyInstaller failing to actually copy
+    the metadata/hiddenimports into the onefile archive) — that class of
+    bug needs a real machine test against the built exe (tracked as
+    follow-up, see Task 13 / real-machine verification).
+    """
+    probe_service = "csm-smoke"
+    probe_username = "probe"
+    probe_value = "ok"
+    try:
+        import keyring
+
+        keyring.set_password(probe_service, probe_username, probe_value)
+        got = keyring.get_password(probe_service, probe_username)
+        if got != probe_value:
+            print(
+                f"  [smoke] keyring round-trip mismatch: "
+                f"wrote {probe_value!r}, read back {got!r}",
+                file=sys.stderr,
+            )
+            return 1
+        keyring.delete_password(probe_service, probe_username)
+        print("  [smoke] keyring round-trip OK (set/get/delete)")
+        return 0
+    except Exception as e:  # noqa: BLE001 - want to catch + report any backend failure
+        print(
+            f"  [smoke] keyring round-trip FAILED: {e.__class__.__name__}: {e}\n"
+            "  keyring is required for TikHub API key storage (provider="
+            "'tikhub'). This likely means the OS keyring backend (on "
+            "Windows: pywin32-ctypes / Credential Manager) is broken or "
+            "missing in the build environment — see §13 R6.",
+            file=sys.stderr,
+        )
+        return 1
+
+
 def detect_target_triple() -> str:
     """Match Tauri's host-triple naming so externalBin resolution works."""
     sys_name = platform.system().lower()
@@ -138,6 +186,21 @@ def main() -> int:
                 f"  skip-sync {cargo_dir}/ — close Tauri first then rerun "
                 f"this script ({e.__class__.__name__})"
             )
+
+    # §13 R6: keyring packaging was a silent, hook-dependent bet (PyInstaller's
+    # bundled keyring/pywin32-ctypes hooks doing the right thing with no
+    # explicit pin). Now that the spec declares copy_metadata + hiddenimports
+    # explicitly, verify the backend still actually works post-build instead
+    # of trusting it silently — fail the build loudly rather than shipping a
+    # sidecar whose TikHub API key storage breaks at runtime.
+    rc = _smoke_test_keyring()
+    if rc != 0:
+        print(
+            "\n  build produced an exe but keyring smoke test failed — "
+            "failing build (see §13 R6)",
+            file=sys.stderr,
+        )
+        return rc
 
     print(f"\n  ok  {final_exe}")
     return 0

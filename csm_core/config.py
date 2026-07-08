@@ -123,6 +123,17 @@ class MonitorConfig(BaseModel):
     #            被绑定到调试端口跑不起来时切到这条
     browser_engine: Literal["patchright", "drission"] = "patchright"
 
+    # ── 数据源模式：本地浏览器 vs TikHub 付费 API ─────────────────
+    # local = 现状（native Chrome / patchright 本地抓取）
+    # tikhub_api = 抓取改走 TikHub API（需在 keyring 配置 tikhub key）
+    data_source_mode: Literal["local", "tikhub_api"] = "local"
+    # TikHub API 基础 URL —— 大陆默认 .dev；海外/受限网络可改 .io。
+    tikhub_base_url: str = "https://api.tikhub.dev"
+    # 抖音视频列表走 App 端点还是 Web 端点。
+    tikhub_video_endpoint: Literal["app", "web"] = "app"
+    # 知乎每页拉取条数 —— 实测 20 为 TikHub 知乎接口稳定履行的上限。
+    tikhub_zhihu_limit: int = 20
+
     # ── 多账号轮换 ───────────────────────────────────────────────
     # 用户在 Cookie 池里有 2+ 条同平台 cookie 时才有意义。关闭时
     # 永远用 pick() 返回的第一条（最久没用 + fail_count 最低）。

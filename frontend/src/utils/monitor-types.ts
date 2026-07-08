@@ -47,8 +47,17 @@ export interface VideoEntry {
   myComment: string;
   /** 我的评论目前在该视频下的热度排名。 */
   rank: number;
-  /** 评论现状：在显 / 被删 / 折叠。 */
-  status: "ok" | "deleted" | "folded";
+  /** 评论现状(只检索前 scanDepth 名):
+   *   ok       在前 alert_top_n 名(在显)
+   *   folded   命中但排在 alert_top_n 名之后、仍在前 scanDepth(跌出理想)
+   *   deleted  上次还在前 scanDepth、这次查不到 → 被删除(留存告警)
+   *   beyond   从没进过前 scanDepth → 超N名外(排 N 名外,或本就被删/限流)
+   *   pending  没跑过 / 评论区为空且无留存历史 → 未监测
+   *   failed   本次监测报错(网络/接口/熔断)→ 监测失败,别伪装成未找到 */
+  status: "ok" | "folded" | "deleted" | "beyond" | "pending" | "failed";
+  /** 本次检索深度（后端 metric.depth_cap，"前 N 名"的 N）；缺失回退 100。
+   *  所有 "超 N 名外 / N+ / 前 N 名" 文案读它，改深度只动后端。 */
+  scanDepth: number;
   /** 评论发出时间。 */
   postedAt: string;
   /** 视频评论区的总评论数（仅展示用）。 */

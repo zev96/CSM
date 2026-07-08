@@ -21,6 +21,13 @@ export interface TaskSnapshot {
   alert_top_n: number;
   /** 评论后台实际扫描范围（默认 150）。rank=-1 时区分"丢失"vs"无" */
   scrape_top_n: number;
+  /** 评论：是否已翻到评论区底部（拿到的比 depth 上限少 = 全区扫遍）。
+   *  配合 matched=false：exhausted → 翻遍全区仍没有（疑似限流/仅自己可见/已删）；
+   *  否则 → 只扫了前 depth 条，可能排名更靠后。命中即停时 matched=true，此标记不参与判断。 */
+  exhausted: boolean;
+  /** 评论：本次检索深度上限（后端 metric.depth_cap，即"前 N 名"的 N；缺失为 0）。
+   *  前端所有"前 N 名 / 超 N 名外 / N+"文案都读它，不写死 → 改深度只动后端一处。 */
+  depth_cap: number;
   /** 评论：本次实际比对了多少条 hot 评论；知乎不用 */
   scope_total: number;
   hot_comments: Array<{ author?: string; text?: string; rank?: number; nickname?: string }>;
@@ -71,6 +78,8 @@ export function resultToSnapshot(r: any): TaskSnapshot | null {
     rank: rankVal,
     alert_top_n: alertTopN,
     scrape_top_n: scrapeTopN,
+    exhausted: Boolean(m.exhausted),
+    depth_cap: typeof m.depth_cap === "number" ? m.depth_cap : 0,
     scope_total: scopeTotal,
     hot_comments: Array.isArray(m.hot_comments) ? m.hot_comments : [],
     total_fetched: typeof m.total_fetched === "number" ? m.total_fetched : 0,
