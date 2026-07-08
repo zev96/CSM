@@ -1488,7 +1488,8 @@ async function saveAccountEdit() {
                 />
               </SettingsRow>
               <div class="text-[11.5px] text-ink-3" :style="{ marginTop: '-8px', marginBottom: '12px' }">
-                按次计费 $0.001/次。评论 = 录入时一次性；知乎 = 按你设的频率。改成高频复算会显著增加费用。
+                按次计费 $0.001/次。评论 = 录入时一次性；知乎 = 按你设的频率。评论只检索靠前约 100 名
+                （每页 20 条，找到你的评论会提前停）→ 单条视频约 5 次请求以内。改成高频复算会显著增加费用。
               </div>
             </template>
             <!--

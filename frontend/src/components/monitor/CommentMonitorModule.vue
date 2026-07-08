@@ -237,20 +237,40 @@ const realCommentRows = computed<SampleComment[]>(() => {
 // 状态规则（与后端 alert_top_n / scrape_top_n 拆分对齐）：
 //   matched && rank <= alert_top_n → "ok"      在显且在理想范围内
 //   matched && rank >  alert_top_n → "folded"  在显但跌出理想（前端文案"跌出 #N"）
-//   !matched                        → "deleted" 没在前 scrape_top_n 条命中（被删 / 折叠 / 没爬到均落此态，UI 显示"无 / 未找到"）
+//   !matched                        → 按留存历史分档：上次在前N这次没了="deleted"(被删除)；从没进前N="beyond"(超N名外)；没跑过/空="pending"(未监测)。N=scanDepth(随后端 depth_cap)
 const realVideosByBatchId = computed<Record<string, VideoEntry[]>>(() => {
   if (props.demoMode) return {};
   const map: Record<string, VideoEntry[]> = {};
   for (const t of props.tasks) {
     const b = parseBatchName(t.name);
-    const snap = props.taskSnapshots[t.id]?.latest;
+    const pair = props.taskSnapshots[t.id];
+    const snap = pair?.latest;
+    const prev = pair?.prev;
+    // 跑过但结果非 ok(failed / risk_control)→ "监测失败",别混进未命中。
+    const failed = !!snap && snap.status !== "" && snap.status !== "ok";
     const matched = snap?.matched ?? false;
     const rank = snap?.rank ?? -1;
     const alertN = snap?.alert_top_n ?? 5;
+    const total = snap?.total_fetched ?? 0;
+    // 本次检索深度 N(后端 metric.depth_cap;缺失回退 100)。所有"前 N 名 / 超 N 名外"都用它。
+    const scanDepth = snap?.depth_cap || 100;
+    // 上一次是否命中在前 N(matched⟹rank≤当前depth;但历史深扫记录 rank 可能>N,故显式判 ≤scanDepth)。
+    // 曾在前 N、这次没了 → 视为"被删除"(留存失败)。
+    const wasInTopN = !!prev && prev.status === "ok" && prev.matched && prev.rank > 0 && prev.rank <= scanDepth;
+    // 未命中分三态:
+    //   deleted  上次在前N、这次查不到 → 被删除(留存监控的核心告警)
+    //   pending  没跑过 / 评论区为空(total=0)且无留存历史 → 未监测
+    //   beyond   从没进过前N → 超N名外(排在N名以外,或本就被删/限流,N深度分不清)
     const status: VideoEntry["status"] =
-      matched
-        ? rank > 0 && rank <= alertN ? "ok" : "folded"
-        : "deleted";
+      failed
+        ? "failed"
+        : matched
+          ? rank > 0 && rank <= alertN ? "ok" : "folded"
+          : wasInTopN
+            ? "deleted"
+            : total === 0
+              ? "pending"
+              : "beyond";
     const urlTail = t.name.includes(" - ")
       ? t.name.slice(t.name.lastIndexOf(" - ") + 3)
       : t.name;
@@ -263,11 +283,38 @@ const realVideosByBatchId = computed<Record<string, VideoEntry[]>>(() => {
       status,
       postedAt: t.last_check_at ? new Date(t.last_check_at).toLocaleDateString() : "—",
       totalComments: snap?.total_fetched ?? 0,
+      scanDepth,
     };
     (map[b] ||= []).push(entry);
   }
   return map;
 });
+
+// 各未命中状态的 hover 提示。只检索前 N 名:beyond 时分不清"排 N 名外(还在)"和"被删"
+// (深度的固有限制,与用户口径「超出N名以外或者被删」一致);deleted 有留存历史(上次在前N
+// 这次没了)故明确提示可能被删。N 取每条 entry 的 scanDepth(随后端 depth_cap)。
+function notFoundHint(v: VideoEntry): string {
+  const n = v.scanDepth;
+  if (v.status === "deleted")
+    return `上次还在前 ${n} 名，这次没找到 —— 评论可能已被删除（也可能跌出了前 ${n} 名）`;
+  if (v.status === "pending")
+    return "尚未监测，或该视频评论区为空";
+  return `未进入前 ${n} 名 —— 排名在 ${n} 名以外，或已被删除 / 限流（本次共比对 ${v.totalComments || 0} 条评论）`;
+}
+
+// 未命中时排名格:超N名外=「N+」;被删除/未监测/失败=「—」(没有有意义的排名)。
+function notFoundRankLabel(v: VideoEntry): string {
+  return v.status === "beyond" ? `${v.scanDepth}+` : "—";
+}
+
+// 状态格的 hover title(整合失败态与各未命中态)。
+function statusTitle(v: VideoEntry): string | undefined {
+  if (v.status === "failed")
+    return "本次监测失败（网络/接口错误或熔断），未能扫描评论；点开可重试";
+  if (v.status === "deleted" || v.status === "beyond" || v.status === "pending")
+    return notFoundHint(v);
+  return undefined;
+}
 
 // 把 video.id 反查回 task.id 用，L3 单视频 SSE / 立刻跑要原数字 id
 function realTaskIdFromVideoId(videoId: string): number | null {
@@ -986,12 +1033,15 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     v-else
                     class="text-[11.5px]"
                     :style="{ color: 'var(--red, #d85a48)' }"
-                  >无</span>
+                  >{{ notFoundRankLabel(v) }}</span>
                 </div>
-                <div class="text-center">
+                <div class="text-center" :title="statusTitle(v)">
                   <Pill v-if="v.status === 'ok'" tone="ok">在显</Pill>
                   <Pill v-else-if="v.status === 'folded'" tone="warn">跌出理想</Pill>
-                  <Pill v-else tone="alert">未找到</Pill>
+                  <Pill v-else-if="v.status === 'failed'" tone="warn">监测失败</Pill>
+                  <Pill v-else-if="v.status === 'deleted'" tone="alert">被删除</Pill>
+                  <Pill v-else-if="v.status === 'pending'" tone="info">未监测</Pill>
+                  <Pill v-else tone="warn">超{{ v.scanDepth }}名外</Pill>
                 </div>
               </div>
             </div>
@@ -1066,7 +1116,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                     }"
                   >
                     <template v-if="selectedVideo.rank > 0">#{{ selectedVideo.rank }}</template>
-                    <span v-else :style="{ fontSize: '14px' }">无</span>
+                    <span v-else :style="{ fontSize: '14px' }">{{ notFoundRankLabel(selectedVideo) }}</span>
                   </div>
                 </div>
                 <div
@@ -1078,10 +1128,13 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                   }"
                 >
                   <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">状态</div>
-                  <div class="mt-1.5">
+                  <div class="mt-1.5" :title="statusTitle(selectedVideo)">
                     <Pill v-if="selectedVideo.status === 'ok'" tone="ok">在显</Pill>
                     <Pill v-else-if="selectedVideo.status === 'folded'" tone="warn">跌出理想</Pill>
-                    <Pill v-else tone="alert">未找到</Pill>
+                    <Pill v-else-if="selectedVideo.status === 'failed'" tone="warn">监测失败</Pill>
+                    <Pill v-else-if="selectedVideo.status === 'deleted'" tone="alert">被删除</Pill>
+                    <Pill v-else-if="selectedVideo.status === 'pending'" tone="info">未监测</Pill>
+                    <Pill v-else tone="warn">超{{ selectedVideo.scanDepth }}名外</Pill>
                   </div>
                 </div>
                 <div

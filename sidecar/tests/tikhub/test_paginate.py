@@ -27,3 +27,18 @@ def test_max_pages_fuse_raises():
     def page_fn(cursor): return (["x"], "next", True)   # 永远 has_more
     with pytest.raises(TikHubError):
         paginate(page_fn, target=1000, max_pages=3)
+
+def test_stop_predicate_short_circuits():
+    # 命中即停:has_more 永远为真,但 stop_predicate 在累积列表含 "MINE" 时返回 True → 立刻停。
+    pages = iter([(["a", "b"], "c1", True), (["MINE"], "c2", True), (["z"], "c3", True)])
+    calls = []
+    def page_fn(cursor): calls.append(cursor); return next(pages)
+    items = paginate(page_fn, target=1000, max_pages=10,
+                     stop_predicate=lambda acc: any(x == "MINE" for x in acc))
+    assert items == ["a", "b", "MINE"]     # 第 2 页拿到 MINE 即停
+    assert len(calls) == 2                  # 不翻第 3 页
+
+def test_stop_predicate_none_is_backward_compatible():
+    pages = iter([(["a"], "c1", True), (["b"], None, False)])
+    items = paginate(lambda c: next(pages), target=100, max_pages=10, stop_predicate=None)
+    assert items == ["a", "b"]

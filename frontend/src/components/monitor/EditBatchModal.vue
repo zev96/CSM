@@ -146,7 +146,7 @@ async function submit() {
 
       <FormField
         label="理想排名（前 N 位）"
-        hint="希望评论出现在前几位，默认 5。后台始终扫描前 150 条，超过才算「丢失」。"
+        hint="希望评论出现在前几位，默认 5。后台会扫描评论区靠前的一批热评，排到检索范围之外才算「丢失」。"
         inline
       >
         <FormInput

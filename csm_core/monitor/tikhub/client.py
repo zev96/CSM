@@ -125,18 +125,22 @@ class TikHubClient:
         return data
 
 
-def paginate(page_fn, target: int, max_pages: int, cancel_token=None):
+def paginate(page_fn, target: int, max_pages: int, cancel_token=None, stop_predicate=None):
     """自适应翻页:反复调用 page_fn(cursor) 直到达到 target 条数或 API 报尽。
 
     page_fn(cursor) -> (items, next_cursor, has_more)。
 
     设计依据: docs/superpowers/specs/2026-07-06-tikhub-api-scraping-mode-design.md §7.2
-    - 正常停止:已凑够 target 条 / has_more=False / 本页空。
+    - 正常停止:已凑够 target 条 / has_more=False / 本页空 / stop_predicate 命中。
     - 异常停止:page_fn 抛异常直接向上传播(**绝不吞掉异常返回残缺列表**——
       否则会把"评论埋得深/翻页失败"误报成"评论被删");
       翻了 max_pages 页仍未终止,视为疑似死循环/风控假状态,主动熔断抛 TikHubError。
     - cancel_token(可选):每页开始前检查一次,置位则提前收工(用户取消属正常路径,
       返回已抓到的部分不算"残缺失败",与 page_fn 异常的语义不同)。
+    - stop_predicate(可选,acc->bool):每抓完一页对**累积列表**求值一次,返回 True
+      即提前停(命中即停)。用途:评论留存监控里,目标评论一旦出现就没必要继续深翻——
+      为已留存的评论白翻到 target 上限是纯粹的浪费(付费 API 每页都计费)。找不到的
+      才会一直翻到 has_more=False / target,用于确认"确实不在(疑似被删/限流)"。
     """
     out: list = []
     cursor = None
@@ -151,6 +155,8 @@ def paginate(page_fn, target: int, max_pages: int, cancel_token=None):
         if not items:
             break
         out.extend(items)
+        if stop_predicate is not None and stop_predicate(out):
+            break
         if not has_more or cursor is None:
             break
     return out[:target]
