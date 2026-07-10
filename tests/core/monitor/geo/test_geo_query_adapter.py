@@ -216,3 +216,28 @@ def test_run_cell_normal_exception_still_becomes_error_cell(monkeypatch):
     monkeypatch.setattr(gq, "get_provider", lambda p: _BoomProv())
     cell = gq.GeoQueryAdapter()._run_cell("kw", "deepseek", "B", [], True, object())
     assert cell.status == "error"
+
+
+def test_fetch_uses_dual_lane_api_concurrent(fresh_db, monkeypatch):
+    import threading as _t
+    barrier = _t.Barrier(2, timeout=3)
+
+    class _ApiProv:
+        def __init__(self, p):
+            self.platform = p; self.mode = "api"
+        def query(self, keyword, *, web_search=True, cancel_token=None):
+            barrier.wait()                       # 两 API cell 必须并发才通过
+            from csm_core.monitor.geo.models import GeoAnswer
+            return GeoAnswer(platform=self.platform, keyword=keyword,
+                             answer_text=f"{self.platform} 推荐 小鹏")
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _ApiProv(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "小鹏", "keywords": ["k1"], "platforms": ["tongyi", "doubao"],
+                "extract_provider": "mock", "geo_api_pool_size": 2}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert result.status == "ok"                 # 未 BrokenBarrier → 两 API cell 并发成功
+    assert result.metric["error_cells"] == 0

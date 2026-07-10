@@ -31,6 +31,7 @@ from ..geo.models import GeoCell
 from ..geo.providers.base import get_provider
 from ..geo.extract import extract, build_extract_client
 from ..geo import metrics
+from ..geo import runner as geo_runner
 from ..geo import storage as geo_storage
 from ..rate_limit import configure_concurrency
 
@@ -75,27 +76,25 @@ class GeoQueryAdapter:
         # Clamp resume_from to valid range so callers don't need to guard.
         resume_from = max(0, min(int(resume_from), total))
 
-        # Emit an initial progress event up-front (mirror baidu) so the UI
-        # shows the total immediately instead of an empty bar until the
-        # first cell finishes. Wrapped — a flaky sink must never kill fetch.
-        if progress_cb is not None:
-            try:
-                progress_cb(resume_from, total)
-            except Exception:
-                logger.exception("[geo] progress_cb(resume_from,N) raised; ignoring")
+        # 双车道并发调度(API 并发 + RPA 按平台并发)。cell 级隔离与串行版一致:
+        # _run_cell 内部把非取消异常兜成 error cell,取消异常上抛由 runner 传导。
+        api_pool_size = int(cfg.get("geo_api_pool_size", 5) or 5)
+        rpa_conc = int(cfg.get("geo_rpa_platform_concurrency", 3) or 3)
 
-        cells: list[GeoCell] = []
-        for i, (kw, plat) in enumerate(cells_plan):
-            if i < resume_from:
-                continue
-            maybe_cancel(cancel_token)
-            cell = self._run_cell(kw, plat, brand, aliases, web_search, client, cancel_token=cancel_token)
-            cells.append(cell)
-            if progress_cb is not None:
-                try:
-                    progress_cb(i + 1, total)
-                except Exception:
-                    logger.exception("[geo] progress_cb(%s,%s) raised; ignoring", i + 1, total)
+        def _cell(kw: str, plat: str) -> GeoCell:
+            return self._run_cell(kw, plat, brand, aliases, web_search, client,
+                                  cancel_token=cancel_token)
+
+        maybe_cancel(cancel_token)               # 开跑前先检一次取消(等价串行版首个 maybe_cancel)
+        tail = cells_plan[resume_from:]
+        cells: list[GeoCell] = geo_runner.run_cells_dual_lane(
+            tail, _cell,
+            mode_of=lambda p: get_provider(p).mode,
+            api_pool_size=api_pool_size,
+            rpa_platform_concurrency=rpa_conc,
+            progress_cb=progress_cb,
+            initial_done=resume_from,
+        )
 
         agg = metrics.aggregate(cells)
         # I2：把"够不到平台"和"曝光低"区分开 —— error_cells 让仪表盘知道
