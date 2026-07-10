@@ -15,6 +15,45 @@ from ..models import GeoAnswer, Citation
 
 logger = logging.getLogger(__name__)
 
+import threading as _threading
+import time as _time
+
+_client_lock = _threading.Lock()
+_client: "httpx.Client | None" = None
+
+
+def _shared_client() -> httpx.Client:
+    """进程内复用一个 httpx.Client(连接池 + 线程安全),避免每 cell 重握手 TLS。"""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = httpx.Client()
+    return _client
+
+
+def _post_retry_429(url: str, *, headers: dict, json: dict, timeout) -> httpx.Response:
+    """采集调用:仅对 429 / 连接建立失败重试一次(均未计费,不违反 §9 防重复计费)。
+    已开始生成的响应(2xx/4xx≠429/5xx)绝不重发。"""
+    client = _shared_client()
+    for attempt in range(2):
+        try:
+            r = client.post(url, headers=headers, json=json, timeout=timeout)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            if attempt == 0:
+                _time.sleep(1.0)
+                continue
+            raise
+        if r.status_code == 429 and attempt == 0:
+            try:
+                delay = min(float(r.headers.get("Retry-After", "1") or 1), 10.0)
+            except (TypeError, ValueError):
+                delay = 1.0
+            _time.sleep(max(0.0, delay))
+            continue
+        return r
+    return r  # pragma: no cover —— 循环必在上面 return/raise
+
 
 def parse_doubao_response(raw: dict) -> tuple[str, list[Citation]]:
     choices = raw.get("choices") or []
@@ -60,7 +99,8 @@ class DoubaoProvider:
         body = {"model": self._bot, "messages": [{"role": "user", "content": keyword}], "stream": False}
         timeout = httpx.Timeout(connect=10.0, read=self._timeout, write=self._timeout, pool=10.0)
         try:
-            r = httpx.post(url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=timeout)
+            r = _post_retry_429(url, headers={"Authorization": f"Bearer {key}"},
+                                json=body, timeout=timeout)
         except httpx.HTTPError as e:
             return GeoAnswer(platform=self.platform, keyword=keyword, status="error", error=str(e))
         logger.info("[geo.doubao] kw=%s http=%d len=%d first200=%s",

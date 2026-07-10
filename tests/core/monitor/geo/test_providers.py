@@ -18,16 +18,28 @@ def test_parse_tongyi_extracts_answer_and_citations():
 
 
 class _FakeResp:
-    def __init__(self, status_code, text, json_data=None, raise_json=False):
+    def __init__(self, status_code, text, json_data=None, raise_json=False, headers=None):
         self.status_code = status_code
         self.text = text
         self._json = json_data
         self._raise = raise_json
+        self.headers = headers or {}
 
     def json(self):
         if self._raise:
             raise ValueError("not json")
         return self._json
+
+
+class _FakeSimpleClient:
+    """给走 _shared_client() 的 provider(doubao/tongyi)注入固定响应的极简 client stub。
+    每次 .post() 都返回同一个响应对象(不 pop)——429 重试路径下第二次仍拿到同一响应,
+    与生产 _post_retry_429「重试一次仍是 429 则原样返回」的语义一致。"""
+    def __init__(self, resp):
+        self._resp = resp
+
+    def post(self, *a, **k):
+        return self._resp
 
 
 def test_tongyi_non_json_200_is_error(monkeypatch):
@@ -157,12 +169,12 @@ def test_doubao_missing_bot_is_error(monkeypatch):
 def test_doubao_content_filter_is_blocked(monkeypatch):
     monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
     monkeypatch.setattr(
-        doubao_mod.httpx, "post",
-        lambda *a, **k: _FakeResp(
+        doubao_mod, "_shared_client",
+        lambda: _FakeSimpleClient(_FakeResp(
             200, "filtered",
             json_data={"choices": [{"finish_reason": "content_filter",
                                     "message": {"role": "assistant", "content": ""}}]},
-        ),
+        )),
     )
     ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
     assert ans.status == "blocked"
@@ -171,22 +183,24 @@ def test_doubao_content_filter_is_blocked(monkeypatch):
 def test_doubao_sensitive_finish_reason_is_blocked(monkeypatch):
     monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
     monkeypatch.setattr(
-        doubao_mod.httpx, "post",
-        lambda *a, **k: _FakeResp(
+        doubao_mod, "_shared_client",
+        lambda: _FakeSimpleClient(_FakeResp(
             200, "sensitive",
             json_data={"choices": [{"finish_reason": "sensitive",
                                     "message": {"role": "assistant", "content": ""}}]},
-        ),
+        )),
     )
     ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
     assert ans.status == "blocked"
 
 
 def test_doubao_http_error_status_is_error(monkeypatch):
+    # 429 现在会被 _post_retry_429 重试一次；Retry-After=0 避免测试真实 sleep,
+    # _FakeSimpleClient 两次 post() 都回同一 429 响应 → 重试后仍是 429 → error。
     monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
     monkeypatch.setattr(
-        doubao_mod.httpx, "post",
-        lambda *a, **k: _FakeResp(429, "rate limit exceeded"),
+        doubao_mod, "_shared_client",
+        lambda: _FakeSimpleClient(_FakeResp(429, "rate limit exceeded", headers={"Retry-After": "0"})),
     )
     ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
     assert ans.status == "error"
@@ -196,11 +210,11 @@ def test_doubao_http_error_status_is_error(monkeypatch):
 def test_doubao_app_error_envelope_is_error(monkeypatch):
     monkeypatch.setattr(doubao_mod, "read_api_key", lambda p: "fake-key")
     monkeypatch.setattr(
-        doubao_mod.httpx, "post",
-        lambda *a, **k: _FakeResp(
+        doubao_mod, "_shared_client",
+        lambda: _FakeSimpleClient(_FakeResp(
             200, '{"error":{"code":"InvalidApiKey","message":"API key 无效"}}',
             json_data={"error": {"code": "InvalidApiKey", "message": "API key 无效"}},
-        ),
+        )),
     )
     ans = doubao_mod.DoubaoProvider(bot_id="bot-x").query("k", web_search=True)
     assert ans.status == "error"
