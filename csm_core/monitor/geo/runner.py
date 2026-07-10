@@ -49,13 +49,16 @@ def run_cells_dual_lane(
     def _tick() -> None:
         if progress_cb is None:
             return
+        # 自增与回调一起放锁内 → 回调按计数顺序串行,末次必是 (total, total)。
+        # 若把 progress_cb 移出锁,慢线程可能在 (total,total) 之后才发 (total-1,total),
+        # 让进度条卡在满格之下,并使 fetch 的 progress[-1]==(total,total) 断言变 flaky。
         with lock:
             done["n"] += 1
             n = done["n"]
-        try:
-            progress_cb(n, total)          # 锁外调 sink;计数在锁内 → 末值必是 total
-        except Exception:
-            logger.exception("[geo.runner] progress_cb(%s,%s) raised; ignoring", n, total)
+            try:
+                progress_cb(n, total)
+            except Exception:
+                logger.exception("[geo.runner] progress_cb(%s,%s) raised; ignoring", n, total)
 
     def _one(i: int) -> None:
         if cancelled["exc"] is not None:
