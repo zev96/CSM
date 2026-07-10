@@ -98,7 +98,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
           class="flex items-center"
           :style="{
             gap: '6px', fontSize: '13px', padding: '7px 12px', borderRadius: '8px',
-            border: '1px solid var(--line-2)', background: '#fff', color: 'var(--ink)', cursor: 'pointer',
+            border: '1px solid var(--line-2)', background: 'var(--card-white)', color: 'var(--ink)', cursor: 'pointer',
           }"
           @click="draftMenuOpen = !draftMenuOpen"
         >
@@ -111,7 +111,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
           class="absolute"
           :style="{
             top: 'calc(100% + 6px)', right: '0', width: '260px', maxHeight: '320px', overflowY: 'auto',
-            background: '#fff', border: '1px solid var(--line-2)', borderRadius: '12px',
+            background: 'var(--card-white)', border: '1px solid var(--line-2)', borderRadius: '12px',
             boxShadow: '0 12px 30px -10px rgba(var(--shadow-rgb),0.25)', zIndex: 40, padding: '6px',
           }"
         >
@@ -139,7 +139,7 @@ function draftLabel(d: { title: string; updated_at: string }): string {
               :style="{
                 flex: 1, fontSize: '13px', color: 'var(--ink)',
                 border: '1px solid var(--primary)', borderRadius: '4px',
-                padding: '1px 5px', outline: 'none', background: '#fff',
+                padding: '1px 5px', outline: 'none', background: 'var(--card-white)',
                 minWidth: 0,
               }"
               @keydown.enter.prevent="commitRename(d.id, $event)"

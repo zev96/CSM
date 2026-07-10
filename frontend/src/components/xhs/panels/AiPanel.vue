@@ -125,7 +125,7 @@ async function polish() {
   border: 1px solid var(--line-2);
   border-radius: 10px;
   padding: 10px 12px;
-  background: #fff;
+  background: var(--card-white);
   color: var(--ink);
   font-size: 13px;
   line-height: 1.6;
@@ -143,7 +143,7 @@ async function polish() {
   padding: 9px 14px;
   border-radius: 10px;
   border: 1px solid var(--line-2);
-  background: #fff;
+  background: var(--card-white);
   color: var(--ink);
   cursor: pointer;
   transition: filter 0.15s;

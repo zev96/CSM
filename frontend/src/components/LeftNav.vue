@@ -87,10 +87,10 @@ function go(key: string) {
     :style="{
       width: '72px',
       padding: '17px 0 18px 0',
-      background: 'rgba(255, 255, 255, 0.35)',
+      background: 'var(--nav-bg)',
       backdropFilter: 'blur(20px) saturate(150%)',
       WebkitBackdropFilter: 'blur(20px) saturate(150%)',
-      borderRight: '1px solid rgba(255, 255, 255, 0.5)',
+      borderRight: '1px solid var(--nav-border)',
       zIndex: 30,
     }"
   >
@@ -125,11 +125,11 @@ function go(key: string) {
             width: '44px',
             height: '44px',
             borderRadius: '14px',
-            background: active === item.key ? 'rgba(255, 255, 255, 0.85)' : 'transparent',
+            background: active === item.key ? 'var(--nav-active-bg)' : 'transparent',
             color: active === item.key ? 'var(--ink)' : 'var(--ink-2)',
             backdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
             WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
-            border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
+            border: active === item.key ? '1px solid var(--nav-active-border)' : '1px solid transparent',
             boxShadow: active === item.key
               ? '0 6px 16px -2px rgba(var(--shadow-rgb),0.12), 0 2px 6px rgba(var(--shadow-rgb),0.06)'
               : 'none',
@@ -230,11 +230,11 @@ function go(key: string) {
           width: '44px',
           height: '44px',
           borderRadius: '14px',
-          background: active === item.key ? 'rgba(255, 255, 255, 0.85)' : 'transparent',
+          background: active === item.key ? 'var(--nav-active-bg)' : 'transparent',
           color: active === item.key ? 'var(--ink)' : 'var(--ink-2)',
           backdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
           WebkitBackdropFilter: active === item.key ? 'blur(10px) saturate(140%)' : 'none',
-          border: active === item.key ? '1px solid rgba(255, 255, 255, 0.7)' : '1px solid transparent',
+          border: active === item.key ? '1px solid var(--nav-active-border)' : '1px solid transparent',
           boxShadow: active === item.key
             ? '0 6px 16px -2px rgba(var(--shadow-rgb),0.12), 0 2px 6px rgba(var(--shadow-rgb),0.06)'
             : 'none',

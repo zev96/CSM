@@ -221,7 +221,9 @@ const currentBatchTasks = computed<Task[]>(() => {
   return batches.value.find((b) => b.name === openBatchName.value)?.tasks ?? [];
 });
 watch(currentBatchTasks, (list) => {
-  if (openBatchName.value != null && list.length === 0) openBatchName.value = null;
+  // 子任务被删到 <=1 时退回 L1：此时它已是「单问题」，在 L1 直接进详情，
+  // 不再停留在只剩 1 行的子列表壳里（对齐「单问题不分层」）。
+  if (openBatchName.value != null && list.length <= 1) openBatchName.value = null;
 });
 
 // 子任务显示名 = 去掉 "批次名 - " 前缀（单条直接用原名）。
@@ -242,11 +244,26 @@ function startBatch(b: ZhihuBatch) {
 function deleteBatch(b: ZhihuBatch) {
   emit("delete-batch", b.name);
 }
-function editBatch(b: ZhihuBatch) {
-  // 同时本地钻入该批次 L2 —— 父组件目前走「逐个用子任务 ✎ 编辑」的退化
-  // 路径（无批次编辑弹窗），先把 L2 打开让用户直接看到可编辑的子任务行。
+// 钻入某批次的 L2：同步 selectedBatchName（这样子任务被删到只剩 1 条、下方 watch
+// 自动退回 L1 时，选中的是这个批次而不是回落到第一条），并把选中子任务落到批次内
+// 首条（右侧详情不停留在别的批次的任务上）。
+function drillInto(b: ZhihuBatch) {
+  selectedBatchName.value = b.name;
   openBatchName.value = b.name;
+  if (!b.tasks.some((t) => t.id === selectedTaskId.value)) {
+    selectedTaskId.value = b.tasks[0]?.id ?? null;
+  }
+}
+function editBatch(b: ZhihuBatch) {
+  // 父组件目前走「逐个用子任务 ✎ 编辑」的退化路径（无批次编辑弹窗），先钻入
+  // L2 让用户直接看到可编辑的子任务行。
+  drillInto(b);
   emit("edit-batch", { name: b.name, tasks: b.tasks });
+}
+// 点批次名：多问题 → 钻入 L2 子列表；单问题 → 就地选中（右侧直接出详情，不进子列表）。
+function openBatch(b: ZhihuBatch) {
+  if (b.tasks.length > 1) drillInto(b);
+  else selectedBatchName.value = b.name;
 }
 
 // ── L1 批次详情面板的「导出数据 / 定时监测」──────────────────────────
@@ -545,9 +562,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => l2Mq?.removeEventListener("change", onL2MqChange));
 
-watch(selectedTaskId, async (id) => {
-  if (id != null && id > 0) await loadResults(id);
-});
+// 详情历史加载见下方 watch(() => selectedTask.value?.id)（须放在 selectedTask 之后）。
 
 // 跟父组件 loadTasks / loadTasksAndSnapshotsAtomic 之前的「首次进 zhihu
 // tab 时若 selectedTaskId 不在 tasks 列表里，自动 fallback 到第一条任
@@ -563,8 +578,28 @@ watch(
   { immediate: true },
 );
 
-const selectedTask = computed(() =>
-  props.tasks.find((t) => t.id === selectedTaskId.value) ?? null,
+const selectedTask = computed<Task | null>(() => {
+  // L2（已钻入批次）→ 左侧点选的子任务；
+  // L1「单问题批次」→ 直接用其唯一子任务（单问题点一下即看详情、不进子列表）；
+  // L1 多问题批次 → null，右侧走「批次汇总」分支。
+  if (openBatchName.value != null) {
+    return props.tasks.find((t) => t.id === selectedTaskId.value) ?? null;
+  }
+  const b = selectedBatch.value;
+  return b && b.tasks.length === 1 ? b.tasks[0] : null;
+});
+
+// 详情历史：selectedTask 变了就拉它的 results（L2 换子任务 / L1 选中单问题批次都覆盖）。
+// 放在 selectedTask 定义之后，避免 watch source 早于其初始化（TDZ）。
+watch(
+  () => selectedTask.value?.id ?? null,
+  async (id) => {
+    if (id != null && id > 0) await loadResults(id);
+  },
+  // immediate：本 watch 注册在 props.tasks/batches 两个 immediate watch 之后，
+  // 挂载时 selectedTask.id 初值已定、不会再"跳变"，不加 immediate 首屏就不拉
+  // results → 默认选中的单问题详情会空掉趋势 + 前N答案（对抗审查 Finding 1）。
+  { immediate: true },
 );
 
 // 知乎详情卡的 "Top 3 抢占者" —— 从 taskResults 的最新一次 result
@@ -644,20 +679,32 @@ function pickSampleZhihu(row: SampleZhihu) {
 // atomic load 跑完，最后调本接口把选中态写到位。
 function selectTask(taskId: number) {
   selectedTaskId.value = taskId;
+  // 新模型下详情按批次解析：把选中批次指到该任务所在批次 —— L1「单问题」直接出
+  // 详情；多问题批次则钻入 L2 并高亮该子任务。否则 selectedTaskId 在 L1 被忽略，
+  // 从数据中心「跳到该知乎问题」会落到第一条批次（对抗审查 Finding 2/4）。
+  const batch = batches.value.find((b) => b.tasks.some((t) => t.id === taskId));
+  if (batch) {
+    selectedBatchName.value = batch.name;
+    openBatchName.value = batch.tasks.length > 1 ? batch.name : null;
+  }
 }
 
 // 父组件 SSE finished 事件回调 —— 抓完一条立刻刷新 taskResults。
 // 仅当 finished 的 task_id 等于当前选中时才拉，跟拆分前的 startMonitorBus
 // 里 `if (selectedTaskId.value === d.task_id) loadResults(d.task_id)` 等价。
 function onTaskFinished(taskId: number) {
-  if (selectedTaskId.value === taskId) {
+  if (selectedTask.value?.id === taskId) {
     loadResults(taskId);
   }
 }
 
 // 父组件删除任务后调用：若当前停在被删任务上，清空选中 + 历史。
 function handleTaskDeleted(taskId: number) {
-  if (selectedTaskId.value === taskId) {
+  // 用 selectedTask（右侧真正在看的任务）判定，而非 selectedTaskId —— L1「单问题
+  // 批次」下 selectedTaskId 可能停在别的任务上，用它会误清当前正在看的详情（对抗
+  // 审查 Finding 2）。被看的任务真被删时，selectedTask 会随 batches 重算而变，
+  // 上面的 watch 自动补拉新任务的 results。
+  if (selectedTask.value?.id === taskId) {
     selectedTaskId.value = null;
     taskResults.value = [];
   }
@@ -1095,8 +1142,8 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
                 type="button"
                 class="truncate text-left text-[13px] font-semibold"
                 :style="{ color: selectedBatchName === b.name ? 'var(--primary-deep)' : 'var(--ink)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', maxWidth: '100%' }"
-                title="查看该批次的问题列表"
-                @click.stop="openBatchName = b.name"
+                :title="b.tasks.length === 1 ? '查看该问题详情' : '查看该批次的问题列表'"
+                @click.stop="openBatch(b)"
               >{{ b.name }}</button>
             </div>
             <!-- Col 2: 状态 Pill —— 批次内有任务运行中 → 进行中，否则 → 就绪 -->
@@ -1110,16 +1157,31 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             <!-- Col 3: ⋯ Dropdown -->
             <div class="flex items-center justify-center">
               <Dropdown
-                :items="[
-                  { key: 'run', label: '启动批次', icon: 'play' },
-                  { key: 'edit', label: '编辑批次', icon: 'edit' },
-                  { key: 'delete', label: '删除批次', icon: 'trash', tone: 'danger' },
-                ]"
+                :items="b.tasks.length === 1
+                  ? [
+                      runningTaskIds[b.tasks[0].id]
+                        ? { key: 'stop', label: '停止', icon: 'x' }
+                        : { key: 'run', label: '立刻监测', icon: 'play' },
+                      { key: 'edit-task', label: '编辑任务', icon: 'edit' },
+                      { key: 'delete-task', label: '删除任务', icon: 'trash', tone: 'danger' },
+                    ]
+                  : [
+                      { key: 'run', label: '启动批次', icon: 'play' },
+                      { key: 'edit', label: '编辑批次', icon: 'edit' },
+                      { key: 'delete', label: '删除批次', icon: 'trash', tone: 'danger' },
+                    ]"
                 align="right"
                 @select="(key) => {
-                  if (key === 'run') startBatch(b);
-                  else if (key === 'edit') editBatch(b);
-                  else if (key === 'delete') deleteBatch(b);
+                  if (b.tasks.length === 1) {
+                    if (key === 'run') emit('run-task', b.tasks[0].id);
+                    else if (key === 'stop') emit('cancel-task', b.tasks[0].id);
+                    else if (key === 'edit-task') emit('edit-task', b.tasks[0]);
+                    else if (key === 'delete-task') emit('delete-task', b.tasks[0].id);
+                  } else {
+                    if (key === 'run') startBatch(b);
+                    else if (key === 'edit') editBatch(b);
+                    else if (key === 'delete') deleteBatch(b);
+                  }
                 }"
               >
                 <template #trigger>
@@ -1404,7 +1466,7 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
           维持原行为不变；只是把 v-else 收窄成 L2 专属分支，L1 走下面的
           批次详情面板。
         -->
-        <template v-else-if="openBatchName != null">
+        <template v-else-if="openBatchName != null || selectedTask">
           <div v-if="!selectedTask" class="text-[12.5px]" :style="{ color: 'var(--ink-3)' }">
             点击左侧任意问题查看详情。
           </div>

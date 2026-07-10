@@ -1435,7 +1435,7 @@ const tabSectionLabel = computed(() => {
               <div
                 class="flex min-h-0 flex-1 flex-col overflow-y-auto"
                 :style="{
-                  background: '#ffffff',
+                  background: 'var(--card-white)',
                   borderRadius: '12px',
                   border: '1px solid var(--line)',
                   padding: '20px 24px',
@@ -1517,7 +1517,7 @@ const tabSectionLabel = computed(() => {
                 :style="{
                   padding: '12px 14px',
                   borderRadius: '12px',
-                  background: '#fbfaf6',
+                  background: 'var(--card-warm)',
                   border: '1px solid var(--line)',
                 }"
               >
@@ -1555,10 +1555,10 @@ const tabSectionLabel = computed(() => {
                       height: '26px',
                       padding: '0 9px',
                       borderRadius: '7px',
-                      background: article.rerunningIndex === p.index ? 'var(--danger-soft, #fef2f2)' : 'var(--card-white)',
-                      color: article.rerunningIndex === p.index ? 'var(--danger, #dc2626)' : 'var(--ink-2)',
+                      background: article.rerunningIndex === p.index ? 'var(--red-soft)' : 'var(--card-white)',
+                      color: article.rerunningIndex === p.index ? 'var(--red-deep)' : 'var(--ink-2)',
                       border: article.rerunningIndex === p.index
-                        ? '1px solid var(--danger, #dc2626)'
+                        ? '1px solid var(--red-deep)'
                         : '1px solid var(--line)',
                     }"
                     @click="article.rerunningIndex === p.index ? article.cancelRerun() : article.rerunPass(p.index)"
@@ -1578,7 +1578,7 @@ const tabSectionLabel = computed(() => {
               <div
                 class="flex min-h-0 flex-1 flex-col overflow-y-auto"
                 :style="{
-                  background: '#ffffff',
+                  background: 'var(--card-white)',
                   borderRadius: '12px',
                   border: '1px solid var(--line)',
                   padding: '20px 24px',
@@ -1945,7 +1945,7 @@ const tabSectionLabel = computed(() => {
                       height: '14px',
                       borderRadius: '50%',
                       background: '#7a9b5e',
-                      border: '3px solid #fff',
+                      border: '3px solid var(--card-white)',
                       boxShadow: '0 1px 3px rgba(var(--shadow-rgb),0.18)',
                     }"
                   />
@@ -2582,7 +2582,7 @@ const tabSectionLabel = computed(() => {
   cursor: pointer;
 }
 .qc-primary-card--clickable:hover {
-  background: #fbfaf6;
+  background: var(--card-warm);
   transform: translateY(-2px);
   box-shadow:
     0 6px 14px -2px rgba(var(--shadow-rgb), 0.10),
@@ -2633,7 +2633,7 @@ const tabSectionLabel = computed(() => {
  * 因继承父 scope 也命中。
  */
 :deep(section) {
-  background-color: #fbfaf6;
+  background-color: var(--card-warm);
   /*
    * Multi-layer box-shadow 解决 overflow-hidden 裁切问题：
    * 父 main 是 `overflow-hidden` + padding 30px，单层大 blur (60+px)
@@ -2656,7 +2656,7 @@ const tabSectionLabel = computed(() => {
    * 顶部 inset 白色高光模拟"环境光打在卡上沿"的弱浮起立体感。
    * 不引入位移，也不被 overflow 影响。
    */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  box-shadow: inset 0 1px 0 var(--edge-hi);
 }
 .right-rail :deep(section) {
   /*
@@ -2665,7 +2665,7 @@ const tabSectionLabel = computed(() => {
    * 卡阴影过重）。
    */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 1px 0 var(--edge-hi),
     0 3px 10px -2px rgba(var(--shadow-rgb), 0.07),
     0 2px 5px rgba(var(--shadow-rgb), 0.04);
   transition: box-shadow 0.14s ease;
@@ -2673,7 +2673,7 @@ const tabSectionLabel = computed(() => {
 .right-rail :deep(section):hover {
   /* hover 同步减一档，跟默认态保持比例 */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 1px 0 var(--edge-hi),
     0 8px 20px -4px rgba(var(--shadow-rgb), 0.10),
     0 4px 8px rgba(var(--shadow-rgb), 0.05);
 }
@@ -2685,7 +2685,7 @@ const tabSectionLabel = computed(() => {
  * 现在 class-driven 让 hover/selected 都走 scoped CSS。
  */
 .assembly-block {
-  background: #fbfaf6;
+  background: var(--card-warm);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 14px;

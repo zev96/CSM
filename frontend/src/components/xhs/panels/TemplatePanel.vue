@@ -149,7 +149,7 @@ function saveAsTemplate() {
   border: 1px solid var(--line-2);
   border-radius: 12px;
   padding: 10px 12px;
-  background: #fff;
+  background: var(--card-white);
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -178,7 +178,7 @@ function saveAsTemplate() {
   border: 1px solid var(--line-2);
   border-radius: 10px;
   padding: 8px 12px;
-  background: #fff;
+  background: var(--card-white);
   cursor: pointer;
   transition: border-color 0.15s;
 }
@@ -215,7 +215,7 @@ function saveAsTemplate() {
   color: var(--ink-2);
   border: 1px solid var(--line-2);
   border-radius: 6px;
-  background: #fff;
+  background: var(--card-white);
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
 }
