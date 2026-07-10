@@ -44,17 +44,17 @@ class _FakeSimpleClient:
 
 def test_tongyi_non_json_200_is_error(monkeypatch):
     monkeypatch.setattr(tongyi_mod, "read_api_key", lambda p: "fake-key")
-    monkeypatch.setattr(tongyi_mod.httpx, "post",
-                        lambda *a, **k: _FakeResp(200, "<html>captcha</html>", raise_json=True))
+    monkeypatch.setattr(tongyi_mod, "_shared_client",
+                        lambda: _FakeSimpleClient(_FakeResp(200, "<html>captcha</html>", raise_json=True)))
     ans = tongyi_mod.TongyiProvider().query("k", web_search=True)
     assert ans.status == "error"
 
 
 def test_tongyi_app_error_code_is_error(monkeypatch):
     monkeypatch.setattr(tongyi_mod, "read_api_key", lambda p: "fake-key")
-    monkeypatch.setattr(tongyi_mod.httpx, "post",
-                        lambda *a, **k: _FakeResp(200, '{"code":"Arrearage"}',
-                                                  json_data={"code": "Arrearage", "message": "欠费"}))
+    monkeypatch.setattr(tongyi_mod, "_shared_client",
+                        lambda: _FakeSimpleClient(_FakeResp(200, '{"code":"Arrearage"}',
+                                                  json_data={"code": "Arrearage", "message": "欠费"})))
     ans = tongyi_mod.TongyiProvider().query("k", web_search=True)
     assert ans.status == "error"
     assert "Arrearage" in ans.error
