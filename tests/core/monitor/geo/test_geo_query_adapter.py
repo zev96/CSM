@@ -241,3 +241,29 @@ def test_fetch_uses_dual_lane_api_concurrent(fresh_db, monkeypatch):
     result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
     assert result.status == "ok"                 # 未 BrokenBarrier → 两 API cell 并发成功
     assert result.metric["error_cells"] == 0
+
+
+def test_fetch_isolates_unconstructable_platform(fresh_db, monkeypatch):
+    # I1 回归守卫:某平台 get_provider 抛错(未知/废弃平台 key、模块 import 失败)
+    # 必须只让该平台变 error cell,健康平台照常成功;整轮不因分类阶段异常而崩。
+    from csm_core.monitor.geo.providers.base import GeoProviderError
+
+    def picker(p):
+        if p == "badplat":
+            raise GeoProviderError("未知 GEO 平台: badplat")
+        return FakeProvider(p)
+    monkeypatch.setattr(geo_mod, "get_provider", picker)
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "小鹏", "keywords": ["k1"], "platforms": ["tongyi", "badplat"],
+                "extract_provider": "mock"}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert result.status == "ok"                  # 一个坏平台不拖垮整轮
+    assert result.metric["error_cells"] == 1
+    conn = storage.get_conn()
+    rows = conn.execute("SELECT platform, status FROM geo_cells WHERE task_id=?", (tid,)).fetchall()
+    statuses = {r["platform"]: r["status"] for r in rows}
+    assert statuses["tongyi"] == "ok"
+    assert statuses["badplat"] == "error"

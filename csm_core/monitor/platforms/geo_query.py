@@ -81,6 +81,18 @@ class GeoQueryAdapter:
         api_pool_size = int(cfg.get("geo_api_pool_size", 5) or 5)
         rpa_conc = int(cfg.get("geo_rpa_platform_concurrency", 3) or 3)
 
+        # 预计算每个平台的车道(mode)。get_provider 可能抛(未知/废弃平台 key、
+        # provider 模块 import 失败)——逐平台兜住,把失败平台并入 API 车道,让
+        # _run_cell 执行时再次 get_provider 抛错并隔离成 error cell(恢复串行版的
+        # cell 级隔离:一个坏平台不拖垮整轮),顺带每平台只构造一次 provider。
+        mode_map: "dict[str, str]" = {}
+        for _p in dict.fromkeys(plat for _, plat in cells_plan):
+            try:
+                mode_map[_p] = get_provider(_p).mode
+            except Exception:
+                logger.warning("[geo] 平台 %s 无法构造(未知/模块缺失),归入 API 车道由 _run_cell 兜错", _p)
+                mode_map[_p] = "api"
+
         def _cell(kw: str, plat: str) -> GeoCell:
             return self._run_cell(kw, plat, brand, aliases, web_search, client,
                                   cancel_token=cancel_token)
@@ -89,7 +101,7 @@ class GeoQueryAdapter:
         tail = cells_plan[resume_from:]
         cells: list[GeoCell] = geo_runner.run_cells_dual_lane(
             tail, _cell,
-            mode_of=lambda p: get_provider(p).mode,
+            mode_of=lambda p: mode_map.get(p, "api"),
             api_pool_size=api_pool_size,
             rpa_platform_concurrency=rpa_conc,
             progress_cb=progress_cb,

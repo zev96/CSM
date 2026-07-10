@@ -23,7 +23,7 @@
 - **修改** `csm_core/monitor/platforms/geo_query.py:88-98` —— 把串行循环换成 `runner.run_cells_dual_lane(...)`;读 `geo_api_pool_size`/`geo_rpa_platform_concurrency` 配置。
 - **修改** `csm_core/monitor/geo/providers/api_doubao.py` —— 共享 `httpx.Client` + 429/连接失败单次重试。
 - **修改** `csm_core/monitor/geo/providers/api_tongyi.py` —— 同上。
-- **修改** `tests/core/monitor/geo/test_geo_query_adapter.py` —— 补一条「API cell 并发、RPA 同平台串行」的 fetch 级测试(现有 6 条断言不变,应继续通过)。
+- **修改** `tests/core/monitor/geo/test_geo_query_adapter.py` —— 补两条 fetch 级测试(① API cell 并发;② 分类阶段 get_provider 失败隔离成 error cell,修 I1 回归),现有测试断言不变、应继续通过。
 
 ---
 
@@ -321,7 +321,7 @@ git commit -m "test(geo): runner 并发/串行/取消/顺序 确定性单测"
 
 **Files:**
 - Modify: `csm_core/monitor/platforms/geo_query.py:65-98`
-- Test: `tests/core/monitor/geo/test_geo_query_adapter.py`(补 1 条,不改原 6 条)
+- Test: `tests/core/monitor/geo/test_geo_query_adapter.py`(补 2 条:并发 + I1 隔离回归,不改原有断言)
 
 - [ ] **Step 1: 写失败测试 —— fetch 下 API 并发 + RPA 同平台串行**
 
@@ -353,6 +353,39 @@ def test_fetch_uses_dual_lane_api_concurrent(fresh_db, monkeypatch):
     assert result.metric["error_cells"] == 0
 ```
 
+- [ ] **Step 1b: 写回归守卫测试 —— 分类阶段 get_provider 失败也要隔离(修 I1)**
+
+Append to `tests/core/monitor/geo/test_geo_query_adapter.py`:
+
+```python
+def test_fetch_isolates_unconstructable_platform(fresh_db, monkeypatch):
+    # I1 回归守卫:某平台 get_provider 抛错(未知/废弃平台 key、模块 import 失败)
+    # 必须只让该平台变 error cell,健康平台照常成功;整轮不因分类阶段异常而崩。
+    from csm_core.monitor.geo.providers.base import GeoProviderError
+
+    def picker(p):
+        if p == "badplat":
+            raise GeoProviderError("未知 GEO 平台: badplat")
+        return FakeProvider(p)
+    monkeypatch.setattr(geo_mod, "get_provider", picker)
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "小鹏", "keywords": ["k1"], "platforms": ["tongyi", "badplat"],
+                "extract_provider": "mock"}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert result.status == "ok"                  # 一个坏平台不拖垮整轮
+    assert result.metric["error_cells"] == 1
+    conn = storage.get_conn()
+    rows = conn.execute("SELECT platform, status FROM geo_cells WHERE task_id=?", (tid,)).fetchall()
+    statuses = {r["platform"]: r["status"] for r in rows}
+    assert statuses["tongyi"] == "ok"
+    assert statuses["badplat"] == "error"
+```
+
+> **为什么**:串行版 `get_provider(platform)` 在 `_run_cell` 的 try/except 内,坏平台(未知 key / provider 模块 import 失败)只会变成一个 error cell,健康平台照跑。若把 Step 3 写成 `mode_of=lambda p: get_provider(p).mode`,`mode_of` 会在 runner 的**分类阶段**(`_run_cell` 之外)调 `get_provider`,一个坏平台就直接抛出 `fetch()` → 整轮零 cell、不 record_run,健康平台被连带打死 → 违反「零回归」。此测试守住该边界:在 Step 3 的 `mode_map` 预计算修复(逐平台兜住 get_provider,失败归入 API 车道由 `_run_cell` 再次调用时隔离)下通过;在朴素 `mode_of=lambda p: get_provider(p).mode` 下失败(异常直接冒出 `fetch()`)。
+
 - [ ] **Step 2: 运行确认失败**
 
 Run: `"D:/CSM/.venv/Scripts/python.exe" -m pytest tests/core/monitor/geo/test_geo_query_adapter.py::test_fetch_uses_dual_lane_api_concurrent -v`
@@ -374,6 +407,18 @@ Replace the serial loop block (current lines 87-98, from `cells: list[GeoCell] =
         api_pool_size = int(cfg.get("geo_api_pool_size", 5) or 5)
         rpa_conc = int(cfg.get("geo_rpa_platform_concurrency", 3) or 3)
 
+        # 预计算每个平台的车道(mode)。get_provider 可能抛(未知/废弃平台 key、
+        # provider 模块 import 失败)——逐平台兜住,把失败平台并入 API 车道,让
+        # _run_cell 执行时再次 get_provider 抛错并隔离成 error cell(恢复串行版的
+        # cell 级隔离:一个坏平台不拖垮整轮),顺带每平台只构造一次 provider。
+        mode_map: "dict[str, str]" = {}
+        for _p in dict.fromkeys(plat for _, plat in cells_plan):
+            try:
+                mode_map[_p] = get_provider(_p).mode
+            except Exception:
+                logger.warning("[geo] 平台 %s 无法构造(未知/模块缺失),归入 API 车道由 _run_cell 兜错", _p)
+                mode_map[_p] = "api"
+
         def _cell(kw: str, plat: str) -> GeoCell:
             return self._run_cell(kw, plat, brand, aliases, web_search, client,
                                   cancel_token=cancel_token)
@@ -382,13 +427,15 @@ Replace the serial loop block (current lines 87-98, from `cells: list[GeoCell] =
         tail = cells_plan[resume_from:]
         cells: list[GeoCell] = geo_runner.run_cells_dual_lane(
             tail, _cell,
-            mode_of=lambda p: get_provider(p).mode,
+            mode_of=lambda p: mode_map.get(p, "api"),
             api_pool_size=api_pool_size,
             rpa_platform_concurrency=rpa_conc,
             progress_cb=progress_cb,
             initial_done=resume_from,
         )
 ```
+
+> **为什么用 `mode_map` 预计算而非直接 `mode_of=lambda p: get_provider(p).mode`**(修 I1 回归):runner 的分类阶段在 `_run_cell` 的隔离之外调 `mode_of`。若 `mode_of` 直接 `get_provider(p).mode`,一个无法构造的平台(未知/废弃 key、provider 模块 import 失败)会把 `GeoProviderError` 抛出整个 `fetch()` —— 零 cell、不 record_run、健康平台被连带打死。这里逐平台 try/except 兜住 get_provider,失败平台记 `"api"` 车道;真正执行时 `_run_cell` 内部再次 `get_provider` 抛错,被其 try/except 隔离成 error cell,恢复串行版语义。`dict.fromkeys` 保序去重让每平台只在分类阶段构造一次 provider(顺带省掉朴素写法里每 cell 一次的重复构造)。Step 1b 的 `test_fetch_isolates_unconstructable_platform` 守此边界。
 
 Then delete the now-duplicate up-front progress emit block (current lines 81-85 `if progress_cb is not None: ... progress_cb(resume_from, total)`) — the runner emits the initial event itself.
 
