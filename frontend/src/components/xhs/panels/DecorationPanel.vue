@@ -22,7 +22,7 @@ const items = computed(() => DECORATION_GROUPS.find((g) => g.key === grp.value)?
         class="xhs-deco"
         :style="{
           fontSize: '14px', padding: '8px 12px', borderRadius: '10px', cursor: 'pointer',
-          border: '1px solid var(--line-2)', background: '#fff', color: 'var(--ink)', whiteSpace: 'nowrap',
+          border: '1px solid var(--line-2)', background: 'var(--card-white)', color: 'var(--ink)', whiteSpace: 'nowrap',
         }"
         @click="xhs.insertAtCursor(it)"
       >

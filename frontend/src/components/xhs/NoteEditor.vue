@@ -35,7 +35,7 @@ const inputBaseStyle = {
   border: "1px solid var(--line-2)",
   borderRadius: "10px",
   padding: "10px 12px",
-  background: "#fff",
+  background: "var(--card-white)",
   color: "var(--ink)",
   fontSize: "14px",
   outline: "none",
@@ -118,7 +118,7 @@ const inputBaseStyle = {
   padding: 7px 14px;
   border-radius: 8px;
   border: 1px solid var(--line-2);
-  background: #fff;
+  background: var(--card-white);
   color: var(--ink);
   cursor: pointer;
   transition: filter 0.15s;
@@ -134,7 +134,7 @@ const inputBaseStyle = {
   padding: 6px 12px;
   border-radius: 8px;
   border: 1px solid var(--line-2);
-  background: #fff;
+  background: var(--card-white);
   color: var(--ink);
   cursor: pointer;
   transition: filter 0.15s;

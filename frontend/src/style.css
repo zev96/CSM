@@ -11,6 +11,7 @@
   --card: #fbf7ec;
   --card-2: #f6f0e1;
   --card-white: #ffffff;
+  --card-warm: #fbfaf6;
   --ink: #1c1a17;
   --ink-2: #4d4943;
   --ink-3: #7a7569;
@@ -53,6 +54,19 @@
   --scroll-thumb-hover: rgba(var(--ink-rgb), 0.32);
   --frosted-bg: rgba(255, 255, 255, 0.55);
   --frosted-border: rgba(255, 255, 255, 0.65);
+
+  /* ── 左侧浮动导航栏（LeftNav）—— 亮色=乳白磨砂玻璃 + 柔白描边。
+     写死的 rgba(255,255,255,…) 在暗色下会翻成发亮的浅条 + 刺眼白线，
+     故抽成 token；暗色覆盖见下方 body[data-theme="dark"]。 */
+  --nav-bg: rgba(255, 255, 255, 0.35);
+  --nav-border: rgba(255, 255, 255, 0.5);
+  --nav-active-bg: rgba(255, 255, 255, 0.85);
+  --nav-active-border: rgba(255, 255, 255, 0.7);
+
+  /* 卡片上沿的环境光高光（inset 顶边）—— 亮色明显、暗色近乎隐形。
+     ArticleView 的 main/inspector 卡用它模拟"光打在卡上边"的浮起感；
+     暗色下没有这层光，调到极淡免得每张卡顶都挂一道刺眼白线。 */
+  --edge-hi: rgba(255, 255, 255, 0.65);
 }
 
 /* ── 暗色主题（暖咖 Espresso）──────────────────────────────────────
@@ -65,6 +79,7 @@ body[data-theme="dark"] {
   --card: #262019;
   --card-2: #2f2820;
   --card-white: #312a21;
+  --card-warm: #2a2419;
   /* 文字 */
   --ink: #f3ede0;
   --ink-2: #c9c0ad;
@@ -96,6 +111,13 @@ body[data-theme="dark"] {
   /* 磨砂玻璃（离散重设） */
   --frosted-bg: rgba(38, 32, 25, 0.55);
   --frosted-border: rgba(245, 237, 224, 0.08);
+  /* 导航栏：暗色改为极淡的浮起浅色 + 微光边，去掉刺眼白线/白条；
+     选中态再亮一档，让近白的 --ink 图标在其上清晰可读（不再糊成白块）。 */
+  --nav-bg: rgba(255, 255, 255, 0.05);
+  --nav-border: rgba(255, 255, 255, 0.06);
+  --nav-active-bg: rgba(255, 255, 255, 0.12);
+  --nav-active-border: rgba(255, 255, 255, 0.14);
+  --edge-hi: rgba(255, 255, 255, 0.05);
 }
 
 html,

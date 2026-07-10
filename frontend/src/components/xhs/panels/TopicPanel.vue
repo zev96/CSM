@@ -63,7 +63,7 @@ async function removeMine(id: string) {
         :style="{
           fontSize: '13px', padding: '5px 12px', borderRadius: '999px', cursor: 'pointer',
           border: '1px solid ' + (added(t) ? '#3a6fb0' : 'var(--line-2)'),
-          background: added(t) ? 'rgba(58,111,176,0.10)' : '#fff',
+          background: added(t) ? 'rgba(58,111,176,0.10)' : 'var(--card-white)',
           color: added(t) ? '#3a6fb0' : 'var(--ink)',
         }"
         @click="xhs.addTopic(t)"
@@ -112,7 +112,7 @@ async function removeMine(id: string) {
   font-size: 13px;
   outline: none;
   color: var(--ink);
-  background: #fff;
+  background: var(--card-white);
 }
 
 .xhs-topic-add-btn {
@@ -145,7 +145,7 @@ async function removeMine(id: string) {
   border: 1px solid var(--line-2);
   border-radius: 10px;
   padding: 8px 12px;
-  background: #fff;
+  background: var(--card-white);
   color: var(--ink);
   font-size: 13px;
   cursor: pointer;
@@ -169,7 +169,7 @@ async function removeMine(id: string) {
   color: var(--ink-2);
   border: 1px solid var(--line-2);
   border-radius: 6px;
-  background: #fff;
+  background: var(--card-white);
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
 }

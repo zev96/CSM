@@ -229,14 +229,14 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
                   />
                 </div>
                 <div class="note-content">
-                  <div :style="{ fontSize: '15px', fontWeight: 700, lineHeight: 1.4, marginBottom: '6px', color: xhs.title ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayTitle }}</div>
-                  <div :style="{ fontSize: '13px', lineHeight: 1.7, color: xhs.body ? 'var(--ink)' : '#bbb', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">
+                  <div :style="{ fontSize: '15px', fontWeight: 700, lineHeight: 1.4, marginBottom: '6px', color: xhs.title ? 'var(--ink)' : 'var(--ink-4)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">{{ displayTitle }}</div>
+                  <div :style="{ fontSize: '13px', lineHeight: 1.7, color: xhs.body ? 'var(--ink)' : 'var(--ink-4)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }">
                     <template v-for="(seg, i) in bodySegments" :key="i">
                       <span v-if="seg.type === 'text'">{{ seg.value }}</span>
                       <span v-else class="xhs-code-chip">{{ seg.label }}</span>
                     </template>
                   </div>
-                  <div :style="{ marginTop: '12px', fontSize: '11px', color: '#bbb' }">编辑于 刚刚 · 广州</div>
+                  <div :style="{ marginTop: '12px', fontSize: '11px', color: 'var(--ink-4)' }">编辑于 刚刚 · 广州</div>
                 </div>
               </div>
               <div class="note-actionbar">
@@ -357,7 +357,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   right: 6.47%;
   bottom: 2.83%;
   z-index: 1;
-  background: #fff;
+  background: var(--card-white);
   border-radius: 10.1% / 4.6%;
   overflow: hidden;
 }
@@ -368,7 +368,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   transform-origin: top left;
   display: flex;
   flex-direction: column;
-  background: #fff;
+  background: var(--card-white);
 }
 
 .mini-avatar {
@@ -511,7 +511,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   gap: 6px;
   padding: 7px 10px;
   border-top: 1px solid var(--line-2);
-  background: #fff;
+  background: var(--card-white);
 }
 .note-comment-input {
   flex: 1;
@@ -610,7 +610,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   flex-direction: column;
   border-radius: 9px;
   overflow: hidden;
-  background: #fff;
+  background: var(--card-white);
   border: 1px solid var(--line-2);
 }
 .dc-cover-wrap {
@@ -650,7 +650,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   overflow: hidden;
 }
 .dc-title-empty {
-  color: #bbb;
+  color: var(--ink-4);
   font-weight: 400;
 }
 .dc-author {
@@ -685,7 +685,7 @@ const NAV = ["首页", "市集", "+", "消息", "我"];
   justify-content: space-around;
   border-top: 1px solid var(--line-2);
   padding: 7px 4px;
-  background: #fff;
+  background: var(--card-white);
 }
 .dc-nav-item {
   font-size: 11px;
