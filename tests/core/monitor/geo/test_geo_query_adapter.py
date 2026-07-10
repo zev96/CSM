@@ -267,3 +267,43 @@ def test_fetch_isolates_unconstructable_platform(fresh_db, monkeypatch):
     statuses = {r["platform"]: r["status"] for r in rows}
     assert statuses["tongyi"] == "ok"
     assert statuses["badplat"] == "error"
+
+
+def test_fetch_cancel_midrun_not_swallowed_as_ok(fresh_db, monkeypatch):
+    # C1 回归守卫:cell 过了起始检查点后用户 Stop(token 置位),同步 POST 无法中途察觉 →
+    # cell 返回 ok。fetch 必须在 runner 返回后复查 token,把「运行期间被取消」抛成取消,
+    # 而不是悄悄 status=ok。
+    import threading as _t
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        pytest.skip("sidecar 不可用,无法区分取消")
+    tok = _t.Event()
+
+    class _StopMidProv:
+        def __init__(self, p):
+            self.platform = p; self.mode = "api"
+        def query(self, kw, *, web_search=True, cancel_token=None):
+            from csm_core.monitor.geo.models import GeoAnswer
+            tok.set()                          # 模拟用户在本 cell 执行期间点 Stop
+            return GeoAnswer(platform=self.platform, keyword=kw, answer_text="x 推荐 小鹏 G6")
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _StopMidProv(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "小鹏", "keywords": ["k1"], "platforms": ["tongyi"], "extract_provider": "mock"}))
+    with pytest.raises(_CancelledFetch):
+        geo_mod.ADAPTER.fetch(storage.get_task(tid), cancel_token=tok)
+
+
+def test_fetch_tolerates_non_numeric_pool_config(fresh_db, monkeypatch):
+    # 非数值 geo_api_pool_size 不应崩 fetch,应回落默认。
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: FakeProvider(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "小鹏", "keywords": ["k1"], "platforms": ["tongyi"],
+                "extract_provider": "mock", "geo_api_pool_size": "abc"}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert result.status == "ok"

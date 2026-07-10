@@ -106,3 +106,21 @@ def test_cancellation_propagates_and_stops(monkeypatch):
         )
     # api_pool_size=1 → 第一个 cell 取消置标志,后续 _one 早退,不应全部启动
     assert started["n"] < 3
+
+
+def test_preset_cancel_token_skips_all_cells():
+    # 传入已置位的 cancel_token → 每个 cell 在起始检查点被跳过,run_cell 一次都不真跑,
+    # runner 抛取消(不返回含 None 的列表)。
+    tok = threading.Event(); tok.set()
+    called = {"n": 0}
+
+    def run_cell(kw, plat):
+        called["n"] += 1
+        return _cell(kw, plat)
+
+    plan = [("k1", "tongyi"), ("k2", "tongyi")]
+    with pytest.raises(BaseException):          # 取消信号(_CancelledFetch 或 standalone 的 RuntimeError)
+        runner.run_cells_dual_lane(plan, run_cell, mode_of=lambda p: "api",
+                                   api_pool_size=2, rpa_platform_concurrency=3,
+                                   cancel_token=tok)
+    assert called["n"] == 0

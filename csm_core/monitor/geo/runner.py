@@ -16,7 +16,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
-from ..base import is_cancelled
+from ..base import is_cancelled, maybe_cancel
 from .models import GeoCell
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ def run_cells_dual_lane(
     rpa_platform_concurrency: int = 3,
     progress_cb: "Callable[[int, int], None] | None" = None,
     initial_done: int = 0,
+    cancel_token: "threading.Event | None" = None,
 ) -> "list[GeoCell]":
     total = initial_done + len(cells_plan)
     results: "list[GeoCell | None]" = [None] * len(cells_plan)
@@ -65,6 +66,7 @@ def run_cells_dual_lane(
             return
         kw, plat = cells_plan[i]
         try:
+            maybe_cancel(cancel_token)       # 队列中 cell 起始检查点:token 已置位则抛取消(与串行版逐 cell 检查对齐)
             results[i] = run_cell(kw, plat)
         except BaseException as e:          # noqa: BLE001 —— 取消是 BaseException 之外的普通异常,但统一兜
             if is_cancelled(e):

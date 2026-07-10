@@ -78,8 +78,14 @@ class GeoQueryAdapter:
 
         # 双车道并发调度(API 并发 + RPA 按平台并发)。cell 级隔离与串行版一致:
         # _run_cell 内部把非取消异常兜成 error cell,取消异常上抛由 runner 传导。
-        api_pool_size = int(cfg.get("geo_api_pool_size", 5) or 5)
-        rpa_conc = int(cfg.get("geo_rpa_platform_concurrency", 3) or 3)
+        def _int_cfg(key: str, default: int, hi: int) -> int:
+            try:
+                v = int(cfg.get(key, default) or default)
+            except (TypeError, ValueError):
+                v = default
+            return max(1, min(v, hi))
+        api_pool_size = _int_cfg("geo_api_pool_size", 5, 16)
+        rpa_conc = _int_cfg("geo_rpa_platform_concurrency", 3, 8)
 
         # 预计算每个平台的车道(mode)。get_provider 可能抛(未知/废弃平台 key、
         # provider 模块 import 失败)——逐平台兜住,把失败平台并入 API 车道,让
@@ -106,7 +112,15 @@ class GeoQueryAdapter:
             rpa_platform_concurrency=rpa_conc,
             progress_cb=progress_cb,
             initial_done=resume_from,
+            cancel_token=cancel_token,
         )
+
+        # C1 修复:runner 返回后复查取消。API cell 的同步 httpx POST 只在
+        # provider.query() 起始处调过一次 maybe_cancel —— 若用户在该 cell 已
+        # 发出请求、尚未返回时点 Stop,POST 会照常跑完并记 ok,token 置位这件事
+        # 就被在飞请求"吞掉"。这里补一次复查,把「运行期间被取消」正确抛成取消,
+        # 而不是悄悄按 status="ok" 持久化(甚至误发告警)。
+        maybe_cancel(cancel_token)
 
         agg = metrics.aggregate(cells)
         # I2：把"够不到平台"和"曝光低"区分开 —— error_cells 让仪表盘知道
