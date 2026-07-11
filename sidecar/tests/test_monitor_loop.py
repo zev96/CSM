@@ -524,3 +524,35 @@ def test_sink_exception_does_not_break_loop(db_path: Path):
     assert len(raised) >= 2
     # And the result was still persisted (the sink failure is downstream of save_result).
     assert len(storage.list_results(task.id)) == 1  # type: ignore[arg-type]
+
+
+def test_maybe_purge_throttles_to_daily(monkeypatch):
+    """T7：purge_old_results 按 24h 节流触发（首次即跑、窗口内不重复），保留 180 天。
+    此前 purge_old_results 全仓 0 调用 → monitor_results 无限膨胀。"""
+    calls: list[int] = []
+    monkeypatch.setattr(
+        storage, "purge_old_results",
+        lambda keep_days=90: (calls.append(keep_days) or 0),
+    )
+
+    now = {"t": datetime(2026, 7, 10, 0, 0, 0)}
+    loop = MonitorLoop(event_sink=lambda e: None, clock=lambda: now["t"])
+
+    loop._maybe_purge_old_results()   # 首次 → 跑
+    loop._maybe_purge_old_results()   # 立即再调 → 24h 节流跳过
+    assert calls == [180]
+
+    now["t"] = now["t"] + timedelta(hours=24, seconds=1)
+    loop._maybe_purge_old_results()   # 过节流窗口 → 再跑
+    assert calls == [180, 180]
+
+
+def test_maybe_purge_failure_is_non_fatal(monkeypatch):
+    """清理抛异常绝不能冒泡影响 tick 派发（fail-soft）。"""
+    def boom(keep_days=90):
+        raise RuntimeError("db locked")
+    monkeypatch.setattr(storage, "purge_old_results", boom)
+
+    loop = MonitorLoop(event_sink=lambda e: None, clock=lambda: datetime(2026, 7, 10))
+    # Must not raise
+    loop._maybe_purge_old_results()

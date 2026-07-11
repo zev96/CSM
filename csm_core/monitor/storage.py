@@ -325,8 +325,12 @@ def save_result(result: MonitorResult, alert_triggered: bool = False) -> int:
 
 def latest_result(task_id: int) -> MonitorResult | None:
     conn = get_conn()
+    # Tie-break on id DESC — see get_last_resumed_keyword: two results can
+    # share the same checked_at within one coarse utcnow() tick, and without
+    # the tiebreaker "latest" is non-deterministic (resume then reads a stale
+    # breakpoint, KPI flickers between the two).
     row = conn.execute(
-        "SELECT * FROM monitor_results WHERE task_id=? ORDER BY checked_at DESC LIMIT 1",
+        "SELECT * FROM monitor_results WHERE task_id=? ORDER BY checked_at DESC, id DESC LIMIT 1",
         (task_id,),
     ).fetchone()
     return _row_to_result(row) if row else None
@@ -335,7 +339,7 @@ def latest_result(task_id: int) -> MonitorResult | None:
 def list_results(task_id: int, limit: int = 30) -> list[MonitorResult]:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT * FROM monitor_results WHERE task_id=? ORDER BY checked_at DESC LIMIT ?",
+        "SELECT * FROM monitor_results WHERE task_id=? ORDER BY checked_at DESC, id DESC LIMIT ?",
         (task_id, limit),
     ).fetchall()
     return [_row_to_result(r) for r in rows]

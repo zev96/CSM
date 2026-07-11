@@ -165,6 +165,78 @@ def test_baidu_browser_session_closes_on_exit(fake_pw, tmp_path):
     assert fake_pw.stop_called is True
 
 
+def _wire_node_pid(pw, pid=4242):
+    """给 FakePW 挂上 node pid 读取链路 pw._impl_obj._connection._transport._proc.pid。"""
+    proc = MagicMock(); proc.pid = pid
+    transport = MagicMock(); transport._proc = proc
+    connection = MagicMock(); connection._transport = transport
+    impl = MagicMock(); impl._connection = connection
+    pw._impl_obj = impl
+
+
+def test_baidu_browser_session_kills_tree_on_failed_teardown(monkeypatch, tmp_path):
+    """孤儿 chrome 兜底：pw.stop() 失败（崩溃 / hang，Node 可能仍活着、Chromium 树
+    残留锁死副本）时，按 node_pid OS-kill 整棵进程树 → 避免熔断反复「Chrome 启动失败」。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    pw = FakePW()
+    _wire_node_pid(pw)
+
+    def _raising_stop():
+        raise RuntimeError("stop hung")
+    pw.stop = _raising_stop  # 模拟 teardown 失败
+
+    monkeypatch.setattr(baidu_browser, "_sync_playwright", lambda: FakeSyncPW(pw))
+    monkeypatch.setattr(baidu_browser, "ensure_browsers_path", lambda: None)
+    killed: list[int] = []
+    monkeypatch.setattr(baidu_browser, "_kill_process_tree",
+                        lambda pid, **kw: killed.append(pid))
+
+    with baidu_browser.baidu_browser_session(headless=True, user_data_dir=tmp_path / "p"):
+        pass
+
+    assert killed == [4242], "teardown 失败时应按 node_pid kill 进程树"
+    assert pw.chromium.context.close_called is True  # graceful 仍先跑
+
+
+def test_baidu_browser_session_no_kill_on_clean_teardown(monkeypatch, tmp_path):
+    """clean teardown（pw.stop 成功、Node 已 reaped）时不再按 pid kill —— 既是
+    no-op 又避免 PID 复用误杀（psutil.Process 构造在进程死后、create_time 守卫失效）。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    pw = FakePW()
+    _wire_node_pid(pw)  # stop 正常成功（FakePW.stop 只置位不抛）
+
+    monkeypatch.setattr(baidu_browser, "_sync_playwright", lambda: FakeSyncPW(pw))
+    monkeypatch.setattr(baidu_browser, "ensure_browsers_path", lambda: None)
+    killed: list[int] = []
+    monkeypatch.setattr(baidu_browser, "_kill_process_tree",
+                        lambda pid, **kw: killed.append(pid))
+
+    with baidu_browser.baidu_browser_session(headless=True, user_data_dir=tmp_path / "p"):
+        pass
+
+    assert killed == [], "clean teardown 不应 kill（防 PID 复用误杀）"
+    assert pw.stop_called is True
+
+
+def test_baidu_browser_session_kill_soft_fails_without_pid(fake_pw, monkeypatch, tmp_path):
+    """读不到 node_pid（老 fake / patchright 内部结构变）时不 kill、不报错，
+    graceful close/stop 照常 —— fail-soft，不能因为拿不到 pid 就崩掉 fetch。"""
+    from csm_core.monitor.drivers import baidu_browser
+
+    killed: list[int] = []
+    # FakePW 没有 _impl_obj → node_pid 读取失败 → 不 kill。
+    monkeypatch.setattr(baidu_browser, "_kill_process_tree",
+                        lambda pid, **kw: killed.append(pid), raising=False)
+
+    with baidu_browser.baidu_browser_session(headless=True, user_data_dir=tmp_path / "p"):
+        pass
+
+    assert killed == [], "拿不到 pid 时不应 kill"
+    assert fake_pw.stop_called is True
+
+
 def test_baidu_browser_session_creates_dir_if_missing(fake_pw, tmp_path):
     """user_data_dir is auto-created on first use (mkdir -p)."""
     from csm_core.monitor.drivers import baidu_browser

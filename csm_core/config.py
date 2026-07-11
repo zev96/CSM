@@ -28,7 +28,9 @@ class BaiduKeywordConfig(BaseModel):
     # fingerprint 不一致直接把 BDUSS 当被劫持，强制重新登录，每次都 layer=auth
     # risk_control。详见 docs/superpowers/specs/2026-05-19-baidu-login-profile-design.md
     headless_default: bool = False
-    captcha_visible_timeout_s: int = 90
+    # 300s：解验证码要留足人工时间。接线后（v0.7.3）该值真正生效，默认对齐
+    # 接线前 _try_human_solve 的死默认 300s，避免升级后窗口反而缩短。
+    captcha_visible_timeout_s: int = 300
     captcha_max_promotions: int = 1
     serp_pacing_seconds: int = 5
     # Article-level pacing —— SERP 解析完后逐条抓正文之间的间隔（min；
@@ -277,10 +279,30 @@ def load_config(path: Path) -> AppConfig:
         logger.debug("settings file not found at %s — using defaults", path)
         return AppConfig()
     try:
-        return AppConfig.model_validate_json(path.read_text(encoding="utf-8"))
+        cfg = AppConfig.model_validate_json(path.read_text(encoding="utf-8"))
     except (ValueError, ValidationError, UnicodeDecodeError, OSError) as e:
         logger.warning("Failed to load settings from %s (%s) — using defaults", path, e)
         return AppConfig()
+    _migrate_legacy_defaults(cfg)
+    return cfg
+
+
+def _migrate_legacy_defaults(cfg: AppConfig) -> None:
+    """就地迁移历史遗留的"死默认值"。
+
+    ``captcha_visible_timeout_s`` 在 v0.7.3 之前是「存了不用」的死配置（解验证码
+    窗口实际恒为 300s），而默认值当时错写成 90。model_dump_json 会把所有字段落盘，
+    所以几乎每个配过设置的老用户的 settings.json 里都持久化了 ``90``。v0.7.3 把它
+    接线生效后，若照搬持久化的 90，会把这些老用户的解验证码窗口从他们**实际体验
+    过的 300s** 悄悄缩到 90s（90s 常来不及注意 + 浮窗 + 解题 → 验证码超时 → 抓取
+    失败）。把持久化的 90（= 老死默认）视作「用新默认 300」，避免升级即回退。
+
+    代价：升级后用户无法把该值精确设成 90（会被视作老默认迁回 300）——对「解验证
+    码宽限时长」这种量级无实际影响（要更短设 60/120 即可）。
+    """
+    bk = cfg.monitor.baidu_keyword
+    if bk.captcha_visible_timeout_s == 90:
+        bk.captcha_visible_timeout_s = 300
 
 
 def save_config(cfg: AppConfig, path: Path) -> None:

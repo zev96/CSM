@@ -196,6 +196,29 @@ def test_get_last_resumed_keyword_returns_zero():
     assert storage.get_last_resumed_keyword(task.id) == 0
 
 
+def test_list_results_latest_is_deterministic_on_checked_at_tie(isolated_storage):
+    """两条结果 checked_at 完全相同（同一时钟 tick 保存，Windows utcnow 分辨率粗）
+    时，list_results / latest_result 必须返回后插入的那条（id 更大 = 真·最新），
+    否则 resume 的 prior-head 读取与 KPI「最新记录」在 tie 上抖动。
+
+    get_last_resumed_keyword 早已用 `id DESC` tiebreaker 修过同款问题；
+    list_results / latest_result 必须一致，否则头尾合并读到旧断点。
+    """
+    task = _make_task(n_keywords=3)
+    ts = datetime(2026, 7, 10, 12, 0, 0)
+    storage.save_result(MonitorResult(
+        task_id=task.id, checked_at=ts, status="risk_control", rank=-1,
+        metric={"marker": "first"}, error_message="",
+    ), alert_triggered=False)
+    storage.save_result(MonitorResult(
+        task_id=task.id, checked_at=ts, status="ok", rank=1,
+        metric={"marker": "second"}, error_message="",
+    ), alert_triggered=False)
+
+    assert storage.list_results(task.id, limit=1)[0].metric["marker"] == "second"
+    assert storage.latest_result(task.id).metric["marker"] == "second"
+
+
 # ── Adapter resume_from tests ─────────────────────────────────────────────────
 
 def test_fetch_with_resume_from_skips_initial_keywords(monkeypatch, no_wait_pacer):
@@ -367,14 +390,27 @@ class TestRunnerRiskControlHandler:
 
     def test_handler_saves_breakpoint_and_publishes_event(self, isolated_storage):
         """Fake adapter raises RiskControlException(progress=3) → handler saves
-        result with last_resumed_keyword=4 and publishes risk_control event."""
+        result with last_resumed_keyword=3 (NOT 4) and publishes risk_control event.
+
+        Off-by-one 修正：progress=kw_idx 是「命中风控、尚未抓完」的那个关键词，
+        resume 必须从它本身重抓，而不是 progress+1 把它永久跳过。
+        """
         from csm_core.monitor.drivers.risk_detector import RiskSignal, RiskControlException
 
         signal = RiskSignal(layer="dom", detail="#captcha-mask")
+        # 前 3 个关键词（kw0/kw1/kw2）已抓完，随异常带出。
+        partial = [
+            {"keyword": "kw0", "default_first_rank": 5, "default_matched_count": 1,
+             "default_results": [], "news_results": []},
+            {"keyword": "kw1", "default_first_rank": -1, "default_matched_count": 0,
+             "default_results": [], "news_results": []},
+            {"keyword": "kw2", "default_first_rank": 8, "default_matched_count": 1,
+             "default_results": [], "news_results": []},
+        ]
 
         class FakeAdapter:
             def fetch(self, t, **kwargs):
-                raise RiskControlException(signal, progress=3)
+                raise RiskControlException(signal, progress=3, partial_keywords=partial)
 
         task = _make_task(n_keywords=10)
 
@@ -386,8 +422,8 @@ class TestRunnerRiskControlHandler:
         # _run_one returns None for risk_control path
         assert result is None
 
-        # Breakpoint saved: progress=3 → next_kw = 3+1 = 4
-        assert storage.get_last_resumed_keyword(task.id) == 4
+        # Breakpoint saved: progress=3 → next_kw = 3 (re-scrape the failed kw)
+        assert storage.get_last_resumed_keyword(task.id) == 3
 
         # risk_control event published (after started event)
         risk_events = [e for e in published_events if e.kind == "risk_control"]
@@ -399,10 +435,18 @@ class TestRunnerRiskControlHandler:
         # result field carries the breakpoint MonitorResult
         assert evt.result is not None
         assert evt.result.status == "risk_control"
-        assert evt.result.metric["last_resumed_keyword"] == 4
+        assert evt.result.metric["last_resumed_keyword"] == 3
         # New top-level fields for frontend banner
-        assert risk_events[0].last_resumed_keyword == 4
+        assert risk_events[0].last_resumed_keyword == 3
         assert risk_events[0].total_keywords == 10
+
+        # 头段数据被持久化进断点 metric.keywords（resume 拼全量的依据）
+        bp_keywords = evt.result.metric["keywords"]
+        assert [k["keyword"] for k in bp_keywords] == ["kw0", "kw1", "kw2"]
+        # 断点聚合按头段算；total_keywords 仍是完整 N=10（进度 3/10）
+        assert evt.result.metric["total_keywords"] == 10
+        assert evt.result.metric["matched_keywords"] == 2
+        assert evt.result.metric["best_default_first_rank"] == 5
 
     def test_handler_none_progress_resumes_from_zero(self, isolated_storage):
         """RiskControlException(progress=None) — non-positional risk —
@@ -429,6 +473,121 @@ class TestRunnerRiskControlHandler:
 
         risk_events = [e for e in published_events if e.kind == "risk_control"]
         assert len(risk_events) == 1
+
+
+class TestRunnerResumeMerge:
+    """resume 完成时头尾合并成完整快照。
+
+    风控中断存下头段 [0..R-1]（断点 metric.keywords），resume 只抓尾段
+    [R..N-1]；runner 必须把两段合并存库，否则新 ok 结果里只有尾段、
+    头段永久缺失（0..R-1 显示「从未监测」）。
+    """
+
+    def _make_loop(self, fake_adapter, published_events: list):
+        from sidecar.csm_sidecar.services.monitor_loop import MonitorLoop
+        return MonitorLoop(
+            event_sink=lambda e: published_events.append(e),
+            adapters={"baidu_keyword": fake_adapter},
+        )
+
+    def test_resume_ok_merges_tail_with_prior_head(self, isolated_storage):
+        task = _make_task(n_keywords=10)
+        all_kw = [f"kw{i}" for i in range(10)]
+
+        # 1. 先存断点：头段 kw0..kw2（kw0 rank5、kw2 rank8 命中）
+        head = [
+            {"keyword": "kw0", "default_first_rank": 5, "default_matched_count": 1,
+             "default_results": [], "news_results": []},
+            {"keyword": "kw1", "default_first_rank": -1, "default_matched_count": 0,
+             "default_results": [], "news_results": []},
+            {"keyword": "kw2", "default_first_rank": 8, "default_matched_count": 1,
+             "default_results": [], "news_results": []},
+        ]
+        _save_result(task.id, "risk_control", {
+            "last_resumed_keyword": 3, "keywords": head,
+            "total_keywords": 10, "search_keywords": all_kw,
+        })
+
+        # 2. Fake adapter 返回尾段 ok 结果（仅 kw3..kw9；kw7 rank2 命中）
+        tail = [
+            {"keyword": f"kw{i}",
+             "default_first_rank": (2 if i == 7 else -1),
+             "default_matched_count": (1 if i == 7 else 0),
+             "default_results": [], "news_results": []}
+            for i in range(3, 10)
+        ]
+        tail_metric = {
+            "keywords": tail, "total_keywords": 7,
+            "search_keywords": [f"kw{i}" for i in range(3, 10)],
+            "best_default_first_rank": 2, "matched_keywords": 1,
+            "total_default_matches": 1, "target_brand": "TestBrand",
+        }
+
+        class FakeAdapter:
+            def fetch(self, t, **kwargs):
+                return MonitorResult(
+                    task_id=t.id, checked_at=datetime.utcnow(),
+                    status="ok", rank=2, metric=tail_metric,
+                )
+
+        published: list = []
+        loop = self._make_loop(FakeAdapter(), published)
+        result = loop._run_one(task, resume_from=3)
+
+        assert result is not None and result.status == "ok"
+        # 合并后是完整 kw0..kw9，配置顺序
+        assert [k["keyword"] for k in result.metric["keywords"]] == all_kw
+        assert result.metric["total_keywords"] == 10
+        # 聚合按全量重算：命中 kw0/kw2/kw7 = 3；最好排名 min(5,8,2)=2
+        assert result.metric["matched_keywords"] == 3
+        assert result.metric["best_default_first_rank"] == 2
+        assert result.rank == 2
+
+        # 持久化的最新记录反映合并结果
+        latest = storage.list_results(task.id, limit=1)[0]
+        assert [k["keyword"] for k in latest.metric["keywords"]] == all_kw
+        # ok 结果绝不能带断点标记，否则下次 resume 会误触发
+        assert "last_resumed_keyword" not in latest.metric
+
+    def test_resume_failure_keeps_breakpoint_intact(self, isolated_storage):
+        """resume 返回 failed（尾段全失败 / 坏副本，成因常与断点同源）时，绝不能
+        用失败结果覆盖断点 —— 否则保全的头段从最新快照消失、last_resumed_keyword
+        丢失导致下次从 0 全扫。断点保留、发 failed 事件让用户可重试续抓。"""
+        task = _make_task(n_keywords=10)
+        all_kw = [f"kw{i}" for i in range(10)]
+        head = [
+            {"keyword": "kw0", "default_first_rank": 5, "default_matched_count": 1,
+             "default_results": [], "news_results": []},
+            {"keyword": "kw1", "default_first_rank": -1, "default_matched_count": 0,
+             "default_results": [], "news_results": []},
+            {"keyword": "kw2", "default_first_rank": 8, "default_matched_count": 1,
+             "default_results": [], "news_results": []},
+        ]
+        _save_result(task.id, "risk_control", {
+            "last_resumed_keyword": 3, "keywords": head,
+            "total_keywords": 10, "search_keywords": all_kw,
+        })
+
+        # resume 尾段全失败 → 适配器返回 status="failed"
+        class FakeAdapter:
+            def fetch(self, t, **kwargs):
+                return MonitorResult(
+                    task_id=t.id, checked_at=datetime.utcnow(), status="failed",
+                    rank=-1, metric={"keywords": [], "total_keywords": 7},
+                    error_message="全部 7 个关键词抓取失败：断网",
+                )
+
+        published: list = []
+        loop = self._make_loop(FakeAdapter(), published)
+        result = loop._run_one(task, resume_from=3)
+
+        # 不落库失败结果 → 断点仍是最新，头段 + 断点位置都在
+        latest = storage.list_results(task.id, limit=1)[0]
+        assert latest.status == "risk_control"
+        assert [k["keyword"] for k in latest.metric["keywords"]] == ["kw0", "kw1", "kw2"]
+        assert storage.get_last_resumed_keyword(task.id) == 3
+        # 发了 failed 事件让用户知道续抓失败
+        assert any(e.kind == "failed" for e in published)
 
 
 # ── POST /api/monitor/tasks/{task_id}/resume route tests ─────────────────────

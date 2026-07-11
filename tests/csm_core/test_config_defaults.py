@@ -9,6 +9,35 @@ import pytest
 from csm_core import config as core_config
 
 
+def test_load_config_migrates_dead_captcha_default_90_to_300(tmp_path):
+    """captcha_visible_timeout_s 在 v0.7.3 前是死配置（恒 300s），默认值当时错写
+    成 90。接线生效后，若照搬持久化的 90 会把老用户的解验证码窗口从实际 300s
+    缩到 90s（他们从没体验过 90s）。加载时把 90（老死默认）迁移成 300。"""
+    p = tmp_path / "settings.json"
+    p.write_text(
+        '{"monitor": {"baidu_keyword": {"captcha_visible_timeout_s": 90}}}',
+        encoding="utf-8",
+    )
+    cfg = core_config.load_config(p)
+    assert cfg.monitor.baidu_keyword.captcha_visible_timeout_s == 300
+
+
+def test_load_config_preserves_user_set_captcha_timeout(tmp_path):
+    """用户显式设的非 90 值原样保留（只迁移老死默认 90）。"""
+    p = tmp_path / "settings.json"
+    p.write_text(
+        '{"monitor": {"baidu_keyword": {"captcha_visible_timeout_s": 150}}}',
+        encoding="utf-8",
+    )
+    cfg = core_config.load_config(p)
+    assert cfg.monitor.baidu_keyword.captcha_visible_timeout_s == 150
+
+
+def test_fresh_config_captcha_timeout_defaults_to_300():
+    """全新配置（无文件）默认就是 300。"""
+    assert core_config.AppConfig().monitor.baidu_keyword.captcha_visible_timeout_s == 300
+
+
 def test_default_templates_dir_under_config_dir():
     assert core_config.default_templates_dir() == core_config.default_config_dir() / "Templates"
 
