@@ -213,6 +213,35 @@ def test_citation_leaderboard_weight_and_sorts_by_weight(fresh_db):
     assert zh["weight"] < pm["weight"]
 
 
+def test_record_run_persists_fail_reason(fresh_db):
+    """v10: fail_reason 要跟着 record_run 落库 —— 前端靠它把「够不到平台」换成人话。
+
+    用现成的 fresh_db fixture（而非手搓 tmp_path 重置）：它连 _local 一并清了，
+    不然本测试排在其它 fresh_db 用例之后跑时，get_conn() 会拿到上一个测试遗留
+    的已关闭连接，先炸 ProgrammingError 而不是本测试要验证的「列缺失」。
+    """
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="失败原因测试", target_url="geo://fail",
+        config={"brand": "fail"}))
+    checked_at = datetime.datetime.utcnow()
+    storage.save_result(MonitorResult(
+        task_id=tid, checked_at=checked_at, status="ok", rank=-1, metric={}))
+    cells = [
+        GeoCell(platform="kimi", keyword="k1", status="ok"),  # ok → fail_reason 恒 ""
+        GeoCell(platform="deepseek", keyword="k1", status="blocked",
+                fail_reason="not_logged_in", raw={"error": "DeepSeek 未登录"}),
+        GeoCell(platform="tongyi", keyword="k1", status="error",
+                fail_reason="timeout", raw={"error": "wait_stream_done exceeded"}),
+    ]
+    geo_storage.record_run(tid, checked_at, cells)
+
+    rows = geo_storage.cells_for_run(tid, checked_at)
+    by_plat = {r["platform"]: r for r in rows}
+    assert by_plat["kimi"]["fail_reason"] == ""
+    assert by_plat["deepseek"]["fail_reason"] == "not_logged_in"
+    assert by_plat["tongyi"]["fail_reason"] == "timeout"
+
+
 def test_v7_migration_adds_extraction_json_to_preexisting_table(tmp_path):
     """老库早先建了不含 extraction_json 的 geo_cells，再次迁移必须 ALTER 补列。
 

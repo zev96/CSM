@@ -32,6 +32,7 @@ _DDL_V7_GEO: list[str] = [
         sentiment   TEXT NOT NULL DEFAULT 'na',
         answer_text TEXT NOT NULL DEFAULT '',
         status      TEXT NOT NULL DEFAULT 'ok',
+        fail_reason TEXT NOT NULL DEFAULT '',
         raw_json    TEXT NOT NULL DEFAULT '{}',
         extraction_json TEXT NOT NULL DEFAULT '{}'
     )
@@ -65,6 +66,15 @@ def apply_v7_migration(conn: sqlite3.Connection) -> None:
     # 库会缺这些列，读到就 OperationalError。_ensure_column 幂等：列在则跳过。
     monitor_storage._ensure_column(
         conn, "geo_cells", "extraction_json", "TEXT NOT NULL DEFAULT '{}'"
+    )
+
+
+def apply_v10_migration(conn: sqlite3.Connection) -> None:
+    """v9 -> v10: geo_cells.fail_reason —— 失败原因分类列(前端映射人话,替掉写死
+    「够不到平台」)。旧库(v7 表已建但无此列)靠 _ensure_column 幂等补上;新库 CREATE
+    已含此列,_ensure_column 探到即跳过。Idempotent。"""
+    monitor_storage._ensure_column(
+        conn, "geo_cells", "fail_reason", "TEXT NOT NULL DEFAULT ''"
     )
 
 
@@ -103,12 +113,13 @@ def record_run(task_id: int, checked_at: "datetime | str", cells: list[GeoCell])
         for c in cells:
             cur = conn.execute(
                 """INSERT INTO geo_cells(task_id, checked_at, platform, keyword,
-                       mentioned, rank, sentiment, answer_text, status, raw_json,
-                       extraction_json)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                       mentioned, rank, sentiment, answer_text, status, fail_reason,
+                       raw_json, extraction_json)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                 (task_id, ts, c.platform, c.keyword,
                  1 if c.mentioned else 0, c.rank, c.sentiment,
-                 c.answer_text, c.status, json.dumps(c.raw, ensure_ascii=False),
+                 c.answer_text, c.status, c.fail_reason,
+                 json.dumps(c.raw, ensure_ascii=False),
                  json.dumps({"recommended": [r.model_dump() for r in c.recommended],
                              "summary": c.summary}, ensure_ascii=False)),
             )

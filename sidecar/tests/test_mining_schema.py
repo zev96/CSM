@@ -50,13 +50,12 @@ def test_v3_videos_unique_platform_video_id(fresh_db: Path):
 
 def test_v3_schema_version_recorded(fresh_db: Path):
     # schema_meta tracks the CURRENT version stamp, not v3 specifically;
-    # bumped to "5" when the comment-template library (T1) added
-    # comment_templates.
+    # bumped to "10" by the geo module's v10 migration (geo_cells.fail_reason).
     conn = sqlite3.connect(str(fresh_db))
     row = conn.execute(
         "SELECT value FROM schema_meta WHERE key='version'"
     ).fetchone()
-    assert row[0] == "5"
+    assert row[0] == "10"
 
 
 def test_models_import_and_validate():
