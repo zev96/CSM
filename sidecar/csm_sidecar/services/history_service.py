@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from csm_core.monitor import storage
+from csm_sidecar.services.monitor_service import _iso_utc
 
 
 COMMENT_PLATFORMS = ("bilibili_comment", "douyin_comment", "kuaishou_comment")
@@ -223,7 +224,7 @@ def get_zhihu_ranking_history(range_str: str) -> dict[str, Any]:
             "best_rank": (curr or {}).get("best_rank", -1),
             "best_rank_prev": (prev or {}).get("best_rank", -1) if prev else None,
             "change_kind": kind,
-            "checked_at": (curr["checked_at"].isoformat() if curr else None),
+            "checked_at": _iso_utc(curr["checked_at"]) if curr else None,
         })
 
     # KPIs aggregated across all questions
@@ -511,7 +512,7 @@ def get_baidu_keyword_history(range_str: str) -> dict[str, Any]:
                 "best_rank": curr_best,
                 "best_rank_prev": prev_best,
                 "change_kind": kind,
-                "checked_at": (curr_result["checked_at"].isoformat() if curr_result else None),
+                "checked_at": _iso_utc(curr_result["checked_at"]) if curr_result else None,
             })
 
     # KPIs
@@ -714,7 +715,7 @@ def get_zhihu_search_history(range_str: str) -> dict[str, Any]:
                 "best_rank": curr_best,
                 "best_rank_prev": prev_best,
                 "change_kind": kind,
-                "checked_at": (curr_result["checked_at"].isoformat() if curr_result else None),
+                "checked_at": _iso_utc(curr_result["checked_at"]) if curr_result else None,
             })
 
     monitored_keywords = len(keyword_rows)
@@ -859,7 +860,7 @@ def _collect_deletion_events(
                     "rank_from": None,
                     "rank_to": None,
                     "status": "deleted",
-                    "at": entry["checked_at"].isoformat(),
+                    "at": _iso_utc(entry["checked_at"]),
                 })
     events.sort(key=lambda e: e["at"], reverse=True)
     return events[:limit]

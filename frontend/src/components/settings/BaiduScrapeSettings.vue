@@ -17,7 +17,7 @@
  *     Body = { chrome_executable_path, chrome_profile_copy_path }
  *     → { ok, error? }
  */
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
@@ -222,7 +222,28 @@ function copyError() {
   navigator.clipboard.writeText(err).catch(() => {});
 }
 
-onMounted(loadConfig);
+// 副本登录窗关闭后，monitorStatus 收到 baidu_login_saved 事件会广播这个
+// window CustomEvent（解耦：设置页不直接订阅 SSE）。收到后刷新「上次登录」
+// 时间显示 + 结束 launching 态 + 未登录时给出明确提示。
+function onLoginSaved(e: Event): void {
+  const ok = (e as CustomEvent).detail?.ok ?? true;
+  launching.value = false;
+  loginResult.value = ok
+    ? null
+    : {
+        ok: false,
+        error: "未检测到登录态（副本里没有 BDUSS），请确认已在副本里登录百度后再完全关闭浏览器",
+      };
+  void loadConfig();
+}
+
+onMounted(() => {
+  void loadConfig();
+  window.addEventListener("csm:baidu-login-saved", onLoginSaved as EventListener);
+});
+onUnmounted(() => {
+  window.removeEventListener("csm:baidu-login-saved", onLoginSaved as EventListener);
+});
 </script>
 
 <template>

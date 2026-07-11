@@ -467,6 +467,10 @@ class TestResumeRoute:
             def is_running(self):
                 return is_running
 
+            def is_task_active(self, task_id):
+                # resume 只在任务已暂停（非 active）时用；固定 False。
+                return False
+
             def run_task_now(self, task_id, *, resume_from=0, keyword_override=None):
                 captured["task_id"] = task_id
                 captured["resume_from"] = resume_from

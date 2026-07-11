@@ -68,6 +68,17 @@ def detect_login_required(response: Any, page: Any) -> bool:
 
     # Layer 2: page.content() 文本检查 —— cookie 还在但 server session
     # 失效时 SERP 仍 200 但 body 文案变了。
+    #
+    # 但这层最易误报：某条 organic 结果摘要里含"登录后查看/请登录"（很多站
+    # 的引流文案）就会被判成"登录墙"，把整个任务暂停。所以先看 SERP 是否
+    # 正常渲染出了结果 —— 有结果 = 词是摘要不是登录墙，跳过 Layer 2。真登录
+    # 墙没有结果容器，Layer 2 照常生效。（复用 risk_detector 同一判据。）
+    try:
+        from .risk_detector import _serp_rendered_results
+        if _serp_rendered_results(page):
+            return False
+    except Exception as e:
+        logger.debug("detect_login_required serp-results probe raised: %s", e)
     try:
         html = page.content() if hasattr(page, "content") else ""
         for phrase in _LOGIN_PROMPT_PHRASES:

@@ -30,7 +30,10 @@ interface BaiduResultRow {
   host: string;
   matches_brand: boolean;
   matched_brand: string | null;
-  source: "http" | "browser";
+  // 后端 source 取值随抓取路径扩展（http / http_raw_fallback /
+  // http_js_challenge_no_body / browser_isolated / unresolved …），前端只做
+  // 展示不 switch，收成宽 string 避免每加一种就 TS 编译失败。
+  source: string;
   content_preview: string;
   fetch_error: string | null;
 }
@@ -158,10 +161,22 @@ const previewHistory = computed<ResultItem[]>(() => {
 });
 
 // L1 右卡 KPI 四联 —— 聚合最新一次 metric.keywords 数据
+// 最新「ok 且有 keywords」的记录 —— 所有 KPI/CSV/行展示的数据源都该用它，
+// 而不是盲取 history[0]（一次失败/风控行会让 KPI 归零、CSV 只导 1 行）。
+function _latestUsable<
+  T extends { status?: string; metric?: { keywords?: unknown[] } | null },
+>(hist: T[] | undefined): T | null {
+  return (
+    (hist ?? []).find(
+      (r) => r.status === "ok" && ((r.metric?.keywords?.length ?? 0) > 0),
+    ) ?? null
+  );
+}
+
 const previewKpis = computed(() => {
   const t = previewTask.value;
   if (!t) return null;
-  const kws = (taskHistories.value[t.id]?.[0]?.metric?.keywords ?? []) as any[];
+  const kws = (_latestUsable(taskHistories.value[t.id])?.metric?.keywords ?? []) as any[];
   return batchBaiduKpis(kws.map((k) => ({
     default_matched_count: k.default_matched_count ?? 0,
     default_first_rank: k.default_first_rank ?? 0,
@@ -207,7 +222,7 @@ function _idealCountForMetric(metric: BaiduMetric | null, idealN: number): numbe
  * 天）—— 用户期望的"14 天连续日历"被压扁成了一天。这个 helper 把"按数据
  * 点排"换成"按日历日分桶"，跟知乎页面 daily_series 的契约对齐。
  */
-function bucketByCalendarDay<T extends { checked_at: string }>(
+function bucketByCalendarDay<T extends { checked_at: string; status?: string }>(
   history: T[],
   totalDays: number = 14,
 ): Array<{ iso: string; label: string; record: T | null }> {
@@ -216,7 +231,14 @@ function bucketByCalendarDay<T extends { checked_at: string }>(
     const d = new Date(r.checked_at);
     if (Number.isNaN(d.getTime())) continue;
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    buckets.set(iso, r); // 同日 → 后写赢（chronological 即时间最晚）
+    // 同日优先保留最后一条 ok 记录：否则当天傍晚一次失败/风控跑会把白天
+    // 的好数据点覆盖成 0，趋势图凭空掉一格。仅当没有 ok 记录时才用最后
+    // 一条（任意 status），保证该天仍有点而不是被判成缺口。
+    const existing = buckets.get(iso);
+    const rOk = r.status === "ok" || r.status === undefined;
+    if (existing === undefined || rOk || existing.status !== "ok") {
+      buckets.set(iso, r);
+    }
   }
   const out: Array<{ iso: string; label: string; record: T | null }> = [];
   const now = new Date();
@@ -318,7 +340,11 @@ function _missingForMetric(metric: BaiduMetric | null, idealN: number): number {
 /** Per-task baidu alert summary used by the hero + modal. */
 function _buildBaiduAlertHero(task: TaskItem): BaiduAlertHero | null {
   const hist = taskHistories.value[task.id] ?? [];
-  const latest = hist[0];
+  // 只看 ok 且有数据的记录：失败/风控行会污染 current/prev 对比。
+  const okRecs = hist.filter(
+    (r) => r.status === "ok" && (r.metric?.keywords?.length ?? 0) > 0,
+  );
+  const latest = okRecs[0];
   if (!latest || !latest.metric) return null;
   const idealN = (task.config as any)?.ideal_rank ?? 5;
   const missingCurrent = _missingForMetric(latest.metric, idealN);
@@ -326,7 +352,7 @@ function _buildBaiduAlertHero(task: TaskItem): BaiduAlertHero | null {
   const total = latest.metric.keywords?.length ?? 0;
   if (total === 0 || missingCurrent / total <= 0.6) return null;
 
-  const prev = hist[1];
+  const prev = okRecs[1];
   const missingPrev = prev?.metric ? _missingForMetric(prev.metric, idealN) : null;
 
   // 卡位为 0 的关键词 + 下降幅度
@@ -421,14 +447,24 @@ function taskOverallStatus(task: TaskItem): { statusLabel: string; tone: PillTon
   const hist = taskHistories.value[task.id] ?? [];
   const latest = hist[0];
   if (!latest) return { statusLabel: "未跑", tone: "info" };
-  if (latest.status === "captcha") return { statusLabel: "验证码", tone: "warn" };
+  // 状态 pill 看「真·最新」记录：一次风控/失败要如实显示，而不是掉回「未跑」。
+  // 后端从不写 "captcha" 状态（那是 SSE phase，不是结果 status），风控中断
+  // 存的是 status="risk_control" —— 之前没映射 → 掉进 total===0 显示「未跑」，
+  // 整个风控中断在 L1 全程隐身。
+  if (latest.status === "risk_control") return { statusLabel: "风控中断", tone: "warn" };
   if (latest.status === "failed" || latest.status === "error") {
     return { statusLabel: "失败", tone: "alert" };
   }
+  // KPI 口径（正常/预警）用「最新 ok 且有数据」的记录，别被一次失败/风控行
+  // 拉成「未跑」（数据其实还在下一条）。
+  const usable = hist.find(
+    (r) => r.status === "ok" && (r.metric?.keywords?.length ?? 0) > 0,
+  );
+  if (!usable || !usable.metric) return { statusLabel: "未跑", tone: "info" };
   const idealN = (task.config as any)?.ideal_rank ?? 5;
-  const total = latest.metric?.keywords?.length ?? 0;
+  const total = usable.metric.keywords?.length ?? 0;
   if (total === 0) return { statusLabel: "未跑", tone: "info" };
-  const idealCount = _idealCountForMetric(latest.metric, idealN);
+  const idealCount = _idealCountForMetric(usable.metric, idealN);
   const missingRate = 1 - idealCount / total;
   // 与 hero 触发同阈：未达理想 > 60% → 预警
   if (missingRate > 0.6) return { statusLabel: "预警", tone: "alert" };
@@ -439,8 +475,18 @@ const latestResult = computed(() =>
   history.value.length > 0 ? history.value[0] : null,
 );
 
+// 行/KPI 展示用「最新 ok 且有 keywords」的记录，而不是盲取 history[0]：
+// 一次失败/风控中断行的 metric 没有 keywords，直接用它会让 93 个关键词全
+// 显示「未跑」、KPI 归零（数据其实还在下一条）。风控 banner 另走
+// latestResult（真·最新）→ riskControlMeta，两者互不影响。
+const latestUsableResult = computed(() =>
+  history.value.find(
+    (r) => r.status === "ok" && ((r.metric?.keywords?.length ?? 0) > 0),
+  ) ?? null,
+);
+
 const latestMetric = computed<BaiduMetric | null>(
-  () => latestResult.value?.metric ?? null,
+  () => latestUsableResult.value?.metric ?? null,
 );
 
 /**
@@ -785,8 +831,8 @@ function exportPreviewCsv(): void {
     toast.warn("没有选中的任务");
     return;
   }
-  const hist = taskHistories.value[t.id] ?? [];
-  const latest = hist[0];
+  // 导出用最新「ok 且有数据」的记录，别被一次失败/风控行导成 1 行空表。
+  const latest = _latestUsable(taskHistories.value[t.id]);
   if (!latest || !latest.metric || !Array.isArray(latest.metric.keywords)) {
     toast.warn("该任务还没有可导出的监测结果，请先运行一次监测");
     return;

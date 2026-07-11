@@ -10,11 +10,25 @@ business logic.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from csm_core.monitor import storage
 from csm_core.monitor.base import MonitorResult, MonitorStatus, MonitorTask, TaskType
+
+
+def _iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a stored timestamp as UTC ISO-8601 with an explicit
+    trailing ``Z``. Stored timestamps are naive UTC (storage writes
+    Z-suffixed UTC and ``_parse_iso`` strips the Z back to a naive value).
+    Without the Z, JS ``new Date(...)`` parses the string as *local* time,
+    shifting every displayed time and calendar-day bucket by the UTC offset
+    (8h in CST) — the day-bucketing bug behind the Baidu/GEO trend charts."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.isoformat() + "Z"
 
 PLATFORM_TYPES: tuple[TaskType, ...] = (
     "zhihu_question",
@@ -36,9 +50,9 @@ def task_to_dict(t: MonitorTask) -> dict[str, Any]:
         "config": t.config,
         "schedule_cron": t.schedule_cron,
         "enabled": t.enabled,
-        "last_check_at": t.last_check_at.isoformat() if t.last_check_at else None,
+        "last_check_at": _iso_utc(t.last_check_at),
         "last_status": t.last_status,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "created_at": _iso_utc(t.created_at),
     }
 
 
@@ -67,7 +81,7 @@ def delete_task(task_id: int) -> None:
 def result_to_dict(r: MonitorResult) -> dict[str, Any]:
     return {
         "task_id": r.task_id,
-        "checked_at": r.checked_at.isoformat() if r.checked_at else None,
+        "checked_at": _iso_utc(r.checked_at),
         "status": r.status,
         "rank": r.rank,
         "metric": r.metric,

@@ -61,6 +61,9 @@ EventKind = Literal[
     "risk_control",  # Task 4: adapter hit risk control mid-scan; breakpoint saved
     # Native mode 方案 D：跑前等关 Chrome / Chrome 已关 / 命中风控需人工解
     "waiting_chrome_close", "chrome_closed", "needs_captcha",
+    # 副本登录窗口关闭后的完成信号（专用事件，不再借用 needs_captcha —— 借用
+    # 会让前端弹「需要人工解验证码（副本登录态已保存）」的错误提示）。
+    "baidu_login_saved",
 ]
 
 
@@ -123,6 +126,7 @@ class MonitorLoop:
         api_adapters: dict[str, Any] | None = None,
         data_source_mode: str = "local",
         clock: Callable[[], datetime] | None = None,
+        schedule_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._event_sink = event_sink
         self._alert_top_n = alert_top_n
@@ -135,12 +139,16 @@ class MonitorLoop:
         self._data_source_mode = data_source_mode
         # Clock is injectable for the same reason: tests fast-forward
         # without sleeping for 60s.
-        # ⚠ 用 utcnow（不是 datetime.now）：storage 把 timestamp 当 UTC 存（标 Z 后缀），
-        # 而 csm_core/monitor/platforms/*.py 的成功路径都用 datetime.utcnow。如果这里用
-        # datetime.now（local time），失败路径 timestamp 比成功路径晚 8 小时（CST），
-        # ORDER BY checked_at DESC 把 risk_control result 排到 ok 后面 → 前端误展示
-        # 历史 banner。统一 UTC。
+        # ⚠ 两个时钟，职责分离：
+        #   _clock（UTC）：给所有 checked_at / event.at 时间戳打点。storage 把
+        #     timestamp 当 UTC 存、序列化补 Z，csm_core 成功路径都用 utcnow；
+        #     若改 local，失败路径 timestamp 比成功路径晚 8h（CST），
+        #     ORDER BY checked_at DESC 会把 risk_control 排到 ok 后面。统一 UTC。
+        #   _schedule_clock（本地）：给 select_due 判「到点没」。schedule_cron 是
+        #     本地墙钟 HH:MM（用户按本地时间设 09:00），必须用本地时间比对，否则
+        #     UTC 时钟会让 09:00 的任务在本地 17:00 才跑（CST 差 8h）。
         self._clock = clock or datetime.utcnow
+        self._schedule_clock = schedule_clock or datetime.now
 
         self._scheduler: BackgroundScheduler | None = None
         self._executor: ThreadPoolExecutor | None = None
@@ -286,6 +294,33 @@ class MonitorLoop:
                 self._cancel_events[task_id] = ev
             return ev
 
+    def _begin_dispatch(self, task_id: int) -> bool:
+        """Atomically reserve ``task_id`` for dispatch iff it's not already
+        running. Returns True if this call acquired the task (caller must
+        dispatch and is responsible for :meth:`_untrack_active`), or False
+        if the task is already active (caller must NOT dispatch).
+
+        This is the single guard preventing the 60s scheduler tick from
+        re-dispatching a still-running long task (a 93-keyword baidu run
+        takes ~60-90 min, and ``last_check_at`` is only bumped on
+        completion so ``select_due`` keeps returning it). It also blocks a
+        manual «启动监测» / run-now from spinning a second concurrent
+        worker on the same task. Seeds the cancel Event so a «停止» issued
+        in the pre-register window before the worker starts isn't lost."""
+        with self._active_lock:
+            if task_id in self._active_task_ids:
+                return False
+            self._active_task_ids.add(task_id)
+            if task_id not in self._cancel_events:
+                self._cancel_events[task_id] = threading.Event()
+            return True
+
+    def is_task_active(self, task_id: int) -> bool:
+        """True if ``task_id`` is currently reserved/running. Used by routes
+        to 409 a duplicate run-now while a task is in flight."""
+        with self._active_lock:
+            return task_id in self._active_task_ids
+
     def _untrack_active(self, task_id: int) -> None:
         with self._active_lock:
             self._active_task_ids.discard(task_id)
@@ -318,27 +353,32 @@ class MonitorLoop:
         """
         if self._executor is None:
             raise RuntimeError("MonitorLoop is not started")
-        # Pre-register active so /api/monitor/running reports this task
-        # the moment the POST returns. Without this, a worker thread that
-        # gets stuck waiting on the platform-slot semaphore (default cap 2,
-        # 120 s timeout) won't have called _track_active yet, and the
-        # frontend's hydrate-on-mount during page navigation will clobber
-        # the optimistic markRunning with an empty Set.
+        # Reserve the task atomically so /api/monitor/running reports it
+        # the moment the POST returns, AND so a duplicate dispatch (a
+        # second «启动监测» while the first run is still in flight, or a
+        # cron tick that overlaps) is rejected rather than spinning a
+        # second concurrent worker on the same task/profile.
         #
-        # _track_active is idempotent under _active_lock — the worker
-        # calls it again on entry to _run_one and gets the same Event,
-        # so cancel signals issued in this pre-register window are not
-        # lost (see _track_active docstring).
-        self._track_active(task_id)
+        # _begin_dispatch seeds the cancel Event, and the worker's
+        # _track_active is idempotent, so cancel signals issued in this
+        # pre-register window are not lost.
+        if not self._begin_dispatch(task_id):
+            logger.info(
+                "run_task_now: task %s already running; ignoring duplicate dispatch",
+                task_id,
+            )
+            done: Future[MonitorResult | None] = Future()
+            done.set_result(None)
+            return done
         try:
             return self._executor.submit(
-                self._run_one_by_id, task_id,
+                self._run_one_by_id_tracked, task_id,
                 keyword_override=keyword_override,
                 resume_from=resume_from,
             )
         except Exception:
             # If submit itself raises (e.g. pool shutting down), undo the
-            # pre-register so /running doesn't lie indefinitely.
+            # reservation so /running doesn't lie indefinitely.
             self._untrack_active(task_id)
             raise
 
@@ -350,15 +390,16 @@ class MonitorLoop:
             logger.warning("MonitorLoop tick overlap — previous tick still running, skipping")
             return
         try:
-            now = self._clock()
+            # 到点判定用本地墙钟（schedule_cron 是本地 HH:MM）；事件时间戳仍用 UTC。
+            now_local = self._schedule_clock()
             try:
                 tasks = storage.list_tasks(enabled_only=True)
             except Exception:
                 logger.exception("MonitorLoop: failed to list tasks; skipping tick")
                 return
-            due = select_due(tasks, now=now)
+            due = select_due(tasks, now=now_local)
             self._publish(MonitorEvent(
-                kind="tick", task_id=0, at=now, dispatched=len(due)
+                kind="tick", task_id=0, at=self._clock(), dispatched=len(due)
             ))
             if not due:
                 return
@@ -370,9 +411,54 @@ class MonitorLoop:
                 # so concurrent dispatch is safe.
                 if self._executor is None:
                     return  # shutting down
-                self._executor.submit(self._run_one, task)
+                # Skip tasks already in flight: a long task (93-keyword
+                # baidu run ≈ 60-90 min) doesn't bump last_check_at until
+                # it finishes, so select_due keeps returning it every tick.
+                # Without this guard each tick would spin an extra full
+                # scan (doubling risk-control exposure) and the duplicate
+                # would race _untrack_active, breaking the «停止» button.
+                if not self._begin_dispatch(task.id):
+                    logger.debug(
+                        "MonitorLoop: task %s still running; skip re-dispatch", task.id
+                    )
+                    continue
+                try:
+                    self._executor.submit(self._run_one_tracked, task)
+                except Exception:
+                    self._untrack_active(task.id)
+                    raise
         finally:
             self._tick_lock.release()
+
+    def _run_one_tracked(self, task: MonitorTask) -> MonitorResult | None:
+        """Worker entry for scheduler dispatch. Guarantees the task is
+        removed from the active set on EVERY exit path (including the
+        early returns in _run_one that don't untrack), so a task reserved
+        by _begin_dispatch is never leaked as permanently-running."""
+        try:
+            return self._run_one(task)
+        finally:
+            if task.id is not None:
+                self._untrack_active(task.id)
+
+    def _run_one_by_id_tracked(
+        self,
+        task_id: int,
+        *,
+        keyword_override: str | None = None,
+        resume_from: int = 0,
+    ) -> MonitorResult | None:
+        """Worker entry for manual dispatch. Same untrack guarantee as
+        :meth:`_run_one_tracked` — covers the task-missing / disabled
+        early returns that otherwise leak a _begin_dispatch reservation."""
+        try:
+            return self._run_one_by_id(
+                task_id,
+                keyword_override=keyword_override,
+                resume_from=resume_from,
+            )
+        finally:
+            self._untrack_active(task_id)
 
     def _run_one_by_id(
         self,
@@ -706,5 +792,9 @@ def _merge_partial_baidu_metric(
         if (kw.get("default_first_rank") or 0) > 0
     ]
     metric["best_default_first_rank"] = min(ranks) if ranks else -1
+    # rank 列必须跟 metric 保持一致 —— should_alert 读的是 result.rank。只更
+    # metric 不更 rank：单关键词未命中重跑会用「那一个词的 rank=-1」误触发
+    # 任务级告警 + 24h 冷却压掉真告警，且 DB rank 列与 metric 永久 drift。
+    result.rank = metric["best_default_first_rank"]
     # search_keywords should reflect the full task, not just the override
     metric["search_keywords"] = [kw.get("keyword") for kw in merged if kw.get("keyword")]

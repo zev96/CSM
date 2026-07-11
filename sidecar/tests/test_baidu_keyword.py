@@ -188,6 +188,100 @@ def test_match_brand_empty_inputs():
     assert baidu_keyword.match_brand("", []) is None
 
 
+def test_match_brand_word_boundary_avoids_substring_false_positive():
+    """纯 ASCII 字母数字品牌要求词边界：Nova 不该命中 innovation、MOVA 不该
+    命中 removal（尤其 raw-body fallback 会喂全站 nav/JS 文本，一个这种
+    子串误命中就把整站文章都判成命中）。"""
+    assert baidu_keyword.match_brand("this is pure innovation", ["Nova"]) is None
+    assert baidu_keyword.match_brand("hair removal tips", ["MOVA"]) is None
+
+
+def test_match_brand_word_boundary_still_hits_real_mention():
+    assert baidu_keyword.match_brand("I bought a Nova phone", ["Nova"]) == "Nova"
+    assert baidu_keyword.match_brand("访问 nova.com 了解", ["Nova"]) == "Nova"
+
+
+def test_match_brand_fullwidth_normalized():
+    """全角品牌名 vs 半角配置 —— NFKC 归一后应命中。"""
+    assert baidu_keyword.match_brand("这款 ＮＯＶＡ 很好", ["NOVA"]) == "NOVA"
+
+
+def test_match_brand_cjk_substring_still_works():
+    """中文品牌无词边界概念，仍走子串匹配。"""
+    assert baidu_keyword.match_brand("我用的是小米手机", ["小米"]) == "小米"
+
+
+def test_all_keywords_failed_true_when_every_kw_errored():
+    assert baidu_keyword._all_keywords_failed([
+        {"keyword": "a", "fetch_error": "serp navigate raised"},
+        {"keyword": "b", "fetch_error": "page.content raised"},
+    ]) is True
+
+
+def test_all_keywords_failed_false_when_some_ok():
+    assert baidu_keyword._all_keywords_failed([
+        {"keyword": "a", "fetch_error": "serp navigate raised"},
+        {"keyword": "b", "fetch_error": None},
+    ]) is False
+
+
+def test_all_keywords_failed_false_on_empty():
+    assert baidu_keyword._all_keywords_failed([]) is False
+
+
+def test_extract_raw_body_text_strips_script_style():
+    """text_content() 默认会把 <script>/<style> 里的 JS/CSS 文本一起拼进来，
+    污染 match_brand（品牌名出现在全站 JS 常量里 → 假命中）。必须先剔除。"""
+    html = (
+        "<html><body>"
+        "<p>正文里根本没提那个词</p>"
+        '<script>var cfg = {"brand": "Nova"};</script>'
+        '<style>.x{content:"Nova"}</style>'
+        "</body></html>"
+    )
+    text = baidu_keyword._extract_raw_body_text(html)
+    assert "正文里根本没提那个词" in text
+    assert "Nova" not in text, "script/style 里的品牌名不该混进正文"
+    assert "var cfg" not in text
+
+
+def test_fetch_article_http_sends_baidu_referer(monkeypatch):
+    """文章抓取要带 Referer=baidu + Sec-Fetch-Site=cross-site，模拟从 SERP
+    点进文章的真实流量形状（百家号等风控最严的站看这个；裸访问 =
+    Sec-Fetch-Site:none 无 Referer 是明显机器人特征）。"""
+    captured: dict = {}
+    long_html = "<html><body><article>" + ("正文内容 " * 60) + "</article></body></html>"
+
+    def fake_get(url, **kw):
+        captured.update(kw)
+        return _FakeResp(text=long_html)
+
+    monkeypatch.setattr(baidu_keyword, "_cc_get", fake_get)
+    baidu_keyword.fetch_article_http("https://post.smzdm.com/p/1")
+    hdrs = captured.get("headers") or {}
+    assert hdrs.get("Referer") == "https://www.baidu.com/"
+    assert hdrs.get("Sec-Fetch-Site") == "cross-site"
+
+
+def test_fetch_article_http_long_article_mentioning_risk_word_not_flagged(monkeypatch):
+    """长文章正文里出现「网络异常/系统繁忙」等词是正常内容，不该被 text 层
+    误判成百度风控（那会丢正文、退化到 title 兜底）。"""
+    long_body = "本文详细讲解如何排查和处理网络异常问题。" * 40
+    html = f"<html><body><article>{long_body}</article></body></html>"
+    monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp(text=html))
+    res = baidu_keyword.fetch_article_http("https://example.com/a")
+    assert not (res.get("fetch_error") or "").startswith("百度风控"), "长文章不该判风控"
+    assert "网络异常" in (res.get("content") or "")
+
+
+def test_fetch_article_http_short_captcha_page_flagged(monkeypatch):
+    """短的验证码/安全验证插页仍要被 text 层判成风控。"""
+    html = "<html><body>安全验证 请完成验证</body></html>"
+    monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp(text=html))
+    res = baidu_keyword.fetch_article_http("https://example.com/a")
+    assert (res.get("fetch_error") or "").startswith("百度风控")
+
+
 # ── 百度跳转解析 ─────────────────────────────────────────────────────────
 def test_resolve_baidu_link_already_real_url():
     """非百度跳转 URL 原样返回。"""
@@ -851,6 +945,149 @@ def test_check_block_calls_article_pacer_per_link(monkeypatch):
     ]
 
 
+def test_check_block_ranks_unresolved_redirect_instead_of_dropping(monkeypatch):
+    """resolve 失败（跟不动 302，返回原 baidu.com/link?… URL）时，这条结果
+    绝不能被当成"百度垂类"静默丢弃 —— 必须占一个 rank 位、带 fetch_error，
+    并用 SERP title 尽力判命中。否则 resolve session 被软封时，用户自己的
+    软文会从整张表里凭空消失、后面所有位次前移。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, _pacer_calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    # resolve = identity → baidu.com/link 保持未解析（模拟解析失败）
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "深度测评 Claude 真香", "href": "https://www.baidu.com/link?url=ABCDEF"},
+        {"title": "百科词条", "href": "https://baike.baidu.com/item/x"},  # 真垂类 → 跳过
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+    )
+    # 未解析行作为 rank 1 保留；真垂类仍被跳过。
+    assert len(out) == 1
+    row = out[0]
+    assert row["rank"] == 1
+    assert "baidu.com/link?" in row["url"]
+    assert row["source"] == "unresolved"
+    assert row["fetch_error"], "未解析行必须带 fetch_error"
+    assert row["matched_brand"] == "Claude", "应用 SERP title 兜底命中"
+    assert row["matches_brand"] is True
+
+
+def test_check_block_skips_browser_fallback_for_baidu_risk(monkeypatch):
+    """fetch_article_http 明确标 needs_browser_fallback=False 的百度风控页
+    （verify.baidu.com / safetycheck），绝不能因为 content 为空就被长度条款
+    强行升级到隔离 tab —— 那会在真登录 context 里反复打开 verify.baidu.com
+    并 180s 空等。应尊重 False，直接走 title 兜底。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, _pacer_calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    monkeypatch.setattr(
+        baidu_keyword, "fetch_article_http",
+        lambda url, **kw: {
+            "content": "",
+            "source": "http",
+            "fetch_error": "百度风控：layer=url verify.baidu.com",
+            "needs_browser_fallback": False,
+        },
+    )
+    called: list[int] = []
+    monkeypatch.setattr(
+        baidu_keyword, "fetch_article_browser_isolated",
+        lambda *a, **kw: (called.append(1), {"content": "x" * 900})[1],
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    fake_page = type("P", (), {"context": object()})()
+    links = [{"title": "评测 Claude 真香", "href": "https://baijiahao.baidu.com/s?id=1"}]
+    out = adapter._check_block(page=fake_page, links=links, brands=["Claude"], block="default")
+
+    assert called == [], "百度风控页不该进浏览器兜底"
+    assert len(out) == 1
+    assert out[0]["rank"] == 1
+    assert out[0]["matched_brand"] == "Claude", "应用 SERP title 兜底命中"
+
+
+def test_check_block_short_circuits_repeated_captcha_host(monkeypatch):
+    """同一 host 多条结果：第一条软着陆验证码超时（is_blocked）后，后续同
+    host 的结果不再进浏览器兜底空等 180s，直接跳过。否则一页 3 条 smzdm =
+    3×180s。所有结果仍占 rank 位。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, _pacer_calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    monkeypatch.setattr(
+        baidu_keyword, "fetch_article_http",
+        lambda url, **kw: {
+            "content": "",
+            "source": "http",
+            "fetch_error": "short",
+            "needs_browser_fallback": True,
+        },
+    )
+    calls: list[str] = []
+
+    def fake_isolated(ctx, href, **kw):
+        calls.append(href)
+        return {
+            "content": "",
+            "is_blocked": True,
+            "fetch_error": "验证码解题超时（180s）",
+            "source": "browser_isolated",
+        }
+
+    monkeypatch.setattr(baidu_keyword, "fetch_article_browser_isolated", fake_isolated)
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    fake_page = type("P", (), {"context": object()})()
+    links = [
+        {"title": "1", "href": "https://post.smzdm.com/p/1"},
+        {"title": "2", "href": "https://post.smzdm.com/p/2"},
+        {"title": "3", "href": "https://post.smzdm.com/p/3"},
+    ]
+    out = adapter._check_block(page=fake_page, links=links, brands=["X"], block="default")
+
+    assert len(calls) == 1, "同 host 只应软着陆一次，后续短路"
+    assert len(out) == 3, "所有结果仍占 rank 位"
+
+
+def test_check_block_memoizes_duplicate_urls(monkeypatch):
+    """同一 resolved URL 在多条结果 / 多关键词里重复出现时，只抓一次正文，
+    其余复用（93 个品牌关键词头部结果高度重叠 → 省 30-50% 文章抓取）。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, _calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    fetch_calls: list[str] = []
+
+    def fake_fetch(url, **kw):
+        fetch_calls.append(url)
+        return {
+            "content": "长正文内容 " * 30,
+            "source": "http",
+            "fetch_error": None,
+            "needs_browser_fallback": False,
+        }
+
+    monkeypatch.setattr(baidu_keyword, "fetch_article_http", fake_fetch)
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    memo: dict = {}
+    links = [
+        {"title": "a", "href": "https://ex.com/same"},
+        {"title": "b", "href": "https://ex.com/same"},   # 同 URL → 复用
+        {"title": "c", "href": "https://ex.com/other"},
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["X"], block="default", article_memo=memo,
+    )
+    assert len(out) == 3, "所有结果仍占 rank 位"
+    assert fetch_calls == ["https://ex.com/same", "https://ex.com/other"], "重复 URL 只抓一次"
+
+
 def test_check_block_uses_baijiahao_pacer_for_baidu_subdomains(monkeypatch):
     """baijiahao.baidu.com / mbd.baidu.com / mp.baidu.com 都走 baijiahao pacer。"""
     from csm_core.monitor import rate_limit as _rl
@@ -982,16 +1219,10 @@ def test_apply_settings_configures_article_and_baijiahao_pacers(monkeypatch):
     assert configs["baidu_keyword:baijiahao"] == (10.0, 20.0)
 
 
-# ── _get_session / _drop_session / _next_ua ────────────────────────────
-
-
-def test_next_ua_rotates_through_pool():
-    """连续调用应该至少覆盖 3 个不同 UA (pool 有 4 条 + Mac 1 条)."""
-    from csm_core.monitor.platforms import baidu_keyword
-
-    adapter = baidu_keyword.BaiduKeywordAdapter()
-    seen = {adapter._next_ua() for _ in range(8)}
-    assert len(seen) >= 3, f"expected >=3 distinct UAs across 8 rotations, got {seen}"
+# ── _get_session / _drop_session ───────────────────────────────────────
+# 注：UA 轮换池已删除 —— impersonate="chrome131" 会发出自洽的 UA + client
+# hints，旧的 _UA_POOL 用 Windows UA 覆盖却让 client hints 说 macOS chrome120，
+# 3/4 会话指纹自相矛盾，是明显机器人特征（见 P1 #4）。
 
 
 def test_get_session_caches_per_task(monkeypatch):

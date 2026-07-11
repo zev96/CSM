@@ -60,6 +60,29 @@ def test_detect_login_required_normal_serp():
     assert baidu_login.detect_login_required(resp, page) is False
 
 
+def test_detect_login_required_suppressed_when_serp_has_results():
+    """合法 SERP 渲染出 organic 结果，但某条摘要含'登录后查看'之类词，
+    不能误判成'登录态失效'把整个任务暂停。有结果 = 词是摘要不是登录墙。"""
+    from csm_core.monitor.drivers import baidu_login
+
+    class _PageWithResults:
+        def content(self):
+            return (
+                "<html><body><div id='content_left'>"
+                "结果：登录后查看更多优惠</div></body></html>"
+            )
+
+        def locator(self, sel):
+            class _L:
+                def count(self_inner):
+                    return 3 if "content_left" in sel else 0
+
+            return _L()
+
+    resp = _FakeResp("https://www.baidu.com/s?wd=优惠")
+    assert baidu_login.detect_login_required(resp, _PageWithResults()) is False
+
+
 def test_detect_login_required_response_none():
     """response can be None (page.goto sometimes returns None on
     main-frame nav). detect_login_required must handle without crashing."""
