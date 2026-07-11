@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable
+from typing import Any, Callable
 
 from ..base import is_cancelled, maybe_cancel
 from .models import GeoCell
@@ -32,6 +32,7 @@ def run_cells_dual_lane(
     progress_cb: "Callable[[int, int], None] | None" = None,
     initial_done: int = 0,
     cancel_token: "threading.Event | None" = None,
+    rpa_batch: "Callable[[str, list[str], threading.Event | None], Any] | None" = None,
 ) -> "list[GeoCell]":
     total = initial_done + len(cells_plan)
     results: "list[GeoCell | None]" = [None] * len(cells_plan)
@@ -75,11 +76,25 @@ def run_cells_dual_lane(
             raise                            # run_cell 应自行把非取消异常隔离成 error cell;冒泡=上游 bug
         _tick()
 
-    def _rpa_worker(indices: "list[int]") -> None:
-        for i in indices:
-            if cancelled["exc"] is not None:
+    def _rpa_worker(plat: str, indices: "list[int]") -> None:
+        if rpa_batch is None:                       # Phase-1 回退:逐 cell(每 cell 自开浏览器)
+            for i in indices:
+                if cancelled["exc"] is not None:
+                    return
+                _one(i)
+            return
+        keywords = [cells_plan[i][0] for i in indices]
+        try:
+            for local_idx, cell in rpa_batch(plat, keywords, cancel_token):
+                if cancelled["exc"] is not None:
+                    return
+                results[indices[local_idx]] = cell
+                _tick()
+        except BaseException as e:                  # noqa: BLE001
+            if is_cancelled(e):
+                cancelled["exc"] = e
                 return
-            _one(i)
+            raise
 
     _emit_initial()
 
@@ -95,8 +110,8 @@ def run_cells_dual_lane(
     try:
         for i in api_idx:
             futs.append(api_ex.submit(_one, i))
-        for indices in rpa_groups.values():
-            futs.append(rpa_ex.submit(_rpa_worker, indices))
+        for plat_name, indices in rpa_groups.items():
+            futs.append(rpa_ex.submit(_rpa_worker, plat_name, indices))
         for f in futs:
             f.result()                       # join 全部;非取消异常在此重抛
     finally:

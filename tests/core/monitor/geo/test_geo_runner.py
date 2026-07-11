@@ -124,3 +124,27 @@ def test_preset_cancel_token_skips_all_cells():
                                    api_pool_size=2, rpa_platform_concurrency=3,
                                    cancel_token=tok)
     assert called["n"] == 0
+
+
+def test_rpa_batch_hook_places_cells_and_ticks_progress():
+    # rpa_batch 提供时,RPA 平台走「每平台一次 batch」路径:逐 cell 就位 + 逐 cell 进度。
+    plan = [("k1", "kimi"), ("k2", "kimi"), ("k1", "tongyi")]
+    seen_batches = []
+
+    def rpa_batch(plat, keywords, cancel_token):
+        seen_batches.append((plat, tuple(keywords)))
+        for li, kw in enumerate(keywords):
+            yield li, _cell(kw, plat)          # 模拟复用浏览器逐关键词产出
+
+    def run_cell(kw, plat):                     # 只应被 API 平台(tongyi)调用
+        return _cell(kw, plat)
+
+    prog = []
+    out = runner.run_cells_dual_lane(
+        plan, run_cell, mode_of=lambda p: "api" if p == "tongyi" else "rpa",
+        api_pool_size=4, rpa_platform_concurrency=3,
+        progress_cb=lambda c, t: prog.append((c, t)), rpa_batch=rpa_batch)
+
+    assert [(c.keyword, c.platform) for c in out] == plan   # 顺序保持
+    assert seen_batches == [("kimi", ("k1", "k2"))]         # kimi 只开一次 batch,含两个关键词
+    assert prog[-1] == (3, 3)                                # 3 个 cell 全计进度
