@@ -128,7 +128,9 @@ def test_preset_cancel_token_skips_all_cells():
 
 def test_rpa_batch_hook_places_cells_and_ticks_progress():
     # rpa_batch 提供时,RPA 平台走「每平台一次 batch」路径:逐 cell 就位 + 逐 cell 进度。
-    plan = [("k1", "kimi"), ("k2", "kimi"), ("k1", "tongyi")]
+    # API cell 放最前 → kimi 全局 index=[1,2] ≠ local_idx=[0,1],真正验 results[indices[local_idx]]
+    # 映射(若 kimi 恰在 [0,1],results[local_idx] 的错写也蒙对,测不出回归)。
+    plan = [("k1", "tongyi"), ("k1", "kimi"), ("k2", "kimi")]
     seen_batches = []
 
     def rpa_batch(plat, keywords, cancel_token):
@@ -148,3 +150,34 @@ def test_rpa_batch_hook_places_cells_and_ticks_progress():
     assert [(c.keyword, c.platform) for c in out] == plan   # 顺序保持
     assert seen_batches == [("kimi", ("k1", "k2"))]         # kimi 只开一次 batch,含两个关键词
     assert prog[-1] == (3, 3)                                # 3 个 cell 全计进度
+
+
+def test_rpa_batch_skips_queued_platform_after_cancel(monkeypatch):
+    # 取消已触发(前一平台抛)后,队列里的 RPA 平台不应再调 rpa_batch(不开浏览器,不留孤儿)。
+    monkeypatch.setattr(runner, "is_cancelled", lambda e: isinstance(e, _Cancel))
+    called = []
+
+    def rpa_batch(plat, keywords, tok):
+        called.append(plat)
+        if plat == "kimi":
+            raise _Cancel("stop")
+        yield 0, _cell(keywords[0], plat)
+
+    plan = [("k1", "kimi"), ("k1", "deepseek")]
+    with pytest.raises(_Cancel):
+        runner.run_cells_dual_lane(
+            plan, lambda kw, p: _cell(kw, p), mode_of=lambda p: "rpa",
+            api_pool_size=1, rpa_platform_concurrency=1,   # 串行化 → deepseek 排在 kimi 后
+            rpa_batch=rpa_batch)
+    assert called == ["kimi"]                              # deepseek 被取消前置检查跳过
+
+
+def test_rpa_batch_underyield_raises_not_silent():
+    # batch 漏产某关键词 → 就地报错,不让 None 漂到 metrics 静默丢数据/远端炸。
+    def rpa_batch(plat, keywords, tok):
+        yield 0, _cell(keywords[0], plat)                  # 只产第一个,漏掉第二个
+
+    plan = [("k1", "kimi"), ("k2", "kimi")]
+    with pytest.raises(RuntimeError, match="漏产"):
+        runner.run_cells_dual_lane(
+            plan, lambda kw, p: _cell(kw, p), mode_of=lambda p: "rpa", rpa_batch=rpa_batch)

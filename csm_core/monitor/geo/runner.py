@@ -83,11 +83,16 @@ def run_cells_dual_lane(
                     return
                 _one(i)
             return
+        if cancelled["exc"] is not None:            # 已取消:队列中的平台不再开浏览器(与 _one 一致,不留孤儿)
+            return
         keywords = [cells_plan[i][0] for i in indices]
+        gen = rpa_batch(plat, keywords, cancel_token)
         try:
-            for local_idx, cell in rpa_batch(plat, keywords, cancel_token):
+            for local_idx, cell in gen:
                 if cancelled["exc"] is not None:
                     return
+                if not (0 <= local_idx < len(indices)):   # 防御:越界/负 idx 会静默写错槽(负数绕回)
+                    raise RuntimeError(f"rpa_batch({plat!r}) 产出非法 local_idx={local_idx}")
                 results[indices[local_idx]] = cell
                 _tick()
         except BaseException as e:                  # noqa: BLE001
@@ -95,6 +100,15 @@ def run_cells_dual_lane(
                 cancelled["exc"] = e
                 return
             raise
+        finally:
+            close = getattr(gen, "close", None)     # 提前 return/异常时显式关生成器 → 触发其 with
+            if close is not None:                    # session 的 __exit__ 关浏览器,不靠 GC 时序(不留孤儿)
+                close()
+        # 防御:batch 契约=每关键词一 cell;正常跑完却有漏 → 就地报错,别让 None 漂到 metrics 炸。
+        if cancelled["exc"] is None:
+            missing = [i for i in indices if results[i] is None]
+            if missing:
+                raise RuntimeError(f"rpa_batch({plat!r}) 漏产 {len(missing)}/{len(indices)} 个 cell")
 
     _emit_initial()
 
