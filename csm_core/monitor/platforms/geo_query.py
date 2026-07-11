@@ -103,6 +103,32 @@ class GeoQueryAdapter:
             return self._run_cell(kw, plat, brand, aliases, web_search, client,
                                   cancel_token=cancel_token)
 
+        def _rpa_batch(plat: str, keywords: "list[str]", tok):
+            """每平台开一次 session,循环关键词逐 cell yield(浏览器跨关键词复用)。
+            provider 构造 / session 开启失败 → 该平台每个关键词各出一个 error cell(隔离)。"""
+            try:
+                provider = get_provider(plat)
+                session_cm = provider.session(web_search=web_search, cancel_token=cancel_token)
+            except Exception as e:                       # 构造失败:全隔离成 error
+                for li, kw in enumerate(keywords):
+                    yield li, GeoCell(platform=plat, keyword=kw, status="error", raw={"error": repr(e)})
+                return
+            produced = 0
+            try:
+                with session_cm as query_one:
+                    for li, kw in enumerate(keywords):
+                        maybe_cancel(cancel_token)
+                        cell = self._run_cell_on_session(query_one, kw, plat, brand, aliases, client)
+                        produced = li + 1
+                        yield li, cell
+            except Exception as e:                       # session 中途崩(浏览器死等):剩余关键词补 error
+                if is_cancelled(e):
+                    raise
+                logger.exception("[geo] rpa session 中断 plat=%s", plat)
+                for li in range(produced, len(keywords)):
+                    yield li, GeoCell(platform=plat, keyword=keywords[li], status="error",
+                                      raw={"error": f"session 中断: {e!r}"})
+
         maybe_cancel(cancel_token)               # 开跑前先检一次取消(等价串行版首个 maybe_cancel)
         tail = cells_plan[resume_from:]
         cells: list[GeoCell] = geo_runner.run_cells_dual_lane(
@@ -113,6 +139,7 @@ class GeoQueryAdapter:
             progress_cb=progress_cb,
             initial_done=resume_from,
             cancel_token=cancel_token,
+            rpa_batch=_rpa_batch,
         )
 
         # C1 修复:runner 返回后复查取消。API cell 的同步 httpx POST 只在
@@ -195,6 +222,24 @@ class GeoQueryAdapter:
             logger.exception("[geo] cell 失败 kw=%s plat=%s", keyword, platform)
             return GeoCell(platform=platform, keyword=keyword, status="error",
                            raw={"error": repr(e)})
+
+    def _run_cell_on_session(self, query_one, keyword, platform, brand, aliases, client) -> GeoCell:
+        """在已开好的 RPA session 上跑单关键词:query_one → extract → cell(逐 cell 隔离,同 _run_cell)。"""
+        try:
+            answer = query_one(keyword)
+            if answer.status in ("error", "blocked"):
+                return GeoCell(platform=platform, keyword=keyword, status=answer.status,
+                               answer_text="", raw={"error": answer.error})
+            ext = extract(answer, brand=brand, aliases=aliases, client=client)
+            return GeoCell(platform=platform, keyword=keyword,
+                           mentioned=ext.mentioned, rank=ext.target_rank, sentiment=ext.sentiment,
+                           answer_text=answer.answer_text, status="ok", raw=answer.raw,
+                           citations=ext.citations, recommended=ext.recommended, summary=ext.summary)
+        except Exception as e:
+            if is_cancelled(e):
+                raise
+            logger.exception("[geo] rpa cell 失败 kw=%s plat=%s", keyword, platform)
+            return GeoCell(platform=platform, keyword=keyword, status="error", raw={"error": repr(e)})
 
 
 ADAPTER = GeoQueryAdapter()

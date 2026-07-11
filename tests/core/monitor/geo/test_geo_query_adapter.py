@@ -297,6 +297,40 @@ def test_fetch_cancel_midrun_not_swallowed_as_ok(fresh_db, monkeypatch):
         geo_mod.ADAPTER.fetch(storage.get_task(tid), cancel_token=tok)
 
 
+def test_fetch_rpa_lane_reuses_session_per_platform(fresh_db, monkeypatch):
+    # RPA 平台每平台只开一次 session，循环关键词；一个坏关键词只坏一个 cell，不拖垮整轮。
+    import contextlib
+    opens = {"n": 0}
+
+    class _RpaProv:
+        def __init__(self, p): self.platform = p; self.mode = "rpa"
+        @contextlib.contextmanager
+        def session(self, *, web_search=True, cancel_token=None):
+            opens["n"] += 1
+            from csm_core.monitor.geo.models import GeoAnswer
+            def query_one(kw):
+                if kw == "bad":
+                    raise RuntimeError("selector drift")
+                return GeoAnswer(platform=self.platform, keyword=kw, answer_text=f"{kw} 推荐 小鹏")
+            yield query_one
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _RpaProv(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "小鹏", "keywords": ["k1", "bad", "k2"], "platforms": ["kimi"],
+                "extract_provider": "mock"}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+
+    assert opens["n"] == 1                        # kimi 只开一次 session(3 关键词复用)
+    assert result.status == "ok"                  # 部分失败不整体失败
+    assert result.metric["error_cells"] == 1      # 仅 "bad" 关键词失败
+    conn = storage.get_conn()
+    rows = {r["keyword"]: r["status"] for r in
+            conn.execute("SELECT keyword,status FROM geo_cells WHERE task_id=?", (tid,)).fetchall()}
+    assert rows == {"k1": "ok", "bad": "error", "k2": "ok"}
+
+
 def test_fetch_tolerates_non_numeric_pool_config(fresh_db, monkeypatch):
     # 非数值 geo_api_pool_size 不应崩 fetch,应回落默认。
     monkeypatch.setattr(geo_mod, "get_provider", lambda p: FakeProvider(p))
