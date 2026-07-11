@@ -1,5 +1,4 @@
 from __future__ import annotations
-import pytest
 from csm_core.monitor.geo.providers.rpa import _driver, _flow
 from csm_core.monitor.geo.providers.rpa.sites import SITES
 

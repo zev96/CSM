@@ -5,6 +5,7 @@
 避免复用浏览器时上一关键词的上下文污染本轮(致命修复①)。
 """
 from __future__ import annotations
+import logging
 import threading
 from typing import Any
 
@@ -12,6 +13,8 @@ from csm_core.monitor.base import maybe_cancel
 from csm_core.monitor.geo.models import GeoAnswer
 from csm_core.monitor.geo.providers.rpa import _flow
 from csm_core.monitor.geo.providers.rpa.sites import SiteSpec
+
+logger = logging.getLogger(__name__)
 
 
 def run_one_keyword(page: Any, spec: SiteSpec, keyword: str, *, web_search: bool,
@@ -41,6 +44,8 @@ def run_one_keyword(page: Any, spec: SiteSpec, keyword: str, *, web_search: bool
                            timeout_s=spec.stream_timeout_s, cancel_token=cancel_token)
     html = page.content()
     answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
+    # 信源三分支互斥(sites.py 里三站 toolcall_sel/source_text_sel 无一同设);web_toggle_sel
+    # 与 deep_think 亦不同现——将来某 spec 同设时需重排本段/上面的开关段。
     if spec.toolcall_sel:                 # Kimi:点开「搜索网页」toolcall 再全页抓 <a>
         _flow.expand_search_toolcalls(page, toolcall_sel=spec.toolcall_sel)
         html = page.content()
@@ -50,6 +55,8 @@ def run_one_keyword(page: Any, spec: SiteSpec, keyword: str, *, web_search: bool
     else:                                 # DeepSeek:答案容器内 <a>
         cites = _flow.extract_citations(html, container_sel=spec.citation_sel,
                                         exclude_hosts=spec.exclude_hosts)
+    logger.info("[geo-rpa][%s] kw=%s answer_len=%d cite_n=%d",
+                spec.platform, keyword, len(answer), len(cites))
     return GeoAnswer(platform=spec.platform, keyword=keyword, answer_text=answer,
                      citations=cites, status="ok" if answer else "empty",
                      raw={"html_len": len(html), "cite_n": len(cites)})
