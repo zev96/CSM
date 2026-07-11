@@ -150,3 +150,29 @@ class TestFusion:
         sig = detect_risk(page, resp)
         assert sig is not None
         assert sig.layer == "http"
+
+    def test_fusion_text_layer_suppressed_when_serp_has_results(self):
+        """合法 SERP 渲染出 organic 结果 + 某结果摘要含'网络异常/系统繁忙/
+        验证码'等词时，不能误判风控暂停整个任务（关键词本身或摘要含词是
+        常态）。text 层是最弱信号，有结果就不该信它。"""
+        page = MagicMock()
+        page.locator = lambda sel: MagicMock(
+            count=(lambda: 5 if "content_left" in sel else 0)
+        )
+        page.content.return_value = (
+            "<html><div id='content_left'>结果：网络异常 排查指南…</div></html>"
+        )
+        page.url = "https://www.baidu.com/s?wd=网络异常"
+        resp = MagicMock(status=200, headers={})
+        assert detect_risk(page, resp) is None
+
+    def test_fusion_text_layer_fires_on_interstitial_without_results(self):
+        """真验证码/风控插页没有 organic 结果容器 → text 层仍然生效。"""
+        page = MagicMock()
+        page.locator = lambda sel: MagicMock(count=lambda: 0)
+        page.content.return_value = "<html>安全验证</html>"
+        page.url = "https://www.baidu.com/somewhere"
+        resp = MagicMock(status=200, headers={})
+        sig = detect_risk(page, resp)
+        assert sig is not None
+        assert sig.layer == "text"

@@ -237,14 +237,18 @@ def test_periodic_tick_dispatches_due_tasks(db_path: Path, sink, captured_events
 
 
 def test_tick_with_no_due_tasks_emits_zero_dispatch(db_path: Path, sink, captured_events):
-    # Create a task that's NOT due: schedule far in the future.
-    future = (datetime.now() + timedelta(hours=2)).strftime("%H:%M")
+    # 用固定本地时钟 12:00 + 同日 14:00 的日程 → 明确「未到点」，不受运行时的
+    # 真实墙钟影响（原来用 now+2h 会在 22:00 后跨过午夜 → 无日期的 HH:MM 被当
+    # 成今天的过去时刻 → 误判为 due，测试随时间闪烁）。
+    from datetime import date
+
+    fixed_local = datetime.combine(date.today(), datetime.min.time()).replace(hour=12)
     task = MonitorTask(
         type="zhihu_question",
         name="future",
         target_url="https://www.zhihu.com/question/future",
         config={"target_brand": "x", "top_n": 5},
-        schedule_cron=future,
+        schedule_cron="14:00",
         enabled=True,
     )
     task.id = storage.create_task(task)
@@ -254,6 +258,7 @@ def test_tick_with_no_due_tasks_emits_zero_dispatch(db_path: Path, sink, capture
         event_sink=sink,
         adapters={"zhihu_question": adapter},
         tick_seconds=1,
+        schedule_clock=lambda: fixed_local,
     )
     loop.start()
     try:
@@ -266,6 +271,189 @@ def test_tick_with_no_due_tasks_emits_zero_dispatch(db_path: Path, sink, capture
     tick_events = [e for e in captured_events if e.kind == "tick"]
     assert tick_events, "expected at least one tick event"
     assert all((t.dispatched or 0) == 0 for t in tick_events)
+
+
+# ── 3b. De-duplication: never dispatch a task that's already running ────────
+class _GatedAdapter:
+    """Blocks inside ``fetch`` until released, so the task stays *active*
+    while we probe whether the scheduler re-dispatches it. Records every
+    call so a duplicate dispatch is observable as ``call_count == 2``."""
+
+    def __init__(self) -> None:
+        self.platform = "zhihu_question"
+        self.call_count = 0
+        self._lock = threading.Lock()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def fetch(self, task: MonitorTask, **_kwargs: Any) -> MonitorResult:
+        with self._lock:
+            self.call_count += 1
+        self.entered.set()
+        self.release.wait(timeout=10)
+        return MonitorResult(
+            task_id=task.id or 0,
+            checked_at=datetime.now(),
+            status="ok",
+            rank=1,
+            metric={"keywords": []},
+        )
+
+
+def test_tick_does_not_redispatch_running_task(db_path: Path, sink, captured_events):
+    """A long-running task must NOT be re-dispatched by subsequent ticks
+    before it finishes — ``last_check_at`` is only bumped on completion, so
+    ``select_due`` keeps returning it, and the dispatcher must skip it."""
+    task = _make_due_task()
+    adapter = _GatedAdapter()
+    loop = MonitorLoop(
+        event_sink=sink,
+        adapters={"zhihu_question": adapter},
+        tick_seconds=3600,
+        clock=datetime.now,  # local clock so select_due sees the local HH:MM schedule
+    )
+    loop.start()
+    try:
+        loop.run_task_now(task.id)  # type: ignore[arg-type]
+        assert adapter.entered.wait(timeout=5), "worker never entered fetch"
+        # Task is still running. Fire ticks: select_due returns it again
+        # (completion hasn't bumped last_check_at). Must be skipped.
+        loop._tick()
+        loop._tick()
+        time.sleep(0.3)  # give any wrongly-submitted worker time to call fetch
+        assert adapter.call_count == 1, "task was re-dispatched while still running"
+    finally:
+        adapter.release.set()
+        loop.stop()
+
+
+def test_run_task_now_rejects_already_running_task(db_path: Path, sink, captured_events):
+    """Manual «启动监测» / run-now during an active run must not spin a
+    second concurrent worker on the same task."""
+    task = _make_due_task()
+    adapter = _GatedAdapter()
+    loop = MonitorLoop(
+        event_sink=sink,
+        adapters={"zhihu_question": adapter},
+        tick_seconds=3600,
+        clock=datetime.now,
+    )
+    loop.start()
+    try:
+        loop.run_task_now(task.id)  # type: ignore[arg-type]
+        assert adapter.entered.wait(timeout=5), "worker never entered fetch"
+        # Second manual dispatch while the first is still running.
+        fut = loop.run_task_now(task.id)  # type: ignore[arg-type]
+        assert fut.result(timeout=5) is None, "duplicate dispatch should resolve to None"
+        time.sleep(0.3)
+        assert adapter.call_count == 1, "duplicate manual dispatch ran a second time"
+        assert loop.is_task_active(task.id) is True  # type: ignore[arg-type]
+    finally:
+        adapter.release.set()
+        loop.stop()
+
+
+# ── 3c. Scheduling uses local wall-clock; stamps stay UTC ───────────────────
+def test_scheduling_uses_local_wall_clock_not_utc(db_path: Path, sink, captured_events):
+    """select_due must compare a task's local HH:MM schedule against LOCAL
+    wall-clock. The bug: a single UTC clock drove both scheduling and
+    stamping, so a 09:00-local daily task fired 8h late (17:00 CST). Here a
+    task due at 11:00 local looks NOT due under the 02:00 UTC stamp clock,
+    but MUST dispatch under the 12:00 local schedule clock."""
+    from datetime import date
+
+    d = date.today()
+    local_now = datetime.combine(d, datetime.min.time()).replace(hour=12)  # 12:00 local
+    utc_now = datetime.combine(d, datetime.min.time()).replace(hour=2)      # 02:00 UTC stamp
+    task = MonitorTask(
+        type="zhihu_question",
+        name="sched",
+        target_url="https://www.zhihu.com/question/sched",
+        config={"target_brand": "x", "top_n": 5},
+        schedule_cron="11:00",
+        enabled=True,
+    )
+    task.id = storage.create_task(task)
+    adapter = FakeAdapter()
+    loop = MonitorLoop(
+        event_sink=sink,
+        adapters={"zhihu_question": adapter},
+        tick_seconds=3600,
+        clock=lambda: utc_now,
+        schedule_clock=lambda: local_now,
+    )
+    loop.start()
+    try:
+        loop._tick()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if any(e.kind == "finished" for e in captured_events):
+                break
+            time.sleep(0.05)
+        assert adapter.call_count == 1, "task due at 11:00 local not dispatched at 12:00 local"
+    finally:
+        loop.stop()
+
+
+# ── 3d. Single-keyword merge writes back result.rank ────────────────────────
+def test_merge_partial_writes_back_result_rank(db_path: Path):
+    """单关键词「启动监测」merge 后，result.rank 必须与重算的
+    best_default_first_rank 一致。否则 should_alert 读到「那一个词的 rank」
+    （未命中=-1）会误触发任务级告警 + 24h 冷却压掉真告警，DB rank 列还跟
+    metric 永久 drift。"""
+    from csm_sidecar.services.monitor_loop import _merge_partial_baidu_metric
+
+    task = MonitorTask(
+        type="baidu_keyword", name="t",
+        target_url="baidu://t",
+        config={"search_keywords": ["kwA", "kwB"]},
+        schedule_cron="manual", enabled=True,
+    )
+    task.id = storage.create_task(task)
+    # 先前快照：kwB 排到 #1
+    prior = MonitorResult(
+        task_id=task.id, checked_at=datetime.now(), status="ok", rank=1,
+        metric={
+            "keywords": [
+                {"keyword": "kwA", "default_first_rank": -1, "default_matched_count": 0,
+                 "default_results": [], "news_results": []},
+                {"keyword": "kwB", "default_first_rank": 1, "default_matched_count": 1,
+                 "default_results": [], "news_results": []},
+            ],
+            "best_default_first_rank": 1,
+        },
+    )
+    storage.save_result(prior)
+    # 单关键词重跑 kwA，这次没命中（rank=-1）
+    partial = MonitorResult(
+        task_id=task.id, checked_at=datetime.now(), status="ok", rank=-1,
+        metric={
+            "keywords": [
+                {"keyword": "kwA", "default_first_rank": -1, "default_matched_count": 0,
+                 "default_results": [], "news_results": []},
+            ],
+            "best_default_first_rank": -1,
+        },
+    )
+    _merge_partial_baidu_metric(partial, "kwA", task.id)
+    assert partial.metric["best_default_first_rank"] == 1
+    assert partial.rank == 1, "result.rank 必须回写为跨全部关键词的 best"
+
+
+# ── 3e. Alert config hot-reload ─────────────────────────────────────────────
+def test_set_alert_config_updates_thresholds(db_path: Path, sink):
+    """PATCH /api/config 改 alert_top_n / alert_cooldown_hours 要即时生效，
+    不该等重启 sidecar（reconfigure 之前只推 adapter 设置，漏了 loop 的告警阈值）。"""
+    loop = MonitorLoop(
+        event_sink=sink,
+        adapters={"zhihu_question": FakeAdapter()},
+        alert_top_n=5,
+        cooldown_hours=24,
+        tick_seconds=3600,
+    )
+    loop.set_alert_config(alert_top_n=7, cooldown_hours=12)
+    assert loop._alert_top_n == 7  # noqa: SLF001
+    assert loop._cooldown_hours == 12  # noqa: SLF001
 
 
 # ── 4. Restart safety ───────────────────────────────────────────────────────

@@ -25,6 +25,8 @@ _PROFILE_CACHE_DIRS_TO_SKIP = frozenset({
     "Cache",
     "Code Cache",
     "GPUCache",
+    # Chrome 音视频缓冲缓存，已知会持续变大（纯缓存、无登录态）。
+    "Media Cache",
     "Service Worker",
     "DawnCache",
     "DawnGraphiteCache",

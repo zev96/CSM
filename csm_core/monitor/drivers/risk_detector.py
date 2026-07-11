@@ -119,6 +119,21 @@ def detect_risk_by_http(response: Any) -> RiskSignal | None:
     return None
 
 
+# SERP organic 结果容器 —— 有结果就说明页面正常渲染了搜索结果，不是风控插页。
+_SERP_RESULT_SELECTOR = "#content_left .c-container"
+
+
+def _serp_rendered_results(page: Any) -> bool:
+    """页面是否正常渲染出了 organic SERP 结果。用来抑制 text 层误报：
+    真验证码/风控插页不会有结果容器，而合法 SERP 常在某条结果摘要里带
+    "网络异常/系统繁忙/验证码"等词。只有确认「有结果」时才抑制 text 层，
+    检测不了（异常/无结果）时保守地放行 text 层（宁可查也别漏真风控）。"""
+    try:
+        return page.locator(_SERP_RESULT_SELECTOR).count() > 0
+    except Exception:
+        return False
+
+
 # ── Fusion ────────────────────────────────────────────────────────────────
 def detect_risk(page: Any, response: Any = None) -> RiskSignal | None:
     """对 page + response 跑 5 层检测，返回第一个命中。
@@ -143,10 +158,14 @@ def detect_risk(page: Any, response: Any = None) -> RiskSignal | None:
     if sig:
         return sig
     try:
-        text = page.content()
-        sig = detect_risk_by_text(text)
-        if sig:
-            return sig
+        # text 层是最弱信号（结果摘要/关键词含"验证码/网络异常/系统繁忙"就中招）。
+        # 页面已渲染出 organic 结果 = 词是摘要不是风控插页 → 跳过 text 层，
+        # 避免误判把整个任务暂停 300s。真插页没有结果容器，text 层照常生效。
+        if not _serp_rendered_results(page):
+            text = page.content()
+            sig = detect_risk_by_text(text)
+            if sig:
+                return sig
     except Exception as e:
         logger.debug("detect_risk: layer raised, continuing: %s", e)
     return None

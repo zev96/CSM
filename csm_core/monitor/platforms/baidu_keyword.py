@@ -18,8 +18,10 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -128,18 +130,6 @@ _XPATH_NEWS = (
     "/div[contains(@class, 'cos-row')]"
     "//h3//a"
 )
-
-# Chrome 子版本 UA 轮换池。curl_cffi 的 impersonate="chrome120" 在
-# _get_session 里保持不变（控制 TLS/H2 fingerprint，跨大版本切换会
-# 让 TLS 与 UA header 矛盾更可疑），只换 User-Agent header 在 Chrome
-# 119-122 之间轮转。
-_UA_POOL: tuple[str, ...] = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-)
-
 
 def parse_serp(html: str) -> dict[str, Any]:
     """从一段 SERP HTML 抽取两组 (title, href) 链接。
@@ -274,14 +264,45 @@ def match_brand(content: str, brands: list[str]) -> str | None:
 
     Returns:
         命中的品牌词原文（保留 brands 列表里的大小写），无命中 → None
+
+    匹配规则：
+    - 两侧都做 NFKC 归一 + lower：全角品牌名（ＮＯＶＡ）与半角配置（NOVA）
+      等价，避免因宽度差异漏检。
+    - 纯 ASCII 字母数字品牌（Nova / MOVA / 3M）要求**词边界**，避免
+      "Nova" 命中 "innovation"、"MOVA" 命中 "removal" 这类子串误报 —— 尤其
+      raw-body fallback 会喂全站 nav/JS 文本，一个误命中就把整站文章误判成
+      命中。
+    - 含 CJK / 空格 / 符号的品牌（小米 / Coca Cola）无词边界概念，走子串。
     """
     if not content or not brands:
         return None
-    content_lc = content.lower()
+    content_norm = unicodedata.normalize("NFKC", content).lower()
     for brand in brands:
-        if brand and brand.lower() in content_lc:
+        if not brand:
+            continue
+        b_norm = unicodedata.normalize("NFKC", brand).lower()
+        if not b_norm:
+            continue
+        if b_norm.isascii() and b_norm.isalnum():
+            # 词边界：品牌前后不能紧挨字母/数字
+            if re.search(
+                r"(?<![a-z0-9])" + re.escape(b_norm) + r"(?![a-z0-9])",
+                content_norm,
+            ):
+                return brand
+        elif b_norm in content_norm:
             return brand
     return None
+
+
+def _all_keywords_failed(keyword_results: list[dict[str, Any]]) -> bool:
+    """每个关键词都带 fetch_error（SERP 导航失败 / content 抓取失败）才算
+    「整轮失败」。用来区分「浏览器/网络在每个关键词上都挂了」（→ 返回
+    failed，触发熔断、不把断网误报成「监测完成」）和「合法地没搜到结果」
+    （fetch_error=None）。空列表不算失败（没跑不等于失败）。"""
+    return bool(keyword_results) and all(
+        kw.get("fetch_error") for kw in keyword_results
+    )
 
 
 # Indirection 给单测 monkeypatch 用。真实调用走 curl_cffi。
@@ -331,6 +352,11 @@ def resolve_baidu_link(url: str, *, session: Any = None) -> str:
 # 没真正提到内容（典型 SPA「请用 APP 打开」壳页），交给浏览器 fallback。
 _HTTP_MIN_CONTENT_CHARS = 200
 
+# 验证码/风控插页的 body text 很短（验证码说明 + 按钮），正文页很长。用这个
+# 阈值区分：只有 body text 短于它时才信 text 层的风控关键词，避免长文章正文
+# 里出现「网络异常/系统繁忙」等词被误判成风控。与 _is_captcha_page 对齐。
+_CAPTCHA_BODY_MIN_CHARS = 800
+
 
 def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
     """用 curl_cffi + readability 抓单篇文章，返回纯文本正文。
@@ -349,9 +375,19 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
         resp = _cc_get(
             url,
             session=session,
-            impersonate="chrome120",
+            impersonate="chrome131",
             allow_redirects=True,
             timeout=15,
+            # 从 SERP 点进文章的真实流量形状：带 baidu Referer + cross-site。
+            # 裸访问（Sec-Fetch-Site:none、无 Referer）对百家号等强风控站是
+            # 明显机器人特征。session 模式下这些 per-request header 覆盖 session
+            # 默认（session 默认给 warmup 打 baidu.com 用的 same/none）。
+            headers={
+                "Referer": "https://www.baidu.com/",
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Dest": "document",
+            },
         )
     except Exception as e:
         return {
@@ -396,11 +432,12 @@ def fetch_article_http(url: str, *, session: Any = None) -> dict[str, Any]:
     # browser fallback 触发风控会 raise → 整个 task pause，比 article-level
     # fail 影响大得多。
     final_url = getattr(resp, "url", url) or url
-    risk = (
-        detect_risk_by_url(final_url)
-        or detect_risk_by_http(resp)
-        or detect_risk_by_text(raw)
-    )
+    # url / http 层可靠，照跑。text 层最易误报（长文章正文里出现「网络异常/
+    # 系统繁忙/验证码」等词是正常内容）—— 只在 body 很短（真验证码/风控插页
+    # 特征，与 _is_captcha_page 的 800 阈值对齐）时才信它。
+    risk = detect_risk_by_url(final_url) or detect_risk_by_http(resp)
+    if risk is None and len(_extract_raw_body_text(raw)) < _CAPTCHA_BODY_MIN_CHARS:
+        risk = detect_risk_by_text(raw)
     if risk is not None:
         return {
             "content": "",
@@ -461,10 +498,10 @@ def _extract_raw_body_text(raw_html: str) -> str:
     里仍有 brand 字符串（meta、og:title、nav 链接、JSON-LD 等）的场景。
     准确度低于 readability，但比 content_len=0 漏检强。
 
-    script / style tag 被 lxml 的 text_content() 自动 strip 在文本之外，
-    所以不会拿到 JS 代码 noise。但 SPA 的 inline JSON state（写在 <script
-    type="application/json"> 里）会被 strip ── 那部分需要更专门的 SPA
-    解析器（方案 C），本 fallback 不 cover。
+    注意：lxml 的 ``text_content()`` **不会**自动剔除 <script>/<style>（旧
+    注释说会是错的，已实测证伪）。body 里的 inline JS/CSS 会被一起拼进来，
+    污染 match_brand（品牌名出现在全站 JS 常量 / 埋点里 → 假命中）并让
+    _is_captcha_page 的 800 字符阈值失真。所以先删掉这些节点再取文本。
     """
     if not raw_html.strip():
         return ""
@@ -473,7 +510,15 @@ def _extract_raw_body_text(raw_html: str) -> str:
     except Exception as e:
         logger.info("raw body text extraction failed: %s", e)
         return ""
-    body = doc.find(".//body") if doc is not None else None
+    if doc is None:
+        return ""
+    # drop_tree() 保留节点的 tail 文本，只删元素本体 —— 比 parent.remove 更稳。
+    for el in doc.xpath("//script | //style | //noscript | //template"):
+        try:
+            el.drop_tree()
+        except Exception:
+            pass
+    body = doc.find(".//body")
     target = body if body is not None else doc
     try:
         return (target.text_content() or "").strip()
@@ -614,6 +659,7 @@ def fetch_article_browser_isolated(
     Returns 跟 fetch_article_http 同 shape，额外 is_blocked 字段。
     """
     new_page = None
+    surfaced = False
     try:
         try:
             new_page = context.new_page()
@@ -656,6 +702,17 @@ def fetch_article_browser_isolated(
                 body=f"文章页需要验证（{cur_url[:50]}），请在弹出的浏览器标签页完成验证后等待自动继续",
             )
             logger.info("[baidu] article captcha, waiting for human solve: %s", url[:80])
+            # 关键：把屏外窗口浮上来 + 激活文章 tab。native 模式窗口恒停在
+            # -32000 屏外（见 offscreen_args），只发通知不上浮 → 用户根本看不到
+            # 要解的验证码 → 180s 必然空等超时、is_blocked、正文抓不到。这正是
+            # 「什么值得买验证码难搞」的直接根因。SERP 级 _try_human_solve 有
+            # surface_window，article 级一直漏了。
+            try:
+                new_page.bring_to_front()
+                surface_window(new_page)
+                surfaced = True
+            except Exception:
+                logger.warning("[baidu] surface article-captcha window failed", exc_info=True)
             deadline = time.monotonic() + solve_timeout_s
             solved = False
             while time.monotonic() < deadline:
@@ -706,6 +763,14 @@ def fetch_article_browser_isolated(
         }
     finally:
         if new_page is not None:
+            # 解完/超时后把窗口推回屏外，恢复默认 offscreen 状态（下一个
+            # 关键词 SERP 不该看见残留窗口）。hide 必须在 close 之前 —— 关了
+            # tab 就拿不到 CDP session 了。
+            if surfaced:
+                try:
+                    hide_window(new_page)
+                except Exception:
+                    logger.debug("[baidu] hide article-captcha window failed", exc_info=True)
             try:
                 new_page.close()
             except Exception:
@@ -876,10 +941,8 @@ class BaiduKeywordAdapter:
         # 默认排除域名（B2B / 电商）。apply_settings 会用 config 里的值
         # 覆盖；空 list 表示「不应用全局黑名单」（用户在设置页清空时）。
         self._default_excluded_domains: tuple[str, ...] = ()
-        # UA 轮换游标 + per-task curl_cffi.Session 池。Session 内含 cookie jar，
-        # per-task 复用让 BAIDUID / BIDUPSID baseline cookie 不被频繁丢弃 →
-        # 大幅降低百度风控触发率（参考 bilibili_comment 同款模式）。
-        self._ua_idx = 0
+        # per-task curl_cffi.Session 池。Session 内含 cookie jar，per-task 复用
+        # 让 BAIDUID / BIDUPSID baseline cookie 不被频繁丢弃 → 降低风控触发率。
         self._http_sessions: dict[int, Any] = {}
         self._http_sessions_lock = threading.Lock()
         self._event_publisher: Any = None
@@ -888,14 +951,6 @@ class BaiduKeywordAdapter:
         """Sidecar lifespan 启动时注入，给 native mode chrome_preflight +
         软着陆验证码 发 SSE 事件用。"""
         self._event_publisher = fn
-
-    def _next_ua(self) -> str:
-        """Round-robin pick from _UA_POOL. Called only by _get_session
-        so each Session gets a stable UA for its lifetime — switching UA
-        mid-session would itself be a bot signal."""
-        ua = _UA_POOL[self._ua_idx % len(_UA_POOL)]
-        self._ua_idx += 1
-        return ua
 
     def _get_session(self, task_id: int) -> Any:
         """Get-or-create curl_cffi.Session for this task. First call warm-ups
@@ -917,9 +972,12 @@ class BaiduKeywordAdapter:
                 return sess
             import importlib
             cc_requests = importlib.import_module("curl_cffi.requests")
-            sess = cc_requests.Session(impersonate="chrome120")
+            # impersonate 自带自洽的 UA + sec-ch-ua client hints，别再用 UA 池
+            # 覆盖 User-Agent（旧代码 3/4 会话 UA 说 Windows 而 client hints 说
+            # macOS，指纹自相矛盾 = 机器人特征）。用较新的 chrome131 而非 2023 的
+            # chrome120（陈旧指纹本身也是 flag）。
+            sess = cc_requests.Session(impersonate="chrome131")
             sess.headers.update({
-                "User-Agent": self._next_ua(),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                 "Accept-Encoding": "gzip, deflate, br",
@@ -1287,6 +1345,11 @@ class BaiduKeywordAdapter:
         # 全局黑名单 + 任务级 exclude_domains 合并 —— 一次性算好，循环
         # 内每个关键词共用同一份；空 set 等价于不过滤。
         exclude_set = self._build_exclude_set(task)
+        # 「本轮已验证码超时」host 集合 —— 跨关键词/跨 block 共享，某 host
+        # 软着陆超时后不再对同 host 反复空等 180s（run 级去重）。
+        captcha_timeout_hosts: set[str] = set()
+        # 本轮 URL memo —— 跨关键词/跨 block 共享，同一篇文章只抓一次正文。
+        article_memo: dict[str, dict[str, Any]] = {}
 
         # Emit a 0/N progress event up-front so the UI can show the total
         # before the first keyword finishes (otherwise the bar is invisible
@@ -1426,11 +1489,15 @@ class BaiduKeywordAdapter:
                     page, parsed["default_links"], [brand, *aliases], block="default",
                     exclude_set=exclude_set,
                     session=session,
+                    captcha_timeout_hosts=captcha_timeout_hosts,
+                    article_memo=article_memo,
                 )
                 news_results = self._check_block(
                     page, parsed["news_links"], [brand, *aliases], block="news",
                     exclude_set=exclude_set,
                     session=session,
+                    captcha_timeout_hosts=captcha_timeout_hosts,
+                    article_memo=article_memo,
                 )
 
                 kw_entry["default_results"] = default_results
@@ -1472,6 +1539,23 @@ class BaiduKeywordAdapter:
             "best_default_first_rank": best_default_first_rank,
         }
 
+        # 整轮每个关键词都抓取失败（断网 / 副本 Chrome 坏）→ 返回 failed 而不是
+        # 「ok + 空表」。否则 runner 会弹「监测任务完成」、熔断器还被 record_success
+        # 重置，掩盖真故障。合法「没搜到结果」（fetch_error=None）不受影响。
+        if _all_keywords_failed(keyword_results):
+            first_err = next(
+                (kw.get("fetch_error") for kw in keyword_results if kw.get("fetch_error")),
+                None,
+            )
+            return MonitorResult(
+                task_id=task.id or 0,
+                checked_at=now,
+                status="failed",
+                rank=-1,
+                metric=metric,
+                error_message=f"全部 {len(keyword_results)} 个关键词抓取失败：{first_err}",
+            )
+
         return MonitorResult(
             task_id=task.id or 0,
             checked_at=now,
@@ -1489,6 +1573,8 @@ class BaiduKeywordAdapter:
         block: str,
         exclude_set: set[str] | None = None,
         session: Any = None,
+        captcha_timeout_hosts: set[str] | None = None,
+        article_memo: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """对一组链接逐条抓正文 + 判命中。返回 1-based rank 的 dict 列表。
 
@@ -1496,14 +1582,52 @@ class BaiduKeywordAdapter:
         （命中 jd.com / 1688.com 等 B2B/电商，或者品牌方在 task 配置里
         指定的「自家门户」域名），过滤掉的条目不计入 rank、不占数。
         这样最终的 rank 1, 2, 3 都是"软文/媒体"性质的链接。
+
+        ``captcha_timeout_hosts`` —— 跨 block/keyword 共享的「本轮已验证码超时」
+        host 集合。某 host 软着陆超时后加进来，后续同 host 结果不再进隔离 tab
+        空等 180s。None 时用本地集合（只在本次调用内短路）。
+
+        ``article_memo`` —— 跨 block/keyword 共享的「本轮已抓正文」缓存（resolved
+        URL → attempt）。同一篇文章常在多个关键词的 SERP 里重复出现，命中直接
+        复用正文/命中结果，跳过 pacer + HTTP + 浏览器兜底。None 时不缓存。
         """
         from .. import rate_limit as _rl  # 本地 import 避免循环；rate_limit 是 re-export shim
 
+        if captcha_timeout_hosts is None:
+            captcha_timeout_hosts = set()
         out: list[dict[str, Any]] = []
         rank = 0
         for link in links:
             href = resolve_baidu_link(link["href"], session=session)
             host = urlparse(href).netloc or "baidu.com"
+
+            # 跳转解析失败守卫：resolve 返回的仍是 baidu.com/link?… → 没拿到
+            # 真实 URL（超时 / 异常，或被风控页拦住没跟 302）。这条的 host 会
+            # 被算成 www.baidu.com 恰好命中下面的 _NON_ARTICLE_HOSTS 而被静默
+            # 跳过 —— 那会让这条（可能正是用户软文）从排名里凭空消失、后面所有
+            # 位次前移；resolve session 被软封时整表全空却报 status=ok。必须占
+            # 一个 rank 位、用 SERP title 尽力判命中、并标 fetch_error。
+            if "baidu.com/link?" in href:
+                rank += 1
+                title = link.get("title", "")
+                title_match = match_brand(title, brands)
+                logger.warning(
+                    "[baidu] _check_block: 跳转未解析，占位 rank=%d（跳过垂类守卫）"
+                    " title=%r matched=%s",
+                    rank, title[:60], title_match or "-",
+                )
+                out.append({
+                    "rank": rank,
+                    "title": title,
+                    "url": href,
+                    "host": host,
+                    "matches_brand": title_match is not None,
+                    "matched_brand": title_match,
+                    "source": "unresolved",
+                    "content_preview": "",
+                    "fetch_error": "跳转链接解析失败（未拿到真实 URL）",
+                })
+                continue
 
             # 百度自有垂类守卫：百科 / 自搜索 / 图片 / 好看等永不是"软文
             # 文章"本体，直接跳过（不计 rank、不发请求、不调 pacer）。
@@ -1525,55 +1649,84 @@ class BaiduKeywordAdapter:
                 )
                 continue
 
-            # Article-level pacer —— 关键反爬节流，原来这里就是裸 for 循环
-            # 秒级连发 N 条 baidu.com/link 解析 + N 条文章 HTTP 请求，正是
-            # 百家号触发验证码的主要诱因。host 是百家号/mbd/mp 时换更宽的
-            # 独立 pacer；其它站走 article pacer。RequestPacer 内部维护
-            # last_request_at，所以第一条不阻塞（_last_request_at=0 → elapsed
-            # 视作 delay_max → sleep_for=0），后续才生效。
             host_lower = host.lower()
-            is_baijiahao = any(
-                host_lower == h or host_lower.endswith("." + h)
-                for h in self._BAIJIAHAO_HOSTS
-            )
-            pacer_key = (
-                self._BAIJIAHAO_PACER_KEY if is_baijiahao else self._ARTICLE_PACER_KEY
-            )
-            _rl.get_pacer(pacer_key).wait()
-
             rank += 1
-            attempt = fetch_article_http(href, session=session)
-            # 方案 B 浏览器兜底（2026-05-28）：HTTP fetch 失败时（403 反爬、
-            # JS challenge 壳页、content_len 过短），用副本 Chrome context 的
-            # 独立 tab 打开文章 URL → 让 JS 跑完 → 拿 rendered HTML → 提正文。
-            #
-            # 老注释说"fetch_article_browser disabled to avoid 风控" ── 那是
-            # 旧 incognito profile 时代的事：共用 baidu page 风控会迁怒 baidu
-            # session。B' 副本模式下 context 是用户日常 Chrome 副本，知乎/
-            # smzdm 等站认账（用户日常浏览过），独立 tab 不污染 baidu 主 page，
-            # 没风控扩散风险。
-            needs_browser = (
-                attempt.get("needs_browser_fallback")
-                or attempt.get("is_js_challenge")
-                or len(attempt.get("content") or "") < _HTTP_MIN_CONTENT_CHARS
-            )
-            if needs_browser and page is not None:
-                try:
-                    ctx = getattr(page, "context", None)
-                    if ctx is not None:
-                        browser_attempt = fetch_article_browser_isolated(ctx, href)
-                        if browser_attempt.get("content"):
-                            # 浏览器兜底拿到正文 → 替换 HTTP attempt
-                            logger.info(
-                                "[baidu] browser_isolated fallback: host=%s http_len=%d → browser_len=%d",
-                                host, len(attempt.get("content") or ""),
-                                len(browser_attempt["content"]),
-                            )
-                            attempt = browser_attempt
-                except Exception as e:
-                    logger.warning(
-                        "[baidu] browser_isolated fallback raised (host=%s): %s", host, e,
+
+            # 本轮 URL memo：同一篇文章常在多个关键词的 SERP 里重复出现（93 个
+            # 品牌相关关键词头部结果高度重叠）。命中直接复用正文/命中结果，跳过
+            # pacer + HTTP + 浏览器兜底 —— 省 30-50% 文章抓取，且请求更少 = 反爬
+            # 暴露更低。只缓存拿到正文的确定性正向结果，避免把 transient 失败
+            # 传染给后续同 URL 的关键词。
+            attempt = article_memo.get(href) if article_memo is not None else None
+            if attempt is None:
+                # Article-level pacer —— 关键反爬节流，原来这里就是裸 for 循环
+                # 秒级连发 N 条 baidu.com/link 解析 + N 条文章 HTTP 请求，正是
+                # 百家号触发验证码的主要诱因。host 是百家号/mbd/mp 时换更宽的
+                # 独立 pacer；其它站走 article pacer。RequestPacer 内部维护
+                # last_request_at，所以第一条不阻塞（_last_request_at=0 → elapsed
+                # 视作 delay_max → sleep_for=0），后续才生效。
+                is_baijiahao = any(
+                    host_lower == h or host_lower.endswith("." + h)
+                    for h in self._BAIJIAHAO_HOSTS
+                )
+                pacer_key = (
+                    self._BAIJIAHAO_PACER_KEY if is_baijiahao else self._ARTICLE_PACER_KEY
+                )
+                _rl.get_pacer(pacer_key).wait()
+
+                attempt = fetch_article_http(href, session=session)
+                # 方案 B 浏览器兜底（2026-05-28）：HTTP fetch 失败时（403 反爬、
+                # JS challenge 壳页、content_len 过短），用副本 Chrome context 的
+                # 独立 tab 打开文章 URL → 让 JS 跑完 → 拿 rendered HTML → 提正文。
+                #
+                # 老注释说"fetch_article_browser disabled to avoid 风控" ── 那是
+                # 旧 incognito profile 时代的事：共用 baidu page 风控会迁怒 baidu
+                # session。B' 副本模式下 context 是用户日常 Chrome 副本，知乎/
+                # smzdm 等站认账（用户日常浏览过），独立 tab 不污染 baidu 主 page，
+                # 没风控扩散风险。
+                # 百度自家风控页（verify.baidu.com / safetycheck）：fetch_article_http
+                # 已明确 needs_browser_fallback=False —— 进隔离 tab 只会在真登录
+                # context 里反复打开 verify.baidu.com 并 180s 空等。尊重它，别让
+                # 下面「content 太短」的长度条款把风控页强行拉进浏览器兜底。
+                is_baidu_risk = (attempt.get("fetch_error") or "").startswith("百度风控")
+                needs_browser = (not is_baidu_risk) and (
+                    attempt.get("needs_browser_fallback")
+                    or attempt.get("is_js_challenge")
+                    or len(attempt.get("content") or "") < _HTTP_MIN_CONTENT_CHARS
+                )
+                # 同 host 一轮只软着陆一次：某 host 上一条软着陆验证码超时
+                # （is_blocked）后，本轮后续同 host 结果不再进隔离 tab 空等 180s
+                # （一页 3 条 smzdm 否则 = 3×180s）。
+                if needs_browser and host_lower in captcha_timeout_hosts:
+                    logger.info(
+                        "[baidu] skip browser fallback: host %s 本轮已验证码超时", host_lower,
                     )
+                    needs_browser = False
+                if needs_browser and page is not None:
+                    try:
+                        ctx = getattr(page, "context", None)
+                        if ctx is not None:
+                            browser_attempt = fetch_article_browser_isolated(ctx, href)
+                            if browser_attempt.get("is_blocked"):
+                                captcha_timeout_hosts.add(host_lower)
+                            if browser_attempt.get("content"):
+                                # 浏览器兜底拿到正文 → 替换 HTTP attempt
+                                logger.info(
+                                    "[baidu] browser_isolated fallback: host=%s http_len=%d → browser_len=%d",
+                                    host, len(attempt.get("content") or ""),
+                                    len(browser_attempt["content"]),
+                                )
+                                attempt = browser_attempt
+                    except Exception as e:
+                        logger.warning(
+                            "[baidu] browser_isolated fallback raised (host=%s): %s", host, e,
+                        )
+
+                # 只缓存拿到正文的确定性正向结果 —— transient 失败不进 memo，让
+                # 后续同 URL 关键词各自重试（且失败页多半已被 captcha_timeout_hosts
+                # 或 baidu_risk 短路，不会真的反复打）。
+                if article_memo is not None and attempt.get("content"):
+                    article_memo[href] = attempt
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)

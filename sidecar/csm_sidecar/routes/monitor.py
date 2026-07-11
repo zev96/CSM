@@ -106,6 +106,8 @@ def run_now(
         )
     if monitor_service.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    if loop.is_task_active(task_id):
+        raise HTTPException(status_code=409, detail="任务正在运行中，请等待本轮结束")
     loop.run_task_now(task_id, keyword_override=keyword)
     return {"task_id": task_id, "queued": True, "keyword": keyword}
 
@@ -130,6 +132,8 @@ def resume_task(task_id: int) -> dict[str, Any]:
         )
     if monitor_service.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    if loop.is_task_active(task_id):
+        raise HTTPException(status_code=409, detail="任务正在运行中，无需从断点恢复")
 
     resume_from = storage.get_last_resumed_keyword(task_id) or 0
     loop.run_task_now(task_id, resume_from=resume_from)
@@ -393,7 +397,21 @@ def reset_baidu_profile() -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail="有正在运行的百度任务，先停止再重置",
         )
-    reset_profile()
+    # 原生模式跑的是「副本」profile（chrome_profile_copy_path），不是自建
+    # baidu_browser_profile。默认 reset_profile() 只删自建目录 → 原生模式下
+    # 用户被风控点重置＝静默空操作。这里按模式选对目录。
+    cfg = _cfg_svc.load()
+    bk = cfg.monitor.baidu_keyword
+    if bk.use_native_chrome and bk.chrome_profile_copy_path:
+        reset_profile(user_data_dir=_Path(bk.chrome_profile_copy_path))
+        # 副本已删，清掉导入/登录元信息，让设置页正确回到「未导入，请重新导入」
+        # 而不是继续显示指向已删目录的「已导入」假状态。
+        bk.chrome_profile_copy_path = None
+        bk.chrome_profile_copy_imported_at = None
+        bk.chrome_profile_copy_last_logged_in_at = None
+        _cfg_svc.save(cfg)
+    else:
+        reset_profile()
 
 
 @router.post("/api/monitor/baidu/login")
@@ -533,6 +551,14 @@ def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
     返回包含 copy_path 给前端展示 + 更新 config。
     """
     from csm_core import config as _core_config
+    from ..services import monitor_lifecycle as _ml
+
+    loop = _ml.get()
+    if loop is not None and loop.has_active_baidu_task():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="有正在运行的百度任务，先停止再重新导入 profile",
+        )
 
     target = _core_config.default_config_dir() / "baidu_chrome_profile_copy"
     try:
@@ -582,6 +608,14 @@ def baidu_test_native(body: TestNativeBody) -> dict[str, Any]:
     Preflight check 已经不需要 ── 副本路径独立于 Chrome 默认目录，
     可以跟用户日常 Chrome 共存。
     """
+    from ..services import monitor_lifecycle as _ml
+
+    loop = _ml.get()
+    if loop is not None and loop.has_active_baidu_task():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="有正在运行的百度任务，先停止再测试启动",
+        )
     try:
         with baidu_browser_session(
             headless=False,
@@ -640,6 +674,15 @@ def baidu_launch_login_window() -> dict[str, Any]:
     import threading
     from datetime import datetime
 
+    from ..services import monitor_lifecycle as _ml
+
+    loop = _ml.get()
+    if loop is not None and loop.has_active_baidu_task():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="有正在运行的百度任务，先停止再登录副本",
+        )
+
     cfg = _cfg_svc.load()
     bk = cfg.monitor.baidu_keyword
     if not bk.chrome_profile_copy_path:
@@ -647,12 +690,14 @@ def baidu_launch_login_window() -> dict[str, Any]:
     if not bk.chrome_executable_path:
         return {"ok": False, "error": "缺 Chrome 可执行文件路径"}
 
+    copy_path = bk.chrome_profile_copy_path
+
     # Spawn 副本 Chrome detached（独立进程，CSM sidecar 退出不影响它）
     try:
         proc = subprocess.Popen(
             [
                 bk.chrome_executable_path,
-                f"--user-data-dir={bk.chrome_profile_copy_path}",
+                f"--user-data-dir={copy_path}",
                 "--profile-directory=Default",
                 "https://www.baidu.com",
             ],
@@ -662,31 +707,67 @@ def baidu_launch_login_window() -> dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": f"启动 Chrome 副本失败: {e}"}
 
-    # 后台监听进程退出 → 更新 last_logged_in_at
+    # 后台监听进程退出 → 校验 BDUSS 真落盘后才更新 last_logged_in_at
     def _watch_login_window(pid: int) -> None:
         try:
             proc.wait()  # 阻塞直到 Chrome 完全退出
         except Exception:
             return
-        # Chrome 退出 = 用户关了登录窗 = BDUSS 已经持久化到副本 Cookies
-        cfg2 = _cfg_svc.load()
-        bk2 = cfg2.monitor.baidu_keyword
-        bk2.chrome_profile_copy_last_logged_in_at = datetime.utcnow().isoformat()
-        _cfg_svc.save(cfg2)
-        # 也通过 monitor_bus publish 一个事件给前端
+        # Chrome 退出后再校验：用户可能没登录就关了窗，不能无条件盖章
+        # 「上次登录」—— 直接读副本 Cookies sqlite 看有没有 BDUSS 行（name/
+        # host_key 是明文，value 加密不影响判断），比再起一个浏览器读 cookie 轻。
+        logged_in = _copy_has_bduss(copy_path)
+        if logged_in:
+            cfg2 = _cfg_svc.load()
+            bk2 = cfg2.monitor.baidu_keyword
+            bk2.chrome_profile_copy_last_logged_in_at = datetime.utcnow().isoformat()
+            _cfg_svc.save(cfg2)
+        # 专用完成事件（不再借用 needs_captcha）。error 字段带失败原因：
+        # None=成功，有值=未检测到登录态。前端据此显示成功/警告，绝不弹验证码。
         from csm_sidecar.monitor_bus import monitor_bus
         from csm_sidecar.services.monitor_loop import MonitorEvent
         monitor_bus.publish(MonitorEvent(
-            kind="needs_captcha",  # reuse 现有 event kind 让前端弹通知
+            kind="baidu_login_saved",
             task_id=0,
             at=datetime.utcnow(),
-            keyword="副本登录态已保存",
-            kw_idx=0,
+            error=None if logged_in else "未检测到登录态（副本里没有 BDUSS），请确认已在副本中登录百度",
         ))
 
     threading.Thread(target=_watch_login_window, args=(proc.pid,), daemon=True).start()
 
     return {"ok": True, "pid": proc.pid}
+
+
+def _copy_has_bduss(copy_path: str) -> bool:
+    """读副本 Cookies sqlite 判断是否存在 baidu.com 的 BDUSS 行。
+
+    cookies 表的 host_key / name 是明文（value 才用 profile master key 加密），
+    所以不解密也能判定「登录态是否落盘」。只读打开避免锁；任何异常 → False。
+    Chrome 已完全退出（proc.wait 返回），WAL 已 checkpoint，读主库即可。
+    """
+    import sqlite3
+
+    cookies_db = _Path(copy_path) / "Default" / "Network" / "Cookies"
+    if not cookies_db.exists():
+        return False
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{cookies_db}?mode=ro", uri=True, timeout=2.0)
+        row = conn.execute(
+            "SELECT 1 FROM cookies WHERE name='BDUSS' "
+            "AND host_key LIKE '%baidu.com' LIMIT 1"
+        ).fetchone()
+        return row is not None
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).info("_copy_has_bduss read failed: %s", e)
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 # ── GEO 卡位监控只读聚合端点 ───────────────────────────────────────────

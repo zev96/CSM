@@ -274,9 +274,12 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
     },
     // ── Native-Chrome mode events ──────────────────────────────────
     needs_captcha: (d: any) => {
-      // 实发的验证码事件（captcha_required 三件套后端从未 publish，仅留作前向兼容）。
-      // task_id=0 是登录窗口场景的复用，不是任务验证码 —— 必须排除。
-      if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, "captcha");
+      // 真任务验证码事件。task_id=0 从来不是任务验证码（历史上登录窗口
+      // 曾借用此事件 → 弹「需要人工解验证码（副本登录态已保存）」的错误提示，
+      // 现已改用专用 baidu_login_saved 事件）。三连通知必须整体 gate 在
+      // task_id>0，否则任何 task_id=0 事件都会误弹验证码通知。
+      if (!(typeof d.task_id === "number" && d.task_id > 0)) return;
+      _setPhase(d.task_id, "captcha");
       const kw = typeof d.keyword === "string" ? d.keyword : "";
       // ① 系统桌面通知
       void _notify?.("CSM 百度监控", `需要人工解验证码（关键词：${kw}），浏览器已弹出`);
@@ -286,6 +289,56 @@ export const useMonitorStatus = defineStore("monitorStatus", () => {
       void import("@tauri-apps/api/core")
         .then(({ invoke }) => invoke("request_window_attention"))
         .catch(() => {});
+    },
+    // 副本登录窗口关闭后的专用完成信号（task_id 恒 0）。error 为空=BDUSS
+    // 已落盘登录成功；有值=没检测到登录态。绝不弹验证码通知。
+    baidu_login_saved: (d: any) => {
+      const errMsg = typeof d.error === "string" ? d.error : "";
+      if (errMsg) {
+        toast.warn(`副本登录未完成：${errMsg}`, { ttl: 0 });
+        bell.push("副本登录未完成", {
+          body: errMsg,
+          tone: "warn",
+          category: "system",
+        });
+      } else {
+        toast.success("副本登录态已保存，可以开始百度监测了");
+        bell.push("副本登录态已保存", {
+          body: "已检测到百度登录 Cookie，副本可用于监测",
+          tone: "success",
+          category: "system",
+        });
+      }
+      // 通知设置页刷新「上次登录」显示（解耦：设置页 addEventListener）。
+      try {
+        window.dispatchEvent(
+          new CustomEvent("csm:baidu-login-saved", { detail: { ok: !errMsg } }),
+        );
+      } catch {
+        /* 非浏览器环境静默 */
+      }
+    },
+    risk_control: (d: any) => {
+      // 风控中断：任务已在后端存了断点（last_resumed_keyword）。之前前端
+      // 没有这个处理器 → failed 处理器又特意「留给 risk_control 事件处理」→
+      // 整个风控中断全程静默、任务卡在「监测中」。这里补上：停 running +
+      // 明确通知用户可从断点续跑。
+      if (typeof d.task_id !== "number") return;
+      clearRunning(d.task_id);
+      lastOutcomes.value = { ...lastOutcomes.value, [d.task_id]: "failed" };
+      const done =
+        typeof d.last_resumed_keyword === "number" ? d.last_resumed_keyword : null;
+      const total = typeof d.total_keywords === "number" ? d.total_keywords : null;
+      const progressText =
+        done != null && total != null ? `已抓 ${done} / 共 ${total} 词，` : "";
+      const body = `任务 #${d.task_id} 被百度风控中断，${progressText}可在详情页点「从断点继续」`;
+      void _notify?.("CSM 百度监控", body);
+      toast.warn(body, { ttl: 0 });
+      bell.push(`监测任务 #${d.task_id} 被风控中断`, {
+        body,
+        tone: "warn",
+        category: "monitor_alert",
+      });
     },
     waiting_chrome_close: (d: any) => {
       if (typeof d.task_id === "number" && d.task_id > 0) _setPhase(d.task_id, "waiting_chrome");

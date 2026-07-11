@@ -46,6 +46,13 @@ def configure_concurrency(platform: str, max_in_flight: int) -> None:
     if max_in_flight < 1:
         raise ValueError("max_in_flight must be ≥ 1")
     with _sem_lock:
+        # 上限没变就别换信号量对象：apply_settings 每次保存设置都会调
+        # configure_concurrency(baidu, 1)。若无脑装一个新 Semaphore，正在跑的
+        # worker 还握着旧对象（count 0），新派发的 worker 却能拿到新对象的空闲
+        # slot → 同一 Chrome 副本上并发两个任务，且旧 holder 释放进新对象后
+        # 上限永久漂到 2。同 cap = no-op。
+        if _max_concurrent.get(platform) == max_in_flight and platform in _sems:
+            return
         _max_concurrent[platform] = max_in_flight
         _sems[platform] = threading.Semaphore(max_in_flight)
 

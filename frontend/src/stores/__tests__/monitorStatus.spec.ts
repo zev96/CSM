@@ -150,4 +150,37 @@ describe("monitorStatus — 铃铛通知", () => {
     const n = useNotifications();
     expect(n.items.value[0]?.body).toContain("共 10 项");
   });
+
+  it("baidu_login_saved(已登录) → 成功铃铛，不弹验证码", () => {
+    const m = useMonitorStatus();
+    const n = useNotifications();
+    m._dispatchSse("baidu_login_saved", { task_id: 0 });
+    expect(n.items.value[0]?.tone).toBe("success");
+    expect(n.items.value[0]?.title).toContain("登录");
+    expect(m.phaseOf(0)).toBeNull();
+  });
+
+  it("baidu_login_saved(未检测到登录态) → 警告铃铛", () => {
+    const m = useMonitorStatus();
+    const n = useNotifications();
+    m._dispatchSse("baidu_login_saved", {
+      task_id: 0,
+      error: "未检测到登录态（副本里没有 BDUSS）",
+    });
+    expect(n.items.value[0]?.tone).toBe("warn");
+  });
+
+  it("risk_control → 清 running + 警告铃铛（带断点进度）", () => {
+    const m = useMonitorStatus();
+    const n = useNotifications();
+    m.markRunning(7);
+    m._dispatchSse("risk_control", {
+      task_id: 7,
+      last_resumed_keyword: 50,
+      total_keywords: 93,
+    });
+    expect(m.isRunning(7)).toBe(false);
+    expect(n.items.value[0]?.category).toBe("monitor_alert");
+    expect(n.items.value[0]?.body).toContain("93");
+  });
 });
