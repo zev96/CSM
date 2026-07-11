@@ -341,3 +341,36 @@ def test_fetch_tolerates_non_numeric_pool_config(fresh_db, monkeypatch):
                 "extract_provider": "mock", "geo_api_pool_size": "abc"}))
     result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
     assert result.status == "ok"
+
+
+def test_fetch_rpa_session_open_failure_isolates_platform(fresh_db, monkeypatch):
+    # RPA session 开启失败(浏览器起不来)→ 该平台每关键词各出 error cell、只尝试开一次,
+    # cell 数目对齐(runner 漏产守卫不触发);单平台全 error → 全失败保护标 failed。
+    import contextlib
+
+    opens = {"n": 0}
+
+    class _BadSession:
+        def __init__(self, p):
+            self.platform = p
+            self.mode = "rpa"
+
+        @contextlib.contextmanager
+        def session(self, *, web_search=True, cancel_token=None):
+            opens["n"] += 1
+            raise RuntimeError("browser launch failed")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _BadSession(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "小鹏", "keywords": ["k1", "k2"], "platforms": ["kimi"],
+                "extract_provider": "mock"}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert opens["n"] == 1                        # 只尝试开一次 session(不是每关键词各开)
+    assert result.status == "failed"             # 单平台全 error → 全失败保护
+    conn = storage.get_conn()
+    rows = {r["keyword"]: r["status"] for r in
+            conn.execute("SELECT keyword,status FROM geo_cells WHERE task_id=?", (tid,)).fetchall()}
+    assert rows == {"k1": "error", "k2": "error"}
