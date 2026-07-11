@@ -156,6 +156,11 @@ class MonitorLoop:
         # iterating tasks when the next tick fires (clock skew, slow DB),
         # we skip rather than double-dispatch.
         self._tick_lock = threading.Lock()
+        # 周期性清理过期 monitor_results（防无限膨胀；purge_old_results 此前 0
+        # 调用）。24h 节流 + 保留 180 天；_last_purge_at 用 _clock（UTC）判间隔。
+        self._last_purge_at: datetime | None = None
+        self._purge_interval_s = 24 * 3600
+        self._purge_keep_days = 180
         # ── Active-task tracking (truth source for "what's running") ──
         # Frontend uses /api/monitor/running to hydrate UI state when a
         # component remounts after the user navigated away. Adapter loops
@@ -390,6 +395,27 @@ class MonitorLoop:
             raise
 
     # ── tick / dispatch internals ───────────────────────────────────────
+    def _maybe_purge_old_results(self) -> None:
+        """24h 节流地清理过期 monitor_results。fail-soft：清理失败绝不影响派发。
+
+        ``purge_old_results`` 此前全仓 0 调用 → DB 无限膨胀。这里在 tick 里
+        节流触发（首次 tick 即跑一次，之后每 24h 一次），保留窗口 180 天。
+        """
+        now = self._clock()
+        last = self._last_purge_at
+        if last is not None and (now - last).total_seconds() < self._purge_interval_s:
+            return
+        self._last_purge_at = now
+        try:
+            deleted = storage.purge_old_results(keep_days=self._purge_keep_days)
+            if deleted:
+                logger.info(
+                    "purged %d monitor_results older than %d days",
+                    deleted, self._purge_keep_days,
+                )
+        except Exception:
+            logger.exception("purge_old_results failed (non-fatal)")
+
     def _tick(self) -> None:
         """One periodic sweep. Runs on APScheduler's own thread."""
         reset_balance_latch()
@@ -397,6 +423,9 @@ class MonitorLoop:
             logger.warning("MonitorLoop tick overlap — previous tick still running, skipping")
             return
         try:
+            # 周期性清理过期结果（24h 节流），放在 due 判定之前 —— 否则「无到点
+            # 任务」的常见 tick 会走 `if not due: return` 早退，清理永远不跑。
+            self._maybe_purge_old_results()
             # 到点判定用本地墙钟（schedule_cron 是本地 HH:MM）；事件时间戳仍用 UTC。
             now_local = self._schedule_clock()
             try:
@@ -602,21 +631,39 @@ class MonitorLoop:
             # Task 4: risk control hit mid-scan. Save a breakpoint result so
             # POST /api/monitor/tasks/{id}/resume can restart from
             # last_resumed_keyword instead of keyword 0.
-            # progress=None means non-positional risk (e.g., fetch_article_browser future case);
-            # treat as "resume from beginning" → next_kw=0.
-            next_kw = (e.progress + 1) if e.progress is not None else 0
+            #
+            # Off-by-one 修正：e.progress = kw_idx 是「命中风控、尚未抓完」的那个
+            # 关键词本身（raise 在 append 之前）。resume 必须从它重抓，所以
+            # next_kw = progress，而不是历史上的 progress+1（那会把触发风控的
+            # 关键词永久跳过，留下数据空洞）。progress=None（非定位型风控）→ 0。
+            next_kw = e.progress if e.progress is not None else 0
+            configured = list((task.config or {}).get("search_keywords", []))
+            # 头段保全：把本轮已抓完的 partial（resume_from..next_kw-1）与上次断点
+            # 保留的 [0..resume_from-1] 合并成完整头段 [0..next_kw-1]，写进断点
+            # metric.keywords。否则风控中断会丢弃已抓数据，且 resume 期间再次
+            # 中断会把更早的头段也丢掉。
+            head_keywords = _merge_resumed_baidu_keywords(
+                e.partial_keywords, resume_from, task.id, configured
+            )
             err_msg = f"风控拦截：layer={e.signal.layer} detail={e.signal.detail}"
             logger.warning("monitor task %s: %s, saving breakpoint at %s", task.id, err_msg, next_kw)
+            breakpoint_metric: dict[str, Any] = {
+                "last_resumed_keyword": next_kw,
+                "captcha_signal_layer": e.signal.layer,
+                "captcha_signal_detail": e.signal.detail,
+                "keywords": head_keywords,
+                # total_keywords 保持完整 N（不是头段长度）→ 前端进度显示「3/10」。
+                "total_keywords": len(configured),
+                "search_keywords": configured,
+                "target_brand": (task.config or {}).get("target_brand", ""),
+            }
+            breakpoint_metric.update(_baidu_keyword_aggregates(head_keywords))
             breakpoint_result = MonitorResult(
                 task_id=task.id,
                 checked_at=self._clock(),
                 status="risk_control",
                 rank=-1,
-                metric={
-                    "last_resumed_keyword": next_kw,
-                    "captcha_signal_layer": e.signal.layer,
-                    "captcha_signal_detail": e.signal.detail,
-                },
+                metric=breakpoint_metric,
                 error_message=err_msg,
             )
             try:
@@ -652,6 +699,24 @@ class MonitorLoop:
             self._untrack_active(task_id_local)
             return None
 
+        # Resume 失败保护：resume（resume_from>0）返回非 ok（尾段全失败 / 坏副本 /
+        # 熔断）时，绝不能用失败结果覆盖断点 —— 否则断点里精心保全的头段从最新
+        # 快照消失、且 last_resumed_keyword 丢失导致下次点续抓退化成从 0 全扫。
+        # 失败成因常与断点同源（反爬/断网/坏 Chrome 副本），紧接的 resume 撞同样
+        # 问题而全失败是很现实的路径。保留断点为最新，仅发 failed 事件让用户知道
+        # 续抓失败、可稍后重试。（非 resume 的失败仍照常落库记录该次失败。）
+        if resume_from > 0 and (not result or result.status != "ok"):
+            reason = (result.error_message if result else None) or "续抓失败"
+            logger.warning(
+                "monitor task %s: resume returned %s; keeping breakpoint intact",
+                task.id, (result.status if result else "None"),
+            )
+            self._untrack_active(task_id_local)
+            self._publish(MonitorEvent(
+                kind="failed", task_id=task.id, at=self._clock(), error=reason,
+            ))
+            return None
+
         # Single-keyword override merge: if the user fired «启动监测» from
         # the Level 2 page, the adapter only scraped one keyword. Pull
         # the previous full snapshot and splice the new keyword's row
@@ -664,6 +729,25 @@ class MonitorLoop:
             except Exception:
                 logger.exception(
                     "monitor task %s: keyword-merge failed; persisting partial as-is",
+                    task.id,
+                )
+        elif (
+            resume_from > 0
+            and task.type == "baidu_keyword"
+            and result.status == "ok"
+            and isinstance(result.metric, dict)
+        ):
+            # Resume 完成：适配器只抓了尾段 [resume_from:]。把它与上次断点
+            # 保留的头段 [0:resume_from] 合并成完整 N 关键词快照，否则新 ok
+            # 结果里只有尾段、头段永久缺失（0..resume_from-1 显示「从未监测」）。
+            try:
+                _merge_resumed_baidu_metric(
+                    result, resume_from, task.id,
+                    list((task.config or {}).get("search_keywords", [])),
+                )
+            except Exception:
+                logger.exception(
+                    "monitor task %s: resume-merge failed; persisting tail as-is",
                     task.id,
                 )
 
@@ -805,3 +889,108 @@ def _merge_partial_baidu_metric(
     result.rank = metric["best_default_first_rank"]
     # search_keywords should reflect the full task, not just the override
     metric["search_keywords"] = [kw.get("keyword") for kw in merged if kw.get("keyword")]
+
+
+def _baidu_keyword_aggregates(keywords: "list[dict[str, Any]]") -> "dict[str, Any]":
+    """Compute the count/rank aggregates over a baidu keyword-row list.
+
+    Shared by the risk_control breakpoint save and the resume merge so the
+    persisted ``matched_keywords`` / ``total_default_matches`` /
+    ``best_default_first_rank`` stay consistent with what the adapter's own
+    ``_fetch_once`` writes on a clean run.
+    """
+    matched = sum(1 for kw in keywords if (kw.get("default_first_rank") or 0) > 0)
+    total_matches = sum(int(kw.get("default_matched_count") or 0) for kw in keywords)
+    ranks = [
+        int(kw.get("default_first_rank") or 0)
+        for kw in keywords
+        if (kw.get("default_first_rank") or 0) > 0
+    ]
+    return {
+        "matched_keywords": matched,
+        "total_default_matches": total_matches,
+        "best_default_first_rank": min(ranks) if ranks else -1,
+    }
+
+
+def _merge_resumed_baidu_keywords(
+    new_rows: "list[dict[str, Any]]",
+    resume_from: int,
+    task_id: int | None,
+    configured_keywords: "list[str]",
+) -> "list[dict[str, Any]]":
+    """Splice freshly-scraped rows onto the head preserved in the prior breakpoint.
+
+    ``new_rows`` covers ``keywords[resume_from:]`` (this run's slice). The
+    head ``keywords[0:resume_from]`` lives in the most-recent stored result
+    (the risk_control breakpoint that triggered this resume). We union the
+    two by keyword string — **new rows win** (fresher) — and emit them in the
+    task's configured order so no keyword is skipped or duplicated.
+
+    ``resume_from <= 0`` (fresh full run) or no prior snapshot → returns
+    ``new_rows`` unchanged. Mismatched/empty configured list → falls back to
+    ``head + new`` concatenation so data is never dropped.
+
+    Known limitation (config anomaly): if ``configured_keywords`` contains the
+    SAME keyword twice, both configured slots resolve to the one ``by_kw``
+    entry — the merged list holds two references to the same row and aggregates
+    double-count it. Duplicate keywords in a monitor task are nonsensical (both
+    scrape the identical SERP), so this best-effort behavior is accepted rather
+    than special-cased; a fresh full scan likewise produces two identical rows.
+    """
+    if resume_from <= 0 or task_id is None:
+        return list(new_rows)
+    prior_results = storage.list_results(task_id, limit=1)
+    prior = prior_results[0] if prior_results else None
+    head_rows: list[dict[str, Any]] = []
+    if prior is not None and isinstance(prior.metric, dict):
+        head_rows = prior.metric.get("keywords") or []
+
+    by_kw: dict[str, dict[str, Any]] = {}
+    for row in head_rows:
+        kw = row.get("keyword")
+        if kw is not None:
+            by_kw[kw] = row
+    for row in new_rows:
+        kw = row.get("keyword")
+        if kw is not None:
+            by_kw[kw] = row  # fresher scrape overrides the preserved head
+
+    merged = [by_kw[k] for k in configured_keywords if k in by_kw]
+    if not merged:
+        # Configured list empty or fully mismatched — never drop data.
+        return list(head_rows) + list(new_rows)
+    return merged
+
+
+def _merge_resumed_baidu_metric(
+    result: MonitorResult,
+    resume_from: int,
+    task_id: int | None,
+    configured_keywords: "list[str]",
+) -> None:
+    """Splice a resumed run's tail metric onto the prior breakpoint's head.
+
+    The resumed adapter run only knows keywords ``[resume_from:]`` — every
+    earlier keyword is absent from ``result.metric["keywords"]``. Reach into
+    the most-recent stored result (the risk_control breakpoint), take its
+    preserved head ``[0:resume_from]``, and rebuild the full ordered list so
+    the persisted ok snapshot reflects every keyword the task tracks.
+
+    Aggregates + ``result.rank`` are recomputed from the merged list.
+    Mutates ``result.metric`` in-place. Deliberately does NOT set
+    ``last_resumed_keyword`` — a completed resume is a clean snapshot, not a
+    breakpoint; leaving it out means ``get_last_resumed_keyword`` returns None
+    so a later resume click doesn't re-trigger from a stale position.
+    """
+    metric = result.metric
+    if not isinstance(metric, dict):
+        return
+    tail = metric.get("keywords") or []
+    merged = _merge_resumed_baidu_keywords(tail, resume_from, task_id, configured_keywords)
+    metric["keywords"] = merged
+    metric["total_keywords"] = len(merged)
+    metric["search_keywords"] = [kw.get("keyword") for kw in merged if kw.get("keyword")]
+    metric.update(_baidu_keyword_aggregates(merged))
+    # rank 列必须跟 metric 一致 —— should_alert 读的是 result.rank。
+    result.rank = metric["best_default_first_rank"]

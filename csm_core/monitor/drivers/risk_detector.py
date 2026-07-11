@@ -175,7 +175,17 @@ def detect_risk(page: Any, response: Any = None) -> RiskSignal | None:
 class RiskControlException(Exception):
     """adapter 命中风控时 raise，runner 捕获后任务标 risk_control。"""
 
-    def __init__(self, signal: RiskSignal, *, progress: int | None = None) -> None:
+    def __init__(
+        self,
+        signal: RiskSignal,
+        *,
+        progress: int | None = None,
+        partial_keywords: "list[dict] | None" = None,
+    ) -> None:
         super().__init__(f"risk control: layer={signal.layer} detail={signal.detail}")
         self.signal = signal
         self.progress = progress  # 已抓 N 个 keyword 的位置（用于断点续抓）
+        # 中断前已抓完的 keyword 结果（0..progress-1）。runner 捕获后写进
+        # breakpoint 结果的 metric.keywords，resume 时拼回完整快照，避免头段
+        # 数据随异常灭失。存副本，caller 之后 mutate 原 list 不影响断点数据。
+        self.partial_keywords: list[dict] = list(partial_keywords) if partial_keywords else []

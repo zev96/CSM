@@ -758,6 +758,28 @@ async function runNow() {
 }
 
 /**
+ * 从断点续抓 —— 上次抓取被百度风控中断（status=risk_control）后，从后端
+ * 保存的 last_resumed_keyword 断点继续，而不是从头全量重跑。走独立的
+ * POST /resume 端点：它读断点位置 + resume_from 派发，runner 完成后把尾段
+ * 与断点保留的头段合并成完整快照。
+ *
+ * 与「启动监测」（单关键词覆盖跑）刻意分开 —— 之前 banner 误导用户点
+ * 「启动监测」续抓，实际只会重跑当前选中的那一个关键词。
+ */
+async function resumeFromBreakpoint() {
+  if (!selectedId.value || isRunning(selectedId.value)) return;
+  markRunning(selectedId.value);
+  try {
+    await whenReady();
+    await sidecar.client.post(`/api/monitor/tasks/${selectedId.value}/resume`);
+    toast.info("已从断点续抓，结果会通过 SSE 流推回");
+  } catch (e: any) {
+    if (selectedId.value !== null) clearRunning(selectedId.value);
+    toast.error(`续抓派发失败: ${e?.message ?? e}`);
+  }
+}
+
+/**
  * Level 1 «立刻监测» —— runs the entire task (all keywords). Different
  * intent from Level 2 button: from the list we don't know which keyword
  * the user cares about, so we sweep all.
@@ -1376,7 +1398,7 @@ defineExpose({ reload: loadTasks, selectTask });
             }"
           >
             <template v-if="riskControlMeta.layer === 'auth'">
-              百度账号未登录或已过期。请到设置页重新登录后点「启动监测」从断点继续抓取。
+              百度账号未登录或已过期。请到设置页重新登录后，回到这里点「从断点续抓」继续。
               <a href="#" class="ml-2 underline" @click.prevent="router.push({ name: 'settings' })">前往设置</a>
             </template>
             <template v-else>
@@ -1385,8 +1407,30 @@ defineExpose({ reload: loadTasks, selectTask });
                 （{{ riskControlMeta.layer }}<template v-if="riskControlMeta.detail"> / {{ riskControlMeta.detail }}</template>）
               </template>
               。断点位置：keyword #{{ riskControlMeta.lastResumedKeyword }}。
-              点击右下方「启动监测」可从断点继续。
+              验证码解决后点下方「从断点续抓」，会从断点继续、已抓的头段不丢。
             </template>
+
+            <!-- 续抓入口 —— 走 POST /resume（读断点 + 合并头尾），跟单关键词
+                 「启动监测」刻意分开，避免用户误点只重跑一个关键词。 -->
+            <div class="mt-2">
+              <button
+                type="button"
+                :disabled="isRunning(selectedId!)"
+                :style="{
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  border: 'none',
+                  background: isRunning(selectedId!) ? 'var(--card-2)' : 'var(--primary-deep)',
+                  color: isRunning(selectedId!) ? 'var(--ink-3)' : '#fff',
+                  cursor: isRunning(selectedId!) ? 'not-allowed' : 'pointer',
+                }"
+                @click="resumeFromBreakpoint()"
+              >
+                {{ isRunning(selectedId!) ? '续抓中…' : '▶ 从断点续抓' }}
+              </button>
+            </div>
           </div>
 
           <!--

@@ -24,6 +24,7 @@ from typing import Any, Iterator
 
 from .patchright_pool import ensure_browsers_path
 from .chrome_detect import prune_profile_caches
+from csm_core.browser_infra.patchright_pool import _kill_process_tree
 from csm_core.browser_infra.window_util import offscreen_args
 
 logger = logging.getLogger(__name__)
@@ -126,8 +127,16 @@ def baidu_browser_session(
 
     pw = None
     context = None
+    # patchright node driver 的 PID —— 杀它整棵树能连带收掉 Chromium 子进程。
+    # launch_persistent_context 不暴露 browser handle，只能从内部 transport 读。
+    node_pid = 0
     try:
         pw = _sync_playwright().start()
+        try:
+            node_pid = pw._impl_obj._connection._transport._proc.pid
+        except Exception:
+            node_pid = 0
+            logger.debug("baidu_browser: cannot read node pid — graceful teardown only")
         # 自建 profile：headless 用完整 Chromium，避免 chrome-headless-shell 缺失。
         if not use_native_chrome:
             launch_kwargs["executable_path"] = pw.chromium.executable_path
@@ -141,11 +150,25 @@ def baidu_browser_session(
                 context.close()
             except Exception as e:
                 logger.debug("baidu context.close raised: %s", e)
+        stopped_cleanly = False
         if pw is not None:
             try:
                 pw.stop()
+                stopped_cleanly = True
             except Exception as e:
                 logger.debug("baidu pw.stop raised: %s", e)
+        # 兜底 OS-kill：**仅在 graceful teardown 失败时**触发。pw.stop() 抛错（崩溃 /
+        # hang / driver 卡死）意味着 Node 可能仍活着、Chromium 树可能残留锁死副本
+        # user_data_dir → 下次启动撞 profile lock 报「Chrome 启动失败」触发熔断。
+        # 此时按 node_pid 杀整棵树彻底收尾（Node 尚活，能枚举子进程），并让下面的
+        # prune 在 Chrome 确实死掉后再跑、不撞文件锁。
+        # stop 成功时 Node 已 reaped：再按 pid 杀既是 no-op，又有 PID 复用误杀风险
+        # （psutil.Process 构造在进程死后、create_time 守卫失效会误杀顶替者），跳过。
+        if node_pid and not stopped_cleanly:
+            try:
+                _kill_process_tree(node_pid, label=f"baidu-browser[{node_pid}]")
+            except Exception as e:
+                logger.debug("baidu _kill_process_tree raised: %s", e)
         # native 副本模式：Chrome 已完全关闭（无文件锁），清理本轮攒下的缓存，
         # 使副本常态维持 ~0.5GB。best-effort，失败只 log 不影响已完成的 fetch。
         if use_native_chrome:

@@ -217,22 +217,115 @@ def parse_serp(html: str) -> dict[str, Any]:
     }
 
 
-def _extract_a_tags(doc: Any, xpath: str) -> list[dict[str, str]]:
-    """跑一条 XPath 抓所有 <a>，返回 [{title, href}]。"""
+# T4 来源预过滤：从 SERP 结果卡的可见 showurl 抽真实来源 host。只认
+# source/showurl/siteLink 语义类（不认泛用的 c-color-gray —— 它也用于日期/
+# 摘要，会把标题或摘要里出现的域名误当来源）。抽不到就 None（fail-open：
+# _check_block 照常 resolve 后过滤，零回归）。
+_SHOWURL_HOST_RE = re.compile(
+    r"(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,}", re.I
+)
+_SHOWURL_XPATH = (
+    ".//*[contains(@class,'showurl') or contains(@class,'source') "
+    "or contains(@class,'siteLink') or contains(@class,'site-link')]"
+)
+
+
+def _showurl_host(a_node: Any) -> str | None:
+    """从结果 <a> 所在 c-container 抽可见来源 host（供排除域名预过滤）。
+
+    走 source/showurl 语义元素的文本，正则抠第一个域名。显示名（"知乎"）
+    或 DOM 改版找不到元素时返回 None —— 调用方 fail-open 走原 resolve 路径。
+    """
+    try:
+        containers = a_node.xpath(
+            "ancestor::div[" + _class_token("c-container") + "][1]"
+        )
+        if not containers:
+            return None
+        container = containers[0]
+        # 防误杀（结构排除=灾难）：一个 c-container 内有多条结果标题锚点时（资讯簇
+        # cos-space 一卡含 N 条 / 聚合卡），showurl 无法可靠归属到当前这一条 ——
+        # 若在整容器里抠"第一个域名"，簇内某条的排除域名会污染整簇被一起预过滤掉。
+        # 这种情况直接 fail-open（None），退回原 resolve 后按各自真实 host 过滤。
+        if len(container.xpath(".//h3//a")) > 1:
+            return None
+        parts = container.xpath(_SHOWURL_XPATH + "//text()")
+        text = " ".join(p.strip() for p in parts if p and p.strip())
+        if not text:
+            return None
+        m = _SHOWURL_HOST_RE.search(text)
+        if not m:
+            return None
+        return m.group(0).lower().strip(".") or None
+    except Exception:
+        return None
+
+
+def _extract_a_tags(doc: Any, xpath: str) -> list[dict[str, Any]]:
+    """跑一条 XPath 抓所有 <a>，返回 [{title, href, show_host}]。
+
+    ``show_host`` —— SERP 可见来源 host（c-showurl），供 _check_block 在
+    resolve 之前预过滤排除域名；抽不到为 None。
+    """
     try:
         nodes = doc.xpath(xpath)
     except Exception as e:
         logger.warning("baidu xpath %r raised: %s", xpath, e)
         return []
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for a in nodes:
         href = (a.get("href") or "").strip()
         if not href:
             continue
         # 标题文本：百度 h3 里通常有 <em> 高亮，textcontent 直接拿到纯文本
         title = (a.text_content() or "").strip()
-        out.append({"title": title, "href": href})
+        out.append({"title": title, "href": href, "show_host": _showurl_host(a)})
     return out
+
+
+# T5 跨轮正向命中缓存 —— 同进程内、TTL 有界、只存确定性正向。
+# 语义：同一 resolved URL 上一轮已确认命中某 brand → 本轮跳过正文抓取直接判
+# 命中（省一次文章 HTTP + 潜在验证码，尤其 smzdm/百家号）。rank 永远按本轮
+# SERP 位置算（位次新鲜），只短路「这篇文章是否含品牌」这一步。
+#
+# 准确性护栏：① 只存正向（未命中/失败从不缓存 → 永远重查）② 默认 TTL 6h：
+# 日更任务跨天必过期→全新抓取零陈旧，只加速同进程内频繁重跑 ③ 复用要求缓存
+# 的 brand 在本任务品牌列表里（多任务隔离）。进程重启即冷 = fail-safe。
+_CROSS_RUN_HIT_TTL_SECONDS = 6 * 3600
+_CROSS_RUN_HIT_MAX = 2000  # 正向命中很少（只用户自家软文），上限只防异常膨胀
+
+
+def _cross_run_lookup(
+    cache: "dict[str, tuple[str, float]] | None", url: str, brands: list[str]
+) -> str | None:
+    """返回缓存里 url 的 matched_brand（未过期且 brand ∈ brands），否则 None。"""
+    if not cache:
+        return None
+    entry = cache.get(url)
+    if entry is None:
+        return None
+    matched_brand, expiry = entry
+    if time.monotonic() >= expiry:
+        cache.pop(url, None)  # 过期即清理
+        return None
+    return matched_brand if matched_brand in brands else None
+
+
+def _cross_run_remember(
+    cache: "dict[str, tuple[str, float]] | None", url: str, matched_brand: str | None
+) -> None:
+    """把确定性正向命中写进缓存（未命中/None 不写）。有界防膨胀。"""
+    if cache is None or not matched_brand:
+        return
+    if len(cache) >= _CROSS_RUN_HIT_MAX and url not in cache:
+        now = time.monotonic()
+        # 快照 list(...) 再迭代，避免与并发写撞 "dict changed size during iteration"
+        # （调用点已加锁，这里再兜一层）。
+        for k in [k for k, (_, exp) in list(cache.items()) if exp <= now]:
+            cache.pop(k, None)
+        if len(cache) >= _CROSS_RUN_HIT_MAX:
+            return  # fail-safe：满了就不缓存新条目，只是少一点提速收益
+    cache[url] = (matched_brand, time.monotonic() + _CROSS_RUN_HIT_TTL_SECONDS)
 
 
 def _tpl_inventory(doc: Any) -> dict[str, int]:
@@ -547,68 +640,6 @@ def _extract_readable_text(raw_html: str) -> str:
     except Exception as e:
         logger.info("readability summary raised: %s", e)
         return ""
-
-
-def fetch_article_browser(page: Any, url: str) -> dict[str, Any]:
-    """浏览器 fallback：用已有的 patchright Page 打开 URL，读 HTML 提正文。
-
-    跟 HTTP-first 函数返回结构一致，方便上游统一处理。
-
-    复用同一个 incognito context 的 Page —— SERP 抓完后，循环里
-    每条 URL 在同 page 上 goto 切走（不开新 tab，避免句柄爆炸）。
-
-    Raises:
-        RiskControlException: page.goto 落到 wappass / verify.baidu / safetycheck
-            等风控页时抛出（detect_risk 4 层任一命中）。progress=None 表示文章页
-            风控不绑定具体 keyword 进度 —— 整个会话被识别，跟 SERP 命中走同一条
-            retry/breakpoint 路径，runner 端 ``(e.progress or 0)`` 自然 fallback 到 0。
-    """
-    response = None
-    try:
-        response = page.goto(url, wait_until="domcontentloaded", timeout=20000)
-    except TypeError:
-        # FakePage 不接受关键字参数：测试场景
-        try:
-            response = page.goto(url)
-        except Exception as e:
-            return {
-                "content": "",
-                "source": "browser",
-                "fetch_error": f"page.goto raised: {e!r}",
-                "needs_browser_fallback": False,
-            }
-    except Exception as e:
-        return {
-            "content": "",
-            "source": "browser",
-            "fetch_error": f"page.goto raised: {e!r}",
-            "needs_browser_fallback": False,
-        }
-
-    # 文章页 4 层风控融合检测（URL + HTTP + DOM + text）。任一层命中 →
-    # 抛 RiskControlException，让 runner 跟 SERP 命中走同一条 retry/breakpoint
-    # 路径。progress=None 表示非 per-keyword 风控（不是某 keyword 卡住，是会话级）。
-    risk = detect_risk(page, response)
-    if risk is not None:
-        raise RiskControlException(risk, progress=None)
-
-    try:
-        raw = page.content() or ""
-    except Exception as e:
-        return {
-            "content": "",
-            "source": "browser",
-            "fetch_error": f"page.content raised: {e!r}",
-            "needs_browser_fallback": False,
-        }
-
-    text = _extract_readable_text(raw)
-    return {
-        "content": text,
-        "source": "browser",
-        "fetch_error": None if text else "browser content empty after readability",
-        "needs_browser_fallback": False,
-    }
 
 
 def _is_captcha_page(raw: str, url: str) -> bool:
@@ -937,7 +968,8 @@ class BaiduKeywordAdapter:
         # 百度恒有头（见 _run 里 effective_headless）—— 这个默认值现已不参与决策，
         # 留作语义标记。
         self._headless_default = False
-        self._captcha_timeout_s = 90
+        # 默认 300s：接线前 _try_human_solve 恒用其 300s 死默认，保持该窗口不缩短。
+        self._captcha_timeout_s = 300
         # 默认排除域名（B2B / 电商）。apply_settings 会用 config 里的值
         # 覆盖；空 list 表示「不应用全局黑名单」（用户在设置页清空时）。
         self._default_excluded_domains: tuple[str, ...] = ()
@@ -946,6 +978,15 @@ class BaiduKeywordAdapter:
         self._http_sessions: dict[int, Any] = {}
         self._http_sessions_lock = threading.Lock()
         self._event_publisher: Any = None
+        # T5 跨轮正向命中缓存：resolved URL → (matched_brand, expiry_monotonic)。
+        # 存活于 adapter 单例（跨 fetch() 调用持续），进程重启即冷。见
+        # _cross_run_lookup / _cross_run_remember 的准确性护栏。
+        self._cross_run_hits: dict[str, tuple[str, float]] = {}
+        # 保护跨轮缓存的读写。百度常态 concurrency=1（串行），但若 apply_settings
+        # 在 configure_concurrency 之前抛错，信号量会惰性回退成 2 → 两个百度任务
+        # 并发 → prune 迭代 dict 时被并发写触发 RuntimeError。跟 _http_sessions_lock
+        # 同理加锁兜底（未争用时开销可忽略）。
+        self._cross_run_lock = threading.Lock()
 
     def set_event_publisher(self, fn: Any) -> None:
         """Sidecar lifespan 启动时注入，给 native mode chrome_preflight +
@@ -1011,7 +1052,7 @@ class BaiduKeywordAdapter:
         self,
         *,
         headless_default: bool = True,
-        captcha_visible_timeout_s: int = 90,
+        captcha_visible_timeout_s: int = 300,
         captcha_max_promotions: int = 1,
         serp_pacing_seconds: int = 5,
         article_pacing_seconds: int = 3,
@@ -1291,8 +1332,8 @@ class BaiduKeywordAdapter:
         context. Keeping this a pure function makes it cheap to unit test.
 
         ``progress=resume_from`` so the runner's breakpoint bookkeeping
-        (already_fetched + 1 == next-to-resume) stays consistent —
-        nothing was fetched in this run; resume from the same index.
+        (``next_kw = progress``) stays consistent — nothing was fetched in
+        this run, so resume from the same index (``resume_from``).
         """
         has_bduss = any(c.get("name") == "BDUSS" for c in cookies)
         if not has_bduss:
@@ -1321,9 +1362,11 @@ class BaiduKeywordAdapter:
         actually process. Keywords before that index are skipped (they were
         already fetched in a prior run that hit risk control). The
         ``RiskControlException.progress`` value raised inside the loop is
-        always the **absolute** keyword index (``resume_from + rel_idx``), so
-        the runner's ``last_resumed_keyword = progress + 1`` bookkeeping
-        works regardless of whether this is a fresh or resumed run.
+        always the **absolute** keyword index (``resume_from + rel_idx``) of
+        the keyword that hit risk — which was NOT yet appended (raise happens
+        before append). The runner resumes from that index itself
+        (``next_kw = progress``, NOT progress+1), so the failing keyword is
+        re-scraped rather than skipped. Works for fresh or resumed runs.
 
         ``aliases`` 必须由 fetch() 解析后 **显式传进来**（和 ``brand`` 同款 thread
         路径：fetch → _fetch_with_promotion → _fetch_once）。别在本方法里就地从
@@ -1446,6 +1489,9 @@ class BaiduKeywordAdapter:
                             detail="登录态失效（SERP 跳转登录页），请到设置页重新登录",
                         ),
                         progress=kw_idx,
+                        # 带出本轮已抓完的头段（本 run 的 resume_from..kw_idx-1）；
+                        # runner 再与上次断点的 [0..resume_from-1] 合并存全量头段。
+                        partial_keywords=keyword_results,
                     )
 
                 # 4 层风控融合检测（URL + HTTP + DOM + text）。
@@ -1456,6 +1502,9 @@ class BaiduKeywordAdapter:
                         page=page, keyword=keyword, kw_idx=kw_idx,
                         task_id=task.id,
                         event_publisher=self._event_publisher,
+                        # 接线配置项：让设置页「验证码可见超时」真正生效（原来恒
+                        # 走 _try_human_solve 的 300s 死默认，配置存了不用）。
+                        timeout_s=self._captcha_timeout_s,
                     )
                     if solved:
                         # 重新 navigate + 重新 detect_risk，本轮 kw 重跑
@@ -1467,10 +1516,14 @@ class BaiduKeywordAdapter:
                             continue
                         risk2 = detect_risk(page, serp_response)
                         if risk2 is not None:
-                            raise RiskControlException(risk2, progress=kw_idx)
+                            raise RiskControlException(
+                                risk2, progress=kw_idx, partial_keywords=keyword_results
+                            )
                         # 解完 + 重导成功 → 继续往下走正常 SERP 解析流程
                     else:
-                        raise RiskControlException(risk, progress=kw_idx)
+                        raise RiskControlException(
+                            risk, progress=kw_idx, partial_keywords=keyword_results
+                        )
 
                 try:
                     serp_html = page.content() or ""
@@ -1491,6 +1544,7 @@ class BaiduKeywordAdapter:
                     session=session,
                     captcha_timeout_hosts=captcha_timeout_hosts,
                     article_memo=article_memo,
+                    cross_run_cache=self._cross_run_hits,
                 )
                 news_results = self._check_block(
                     page, parsed["news_links"], [brand, *aliases], block="news",
@@ -1498,6 +1552,7 @@ class BaiduKeywordAdapter:
                     session=session,
                     captcha_timeout_hosts=captcha_timeout_hosts,
                     article_memo=article_memo,
+                    cross_run_cache=self._cross_run_hits,
                 )
 
                 kw_entry["default_results"] = default_results
@@ -1575,6 +1630,7 @@ class BaiduKeywordAdapter:
         session: Any = None,
         captcha_timeout_hosts: set[str] | None = None,
         article_memo: dict[str, dict[str, Any]] | None = None,
+        cross_run_cache: "dict[str, tuple[str, float]] | None" = None,
     ) -> list[dict[str, Any]]:
         """对一组链接逐条抓正文 + 判命中。返回 1-based rank 的 dict 列表。
 
@@ -1598,6 +1654,18 @@ class BaiduKeywordAdapter:
         out: list[dict[str, Any]] = []
         rank = 0
         for link in links:
+            # T4 来源预过滤：SERP 可见 host（c-showurl）已是排除域名 → 在 resolve
+            # 之前就跳过，省一次 /link 跳转解析。show_host=None（显示名 / DOM 改版
+            # 抽不到）时不预过滤，走原 resolve 后过滤路径，零回归。结果与 resolve
+            # 后过滤一致：不占 rank、不发文章请求、不调 pacer。
+            show_host = (link.get("show_host") or "").lower().strip()
+            if show_host and exclude_set and self._is_host_excluded(show_host, exclude_set):
+                logger.info(
+                    "baidu _check_block: prefilter skip excluded show_host %s (link %s)",
+                    show_host, link.get("title", "")[:40],
+                )
+                continue
+
             href = resolve_baidu_link(link["href"], session=session)
             host = urlparse(href).netloc or "baidu.com"
 
@@ -1651,6 +1719,29 @@ class BaiduKeywordAdapter:
 
             host_lower = host.lower()
             rank += 1
+
+            # T5 跨轮正向命中缓存：同一 URL 上一轮（≤TTL）已确认命中本任务某品牌
+            # → 直接判命中、跳过正文抓取（省文章 HTTP + 潜在验证码）。rank 已按
+            # 本轮 SERP 位置算好（位次永远新鲜），这里只短路「是否含品牌」。
+            with self._cross_run_lock:
+                cross_hit = _cross_run_lookup(cross_run_cache, href, brands)
+            if cross_hit is not None:
+                logger.info(
+                    "[baidu] cross-run cache hit: rank=%d host=%s brand=%s url=%s",
+                    rank, host, cross_hit, href[:80],
+                )
+                out.append({
+                    "rank": rank,
+                    "title": link.get("title", ""),
+                    "url": href,
+                    "host": host,
+                    "matches_brand": True,
+                    "matched_brand": cross_hit,
+                    "source": "cache",
+                    "content_preview": "",
+                    "fetch_error": None,
+                })
+                continue
 
             # 本轮 URL memo：同一篇文章常在多个关键词的 SERP 里重复出现（93 个
             # 品牌相关关键词头部结果高度重叠）。命中直接复用正文/命中结果，跳过
@@ -1730,6 +1821,11 @@ class BaiduKeywordAdapter:
 
             content = attempt.get("content") or ""
             matched_brand = match_brand(content, brands)
+            # 是否来自"真·正文命中"（而非下面的 title fallback）—— 只有正文命中才
+            # 够确定性、值得写进跨轮缓存；title fallback 是抓取失败下的弱兜底，
+            # 缓存它会把一次瞬时失败的 title-only 判定钉死 TTL 期，掩盖文章其实
+            # 可抓 / 可能已不含品牌。
+            matched_from_content = matched_brand is not None
             # SERP title last-resort fallback：HTTP + browser 都拿不到有效
             # 正文（JS challenge / 验证码反爬 / 内容过短）时，才用 SERP title
             # 匹配 brand。优先级：HTTP 正文 → browser 正文 → title。
@@ -1770,6 +1866,11 @@ class BaiduKeywordAdapter:
                 "content_preview": content[:160],
                 "fetch_error": attempt.get("fetch_error"),
             })
+            # T5：只把"真·正文命中"写进跨轮缓存供后续 run 复用（title fallback
+            # 命中不写 —— 见 matched_from_content 注释）；未命中/弱兜底都不写。
+            if matched_from_content and matched_brand:
+                with self._cross_run_lock:
+                    _cross_run_remember(cross_run_cache, href, matched_brand)
         return out
 
 

@@ -176,3 +176,42 @@ class TestFusion:
         sig = detect_risk(page, resp)
         assert sig is not None
         assert sig.layer == "text"
+
+
+# ── RiskControlException carries the already-scraped partial keywords ──────────
+# 断点续跑重建：风控中断时已抓的 keyword_results 必须随异常带出去，否则
+# runner 存的 breakpoint 里只有 last_resumed_keyword、丢掉了头段数据，
+# resume 后无法拼回完整快照（0..N 有半段永久缺失）。
+class TestRiskControlExceptionPartial:
+    def test_carries_partial_keywords(self):
+        from csm_core.monitor.drivers.risk_detector import (
+            RiskControlException,
+            RiskSignal,
+        )
+
+        sig = RiskSignal(layer="dom", detail="captcha")
+        partial = [{"keyword": "a"}, {"keyword": "b"}]
+        e = RiskControlException(sig, progress=2, partial_keywords=partial)
+        assert e.progress == 2
+        assert e.partial_keywords == partial
+
+    def test_partial_keywords_defaults_to_empty_list(self):
+        from csm_core.monitor.drivers.risk_detector import (
+            RiskControlException,
+            RiskSignal,
+        )
+
+        e = RiskControlException(RiskSignal(layer="url", detail="x"))
+        assert e.partial_keywords == []
+
+    def test_partial_keywords_is_defensive_copy(self):
+        """存的是副本 —— caller 之后 mutate 原 list 不应影响已带出的断点数据。"""
+        from csm_core.monitor.drivers.risk_detector import (
+            RiskControlException,
+            RiskSignal,
+        )
+
+        src = [{"keyword": "a"}]
+        e = RiskControlException(RiskSignal(layer="dom", detail="x"), partial_keywords=src)
+        src.append({"keyword": "b"})
+        assert e.partial_keywords == [{"keyword": "a"}]

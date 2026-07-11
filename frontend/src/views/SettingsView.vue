@@ -1754,7 +1754,7 @@ async function saveAccountEdit() {
                 hint="出现验证码后等待用户手动过验证的最长时间。"
               >
                 <input
-                  :value="get('monitor.baidu_keyword.captcha_visible_timeout_s') ?? 90"
+                  :value="get('monitor.baidu_keyword.captcha_visible_timeout_s') ?? 300"
                   type="number"
                   min="30"
                   max="300"

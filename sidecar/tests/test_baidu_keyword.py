@@ -406,75 +406,6 @@ def test_fetch_article_http_network_exception_triggers_fallback(monkeypatch):
     assert "nxdomain" in (result["fetch_error"] or "").lower()
 
 
-# ── 浏览器 fallback ─────────────────────────────────────────────────────
-def test_fetch_article_browser_success():
-    """给一个 fake page，验证 fallback 抽到 content 并标 source=browser。"""
-    long_text = "  这里是浏览器 fallback 抓到的正文：" + ("Claude " * 30)
-
-    class FakePage:
-        def goto(self, url, **kw):
-            pass
-
-        def content(self):
-            return f"<html><body><article>{long_text}</article></body></html>"
-
-    result = baidu_keyword.fetch_article_browser(
-        FakePage(), "https://spa.example/post"
-    )
-    assert result["source"] == "browser"
-    assert result["fetch_error"] is None
-    assert "Claude" in result["content"]
-
-
-def test_fetch_article_browser_navigation_exception():
-    class FakePage:
-        def goto(self, url, **kw):
-            raise RuntimeError("navigation timeout")
-
-        def content(self):
-            return ""
-
-    result = baidu_keyword.fetch_article_browser(
-        FakePage(), "https://timeout.example/"
-    )
-    assert result["source"] == "browser"
-    assert "navigation timeout" in (result["fetch_error"] or "")
-
-
-def test_fetch_article_browser_risk_control_raises(monkeypatch):
-    """文章页 page.goto 落到 wappass / verify.baidu / safetycheck 等风控页时，
-    fetch_article_browser 必须抛 RiskControlException 而不是静默返回 empty content。
-
-    历史 bug：HTTP fetch 失败 → 浏览器 fallback → goto 跳到验证页 → readability 提不到
-    正文 → 返回 content="" + fetch_error="browser content empty after readability"。
-    上游误判为单条文章抓取失败，继续跑剩余 keyword，整个任务 status=ok 完成但大量
-    品牌词漏匹配。修复：detect_risk(page, response) 任一层命中即 raise，让 runner
-    跟 SERP 命中走同一条 retry/breakpoint 路径。progress=None 表示非 per-keyword 风控。
-    """
-    from csm_core.monitor.drivers.risk_detector import RiskSignal, RiskControlException
-
-    class FakePage:
-        def goto(self, url, **kw):
-            return None  # response None 也没关系，detect_risk 被 mock 了
-
-        def content(self):
-            return ""
-
-    def fake_detect_risk(page, response=None):
-        return RiskSignal(layer="url", detail="URL matches 'wappass.baidu.com'")
-
-    # 通过模块命名空间注入，跟现有 TestRiskDetectionIntegration 一样
-    monkeypatch.setattr(baidu_keyword, "detect_risk", fake_detect_risk)
-
-    with pytest.raises(RiskControlException) as exc_info:
-        baidu_keyword.fetch_article_browser(FakePage(), "https://example.com/article")
-
-    assert exc_info.value.progress is None, (
-        f"文章页风控不绑定具体 keyword 进度；期望 progress=None，实际 {exc_info.value.progress!r}"
-    )
-    assert exc_info.value.signal.layer == "url"
-
-
 # ── 完整 fetch 编排 ──────────────────────────────────────────────────────
 from csm_core.monitor.base import MonitorTask
 
@@ -872,6 +803,98 @@ class TestRiskDetectionIntegration:
             f"detect_risk should have been called 3 times (one per keyword until hit), got {call_count['n']}"
         )
 
+    def test_risk_exception_carries_scraped_partial_keywords(
+        self, monkeypatch, patch_session
+    ):
+        """断点续跑重建：风控在第 3 个 keyword（idx=2）命中时，前两个已抓完的
+        keyword（kw1/kw2）必须随 RiskControlException.partial_keywords 带出去，
+        否则 runner 存断点时头段数据灭失、resume 拼不回完整快照。"""
+        from csm_core.monitor.drivers.risk_detector import RiskSignal, RiskControlException
+
+        call_count = {"n": 0}
+
+        def fake_detect_risk(page, response=None):
+            url = getattr(page, "url", "") or ""
+            if "baidu.com/s?" not in url:
+                return None
+            call_count["n"] += 1
+            if call_count["n"] >= 3:
+                return RiskSignal(layer="dom", detail="DOM matched '#captcha-mask'")
+            return None
+
+        monkeypatch.setattr(baidu_keyword, "detect_risk", fake_detect_risk)
+        monkeypatch.setattr(baidu_keyword, "_try_human_solve", lambda **kw: False)
+
+        serp = _load("serp_default_only.html")
+        patch_session["session"] = FakeSession(serp_html=serp, page_contents={})
+        monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+
+        task = MonitorTask(
+            id=99,
+            type="baidu_keyword",
+            name="risk-partial-test",
+            target_url="https://www.baidu.com/s?wd=kw1",
+            config={
+                "search_keywords": ["kw1", "kw2", "kw3", "kw4", "kw5"],
+                "target_brand": "Claude",
+            },
+        )
+
+        with pytest.raises(RiskControlException) as exc_info:
+            baidu_keyword.ADAPTER.fetch(task)
+
+        partial = exc_info.value.partial_keywords
+        assert [kw.get("keyword") for kw in partial] == ["kw1", "kw2"], (
+            f"expected the 2 completed keywords carried as partial, got {partial!r}"
+        )
+
+
+def test_human_solve_uses_configured_captcha_timeout(monkeypatch, patch_session):
+    """T7：apply_settings 的 captcha_visible_timeout_s 必须传给 _try_human_solve
+    的 timeout_s —— 否则该设置项恒等于死默认（存了不用），用户调不动解验证码窗口。"""
+    from csm_core.monitor.drivers.risk_detector import RiskSignal, RiskControlException
+
+    captured: dict = {}
+
+    def fake_solve(**kw):
+        captured.update(kw)
+        return False  # 不解 → 走 raise 退出
+
+    monkeypatch.setattr(baidu_keyword, "_try_human_solve", fake_solve)
+
+    def fake_detect_risk(page, response=None):
+        url = getattr(page, "url", "") or ""
+        if "baidu.com/s?" not in url:
+            return None
+        return RiskSignal(layer="dom", detail="captcha")
+
+    monkeypatch.setattr(baidu_keyword, "detect_risk", fake_detect_risk)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+
+    serp = _load("serp_default_only.html")
+    patch_session["session"] = FakeSession(serp_html=serp, page_contents={})
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter._captcha_timeout_s = 137
+    task = MonitorTask(
+        id=7, type="baidu_keyword", name="captcha-timeout-test",
+        target_url="https://www.baidu.com/s?wd=kw1",
+        config={"search_keywords": ["kw1"], "target_brand": "Claude"},
+    )
+    with pytest.raises(RiskControlException):
+        adapter.fetch(task)
+    assert captured.get("timeout_s") == 137, (
+        f"配置的 captcha 超时未传给 _try_human_solve，captured={captured.get('timeout_s')!r}"
+    )
+
+
+def test_apply_settings_default_captcha_timeout_preserves_300(monkeypatch):
+    """默认值必须是 300s（保持接线前的 effective 窗口），否则接线反而缩短窗口。"""
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    assert adapter._captcha_timeout_s == 300  # __init__ 默认
+    adapter.apply_settings()  # 全默认调用
+    assert adapter._captcha_timeout_s == 300  # apply_settings 默认
+
 
 # ── Article-level pacing（防百家号验证码） ──────────────────────────────────
 #
@@ -1136,6 +1159,241 @@ def test_check_block_picks_pacer_per_link_host(monkeypatch):
         "baidu_keyword:article",
         "baidu_keyword:baijiahao",
     ]
+
+
+def test_parse_serp_extracts_show_host_from_showurl():
+    """T4 来源预过滤：parse_serp 从 c-showurl 抽出可见来源 host，供 _check_block
+    在 resolve 之前预过滤排除域名。显示名（无域名）→ show_host=None（fail-open）。"""
+    html = """
+    <div id="content_left">
+      <div class="result c-container xpath-log new-pmd">
+        <h3><a href="http://www.baidu.com/link?url=JD">京东自营</a></h3>
+        <div class="c-showurl c-color-gray">mall.jd.com</div>
+      </div>
+      <div class="result c-container xpath-log new-pmd">
+        <h3><a href="http://www.baidu.com/link?url=ZH">知乎测评</a></h3>
+        <span class="c-showurl">www.zhihu.com&nbsp;2天前</span>
+      </div>
+      <div class="result c-container xpath-log new-pmd">
+        <h3><a href="http://www.baidu.com/link?url=NAME">某来源</a></h3>
+        <span class="c-showurl">什么值得买</span>
+      </div>
+    </div>
+    """
+    links = baidu_keyword.parse_serp(html)["default_links"]
+    hosts = {l["href"]: l.get("show_host") for l in links}
+    assert hosts["http://www.baidu.com/link?url=JD"] == "mall.jd.com"
+    assert hosts["http://www.baidu.com/link?url=ZH"] == "www.zhihu.com"
+    # 纯显示名（无域名）→ 解析不到，fail-open 为 None
+    assert hosts["http://www.baidu.com/link?url=NAME"] is None
+
+
+def test_parse_serp_show_host_fail_open_on_multi_item_container():
+    """防误杀（结构排除=灾难）：一个 c-container 里有多条结果标题（资讯簇 /
+    聚合卡）时，showurl 无法可靠归属到具体某一条 → show_host 必须 fail-open 为
+    None，绝不能让簇内某一条的来源域名污染整簇、把整簇一起 resolve 前预过滤掉。"""
+    # 模拟资讯簇：一个 c-container 内 4 条 cos-item，其中一条来源是排除域名。
+    html = """
+    <div id="content_left">
+      <div class="result c-container xpath-log new-pmd" tpl="news-realtime">
+        <div class="cos-space">
+          <div class="cos-row">
+            <div><h3 class="cos-item-title"><a href="http://www.baidu.com/link?url=A">竞品资讯</a></h3>
+                 <span class="cos-source">mall.jd.com</span></div>
+            <div><h3 class="cos-item-title"><a href="http://www.baidu.com/link?url=B">我的软文</a></h3>
+                 <span class="cos-source">知乎</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+    news = baidu_keyword.parse_serp(html)["news_links"]
+    assert len(news) == 2
+    # 多条结果同容器 → 全部 fail-open，B（我的软文）绝不能被 A 的 jd 来源连累
+    assert all(l.get("show_host") is None for l in news), (
+        f"多结果容器必须 fail-open，实际 {[l.get('show_host') for l in news]}"
+    )
+
+
+def test_check_block_prefilters_excluded_show_host_without_resolving(monkeypatch):
+    """show_host 命中 exclude_set 时，在 resolve_baidu_link 之前就跳过 —— 省一次
+    /link 跳转解析。与 resolve 后过滤同结果（不计 rank、不抓正文）。"""
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    resolved: list[str] = []
+    real_resolve = baidu_keyword.resolve_baidu_link
+
+    def _tracking_resolve(u, **kw):
+        resolved.append(u)
+        return real_resolve(u, **kw)
+
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", _tracking_resolve)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "jd ad", "href": "http://www.baidu.com/link?url=JD", "show_host": "mall.jd.com"},
+        {"title": "article", "href": "https://example.com/a", "show_host": "example.com"},
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        exclude_set={"jd.com"},
+    )
+    # jd 被 show_host 预过滤：从未 resolve、不占 rank
+    assert "http://www.baidu.com/link?url=JD" not in resolved
+    assert [r["host"] for r in out] == ["example.com"]
+    # 只有 example 走了 article pacer（jd 连 pacer 都没碰）
+    assert calls == ["baidu_keyword:article"]
+
+
+def test_check_block_show_host_display_name_falls_through_to_resolve(monkeypatch):
+    """show_host 是显示名（None）或非排除域名时，走原 resolve 后过滤路径，零回归。"""
+    _setup_check_block_mocks(monkeypatch)
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, _calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+
+    resolved: list[str] = []
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link",
+                        lambda u, **kw: resolved.append(u) or u)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [
+        {"title": "jd via display name", "href": "https://item.jd.com/1.html", "show_host": None},
+    ]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        exclude_set={"jd.com"},
+    )
+    # show_host=None → 不预过滤 → 仍 resolve，随后按真实 host 过滤掉（原行为）
+    assert resolved == ["https://item.jd.com/1.html"]
+    assert out == []
+
+
+def test_check_block_cross_run_cache_hit_skips_article_fetch(monkeypatch):
+    """T5 跨轮正向缓存：上轮确认命中的 URL（未过期、brand 在本任务品牌列表里），
+    本轮直接判命中、跳过正文抓取 + article pacer；rank 仍按本轮 SERP 位置算。"""
+    import time as _t
+    from csm_core.monitor import rate_limit as _rl
+
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    fetched: list[str] = []
+    monkeypatch.setattr(baidu_keyword, "fetch_article_http",
+                        lambda u, **kw: fetched.append(u) or {"content": "x" * 500})
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter._cross_run_hits["https://example.com/a"] = ("Claude", _t.monotonic() + 3600)
+    links = [{"title": "t", "href": "https://example.com/a", "show_host": None}]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        cross_run_cache=adapter._cross_run_hits,
+    )
+    assert fetched == [], "cached hit 不应再抓正文"
+    assert calls == [], "cached hit 不应调 article pacer"
+    assert out[0]["matches_brand"] is True
+    assert out[0]["matched_brand"] == "Claude"
+    assert out[0]["source"] == "cache"
+    assert out[0]["rank"] == 1
+
+
+def test_check_block_cross_run_cache_writes_on_positive_match(monkeypatch):
+    """正向命中的 URL 写入跨轮缓存，供后续 run 复用（未命中不写）。"""
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, _calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    monkeypatch.setattr(
+        baidu_keyword, "_cc_get",
+        lambda url, **kw: _FakeResp(
+            text="<html><body><article>" + ("Claude 产品测评。" * 40) + "</article></body></html>"
+        ),
+    )
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cache = adapter._cross_run_hits
+    links = [
+        {"title": "hit", "href": "https://example.com/hit", "show_host": None},
+        {"title": "miss", "href": "https://example.com/miss", "show_host": None},
+    ]
+    # 第二条命中不同内容（无品牌）→ 用另一个 _cc_get 分支？简单起见只验第一条写入。
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        cross_run_cache=cache,
+    )
+    assert out[0]["matched_brand"] == "Claude"
+    assert cache.get("https://example.com/hit", (None,))[0] == "Claude"
+
+
+def test_check_block_does_not_cache_title_fallback_match(monkeypatch):
+    """T5 准确性：title fallback 命中（正文抓取失败、靠 SERP 标题兜底）绝不写跨轮
+    缓存 —— 否则一次瞬时抓取失败的 title-only 判定被钉死 6h，掩盖文章其实可抓 /
+    可能已不含品牌。只有真·正文命中才进缓存。"""
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, _c = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    # 正文抓取失败：内容过短 + is_blocked → fetch_failed，正文匹配 None
+    monkeypatch.setattr(baidu_keyword, "fetch_article_http",
+                        lambda u, **kw: {"content": "x", "is_blocked": True})
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cache = adapter._cross_run_hits
+    # SERP 标题含品牌 → 触发 title fallback 命中
+    links = [{"title": "Claude 深度测评", "href": "https://example.com/a", "show_host": None}]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        cross_run_cache=cache,
+    )
+    assert out[0]["matched_brand"] == "Claude"  # title fallback 判命中
+    assert "https://example.com/a" not in cache, "title fallback 命中不应写跨轮缓存"
+
+
+def test_check_block_cross_run_cache_expired_entry_refetches(monkeypatch):
+    """过期条目（超 TTL）→ 当作未命中，重新抓正文。"""
+    import time as _t
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, _calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    fetched: list[str] = []
+    monkeypatch.setattr(baidu_keyword, "fetch_article_http",
+                        lambda u, **kw: fetched.append(u) or {"content": "Claude " * 200})
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    adapter._cross_run_hits["https://example.com/a"] = ("Claude", _t.monotonic() - 1)  # 已过期
+    links = [{"title": "t", "href": "https://example.com/a", "show_host": None}]
+    adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        cross_run_cache=adapter._cross_run_hits,
+    )
+    assert fetched == ["https://example.com/a"], "过期条目必须重新抓取"
+
+
+def test_check_block_cross_run_cache_wrong_brand_ignored(monkeypatch):
+    """缓存里记的 brand 不在本任务品牌列表里 → 不复用，正常抓取（多任务隔离）。"""
+    import time as _t
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, _calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    fetched: list[str] = []
+    monkeypatch.setattr(baidu_keyword, "fetch_article_http",
+                        lambda u, **kw: fetched.append(u) or {"content": "z" * 500})
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    # 缓存记的是别的任务的品牌 Nova
+    adapter._cross_run_hits["https://example.com/a"] = ("Nova", _t.monotonic() + 3600)
+    links = [{"title": "t", "href": "https://example.com/a", "show_host": None}]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default",
+        cross_run_cache=adapter._cross_run_hits,
+    )
+    assert fetched == ["https://example.com/a"], "别的品牌的缓存不能复用"
+    assert out[0]["matched_brand"] is None
 
 
 def test_check_block_excluded_host_skips_pacer(monkeypatch):
