@@ -171,6 +171,13 @@ class MonitorLoop:
         """reconfigure() 在 config PATCH 后调用,热切数据源模式。"""
         self._data_source_mode = mode
 
+    def set_alert_config(self, *, alert_top_n: int, cooldown_hours: int) -> None:
+        """reconfigure() 在 config PATCH 后调用，热更告警阈值。原来 reconfigure
+        只推 adapter 设置 + data_source_mode，漏了 loop 自己的 _alert_top_n /
+        _cooldown_hours → 用户改「进入前 N 名才告警」「告警冷却」得重启才生效。"""
+        self._alert_top_n = int(alert_top_n)
+        self._cooldown_hours = int(cooldown_hours)
+
     def set_api_adapters(self, adapters: dict[str, Any]) -> None:
         self._api_adapters = dict(adapters or {})
 

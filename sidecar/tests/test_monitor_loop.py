@@ -237,14 +237,18 @@ def test_periodic_tick_dispatches_due_tasks(db_path: Path, sink, captured_events
 
 
 def test_tick_with_no_due_tasks_emits_zero_dispatch(db_path: Path, sink, captured_events):
-    # Create a task that's NOT due: schedule far in the future.
-    future = (datetime.now() + timedelta(hours=2)).strftime("%H:%M")
+    # 用固定本地时钟 12:00 + 同日 14:00 的日程 → 明确「未到点」，不受运行时的
+    # 真实墙钟影响（原来用 now+2h 会在 22:00 后跨过午夜 → 无日期的 HH:MM 被当
+    # 成今天的过去时刻 → 误判为 due，测试随时间闪烁）。
+    from datetime import date
+
+    fixed_local = datetime.combine(date.today(), datetime.min.time()).replace(hour=12)
     task = MonitorTask(
         type="zhihu_question",
         name="future",
         target_url="https://www.zhihu.com/question/future",
         config={"target_brand": "x", "top_n": 5},
-        schedule_cron=future,
+        schedule_cron="14:00",
         enabled=True,
     )
     task.id = storage.create_task(task)
@@ -254,6 +258,7 @@ def test_tick_with_no_due_tasks_emits_zero_dispatch(db_path: Path, sink, capture
         event_sink=sink,
         adapters={"zhihu_question": adapter},
         tick_seconds=1,
+        schedule_clock=lambda: fixed_local,
     )
     loop.start()
     try:
@@ -433,6 +438,22 @@ def test_merge_partial_writes_back_result_rank(db_path: Path):
     _merge_partial_baidu_metric(partial, "kwA", task.id)
     assert partial.metric["best_default_first_rank"] == 1
     assert partial.rank == 1, "result.rank 必须回写为跨全部关键词的 best"
+
+
+# ── 3e. Alert config hot-reload ─────────────────────────────────────────────
+def test_set_alert_config_updates_thresholds(db_path: Path, sink):
+    """PATCH /api/config 改 alert_top_n / alert_cooldown_hours 要即时生效，
+    不该等重启 sidecar（reconfigure 之前只推 adapter 设置，漏了 loop 的告警阈值）。"""
+    loop = MonitorLoop(
+        event_sink=sink,
+        adapters={"zhihu_question": FakeAdapter()},
+        alert_top_n=5,
+        cooldown_hours=24,
+        tick_seconds=3600,
+    )
+    loop.set_alert_config(alert_top_n=7, cooldown_hours=12)
+    assert loop._alert_top_n == 7  # noqa: SLF001
+    assert loop._cooldown_hours == 12  # noqa: SLF001
 
 
 # ── 4. Restart safety ───────────────────────────────────────────────────────

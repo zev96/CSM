@@ -142,6 +142,11 @@ def reconfigure(cfg: AppConfig | None = None) -> None:
     cfg = cfg or config_service.load()
     _apply_runtime_settings(cfg)
     _loop.set_data_source_mode(cfg.monitor.data_source_mode)
+    # 告警阈值也热更，否则改 alert_top_n / alert_cooldown_hours 要重启才生效。
+    _loop.set_alert_config(
+        alert_top_n=cfg.monitor.alert_top_n,
+        cooldown_hours=cfg.monitor.alert_cooldown_hours,
+    )
 
 
 def get() -> MonitorLoop | None:
