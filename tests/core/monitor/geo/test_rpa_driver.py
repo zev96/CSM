@@ -27,7 +27,7 @@ def test_run_one_keyword_blocked_when_not_logged_in():
     ans = _driver.run_one_keyword(page, SITES["deepseek"], "k",
                                   web_search=True, cancel_token=None, logged_in=False)
     assert ans.status == "blocked"
-    assert "登录" in ans.error
+    assert ans.error == "DeepSeek 未登录，请在设置中登录"   # 平台专属文案(会进 all-fail toast),非泛化 id
     assert page.gotos == []                      # 未登录不 goto,直接 blocked
 
 

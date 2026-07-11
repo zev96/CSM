@@ -21,7 +21,7 @@ def run_one_keyword(page: Any, spec: SiteSpec, keyword: str, *, web_search: bool
                     cancel_token: "threading.Event | None", logged_in: bool) -> GeoAnswer:
     if not logged_in:
         return GeoAnswer(platform=spec.platform, keyword=keyword, status="blocked",
-                         error=f"{spec.platform} 未登录，请在设置中登录")
+                         error=spec.login_blocked_msg)
     # 会话重置(fix #1):回首页 →(有新建按钮的站)开干净会话,清掉上一关键词上下文。
     page.goto(spec.url, wait_until="domcontentloaded", timeout=30000)
     if spec.new_chat_sel:

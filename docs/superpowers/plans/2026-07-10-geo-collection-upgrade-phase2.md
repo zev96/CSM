@@ -640,6 +640,7 @@ Expected: 全绿。
   - **信源照旧**:kimi 的引用数、元宝的 name-only 信源、deepseek 的答案内链接 —— 与 Phase 1 单发时口径一致(没因复用丢失)。
   - **超时口径**:深度思考的 deepseek/元宝 仍走 180s、kimi 120s(慢站不误判超时)。
   - **Stop 生效**:运行中点停止,能在合理时间内中止(RPA 每题 `wait_stream_done` 每 500ms 查 token;`page.goto`/登录阶段的 Stop 迟滞是已知、留 Phase 3)。
+  - **⚠ 复用后的 goto-reset 时序(P2.3 审查 finding 2,只能真机验):** `session()` 开局已 goto 一次(登录检查),`run_one_keyword` 每关键词又 goto 一次重置会话——① 第 1 个关键词的这次 goto 是冗余的(单发 query 场景多跳一次,无害);② **更要紧**:reset-goto 之后**没有显式 settle**就直接点 新建对话/深度思考开关/composer,不像 `session()` 首个 goto 后跟着 `wait_login_ready` 的 poll+settle。真机上若发现 reset 后首个 DOM 交互偶发失败/点空(尤其元宝 new_chat、DeepSeek 深度思考开关),就是这个——修法二选一:(a) `run_one_keyword` goto 后补一个就绪等待(`wait_login_ready` 兼作 settle+存活检查,顺带能抓到会话中途过期→blocked);(b) 首关键词跳过 reset-goto。**单测验不了(fake page 的 goto 是 no-op),必须真机确认后再定。**
 - [ ] **Step 3:【用户/agent】对抗性审查**(按用户全局规则):派 2–3 独立 subagent 证伪本 Phase——①并发正确性(3 session 并发、cell 就位/进度/取消传导、session 中断补 error 的下标正确性)②回归(现有 RPA provider 测试、Phase-1 契约)③资源/风控(3 长驻浏览器同时开的内存、profile 锁、复用后单会话多轮是否更像机器人——注意节奏是 Phase 3)。发现逐条核实修复。
 - [ ] **Step 4: 收尾**:真机通过 + 审查通过后,`finishing-a-development-branch` 决定合并/PR。
 

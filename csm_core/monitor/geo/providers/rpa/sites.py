@@ -33,6 +33,7 @@ class SiteSpec:
     exclude_hosts: tuple[str, ...] = ()
     stream_timeout_s: float = 120.0   # wait_stream_done 超时(深度思考/联网更慢的站放宽)
     post_new_chat_wait_ms: int = 0     # 点「新建对话」后等 composer 渲染就绪的毫秒数(元宝需要)
+    login_blocked_msg: str = "未登录，请在设置中登录"  # 未登录提示(all-fail 时会进前端 toast,需带平台名/登录方式)
 
 
 SITES: dict[str, SiteSpec] = {
@@ -53,6 +54,7 @@ SITES: dict[str, SiteSpec] = {
         deep_think=True,                  # 用户要求：DeepSeek 开深度思考（智能搜索默认已开）
         exclude_hosts=("deepseek.com",),
         stream_timeout_s=180.0,
+        login_blocked_msg="DeepSeek 未登录，请在设置中登录",
     ),
     "kimi": SiteSpec(
         platform="kimi",
@@ -72,6 +74,7 @@ SITES: dict[str, SiteSpec] = {
         exclude_hosts=("kimi.com", "moonshot.cn", "moonshot.ai", "kimi.ai",
                        "mokahr.com", "bing.com"),
         stream_timeout_s=120.0,
+        login_blocked_msg="Kimi 未登录，请在设置中登录",
     ),
     "yuanbao": SiteSpec(
         platform="yuanbao",
@@ -100,5 +103,6 @@ SITES: dict[str, SiteSpec] = {
         exclude_hosts=("yuanbao.tencent.com", "tencent.com"),
         stream_timeout_s=180.0,
         post_new_chat_wait_ms=600,
+        login_blocked_msg="腾讯元宝 未登录，请在设置中扫码登录",
     ),
 }
