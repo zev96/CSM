@@ -319,7 +319,8 @@ def test_fetch_rpa_lane_reuses_session_per_platform(fresh_db, monkeypatch):
     tid = storage.create_task(MonitorTask(
         type="geo_query", name="t", target_url="geo://x",
         config={"brand": "小鹏", "keywords": ["k1", "bad", "k2"], "platforms": ["kimi"],
-                "extract_provider": "mock"}))
+                "extract_provider": "mock",
+                "geo_rpa_jitter_min": 0, "geo_rpa_jitter_max": 0}))   # 单测关 jitter,别真睡
     result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
 
     assert opens["n"] == 1                        # kimi 只开一次 session(3 关键词复用)
@@ -477,6 +478,33 @@ def test_rpa_batch_interrupt_does_not_feed_consecutive_skip(monkeypatch):
     cells = [c for _, c in out]
     assert all(c.fail_reason == "interrupted" for c in cells)
     assert not any(c.raw.get("synthetic") for c in cells)        # 未产合成 cell
+
+
+def test_sleep_jitter_waits_random_delay_and_is_cancelable():
+    from csm_core.monitor.platforms import geo_query as gq
+    import threading
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        _CancelledFetch = RuntimeError
+    calls = {}
+    tok = threading.Event()
+    def _fake_wait(d):
+        calls["delay"] = d
+        return False                        # 未取消 → 睡满
+    tok.wait = _fake_wait                    # type: ignore[method-assign]
+    gq._sleep_jitter(tok, 10, 20, _rand=lambda a, b: 12.5)
+    assert calls["delay"] == 12.5           # 把 random.uniform 的值交给 Event.wait
+
+    tok2 = threading.Event(); tok2.set()     # 已取消 → wait 立刻 True → maybe_cancel 抛
+    import pytest
+    with pytest.raises(_CancelledFetch):
+        gq._sleep_jitter(tok2, 10, 20, _rand=lambda a, b: 1.0)
+
+
+def test_sleep_jitter_zero_max_is_noop():
+    from csm_core.monitor.platforms import geo_query as gq
+    gq._sleep_jitter(None, 0, 0)            # hi<=0 → 直接返回,不睡不抛(禁用 jitter)
 
 
 def test_rpa_batch_consecutive_fail_short_circuits(monkeypatch):
