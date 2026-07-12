@@ -143,18 +143,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
             _bk_module.ADAPTER.set_event_publisher(_publish_native_event)
 
-            # Notify hook：chrome_preflight / baidu_keyword 的 _notify() 默认 fallback
-            # 到 logger.warning("notifier not configured")，会刷一堆没意义的 warning。
+            # Notify hook：baidu_keyword 的 _notify() 默认 fallback 到
+            # logger.warning("notifier not configured")，会刷一堆没意义的 warning。
             # 实际系统通知由前端 SSE handler (monitorStatus.ts) 收到 native event
-            # 后调 useSystemNotify 弹 ── 后端只发 SSE 事件就够了。
-            # 这里注入 log-only notifier 是 reserved hook（万一以后想加后端 ── tray
-            # icon、Slack webhook ── 在这里换个 impl 就行），同时消除 warning spam。
-            from csm_core.monitor.drivers import chrome_preflight as _chrome_preflight
-
+            # 后调 useSystemNotify 弹 ── 后端只发 SSE 事件就够了。这里注入 log-only
+            # notifier 是 reserved hook（以后想加后端 tray icon / Slack webhook 换个
+            # impl 即可），同时消除 warning spam。
             def _log_only_notify(*, title: str, body: str) -> None:
                 logger.info("baidu native notify: %s — %s", title, body)
 
-            _chrome_preflight.set_notifier(_log_only_notify)
             _bk_module.set_notifier(_log_only_notify)
         except Exception:
             logger.exception("native event publisher injection failed; continuing without native SSE events")

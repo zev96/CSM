@@ -475,6 +475,30 @@ class TestRunnerRiskControlHandler:
         assert len(risk_events) == 1
 
 
+def test_merge_resumed_dup_keyword_distinct_objects(monkeypatch):
+    """R9：配置含重复关键词时，合并出的两个同名槽必须是**不同对象**（不共享
+    引用），避免 aliasing；行数/顺序与全新扫描一致（配置里出现几次就几行）。"""
+    from sidecar.csm_sidecar.services import monitor_loop as ml
+
+    prior = MonitorResult(
+        task_id=1, checked_at=datetime.utcnow(), status="risk_control", rank=-1,
+        metric={"keywords": [{"keyword": "A", "default_first_rank": 5,
+                              "default_matched_count": 1}]},
+    )
+    monkeypatch.setattr(ml.storage, "list_results", lambda tid, limit=1: [prior])
+    new_rows = [
+        {"keyword": "B", "default_first_rank": -1, "default_matched_count": 0},
+        {"keyword": "A", "default_first_rank": 9, "default_matched_count": 1},
+    ]
+    merged = ml._merge_resumed_baidu_keywords(
+        new_rows, resume_from=1, task_id=1, configured_keywords=["A", "B", "A"],
+    )
+    assert [r["keyword"] for r in merged] == ["A", "B", "A"]
+    a_slots = [r for r in merged if r["keyword"] == "A"]
+    assert len(a_slots) == 2
+    assert a_slots[0] is not a_slots[1], "重复关键词的两个槽不能共享同一 dict 对象"
+
+
 class TestRunnerResumeMerge:
     """resume 完成时头尾合并成完整快照。
 

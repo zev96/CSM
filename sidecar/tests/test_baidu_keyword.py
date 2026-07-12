@@ -896,6 +896,16 @@ def test_apply_settings_default_captcha_timeout_preserves_300(monkeypatch):
     assert adapter._captcha_timeout_s == 300  # apply_settings 默认
 
 
+def test_apply_settings_threads_article_rank_cap():
+    """R4：article_fetch_rank_cap 从 apply_settings 传到 _article_rank_cap；默认 0=不封顶。"""
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    assert adapter._article_rank_cap == 0
+    adapter.apply_settings()
+    assert adapter._article_rank_cap == 0
+    adapter.apply_settings(article_fetch_rank_cap=10)
+    assert adapter._article_rank_cap == 10
+
+
 # ── Article-level pacing（防百家号验证码） ──────────────────────────────────
 #
 # 这一层节流是为了防 baidu 风控：原来 _check_block 对 SERP 解析出的
@@ -1161,6 +1171,42 @@ def test_check_block_picks_pacer_per_link_host(monkeypatch):
     ]
 
 
+def test_parse_serp_extracts_snippet():
+    """R1：parse_serp 抽 c-container 摘要文本，供正文抓取失败时兜底判命中。
+    多结果容器（资讯簇）fail-open 为空（防摘要串味）。"""
+    html = """
+    <div id="content_left">
+      <div class="result c-container xpath-log new-pmd">
+        <h3><a href="http://www.baidu.com/link?url=A">标题不含品牌</a></h3>
+        <div class="c-abstract">这是一段摘要，正文里提到了 Claude 这个牌子的表现很好。</div>
+      </div>
+    </div>
+    """
+    links = baidu_keyword.parse_serp(html)["default_links"]
+    assert len(links) == 1
+    assert "Claude" in (links[0].get("snippet") or "")
+
+
+def test_check_block_snippet_fallback_when_fetch_fails(monkeypatch):
+    """R1：正文抓取失败 + 标题无品牌 + 摘要含品牌 → 靠 SERP 摘要兜底判命中
+    （软文品牌常出现在摘要）。这是弱兜底，不写跨轮缓存。"""
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, _c = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u, **kw: u)
+    # 正文抓取失败（内容过短 + is_blocked），正文/标题都无品牌
+    monkeypatch.setattr(baidu_keyword, "fetch_article_http",
+                        lambda u, **kw: {"content": "x", "is_blocked": True})
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cache = adapter._cross_run_hits
+    links = [{"title": "无品牌标题", "href": "https://example.com/a",
+              "show_host": None, "snippet": "摘要里写着 Claude 很不错"}]
+    out = adapter._check_block(page=None, links=links, brands=["Claude"],
+                               block="default", cross_run_cache=cache)
+    assert out[0]["matched_brand"] == "Claude", "应靠摘要兜底判命中"
+    assert "https://example.com/a" not in cache, "摘要弱兜底不写跨轮缓存"
+
+
 def test_parse_serp_extracts_show_host_from_showurl():
     """T4 来源预过滤：parse_serp 从 c-showurl 抽出可见来源 host，供 _check_block
     在 resolve 之前预过滤排除域名。显示名（无域名）→ show_host=None（fail-open）。"""
@@ -1394,6 +1440,67 @@ def test_check_block_cross_run_cache_wrong_brand_ignored(monkeypatch):
     )
     assert fetched == ["https://example.com/a"], "别的品牌的缓存不能复用"
     assert out[0]["matched_brand"] is None
+
+
+def test_check_block_honors_cancel_mid_keyword(monkeypatch):
+    """R3：_check_block 每条文章前查取消令牌 —— 用户点停止不必等整个关键词的
+    所有文章抓完（原来一个关键词内 10+ 篇 × 节流最多等约 5min）。"""
+    import threading
+    # 必须与适配器 raise 时的 import 路径一致（csm_sidecar.*，非 sidecar.csm_sidecar.*）
+    # —— PYTHONPATH 双路径下两者是不同的类对象，否则 pytest.raises 抓不到。
+    from csm_sidecar.services.monitor_loop import _CancelledFetch
+    _setup_check_block_mocks(monkeypatch)
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    cancel = threading.Event()
+    cancel.set()  # 已请求取消
+    links = [{"title": "a", "href": "https://ex.com/p", "show_host": None, "snippet": ""}]
+    with pytest.raises(_CancelledFetch):
+        adapter._check_block(page=None, links=links, brands=["X"],
+                             block="default", cancel_token=cancel)
+    assert calls == [], "取消后不应再抓文章（不调 article pacer）"
+
+
+def test_check_block_rank_cap_stops_after_n(monkeypatch):
+    """R4：rank_cap>0 时，抓满 N 条排名结果就停（省掉尾部文章抓取）。默认 0=不封顶。"""
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    _setup_check_block_mocks(monkeypatch)
+
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [{"title": f"a{i}", "href": f"https://ex{i}.com/p", "show_host": None} for i in range(5)]
+    out = adapter._check_block(
+        page=None, links=links, brands=["Claude"], block="default", rank_cap=2,
+    )
+    assert [r["rank"] for r in out] == [1, 2], "抓满 2 条即停"
+    assert len(calls) == 2, "只对前 2 条调 article pacer（尾部不抓）"
+
+
+def test_check_block_rank_cap_zero_fetches_all(monkeypatch):
+    """rank_cap=0（默认）不封顶 —— 全量抓取，保持准确（不漏页 1 的 11-13 位）。"""
+    _setup_check_block_mocks(monkeypatch)
+    from csm_core.monitor import rate_limit as _rl
+    fake_get_pacer, calls = _make_pacer_tracker()
+    monkeypatch.setattr(_rl, "get_pacer", fake_get_pacer)
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [{"title": f"a{i}", "href": f"https://ex{i}.com/p", "show_host": None} for i in range(5)]
+    out = adapter._check_block(page=None, links=links, brands=["Claude"], block="default")
+    assert len(out) == 5
+
+
+def test_check_block_row_omits_content_preview(monkeypatch):
+    """R5 瘦身：baidu 结果行不再写 content_preview（百度端无渲染消费者，仅
+    浪费 30-40% 落库体积）。zhihu 端仍保留（那边 UI 会渲染摘要）。"""
+    _setup_check_block_mocks(monkeypatch)
+    adapter = baidu_keyword.BaiduKeywordAdapter()
+    links = [{"title": "t", "href": "https://example.com/a", "show_host": None}]
+    out = adapter._check_block(page=None, links=links, brands=["Claude"], block="default")
+    assert out, "应有一条结果"
+    assert "content_preview" not in out[0], "baidu 结果行不应再带 content_preview"
 
 
 def test_check_block_excluded_host_skips_pacer(monkeypatch):

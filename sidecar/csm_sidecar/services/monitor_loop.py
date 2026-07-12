@@ -931,12 +931,10 @@ def _merge_resumed_baidu_keywords(
     ``new_rows`` unchanged. Mismatched/empty configured list → falls back to
     ``head + new`` concatenation so data is never dropped.
 
-    Known limitation (config anomaly): if ``configured_keywords`` contains the
-    SAME keyword twice, both configured slots resolve to the one ``by_kw``
-    entry — the merged list holds two references to the same row and aggregates
-    double-count it. Duplicate keywords in a monitor task are nonsensical (both
-    scrape the identical SERP), so this best-effort behavior is accepted rather
-    than special-cased; a fresh full scan likewise produces two identical rows.
+    Duplicate keywords (config anomaly): if ``configured_keywords`` lists the
+    SAME keyword twice, each slot gets a distinct row object (2nd+ occurrences
+    are shallow copies) so there's no aliasing; the count matches a fresh scan
+    (which likewise produces one row per configured slot).
     """
     if resume_from <= 0 or task_id is None:
         return list(new_rows)
@@ -956,7 +954,16 @@ def _merge_resumed_baidu_keywords(
         if kw is not None:
             by_kw[kw] = row  # fresher scrape overrides the preserved head
 
-    merged = [by_kw[k] for k in configured_keywords if k in by_kw]
+    # 按配置序发出；重复关键词的第 2+ 个槽发**浅拷贝**而非同一引用，避免 aliasing
+    # （行数/顺序与全新扫描一致——配置里出现几次就几行）。
+    merged: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    for k in configured_keywords:
+        row = by_kw.get(k)
+        if row is None:
+            continue
+        seen[k] = seen.get(k, 0) + 1
+        merged.append(row if seen[k] == 1 else dict(row))
     if not merged:
         # Configured list empty or fully mismatched — never drop data.
         return list(head_rows) + list(new_rows)

@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -213,6 +214,10 @@ def copy_profile_to(
         try:
             shutil.rmtree(target)
         except OSError as e:
+            if getattr(e, "errno", None) == errno.ENOSPC:
+                raise OSError(
+                    f"磁盘空间不足，无法清理旧副本目录：{target}. 请清理磁盘后重试. 原因: {e}"
+                ) from e
             raise OSError(
                 f"旧副本目录无法清空（可能有 Chromium / Chrome 进程占着文件锁）："
                 f"{target}. 请关掉所有 Chrome / Chromium 进程后重试，"
@@ -229,13 +234,18 @@ def copy_profile_to(
     # 这里换成 copy_function 吞掉单文件锁错误并记录，让复制整体成功；登录态
     # 文件（Cookies）被锁则回一条 warning，让上层提示用户而不是报红「复制失败」。
     skipped_locked: list[str] = []
+    # 磁盘满不是"文件被锁"——若当成锁吞掉，ENOSPC 会让每个文件都 skip、最后误报
+    # 「Chrome 正在运行，关掉重试」。用标志位记下，复制后统一抛明确的磁盘满错误。
+    disk_full = {"hit": False}
 
     def _resilient_copy(src: str, dst: str) -> None:
         try:
             shutil.copy2(src, dst)
         except (PermissionError, OSError) as e:
+            if getattr(e, "errno", None) == errno.ENOSPC:
+                disk_full["hit"] = True
             skipped_locked.append(os.path.basename(src))
-            logger.info("copy_profile_to: 跳过被锁文件 %s（%s）", src, e)
+            logger.info("copy_profile_to: 跳过文件 %s（%s）", src, e)
 
     # 复制 profile 内容 → target/Default/
     target_profile = target / "Default"
@@ -257,8 +267,17 @@ def copy_profile_to(
         try:
             shutil.copy2(source_local_state, target / "Local State")
         except (PermissionError, OSError) as e:
+            if getattr(e, "errno", None) == errno.ENOSPC:
+                disk_full["hit"] = True
             skipped_locked.append("Local State")
-            logger.info("copy_profile_to: 跳过被锁 Local State（%s）", e)
+            logger.info("copy_profile_to: 跳过 Local State（%s）", e)
+
+    # 磁盘满：致命且与"Chrome 开着"无关，抛明确错误让上层如实提示（而不是
+    # 把满盘伪装成"文件被锁、请关 Chrome"让用户白关一遍还是失败）。
+    if disk_full["hit"]:
+        raise OSError(
+            f"磁盘空间不足，无法完整复制 Chrome 副本到 {target}. 请清理磁盘后重试."
+        )
 
     elapsed = time.monotonic() - start
     size_bytes = sum(p.stat().st_size for p in target.rglob("*") if p.is_file())

@@ -31,7 +31,6 @@ class BaiduKeywordConfig(BaseModel):
     # 300s：解验证码要留足人工时间。接线后（v0.7.3）该值真正生效，默认对齐
     # 接线前 _try_human_solve 的死默认 300s，避免升级后窗口反而缩短。
     captcha_visible_timeout_s: int = 300
-    captcha_max_promotions: int = 1
     serp_pacing_seconds: int = 5
     # Article-level pacing —— SERP 解析完后逐条抓正文之间的间隔（min；
     # 实际抖动到 min*2）。3-6s 是「不会被 baidu 风控」的实测下限；用户
@@ -41,6 +40,10 @@ class BaiduKeywordConfig(BaseModel):
     # 百家号专用 article pacer 上限 —— baidu 自家子域反爬最严，比普通
     # 软文站需要更宽的间隔窗口。8-16s 实测能稳定避开验证码。
     baijiahao_pacing_seconds: int = 8
+    # 每关键词每区块抓满 N 条排名结果就停（省尾部文章抓取，一轮省 5-20min）。
+    # 0=不封顶（默认）：百度只取 page 1，封顶会漏掉第 11-13 位的软文——默认关
+    # 保证准确，愿以少量准确换速度的用户可在设置页开（如设 10 只看前十）。
+    article_fetch_rank_cap: int = 0
     # ── Native Chrome 模式 (方案 D → pivot to B' on 2026-05-25) ─────
     # 启用后 native 流程用 chrome_profile_copy_path 跑（CSM 自动复制的副本，
     # 非 Chrome 默认目录避开 Chrome 91+ DevTools 限制）。下面这 4 个字段是

@@ -8,11 +8,23 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from csm_core.monitor import storage
 from csm_sidecar.services.monitor_service import _iso_utc
+
+
+def _utc_to_local_naive(dt: "datetime | None") -> "datetime | None":
+    """把存库的 naive-UTC 时间戳转成 naive-本地时间。
+
+    结果按天分桶时用本地墙钟（now=datetime.now() 是本地）比对——若拿 naive-UTC
+    直接和本地日边界比，本地凌晨/深夜跑的结果会被错分到相邻一天（CST 差 8h）。
+    统一转本地后，后端 daily_series 的分桶与前端本地日、KPI 口径一致。
+    """
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
 
 COMMENT_PLATFORMS = ("bilibili_comment", "douyin_comment", "kuaishou_comment")
@@ -437,11 +449,16 @@ def get_baidu_keyword_history(range_str: str) -> dict[str, Any]:
     per_task: dict[int, list[dict]] = defaultdict(list)
     for row in rows:
         m = json.loads(row["metric_json"] or "{}")
-        checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001
+        checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001 —— 原始 naive-UTC
         if not checked:
             continue
         per_task[row["task_id"]].append({
+            # checked_at 保持原始 UTC —— 给下游 _iso_utc 输出用；若转本地再喂
+            # _iso_utc（它只归一化 aware 值）会把本地时间误盖 "Z"，偏移一个时区。
             "checked_at": checked,
+            # daily_series 按本地日分桶要用本地墙钟（now 是本地）；只在分桶比较处
+            # 用它，不污染上面的 checked_at。见 _utc_to_local_naive。
+            "checked_at_local": _utc_to_local_naive(checked),
             "metric": m,
             "task_name": row["task_name"],
         })
@@ -604,10 +621,10 @@ def _baidu_daily_series(
         for task_id, results in per_task.items():
             keywords_for_task = task_keywords.get(task_id, [])
             # results is DESC by checked_at; find latest on or before day_end
-            curr_on_day = next((r for r in results if r["checked_at"] < day_end), None)
+            curr_on_day = next((r for r in results if r["checked_at_local"] < day_end), None)
             if not curr_on_day:
                 continue
-            prev_for_day = next((r for r in results if r["checked_at"] < day_start), None)
+            prev_for_day = next((r for r in results if r["checked_at_local"] < day_start), None)
 
             curr_m = curr_on_day["metric"]
             prev_m = prev_for_day["metric"] if prev_for_day else {}
@@ -669,11 +686,16 @@ def get_zhihu_search_history(range_str: str) -> dict[str, Any]:
     per_task: dict[int, list[dict]] = defaultdict(list)
     for row in rows:
         m = json.loads(row["metric_json"] or "{}")
-        checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001
+        checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001 —— 原始 naive-UTC
         if not checked:
             continue
         per_task[row["task_id"]].append({
+            # checked_at 保持原始 UTC —— 给下游 _iso_utc 输出用；若转本地再喂
+            # _iso_utc（它只归一化 aware 值）会把本地时间误盖 "Z"，偏移一个时区。
             "checked_at": checked,
+            # daily_series 按本地日分桶要用本地墙钟（now 是本地）；只在分桶比较处
+            # 用它，不污染上面的 checked_at。见 _utc_to_local_naive。
+            "checked_at_local": _utc_to_local_naive(checked),
             "metric": m,
             "task_name": row["task_name"],
         })
@@ -785,10 +807,10 @@ def _zhihu_search_daily_series(
 
         for task_id, results in per_task.items():
             keywords_for_task = task_keywords.get(task_id, [])
-            curr_on_day = next((r for r in results if r["checked_at"] < day_end), None)
+            curr_on_day = next((r for r in results if r["checked_at_local"] < day_end), None)
             if not curr_on_day:
                 continue
-            prev_for_day = next((r for r in results if r["checked_at"] < day_start), None)
+            prev_for_day = next((r for r in results if r["checked_at_local"] < day_start), None)
 
             curr_m = curr_on_day["metric"]
             prev_m = prev_for_day["metric"] if prev_for_day else {}
