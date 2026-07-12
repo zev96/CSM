@@ -282,6 +282,27 @@ def test_wait_stream_done_honors_cancel_token():
                                idle_ms=1, timeout_s=5, poll_ms=10, cancel_token=tok)
 
 
+def test_wait_stream_done_sleep_wake_raises_interrupted():
+    # monotonic 单轮从 1→61 跳变(睡眠),越 deadline 时归 StreamInterrupted 而非 TimeoutError
+    times = iter([0.0, 0.0, 1.0, 61.0, 130.0])   # deadline,last_tick,iter1,iter2(跳变),iter3(越界)
+    page = _FakePage(["<a>"])
+    with pytest.raises(_flow.StreamInterrupted):
+        _flow.wait_stream_done(page, done_predicate=lambda: False, idle_ms=1, timeout_s=120,
+                               poll_ms=1, jump_threshold_s=30,
+                               _now=lambda: next(times), _sleep=lambda s: None)
+
+
+def test_wait_stream_done_normal_timeout_is_not_interrupted():
+    # 平稳小步推进(每轮 <阈值)→ 仍是 TimeoutError(不误判中断)
+    times = iter([0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    page = _FakePage(["<a>"])
+    with pytest.raises(TimeoutError) as ei:
+        _flow.wait_stream_done(page, done_predicate=lambda: False, idle_ms=1, timeout_s=5,
+                               poll_ms=1, jump_threshold_s=30,
+                               _now=lambda: next(times), _sleep=lambda s: None)
+    assert not isinstance(ei.value, _flow.StreamInterrupted)
+
+
 def test_sites_deepseek_present_and_css_selectors_valid():
     from bs4 import BeautifulSoup
     from csm_core.monitor.geo.providers.rpa.sites import SITES, SiteSpec

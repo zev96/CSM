@@ -466,6 +466,19 @@ def test_rpa_batch_login_gate_synthesizes_rest(monkeypatch):
         assert c.raw.get("synthetic") is True
 
 
+def test_rpa_batch_interrupt_does_not_feed_consecutive_skip(monkeypatch):
+    from csm_core.monitor.platforms import geo_query as gq
+    adapter = gq.GeoQueryAdapter()
+    kws = ["k1", "k2", "k3", "k4"]
+    # 连续 interrupted(睡眠唤醒)error → 不喂连败计数 → 不短路,逐个照跑到底(即便 consec_skip=2)
+    provider = _fake_provider_yielding({k: ("error", "睡眠唤醒 interrupted") for k in kws})
+    out = _drain_batch(adapter, "kimi", kws, provider, monkeypatch, consec_skip=2)
+    assert [li for li, _ in out] == [0, 1, 2, 3]                 # 四个都真跑,无短路
+    cells = [c for _, c in out]
+    assert all(c.fail_reason == "interrupted" for c in cells)
+    assert not any(c.raw.get("synthetic") for c in cells)        # 未产合成 cell
+
+
 def test_rpa_batch_consecutive_fail_short_circuits(monkeypatch):
     from csm_core.monitor.platforms import geo_query as gq
     adapter = gq.GeoQueryAdapter()

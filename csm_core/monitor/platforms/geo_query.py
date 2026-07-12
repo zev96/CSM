@@ -273,8 +273,13 @@ class GeoQueryAdapter:
                             produced = li2 + 1
                             yield li2, syn
                         return
-                    consec = consec + 1 if failed else 0
-                    if failed and consec >= consec_skip:
+                    is_interrupt = cell.fail_reason == "interrupted"
+                    if failed and not is_interrupt:
+                        consec += 1
+                    elif not failed:
+                        consec = 0
+                    # 中断(睡眠唤醒):consec 不变 —— 机器睡眠与平台健康无关,不喂短路计数。
+                    if failed and not is_interrupt and consec >= consec_skip:
                         for li2, syn in _synthetic(li + 1, cell.fail_reason or "unknown",
                                                    f"{plat} 连续 {consec} 个关键词失败,短路跳过剩余"):
                             produced = li2 + 1

@@ -306,18 +306,34 @@ def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
                      idle_ms: int = 1500, timeout_s: float = 90.0,
                      poll_ms: int = 500,
                      cancel_token: "Any | None" = None,
-                     length_fn: "Callable[[], int] | None" = None) -> None:
-    """轮询直到 done_predicate() 为真且 page.content() 长度静默 idle_ms。
-    超 timeout_s 抛 TimeoutError；每轮 maybe_cancel(cancel_token)（取消即抛）。"""
+                     length_fn: "Callable[[], int] | None" = None,
+                     jump_threshold_s: float = 30.0,
+                     _now=time.monotonic, _sleep=time.sleep) -> None:
+    """轮询直到 done_predicate() 为真且长度静默 idle_ms。超 timeout_s 抛 TimeoutError;
+    每轮 maybe_cancel(cancel_token)(取消即抛)。
+
+    中断分类:Win time.monotonic() 含睡眠时间——若**单轮**推进 > jump_threshold_s
+    (≫ 轮询间隔),判定机器睡眠/挂起过;到 deadline 时抛 StreamInterrupted 而非
+    TimeoutError(上层不 retry、不喂连败短路),避免睡眠唤醒引发假超时风暴。
+    _now/_sleep 为测试注入缝(默认 time.monotonic/time.sleep)。"""
     if length_fn is None:
         def length_fn():                      # 默认:整页长度(与旧版逐字节等价,保既有测试)
             return len(page.content())
-    deadline = time.monotonic() + timeout_s
-    stable_since: float | None = None
+    deadline = _now() + timeout_s
+    stable_since = None
     last_len = -1
+    last_tick = _now()
+    slept = False
     while True:
         maybe_cancel(cancel_token)
-        if time.monotonic() > deadline:
+        now = _now()
+        if now - last_tick > jump_threshold_s:   # 单轮跳变 ≫ 轮询间隔 = 机器睡眠/挂起过
+            slept = True
+        last_tick = now
+        if now > deadline:
+            if slept:                            # 睡眠唤醒:归中断(上层不 retry/不喂连败),别误判站点超时
+                raise StreamInterrupted(
+                    f"wait_stream_done 检出睡眠唤醒/时钟跳变(interrupted),窗口 {timeout_s}s")
             raise TimeoutError(f"wait_stream_done exceeded {timeout_s}s")
         try:
             done = bool(done_predicate())
@@ -332,12 +348,12 @@ def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
         last_len = cur_len
         if done and quiet:
             if stable_since is None:
-                stable_since = time.monotonic()
-            elif (time.monotonic() - stable_since) * 1000 >= idle_ms:
+                stable_since = now
+            elif (now - stable_since) * 1000 >= idle_ms:
                 return
         else:
             stable_since = None
-        time.sleep(poll_ms / 1000.0)
+        _sleep(poll_ms / 1000.0)
 
 
 def make_done_predicate(page: Any, *, generating_sel: str | None,
