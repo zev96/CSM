@@ -38,9 +38,11 @@ def classify_fail_reason(*, status: str, error: str) -> str:
     if ("quota" in t or "insufficient" in t or "balance" in t or "arrears" in t
             or "欠费" in e or "余额" in e or "配额" in e):
         return "quota_exhausted"
-    # 5) 内容风控。
-    if ("风控" in e or "敏感" in e or "违规" in e or "content_filter" in t
-            or ("content" in t and "block" in t)):
+    # 5) 内容风控。「安全过滤」是三家 API provider(通义/豆包/Kimi)content_filter/
+    #    sensitive 时实际写的文案(如「内容被通义安全过滤」),必须命中,否则会落到下面
+    #    blocked→not_logged_in 兜底,把内容拦截误报成「未登录」(误导用户去查登录)。
+    if ("风控" in e or "敏感" in e or "违规" in e or "安全过滤" in e
+            or "content_filter" in t or ("content" in t and "block" in t)):
         return "content_blocked"
     # 6) 流式超时(答案没在期限内收敛)—— 必须早于泛 timeout(见模块头注)。
     if "wait_stream_done" in t or ("stream" in t and "timeout" in t):

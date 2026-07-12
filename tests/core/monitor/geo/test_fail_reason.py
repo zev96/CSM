@@ -45,3 +45,15 @@ def test_geocell_has_fail_reason_field_default_empty():
     assert c.fail_reason == ""
     c2 = GeoCell(platform="kimi", keyword="k1", status="error", fail_reason="timeout")
     assert c2.fail_reason == "timeout"
+
+
+@pytest.mark.parametrize("error", [
+    # 真实 provider 文案(api_tongyi/api_doubao/api_kimi 在 finish_reason
+    # ==sensitive/content_filter 时实际写这些)—— 必须归 content_blocked,
+    # 不能落到 blocked→not_logged_in 兜底(否则内容拦截被误报成「未登录」)。
+    "内容被通义安全过滤",
+    "内容被豆包安全过滤",
+    "内容被 Kimi 安全过滤",
+])
+def test_real_content_filter_messages_are_content_blocked(error):
+    assert classify_fail_reason(status="blocked", error=error) == "content_blocked"
