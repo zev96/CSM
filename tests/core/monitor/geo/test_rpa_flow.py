@@ -100,6 +100,7 @@ class _FakePage:
         self.typed = []
         self.evaluated = []
         self._eval_return = None       # start_new_chat 的 JS 点击返回（True=点到/False=icon 不在）
+        self._eval_seq = None          # 设为列表 → evaluate 依次返回（末值定格），用于 answer_text_len
         self.keyboard = _FakeKeyboard(self)
 
     def content(self):
@@ -107,6 +108,8 @@ class _FakePage:
 
     def evaluate(self, expression, arg=None):
         self.evaluated.append((expression, arg))
+        if self._eval_seq is not None:
+            return self._eval_seq.pop(0) if len(self._eval_seq) > 1 else self._eval_seq[0]
         return self._eval_return
 
     def wait_for_timeout(self, ms):
@@ -303,11 +306,19 @@ def test_make_done_predicate_generating_requires_started():
     assert done() is True   # 曾出现且现已消失 → 完成
 
 
-def test_make_done_predicate_answer_growth_requires_started():
-    # 无 generating：测「回答容器」文本增长判「已开始」（空 → 仍空 → 出文）
-    seq = ['<div class="a"></div>', '<div class="a"></div>',
-           '<div class="a">' + "字" * 100 + '</div>']
-    page = _FakePage(seq)
+def test_answer_text_len_uses_evaluate_and_guards_errors():
+    page = _FakePage(["x"]); page._eval_seq = [123]
+    assert _flow.answer_text_len(page, "div.a") == 123
+    assert page.evaluated and page.evaluated[0][1] == "div.a"   # 把 selector 传进 JS
+    boom = _FakePage(["x"])
+    def _raise(*a, **k): raise RuntimeError("eval boom")
+    boom.evaluate = _raise
+    assert _flow.answer_text_len(boom, "div.a") == 0            # 出错→0,不外抛
+
+
+def test_make_done_predicate_answer_growth_uses_evaluate():
+    # 无 generating：内容分支改走 answer_text_len(evaluate) —— 空 → 仍空 → 出文>基线+30 判「已开始」
+    page = _FakePage(["x"]); page._eval_seq = [0, 0, 200]
     done = _flow.make_done_predicate(page, generating_sel=None, answer_sel="div.a")
     assert done() is False   # 回答容器空 → 记基线
     assert done() is False   # 仍空 → 还没开始

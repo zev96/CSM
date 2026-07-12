@@ -41,7 +41,8 @@ def run_one_keyword(page: Any, spec: SiteSpec, keyword: str, *, web_search: bool
     done_pred = _flow.make_done_predicate(page, generating_sel=spec.generating_sel,
                                           answer_sel=spec.answer_sel)
     _flow.wait_stream_done(page, done_predicate=done_pred, idle_ms=1500,
-                           timeout_s=spec.stream_timeout_s, cancel_token=cancel_token)
+                           timeout_s=spec.stream_timeout_s, cancel_token=cancel_token,
+                           length_fn=lambda: _flow.answer_text_len(page, spec.answer_sel))
     html = page.content()
     answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
     # 信源三分支互斥(sites.py 里三站 toolcall_sel/source_text_sel 无一同设);web_toggle_sel

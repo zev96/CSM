@@ -283,12 +283,30 @@ def expand_search_toolcalls(page: Any, *, toolcall_sel: str, hint: str = "搜索
     return clicked
 
 
+def answer_text_len(page: Any, answer_sel: str) -> int:
+    """答案容器可见文本长度(page 端 textContent 求和,不过 bs4)。缺失/出错→0。
+    热轮询(每 500ms × 3 车道)用它替代 page.content()+bs4,省 GIL/整页序列化。
+    三站 answer_sel 均为合法 querySelectorAll CSS(复合类 / [class*=] / :not())。"""
+    try:
+        return int(page.evaluate(
+            """(sel) => { let n = 0;
+                 for (const el of document.querySelectorAll(sel)) n += (el.textContent || '').length;
+                 return n; }""",
+            answer_sel))
+    except Exception:
+        return 0
+
+
 def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
                      idle_ms: int = 1500, timeout_s: float = 90.0,
                      poll_ms: int = 500,
-                     cancel_token: "Any | None" = None) -> None:
+                     cancel_token: "Any | None" = None,
+                     length_fn: "Callable[[], int] | None" = None) -> None:
     """轮询直到 done_predicate() 为真且 page.content() 长度静默 idle_ms。
     超 timeout_s 抛 TimeoutError；每轮 maybe_cancel(cancel_token)（取消即抛）。"""
+    if length_fn is None:
+        def length_fn():                      # 默认:整页长度(与旧版逐字节等价,保既有测试)
+            return len(page.content())
     deadline = time.monotonic() + timeout_s
     stable_since: float | None = None
     last_len = -1
@@ -302,7 +320,7 @@ def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
             logger.debug("done_predicate raised: %s", e)
             done = False
         try:
-            cur_len = len(page.content())
+            cur_len = length_fn()
         except Exception:
             cur_len = last_len
         quiet = cur_len == last_len
@@ -337,10 +355,7 @@ def make_done_predicate(page: Any, *, generating_sel: str | None,
             if present:
                 started["v"] = True
             return started["v"] and not present
-        try:
-            cur = len(extract_answer_text(page.content(), container_sel=answer_sel))
-        except Exception:
-            return False
+        cur = answer_text_len(page, answer_sel)   # page.evaluate textContent(热轮询降本,不过 bs4)
         if base_len["v"] is None:
             base_len["v"] = cur
         if cur > (base_len["v"] or 0) + 30:
