@@ -7,6 +7,7 @@ import {
   weeklyPlatformCoverage,
   filterBoard,
   placeholderPlatform,
+  failReasonLabel,
   type PlatformVM,
   type BoardRow,
 } from "@/components/monitor/geo/geoDetail";
@@ -184,5 +185,23 @@ describe("filterBoard", () => {
   it("门槛可自定义", () => {
     const out = filterBoard([mk("a.com", 5), mk("b.com", 20)], 20);
     expect(out.map((r) => r.domain)).toEqual(["b.com"]);
+  });
+});
+
+describe("failReasonLabel", () => {
+  it("已知 code 映射人话 + 行动提示", () => {
+    expect(failReasonLabel("not_logged_in")).toContain("未登录");
+    expect(failReasonLabel("timeout")).toContain("超时");
+    expect(failReasonLabel("rate_limited")).toContain("限流");
+    expect(failReasonLabel("quota_exhausted")).toMatch(/配额|余额|欠费/);
+    expect(failReasonLabel("content_blocked")).toMatch(/内容|拦/);
+    expect(failReasonLabel("selector_drift")).toMatch(/改版|页面|采集/);
+    expect(failReasonLabel("network")).toMatch(/网络|浏览器/);
+    expect(failReasonLabel("interrupted")).toMatch(/中断/);
+  });
+  it("空 / unknown / 未知 code 回退旧文案「够不到平台」", () => {
+    expect(failReasonLabel("")).toBe("够不到平台");
+    expect(failReasonLabel("unknown")).toBe("够不到平台");
+    expect(failReasonLabel("这不是已知code")).toBe("够不到平台");
   });
 });

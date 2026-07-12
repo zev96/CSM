@@ -30,7 +30,9 @@ from ..base import MonitorTask, MonitorResult, maybe_cancel, is_cancelled
 from ..geo.models import GeoCell
 from ..geo.providers.base import get_provider
 from ..geo.extract import extract, build_extract_client
+from ..geo.fail_reason import classify_fail_reason
 from ..geo import metrics
+from ..geo import runner as geo_runner
 from ..geo import storage as geo_storage
 from ..rate_limit import configure_concurrency
 
@@ -75,27 +77,55 @@ class GeoQueryAdapter:
         # Clamp resume_from to valid range so callers don't need to guard.
         resume_from = max(0, min(int(resume_from), total))
 
-        # Emit an initial progress event up-front (mirror baidu) so the UI
-        # shows the total immediately instead of an empty bar until the
-        # first cell finishes. Wrapped — a flaky sink must never kill fetch.
-        if progress_cb is not None:
+        # 双车道并发调度(API 并发 + RPA 按平台并发)。cell 级隔离与串行版一致:
+        # _run_cell 内部把非取消异常兜成 error cell,取消异常上抛由 runner 传导。
+        def _int_cfg(key: str, default: int, hi: int) -> int:
             try:
-                progress_cb(resume_from, total)
-            except Exception:
-                logger.exception("[geo] progress_cb(resume_from,N) raised; ignoring")
+                v = int(cfg.get(key, default) or default)
+            except (TypeError, ValueError):
+                v = default
+            return max(1, min(v, hi))
+        api_pool_size = _int_cfg("geo_api_pool_size", 5, 16)
+        rpa_conc = _int_cfg("geo_rpa_platform_concurrency", 3, 8)
+        consec_skip = _int_cfg("geo_consecutive_fail_skip", 3, 999)
 
-        cells: list[GeoCell] = []
-        for i, (kw, plat) in enumerate(cells_plan):
-            if i < resume_from:
-                continue
-            maybe_cancel(cancel_token)
-            cell = self._run_cell(kw, plat, brand, aliases, web_search, client, cancel_token=cancel_token)
-            cells.append(cell)
-            if progress_cb is not None:
-                try:
-                    progress_cb(i + 1, total)
-                except Exception:
-                    logger.exception("[geo] progress_cb(%s,%s) raised; ignoring", i + 1, total)
+        # 预计算每个平台的车道(mode)。get_provider 可能抛(未知/废弃平台 key、
+        # provider 模块 import 失败)——逐平台兜住,把失败平台并入 API 车道,让
+        # _run_cell 执行时再次 get_provider 抛错并隔离成 error cell(恢复串行版的
+        # cell 级隔离:一个坏平台不拖垮整轮),顺带每平台只构造一次 provider。
+        mode_map: "dict[str, str]" = {}
+        for _p in dict.fromkeys(plat for _, plat in cells_plan):
+            try:
+                mode_map[_p] = get_provider(_p).mode
+            except Exception:
+                logger.warning("[geo] 平台 %s 无法构造(未知/模块缺失),归入 API 车道由 _run_cell 兜错", _p)
+                mode_map[_p] = "api"
+
+        def _cell(kw: str, plat: str) -> GeoCell:
+            return self._run_cell(kw, plat, brand, aliases, web_search, client,
+                                  cancel_token=cancel_token)
+
+        maybe_cancel(cancel_token)               # 开跑前先检一次取消(等价串行版首个 maybe_cancel)
+        tail = cells_plan[resume_from:]
+        cells: list[GeoCell] = geo_runner.run_cells_dual_lane(
+            tail, _cell,
+            mode_of=lambda p: mode_map.get(p, "api"),
+            api_pool_size=api_pool_size,
+            rpa_platform_concurrency=rpa_conc,
+            progress_cb=progress_cb,
+            initial_done=resume_from,
+            cancel_token=cancel_token,
+            rpa_batch=lambda plat, kws, t: self._rpa_batch(
+                plat, kws, t, web_search=web_search, brand=brand, aliases=aliases,
+                client=client, consec_skip=consec_skip),
+        )
+
+        # C1 修复:runner 返回后复查取消。API cell 的同步 httpx POST 只在
+        # provider.query() 起始处调过一次 maybe_cancel —— 若用户在该 cell 已
+        # 发出请求、尚未返回时点 Stop,POST 会照常跑完并记 ok,token 置位这件事
+        # 就被在飞请求"吞掉"。这里补一次复查,把「运行期间被取消」正确抛成取消,
+        # 而不是悄悄按 status="ok" 持久化(甚至误发告警)。
+        maybe_cancel(cancel_token)
 
         agg = metrics.aggregate(cells)
         # I2：把"够不到平台"和"曝光低"区分开 —— error_cells 让仪表盘知道
@@ -155,7 +185,9 @@ class GeoQueryAdapter:
             answer = provider.query(keyword, web_search=web_search, cancel_token=cancel_token)
             if answer.status in ("error", "blocked"):
                 return GeoCell(platform=platform, keyword=keyword, status=answer.status,
-                               answer_text="", raw={"error": answer.error})
+                               answer_text="",
+                               fail_reason=classify_fail_reason(status=answer.status, error=answer.error),
+                               raw={"error": answer.error})
             ext = extract(answer, brand=brand, aliases=aliases, client=client)
             return GeoCell(
                 platform=platform, keyword=keyword,
@@ -169,7 +201,92 @@ class GeoQueryAdapter:
             # 保留异常类型（不止 message），下钻时能区分 TimeoutError vs ValueError。
             logger.exception("[geo] cell 失败 kw=%s plat=%s", keyword, platform)
             return GeoCell(platform=platform, keyword=keyword, status="error",
+                           fail_reason=classify_fail_reason(status="error", error=repr(e)),
                            raw={"error": repr(e)})
+
+    def _run_cell_on_session(self, query_one, keyword, platform, brand, aliases, client) -> GeoCell:
+        """在已开好的 RPA session 上跑单关键词:query_one → extract → cell(逐 cell 隔离,同 _run_cell)。"""
+        try:
+            answer = query_one(keyword)
+            if answer.status in ("error", "blocked"):
+                return GeoCell(platform=platform, keyword=keyword, status=answer.status,
+                               answer_text="",
+                               fail_reason=classify_fail_reason(status=answer.status, error=answer.error),
+                               raw={"error": answer.error})
+            ext = extract(answer, brand=brand, aliases=aliases, client=client)
+            return GeoCell(platform=platform, keyword=keyword,
+                           mentioned=ext.mentioned, rank=ext.target_rank, sentiment=ext.sentiment,
+                           answer_text=answer.answer_text, status="ok", raw=answer.raw,
+                           citations=ext.citations, recommended=ext.recommended, summary=ext.summary)
+        except Exception as e:
+            if is_cancelled(e):
+                raise
+            logger.exception("[geo] rpa cell 失败 kw=%s plat=%s", keyword, platform)
+            return GeoCell(platform=platform, keyword=keyword, status="error",
+                           fail_reason=classify_fail_reason(status="error", error=repr(e)),
+                           raw={"error": repr(e)})
+
+    def _rpa_batch(self, plat, plat_keywords, tok, *, web_search, brand, aliases,
+                   client, consec_skip):
+        """每平台开一次 session,循环关键词逐 cell yield(浏览器跨关键词复用)。
+
+        登录 gate(§4.3):首关键词返回 blocked = 平台没登录 → 余下关键词全出合成
+        blocked cell(不再问,省 goto/等流)。
+        连败短路(§4.3):连续 consec_skip 个关键词 status∈{error,blocked} → 余下
+        全出合成 cell,携带最后一个失败的 fail_reason。
+        合成 cell(§4.5:被跳平台不缺席)status=blocked、携带触发失败的 fail_reason、
+        raw.synthetic=True;记 error_cells、不进 KPI 分母、不触发假「跌出」告警。
+
+        契约:必对每个关键词各 yield 一个 (local_idx, cell);provider 构造 / session
+        开启(__enter__)/收尾(__exit__)失败 → 该平台每关键词各出一个 error cell(隔离)。
+        """
+        def _synthetic(start_li, reason, detail):
+            for li in range(start_li, len(plat_keywords)):
+                yield li, GeoCell(platform=plat, keyword=plat_keywords[li], status="blocked",
+                                  fail_reason=reason, raw={"error": detail, "synthetic": True})
+
+        try:
+            provider = get_provider(plat)
+            session_cm = provider.session(web_search=web_search, cancel_token=tok)
+        except Exception as e:                       # 构造失败:全隔离成 error
+            reason = classify_fail_reason(status="error", error=repr(e))
+            for li, kw in enumerate(plat_keywords):
+                yield li, GeoCell(platform=plat, keyword=kw, status="error",
+                                  fail_reason=reason, raw={"error": repr(e)})
+            return
+
+        produced = 0
+        consec = 0
+        try:
+            with session_cm as query_one:
+                for li, kw in enumerate(plat_keywords):
+                    maybe_cancel(tok)
+                    cell = self._run_cell_on_session(query_one, kw, plat, brand, aliases, client)
+                    produced = li + 1
+                    yield li, cell
+                    failed = cell.status in ("error", "blocked")
+                    # 登录 gate:首关键词就 blocked = 平台没登录,别再问剩下的。
+                    if li == 0 and cell.status == "blocked":
+                        for li2, syn in _synthetic(li + 1, cell.fail_reason or "not_logged_in",
+                                                   f"{plat} 首关键词未登录,跳过剩余关键词"):
+                            produced = li2 + 1
+                            yield li2, syn
+                        return
+                    consec = consec + 1 if failed else 0
+                    if failed and consec >= consec_skip:
+                        for li2, syn in _synthetic(li + 1, cell.fail_reason or "unknown",
+                                                   f"{plat} 连续 {consec} 个关键词失败,短路跳过剩余"):
+                            produced = li2 + 1
+                            yield li2, syn
+                        return
+        except Exception as e:                       # session __enter__/__exit__ 失败或中途非隔离异常
+            if is_cancelled(e):
+                raise
+            logger.exception("[geo] rpa session 中断 plat=%s", plat)
+            reason = classify_fail_reason(status="error", error=repr(e))
+            for li in range(produced, len(plat_keywords)):
+                yield li, GeoCell(platform=plat, keyword=plat_keywords[li], status="error",
+                                  fail_reason=reason, raw={"error": f"session 中断: {e!r}"})
 
 
 ADAPTER = GeoQueryAdapter()

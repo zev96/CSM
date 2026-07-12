@@ -5,12 +5,13 @@
 取消（用户 Stop）上抛、不算失败。
 """
 from __future__ import annotations
+import contextlib
 import logging
 import threading
 
 from csm_core.monitor.base import maybe_cancel, is_cancelled
 from csm_core.monitor.geo.models import GeoAnswer
-from csm_core.monitor.geo.providers.rpa import _flow
+from csm_core.monitor.geo.providers.rpa import _driver, _flow
 from csm_core.monitor.geo.providers.rpa._session import rpa_page
 from csm_core.monitor.geo.providers.rpa.sites import SITES
 
@@ -22,45 +23,28 @@ class KimiProvider:
     platform = "kimi"
     mode = "rpa"
 
+    @contextlib.contextmanager
+    def session(self, *, web_search: bool = True,
+                cancel_token: "threading.Event | None" = None):
+        spec = _SPEC
+        with rpa_page(self.platform, headless=False) as page:
+            page.goto(spec.url, wait_until="domcontentloaded", timeout=30000)
+            logged_in = _flow.wait_login_ready(page, logged_in_sel=spec.logged_in_sel,
+                                               logged_out_sel=spec.logged_out_sel)
+
+            def query_one(keyword: str) -> GeoAnswer:
+                return _driver.run_one_keyword(page, spec, keyword, web_search=web_search,
+                                               cancel_token=cancel_token, logged_in=logged_in)
+            yield query_one
+
     def query(self, keyword: str, *, web_search: bool = True,
               cancel_token: "threading.Event | None" = None) -> GeoAnswer:
         maybe_cancel(cancel_token)
-        spec = _SPEC
         try:
-            with rpa_page(self.platform, headless=False) as page:
-                page.goto(spec.url, wait_until="domcontentloaded", timeout=30000)
-                if not _flow.wait_login_ready(page, logged_in_sel=spec.logged_in_sel,
-                                              logged_out_sel=spec.logged_out_sel):
-                    return GeoAnswer(platform=self.platform, keyword=keyword,
-                                     status="blocked", error="Kimi 未登录，请在设置中登录")
-                if web_search and spec.web_toggle_sel:
-                    _flow.ensure_web_toggle(page, toggle_sel=spec.web_toggle_sel, want_on=True)
-                _flow.submit_query(page, composer_sel=spec.composer_sel,
-                                   send_sel=spec.send_sel, text=keyword)
-                done_pred = _flow.make_done_predicate(
-                    page, generating_sel=spec.generating_sel, answer_sel=spec.answer_sel)
-                _flow.wait_stream_done(page, done_predicate=done_pred, idle_ms=1500,
-                                       timeout_s=120.0, cancel_token=cancel_token)
-                html = page.content()
-                answer = _flow.extract_answer_text(html, container_sel=spec.answer_sel)
-                # Kimi 信源：内联 <a> 不稳（常为空）→ 点开「搜索网页」toolcall 露出搜到的
-                # 网页链接，再全页抓 <a>（过滤 bing 跳转壳 + 自家域名）。需在 page 开着时做。
-                if spec.toolcall_sel:
-                    _flow.expand_search_toolcalls(page, toolcall_sel=spec.toolcall_sel)
-                    html = page.content()
-                    cites = _flow.extract_citations(html, container_sel=None,
-                                                    exclude_hosts=spec.exclude_hosts)
-                else:
-                    cites = _flow.extract_citations(html, container_sel=spec.citation_sel,
-                                                    exclude_hosts=spec.exclude_hosts)
-            logger.info("[geo-rpa][kimi] kw=%s answer_len=%d cite_n=%d",
-                        keyword, len(answer), len(cites))
-            return GeoAnswer(platform=self.platform, keyword=keyword, answer_text=answer,
-                             citations=cites, status="ok" if answer else "empty",
-                             raw={"html_len": len(html), "cite_n": len(cites)})
+            with self.session(web_search=web_search, cancel_token=cancel_token) as query_one:
+                return query_one(keyword)
         except Exception as e:
             if is_cancelled(e):
                 raise
             logger.exception("[geo-rpa][kimi] query failed kw=%s", keyword)
-            return GeoAnswer(platform=self.platform, keyword=keyword,
-                             status="error", error=str(e))
+            return GeoAnswer(platform=self.platform, keyword=keyword, status="error", error=str(e))

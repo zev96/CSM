@@ -74,6 +74,7 @@ export interface PlatformVM {
   id: string;
   name: string;
   status: string; // 'ok' | 'error' | 'blocked' | 'empty' ...
+  failReason?: string; // 失败原因分类(后端 geo.fail_reason;非失败 cell 为空)
   mentioned: boolean;
   rank: number;
   sentiment: string; // 'pos' | 'neu' | 'neg' | 'na'
@@ -222,6 +223,25 @@ export function cellStatus(p: PlatformVM): CellBadge {
   if (!p.mentioned) return { kind: "miss", label: "未提及", short: "✗ 未提及", color: "var(--red)" };
   if (p.rank === 1) return { kind: "first", label: "首推 #1", short: "★ #1", color: "var(--green)" };
   return { kind: "hit", label: `提及 #${p.rank}`, short: `#${p.rank}`, color: "var(--primary-deep)" };
+}
+
+/**
+ * 失败原因 code → 人话 + 行动提示(替掉写死的「够不到平台」)。
+ * 与后端 csm_core/monitor/geo/fail_reason.py 的 FailReason 枚举对齐。
+ * 空 / unknown / 未知 code 回退旧文案「够不到平台」,保证永不显示裸 code。
+ */
+const FAIL_REASON_TEXT: Record<string, string> = {
+  not_logged_in: "未登录 · 去设置登录",
+  timeout: "响应超时 · 可重试",
+  selector_drift: "页面改版 · 采集异常",
+  rate_limited: "被限流 · 稍后重试",
+  quota_exhausted: "配额/余额不足 · 查账户",
+  content_blocked: "内容被拦 · 换个说法",
+  network: "网络/浏览器异常 · 重试",
+  interrupted: "已中断 · 重跑一次",
+};
+export function failReasonLabel(code: string | undefined | null): string {
+  return FAIL_REASON_TEXT[(code || "").trim()] ?? "够不到平台";
 }
 
 /** 已配置但本次无 cell 的平台占位 VM（中性灰「未运行」卡用）。 */
@@ -410,6 +430,7 @@ interface RawCell {
   rank: number;
   sentiment: string;
   status: string;
+  fail_reason?: string;
   answer_text: string;
   citations: RawCite[];
   recommended: RecommendedEntity[];
@@ -456,6 +477,7 @@ function cellToPlatform(c: RawCell, brandTerms: string[]): PlatformVM {
     id: c.platform,
     name: platformLabel(c.platform),
     status: c.status,
+    failReason: c.fail_reason || "",
     mentioned,
     rank: typeof c.rank === "number" ? c.rank : -1,
     sentiment: c.sentiment || "na",

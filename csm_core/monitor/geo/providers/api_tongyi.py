@@ -16,6 +16,44 @@ logger = logging.getLogger(__name__)
 
 _URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 
+import threading as _threading
+import time as _time
+
+_client_lock = _threading.Lock()
+_client: "httpx.Client | None" = None
+
+
+def _shared_client() -> httpx.Client:
+    """进程内复用一个 httpx.Client(连接池 + 线程安全)。"""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = httpx.Client()
+    return _client
+
+
+def _post_retry_429(url: str, *, headers: dict, json: dict, timeout) -> httpx.Response:
+    """采集调用:仅对 429 / 连接建立失败重试一次(未计费)。已生成响应绝不重发。"""
+    client = _shared_client()
+    for attempt in range(2):
+        try:
+            r = client.post(url, headers=headers, json=json, timeout=timeout)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            if attempt == 0:
+                _time.sleep(1.0)
+                continue
+            raise
+        if r.status_code == 429 and attempt == 0:
+            try:
+                delay = min(float(r.headers.get("Retry-After", "1") or 1), 10.0)
+            except (TypeError, ValueError):
+                delay = 1.0
+            _time.sleep(max(0.0, delay))
+            continue
+        return r
+    return r  # pragma: no cover
+
 
 def parse_tongyi_response(raw: dict) -> tuple[str, list[Citation]]:
     out = raw.get("output") or {}
@@ -64,7 +102,7 @@ class TongyiProvider:
                            "result_format": "message"},
         }
         try:
-            r = httpx.post(
+            r = _post_retry_429(
                 _URL,
                 headers={"Authorization": f"Bearer {key}"},
                 json=body,

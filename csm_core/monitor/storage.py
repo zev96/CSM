@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -153,6 +153,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     #     fact_snapshots / model_fingerprints）。同 v3-v8 lazy import + 幂等。
     from csm_core.feedback import storage as feedback_storage
     feedback_storage.apply_v9_migration(conn)
+    # v10: geo_cells.fail_reason —— 失败原因分类列(前端替掉写死「够不到平台」)。
+    # geo_storage 已在 v7 段 import(同一函数作用域)。幂等。
+    geo_storage.apply_v10_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),

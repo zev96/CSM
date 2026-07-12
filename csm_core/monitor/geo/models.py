@@ -58,6 +58,7 @@ class GeoCell(BaseModel):
     sentiment: Sentiment = "na"
     answer_text: str = ""
     status: AnswerStatus = "ok"   # ok/empty/blocked/error，与 GeoAnswer 同值域
+    fail_reason: str = ""         # 失败原因分类(见 geo.fail_reason;ok cell 恒 ""）
     raw: dict[str, Any] = Field(default_factory=dict)
     citations: list[ClassifiedCitation] = Field(default_factory=list)
     recommended: list[RecommendedEntity] = Field(default_factory=list)

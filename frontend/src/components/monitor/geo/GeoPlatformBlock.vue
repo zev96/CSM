@@ -3,12 +3,13 @@
  * 平台对比卡片 `PlatformBlock`（Notion 风格）—— 移植 design full-app.jsx。
  * 色块头部(状态着色) + 关于「品牌」的原文(摘录，品牌名高亮；未提及红块) +
  * AI 采用的信源(全部，无数量徽章)。masonry 两列由父组件 column-count 布局。
- * 采集失败 → 正文显「本平台本次采集失败」。配色/字号严格照稿。
+ * 采集失败 → 正文显「本平台本次未取到结果：<失败原因>」。配色/字号严格照稿。
  */
 import { computed } from "vue";
 
 import {
   cellStatus,
+  failReasonLabel,
   isFailed,
   isPending,
   sentDotColor,
@@ -115,7 +116,7 @@ const excerptSegs = computed<Seg[]>(() => {
       :style="{ padding: '14px 16px', fontSize: '12px', color: 'var(--ink-3)', gap: '7px' }"
     >
       <span :style="{ width: '6px', height: '6px', borderRadius: '999px', background: 'var(--red)' }" />
-      本平台本次采集失败，未取到结果。
+      本平台本次未取到结果：{{ failReasonLabel(platform.failReason) }}
     </div>
     <div v-else :style="{ padding: '13px 16px 15px' }">
       <!-- 关于品牌的原文 -->
