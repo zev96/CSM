@@ -30,6 +30,7 @@ from ..base import MonitorTask, MonitorResult, maybe_cancel, is_cancelled
 from ..geo.models import GeoCell
 from ..geo.providers.base import get_provider
 from ..geo.extract import extract, build_extract_client
+from ..geo.fail_reason import classify_fail_reason
 from ..geo import metrics
 from ..geo import runner as geo_runner
 from ..geo import storage as geo_storage
@@ -208,7 +209,9 @@ class GeoQueryAdapter:
             answer = provider.query(keyword, web_search=web_search, cancel_token=cancel_token)
             if answer.status in ("error", "blocked"):
                 return GeoCell(platform=platform, keyword=keyword, status=answer.status,
-                               answer_text="", raw={"error": answer.error})
+                               answer_text="",
+                               fail_reason=classify_fail_reason(status=answer.status, error=answer.error),
+                               raw={"error": answer.error})
             ext = extract(answer, brand=brand, aliases=aliases, client=client)
             return GeoCell(
                 platform=platform, keyword=keyword,
@@ -222,6 +225,7 @@ class GeoQueryAdapter:
             # 保留异常类型（不止 message），下钻时能区分 TimeoutError vs ValueError。
             logger.exception("[geo] cell 失败 kw=%s plat=%s", keyword, platform)
             return GeoCell(platform=platform, keyword=keyword, status="error",
+                           fail_reason=classify_fail_reason(status="error", error=repr(e)),
                            raw={"error": repr(e)})
 
     def _run_cell_on_session(self, query_one, keyword, platform, brand, aliases, client) -> GeoCell:
@@ -230,7 +234,9 @@ class GeoQueryAdapter:
             answer = query_one(keyword)
             if answer.status in ("error", "blocked"):
                 return GeoCell(platform=platform, keyword=keyword, status=answer.status,
-                               answer_text="", raw={"error": answer.error})
+                               answer_text="",
+                               fail_reason=classify_fail_reason(status=answer.status, error=answer.error),
+                               raw={"error": answer.error})
             ext = extract(answer, brand=brand, aliases=aliases, client=client)
             return GeoCell(platform=platform, keyword=keyword,
                            mentioned=ext.mentioned, rank=ext.target_rank, sentiment=ext.sentiment,
@@ -240,7 +246,9 @@ class GeoQueryAdapter:
             if is_cancelled(e):
                 raise
             logger.exception("[geo] rpa cell 失败 kw=%s plat=%s", keyword, platform)
-            return GeoCell(platform=platform, keyword=keyword, status="error", raw={"error": repr(e)})
+            return GeoCell(platform=platform, keyword=keyword, status="error",
+                           fail_reason=classify_fail_reason(status="error", error=repr(e)),
+                           raw={"error": repr(e)})
 
 
 ADAPTER = GeoQueryAdapter()

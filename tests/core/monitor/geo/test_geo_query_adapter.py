@@ -374,3 +374,45 @@ def test_fetch_rpa_session_open_failure_isolates_platform(fresh_db, monkeypatch)
     rows = {r["keyword"]: r["status"] for r in
             conn.execute("SELECT keyword,status FROM geo_cells WHERE task_id=?", (tid,)).fetchall()}
     assert rows == {"k1": "error", "k2": "error"}
+
+
+def test_run_cell_populates_fail_reason(monkeypatch):
+    from csm_core.monitor.platforms import geo_query as gq
+    from csm_core.monitor.geo.models import GeoAnswer
+
+    adapter = gq.GeoQueryAdapter()
+
+    # blocked(未登录)→ fail_reason=not_logged_in
+    class _Blocked:
+        mode = "rpa"
+        def query(self, kw, *, web_search, cancel_token=None):
+            return GeoAnswer(platform="deepseek", keyword=kw, status="blocked",
+                             error="DeepSeek 未登录，请在设置中登录")
+    monkeypatch.setattr(gq, "get_provider", lambda p: _Blocked())
+    cell = adapter._run_cell("k1", "deepseek", "云野", [], True, client=object())
+    assert cell.status == "blocked"
+    assert cell.fail_reason == "not_logged_in"
+
+    # 异常(流超时)→ status=error, fail_reason=timeout
+    class _Timeout:
+        mode = "rpa"
+        def query(self, kw, *, web_search, cancel_token=None):
+            raise TimeoutError("wait_stream_done exceeded 180s")
+    monkeypatch.setattr(gq, "get_provider", lambda p: _Timeout())
+    cell = adapter._run_cell("k1", "kimi", "云野", [], True, client=object())
+    assert cell.status == "error"
+    assert cell.fail_reason == "timeout"
+
+
+def test_run_cell_on_session_populates_fail_reason():
+    from csm_core.monitor.platforms import geo_query as gq
+    from csm_core.monitor.geo.models import GeoAnswer
+
+    adapter = gq.GeoQueryAdapter()
+
+    def query_one(kw):   # 直接给 session 上的 query_one
+        return GeoAnswer(platform="yuanbao", keyword=kw, status="blocked",
+                         error="腾讯元宝 未登录，请在设置中扫码登录")
+    cell = adapter._run_cell_on_session(query_one, "k1", "yuanbao", "云野", [], client=object())
+    assert cell.status == "blocked"
+    assert cell.fail_reason == "not_logged_in"
