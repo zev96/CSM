@@ -416,3 +416,87 @@ def test_run_cell_on_session_populates_fail_reason():
     cell = adapter._run_cell_on_session(query_one, "k1", "yuanbao", "云野", [], client=object())
     assert cell.status == "blocked"
     assert cell.fail_reason == "not_logged_in"
+
+
+def _fake_provider_yielding(script):
+    """返回一个 provider,其 session() 的 query_one(kw) 按 script[kw] 出 GeoAnswer。"""
+    import contextlib
+    from csm_core.monitor.geo.models import GeoAnswer
+
+    class _P:
+        mode = "rpa"
+        @contextlib.contextmanager
+        def session(self, *, web_search, cancel_token=None):
+            def query_one(kw):
+                st, err = script[kw]
+                if st == "ok":
+                    return GeoAnswer(platform="kimi", keyword=kw, answer_text="有内容", status="ok")
+                return GeoAnswer(platform="kimi", keyword=kw, status=st, error=err)
+            yield query_one
+    return _P()
+
+
+def _drain_batch(adapter, plat, kws, provider, monkeypatch, consec_skip=3):
+    from csm_core.monitor.platforms import geo_query as gq
+    monkeypatch.setattr(gq, "get_provider", lambda p: provider)
+    # ok cell 会走 extract → 打桩成恒定 GeoExtraction,避免真调 LLM。
+    from csm_core.monitor.geo.models import GeoExtraction
+    monkeypatch.setattr(gq, "extract",
+                        lambda answer, *, brand, aliases, client: GeoExtraction(mentioned=False))
+    out = list(adapter._rpa_batch(plat, kws, None, web_search=True, brand="云野",
+                                  aliases=[], client=object(), consec_skip=consec_skip))
+    return out
+
+
+def test_rpa_batch_login_gate_synthesizes_rest(monkeypatch):
+    from csm_core.monitor.platforms import geo_query as gq
+    adapter = gq.GeoQueryAdapter()
+    kws = ["k1", "k2", "k3"]
+    provider = _fake_provider_yielding({
+        "k1": ("blocked", "Kimi 未登录，请在设置中登录"),
+        "k2": ("ok", ""), "k3": ("ok", ""),   # 不该被调用
+    })
+    out = _drain_batch(adapter, "kimi", kws, provider, monkeypatch)
+    assert [li for li, _ in out] == [0, 1, 2]              # 契约:每关键词一 cell
+    cells = [c for _, c in out]
+    assert cells[0].status == "blocked" and cells[0].fail_reason == "not_logged_in"
+    for c in cells[1:]:                                    # k2/k3 合成:blocked + 继承 + synthetic
+        assert c.status == "blocked"
+        assert c.fail_reason == "not_logged_in"
+        assert c.raw.get("synthetic") is True
+
+
+def test_rpa_batch_consecutive_fail_short_circuits(monkeypatch):
+    from csm_core.monitor.platforms import geo_query as gq
+    adapter = gq.GeoQueryAdapter()
+    kws = ["k1", "k2", "k3", "k4", "k5"]
+    provider = _fake_provider_yielding({
+        "k1": ("error", "wait_stream_done exceeded"),
+        "k2": ("error", "wait_stream_done exceeded"),
+        "k3": ("error", "wait_stream_done exceeded"),
+        "k4": ("ok", ""), "k5": ("ok", ""),   # 不该被调用
+    })
+    out = _drain_batch(adapter, "kimi", kws, provider, monkeypatch, consec_skip=3)
+    cells = [c for _, c in out]
+    assert len(cells) == 5                                 # 契约:补足 5 个
+    assert [c.status for c in cells[:3]] == ["error", "error", "error"]
+    assert all(c.fail_reason == "timeout" for c in cells[:3])
+    for c in cells[3:]:                                    # k4/k5 合成,继承 timeout
+        assert c.status == "blocked"
+        assert c.fail_reason == "timeout"
+        assert c.raw.get("synthetic") is True
+
+
+def test_rpa_batch_no_early_skip_when_recovers(monkeypatch):
+    from csm_core.monitor.platforms import geo_query as gq
+    adapter = gq.GeoQueryAdapter()
+    kws = ["k1", "k2", "k3", "k4"]
+    # error,error,ok(连败清零),error → 从不达 3 连败,全部真跑,无合成
+    provider = _fake_provider_yielding({
+        "k1": ("error", "x"), "k2": ("error", "x"),
+        "k3": ("ok", ""), "k4": ("error", "x"),
+    })
+    out = _drain_batch(adapter, "kimi", kws, provider, monkeypatch, consec_skip=3)
+    cells = [c for _, c in out]
+    assert [c.raw.get("synthetic") for c in cells] == [None, None, None, None]
+    assert [c.status for c in cells] == ["error", "error", "ok", "error"]
