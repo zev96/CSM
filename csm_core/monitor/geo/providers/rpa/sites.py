@@ -18,7 +18,7 @@ class SiteSpec:
     platform: str
     url: str
     composer_sel: str
-    send_sel: str | None          # None → 按 Enter 提交
+    send_sel: "str | tuple[str, ...] | None"  # None→Enter;元组→多候选逐试后再 Enter 兜底
     web_toggle_sel: str | None    # None → 默认联网/无开关
     generating_sel: str | None    # 生成中在场的元素（如停止按钮）；None → 退化为 send 可点
     answer_sel: str               # 回答容器（抓正文，CSS）

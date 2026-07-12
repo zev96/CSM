@@ -120,7 +120,7 @@ class _FakePage:
     def fill(self, sel, text):
         self.filled = (sel, text)
 
-    def click(self, sel):
+    def click(self, sel, **kwargs):
         self.clicked.append(sel)
 
     def press(self, sel, key):
@@ -151,6 +151,33 @@ def test_submit_query_types_and_enters_when_no_send_sel():
     _flow.submit_query(page, composer_sel="textarea", send_sel=None, text="k")
     assert page.typed == ["k"]
     assert page.pressed == [("<kbd>", "Enter")]
+
+
+class _FlakyClickPage(_FakePage):
+    """指定 selector 的 click 抛异常(模拟发送键选择器漂移),验证 Enter 兜底/下一候选。"""
+    def __init__(self, contents, fail_sels=()):
+        super().__init__(contents)
+        self._fail = set(fail_sels)
+
+    def click(self, sel, **kwargs):
+        if sel in self._fail:
+            raise RuntimeError(f"click timeout: {sel}")
+        self.clicked.append(sel)
+
+
+def test_submit_query_falls_back_to_enter_when_send_click_fails():
+    page = _FlakyClickPage(["<html></html>"], fail_sels={"button.send"})
+    _flow.submit_query(page, composer_sel="textarea", send_sel="button.send", text="k")
+    assert page.clicked == ["textarea"]              # composer 聚焦成功、发送键失败
+    assert page.pressed == [("<kbd>", "Enter")]      # 回落 Enter
+
+
+def test_submit_query_tries_second_candidate_before_enter():
+    page = _FlakyClickPage(["<html></html>"], fail_sels={"button.a"})
+    _flow.submit_query(page, composer_sel="textarea",
+                       send_sel=("button.a", "button.b"), text="k")
+    assert page.clicked == ["textarea", "button.b"]  # 首候选失败→次候选成功
+    assert page.pressed == []                         # 无需 Enter
 
 
 def test_ensure_web_toggle_clicks_when_off():

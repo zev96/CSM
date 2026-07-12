@@ -129,8 +129,9 @@ def wait_login_ready(page: Any, *, logged_in_sel: str, logged_out_sel: str | Non
     return False
 
 
-def submit_query(page: Any, *, composer_sel: str, send_sel: str | None, text: str,
-                 focus_ms: int = 250, key_delay_ms: int = 20, commit_ms: int = 400) -> None:
+def submit_query(page: Any, *, composer_sel: str, send_sel, text: str,
+                 focus_ms: int = 250, key_delay_ms: int = 20, commit_ms: int = 400,
+                 send_timeout_ms: int = 4000) -> None:
     """聚焦 composer + 真键盘逐字打字（带节流），再点 send_sel（无则按 Enter）。
 
     用 page.keyboard.type 而非 page.fill —— Lexical/Quill 等受控富文本编辑器
@@ -145,10 +146,16 @@ def submit_query(page: Any, *, composer_sel: str, send_sel: str | None, text: st
     page.wait_for_timeout(focus_ms)
     page.keyboard.type(text, delay=key_delay_ms)
     page.wait_for_timeout(commit_ms)
-    if send_sel:
-        page.click(send_sel)
-    else:
-        page.keyboard.press("Enter")
+    # 发送键多候选(str / 元组 / None):逐个 click(带超时),全失败或 None → Enter 兜底。
+    # 站点改版把某发送键选择器打漂时不再整条关键词失败(选择器漂 = 采集失败大头)。
+    candidates = (send_sel,) if isinstance(send_sel, str) else tuple(send_sel or ())
+    for sel in candidates:
+        try:
+            page.click(sel, timeout=send_timeout_ms)
+            return
+        except Exception as e:
+            logger.info("submit_query: 发送键 %r 点击失败(试下一候选/Enter): %s", sel, e)
+    page.keyboard.press("Enter")
 
 
 def ensure_web_toggle(page: Any, *, toggle_sel: str, want_on: bool = True,
