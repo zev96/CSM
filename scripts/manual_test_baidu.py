@@ -44,8 +44,7 @@ def main(argv: list[str]) -> int:
 
     ADAPTER.apply_settings(
         headless_default=headless,
-        captcha_visible_timeout_s=90,
-        captcha_max_promotions=1,
+        captcha_visible_timeout_s=300,
         serp_pacing_seconds=5,
         breaker_failures=3,
         breaker_cooldown_seconds=600,

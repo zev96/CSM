@@ -34,7 +34,8 @@ interface BaiduResultRow {
   // http_js_challenge_no_body / browser_isolated / unresolved …），前端只做
   // 展示不 switch，收成宽 string 避免每加一种就 TS 编译失败。
   source: string;
-  content_preview: string;
+  // R5 瘦身后后端不再下发（baidu 端无渲染消费者）；留可选字段兼容历史落库行。
+  content_preview?: string;
   fetch_error: string | null;
 }
 

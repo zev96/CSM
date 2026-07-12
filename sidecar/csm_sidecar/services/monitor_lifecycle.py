@@ -59,13 +59,13 @@ def _apply_runtime_settings(cfg: AppConfig) -> None:
         BAIDU_ADAPTER.apply_settings(
             headless_default=bcfg.headless_default,
             captcha_visible_timeout_s=bcfg.captcha_visible_timeout_s,
-            captcha_max_promotions=bcfg.captcha_max_promotions,
             serp_pacing_seconds=bcfg.serp_pacing_seconds,
             article_pacing_seconds=bcfg.article_pacing_seconds,
             baijiahao_pacing_seconds=bcfg.baijiahao_pacing_seconds,
             breaker_failures=bcfg.breaker_failures,
             breaker_cooldown_seconds=bcfg.breaker_cooldown_seconds,
             default_excluded_domains=bcfg.default_excluded_domains,
+            article_fetch_rank_cap=bcfg.article_fetch_rank_cap,
         )
     except Exception as e:
         logger.exception("BAIDU_ADAPTER.apply_settings failed: %s", e)

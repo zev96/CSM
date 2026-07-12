@@ -235,6 +235,25 @@ class TestCopyProfileTo:
         # Cache dir is excluded by the ignore callback (tested separately)
         assert not (target / "Default" / "Cache").exists()
 
+    def test_disk_full_surfaces_clear_error_not_chrome_running(self, tmp_path, monkeypatch):
+        """R8：复制时磁盘满（ENOSPC）应报明确「磁盘空间不足」，而不是被当成
+        「文件被锁 / Chrome 开着」吞掉（否则每个文件都 ENOSPC→全 skipped→误报关 Chrome）。"""
+        import errno as _errno
+        user_data, _ = self._make_source(tmp_path)
+        target = tmp_path / "copy_dest"
+
+        def _enospc(src, dst, **kw):
+            raise OSError(_errno.ENOSPC, "No space left on device")
+        monkeypatch.setattr(chrome_detect.shutil, "copy2", _enospc)
+
+        with pytest.raises(OSError) as exc:
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(user_data),
+                source_profile_name="Default",
+                target_path=str(target),
+            )
+        assert "磁盘空间不足" in str(exc.value)
+
     def test_copies_local_state(self, tmp_path):
         """Local State 必须被复制到副本根目录。"""
         user_data, _ = self._make_source(tmp_path)

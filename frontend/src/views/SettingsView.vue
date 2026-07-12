@@ -1769,14 +1769,14 @@ async function saveAccountEdit() {
                 />
               </SettingsRow>
               <SettingsRow
-                label="单任务最多升级次数"
-                hint="同一任务最多允许从 headless 切换到可见窗口的次数。"
+                label="排名抓取上限（0=不限）"
+                hint="每关键词的默认结果抓满前 N 条就停，省尾部抓取（资讯区不受限）。0=不限（默认，准确，不漏第 11-13 位软文）；设 10 只看前十换速度。"
               >
                 <input
-                  :value="get('monitor.baidu_keyword.captcha_max_promotions') ?? 1"
+                  :value="get('monitor.baidu_keyword.article_fetch_rank_cap') ?? 0"
                   type="number"
                   min="0"
-                  max="3"
+                  max="50"
                   class="bg-card-white px-3 text-[12.5px] outline-none"
                   :style="{
                     width: '80px',
@@ -1784,7 +1784,7 @@ async function saveAccountEdit() {
                     borderRadius: '10px',
                     border: '1px solid var(--line)',
                   }"
-                  @change="(e) => setField('monitor.baidu_keyword.captcha_max_promotions', Number((e.target as HTMLInputElement).value))"
+                  @change="(e) => setField('monitor.baidu_keyword.article_fetch_rank_cap', Number((e.target as HTMLInputElement).value))"
                 />
               </SettingsRow>
               <SettingsRow

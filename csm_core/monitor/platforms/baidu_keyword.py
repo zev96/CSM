@@ -261,11 +261,38 @@ def _showurl_host(a_node: Any) -> str | None:
         return None
 
 
+# R1 摘要兜底：从结果卡抽 SERP 摘要文本，供正文抓取失败时再判一层命中（软文
+# 品牌常出现在摘要里）。只用于"抓取失败"的弱兜底，不替代正文抓取、不写跨轮缓存。
+_SNIPPET_XPATH = (
+    ".//*[contains(@class,'abstract') or contains(@class,'c-span-last') "
+    "or contains(@class,'content-right')]//text()"
+)
+
+
+def _result_snippet(a_node: Any) -> str:
+    """从结果 <a> 所在 c-container 抽 SERP 摘要文本。多结果容器（资讯簇）
+    fail-open 返回 ""（防簇内摘要串味造成假命中）。"""
+    try:
+        containers = a_node.xpath(
+            "ancestor::div[" + _class_token("c-container") + "][1]"
+        )
+        if not containers:
+            return ""
+        container = containers[0]
+        if len(container.xpath(".//h3//a")) > 1:
+            return ""
+        parts = container.xpath(_SNIPPET_XPATH)
+        return " ".join(p.strip() for p in parts if p and p.strip())[:500]
+    except Exception:
+        return ""
+
+
 def _extract_a_tags(doc: Any, xpath: str) -> list[dict[str, Any]]:
-    """跑一条 XPath 抓所有 <a>，返回 [{title, href, show_host}]。
+    """跑一条 XPath 抓所有 <a>，返回 [{title, href, show_host, snippet}]。
 
     ``show_host`` —— SERP 可见来源 host（c-showurl），供 _check_block 在
     resolve 之前预过滤排除域名；抽不到为 None。
+    ``snippet`` —— SERP 摘要文本，正文抓取失败时的兜底命中信号；抽不到为 ""。
     """
     try:
         nodes = doc.xpath(xpath)
@@ -279,7 +306,10 @@ def _extract_a_tags(doc: Any, xpath: str) -> list[dict[str, Any]]:
             continue
         # 标题文本：百度 h3 里通常有 <em> 高亮，textcontent 直接拿到纯文本
         title = (a.text_content() or "").strip()
-        out.append({"title": title, "href": href, "show_host": _showurl_host(a)})
+        out.append({
+            "title": title, "href": href,
+            "show_host": _showurl_host(a), "snippet": _result_snippet(a),
+        })
     return out
 
 
@@ -970,6 +1000,9 @@ class BaiduKeywordAdapter:
         self._headless_default = False
         # 默认 300s：接线前 _try_human_solve 恒用其 300s 死默认，保持该窗口不缩短。
         self._captcha_timeout_s = 300
+        # 每关键词每区块抓满 N 条排名结果就停（省尾部抓取）。0=不封顶（默认，
+        # 保持准确不漏 page 1 的 11-13 位）；用户可在设置页按需开启换速度。
+        self._article_rank_cap = 0
         # 默认排除域名（B2B / 电商）。apply_settings 会用 config 里的值
         # 覆盖；空 list 表示「不应用全局黑名单」（用户在设置页清空时）。
         self._default_excluded_domains: tuple[str, ...] = ()
@@ -1053,13 +1086,13 @@ class BaiduKeywordAdapter:
         *,
         headless_default: bool = True,
         captcha_visible_timeout_s: int = 300,
-        captcha_max_promotions: int = 1,
         serp_pacing_seconds: int = 5,
         article_pacing_seconds: int = 3,
         baijiahao_pacing_seconds: int = 8,
         breaker_failures: int = 3,
         breaker_cooldown_seconds: int = 600,
         default_excluded_domains: list[str] | tuple[str, ...] | None = None,
+        article_fetch_rank_cap: int = 0,
     ) -> None:
         """挂接 settings.monitor.baidu_keyword.*。lifecycle 启动 + 设置页保存时各调一次。
 
@@ -1075,9 +1108,7 @@ class BaiduKeywordAdapter:
 
         self._headless_default = headless_default
         self._captcha_timeout_s = captcha_visible_timeout_s
-        # captcha_max_promotions 入参保留以保持向后兼容，但值已无效。
-        # Task 3 起 auto-promotion 路径废弃，risk control 由 runner 决定 retry。
-        _ = captcha_max_promotions  # noqa: F841 — Ignored since Task 3
+        self._article_rank_cap = max(0, int(article_fetch_rank_cap))
         # Normalize to lowercase + stripped tuple (cheap immutable snapshot
         # so the fetch path doesn't need a lock if settings re-applies
         # mid-flight).
@@ -1545,6 +1576,8 @@ class BaiduKeywordAdapter:
                     captcha_timeout_hosts=captcha_timeout_hosts,
                     article_memo=article_memo,
                     cross_run_cache=self._cross_run_hits,
+                    rank_cap=self._article_rank_cap,
+                    cancel_token=cancel_token,
                 )
                 news_results = self._check_block(
                     page, parsed["news_links"], [brand, *aliases], block="news",
@@ -1553,6 +1586,10 @@ class BaiduKeywordAdapter:
                     captcha_timeout_hosts=captcha_timeout_hosts,
                     article_memo=article_memo,
                     cross_run_cache=self._cross_run_hits,
+                    # rank cap 只作用于默认结果区（用户「只看前 N 名排名」的语义就是默认
+                    # 结果）；资讯区通常很小，不封顶，避免「设 10 实际抓到约 20」的意外。
+                    rank_cap=0,
+                    cancel_token=cancel_token,
                 )
 
                 kw_entry["default_results"] = default_results
@@ -1631,6 +1668,8 @@ class BaiduKeywordAdapter:
         captcha_timeout_hosts: set[str] | None = None,
         article_memo: dict[str, dict[str, Any]] | None = None,
         cross_run_cache: "dict[str, tuple[str, float]] | None" = None,
+        rank_cap: int = 0,
+        cancel_token: Any = None,
     ) -> list[dict[str, Any]]:
         """对一组链接逐条抓正文 + 判命中。返回 1-based rank 的 dict 列表。
 
@@ -1654,6 +1693,21 @@ class BaiduKeywordAdapter:
         out: list[dict[str, Any]] = []
         rank = 0
         for link in links:
+            # R3 协作取消检查点：每条文章前查一次令牌，让「停止」在关键词内即时
+            # 生效（原来一个关键词内 10+ 篇 × 节流，停止最多要等约 5min）。
+            if cancel_token is not None and cancel_token.is_set():
+                try:
+                    from csm_sidecar.services.monitor_loop import _CancelledFetch
+                except ImportError:
+                    _CancelledFetch = RuntimeError  # type: ignore[assignment]
+                raise _CancelledFetch("cancelled mid-keyword (before next article)")
+
+            # R4 rank cap：抓满 N 条排名结果就停（省尾部文章抓取）。默认 rank_cap=0
+            # 不封顶——全量抓取保持准确（百度只取 page 1，封顶会漏 11-13 位，故设为
+            # 用户可选、默认关）。排除/垂类跳过的条目不占 rank，不受影响。
+            if rank_cap > 0 and rank >= rank_cap:
+                break
+
             # T4 来源预过滤：SERP 可见 host（c-showurl）已是排除域名 → 在 resolve
             # 之前就跳过，省一次 /link 跳转解析。show_host=None（显示名 / DOM 改版
             # 抽不到）时不预过滤，走原 resolve 后过滤路径，零回归。结果与 resolve
@@ -1692,7 +1746,6 @@ class BaiduKeywordAdapter:
                     "matches_brand": title_match is not None,
                     "matched_brand": title_match,
                     "source": "unresolved",
-                    "content_preview": "",
                     "fetch_error": "跳转链接解析失败（未拿到真实 URL）",
                 })
                 continue
@@ -1738,7 +1791,6 @@ class BaiduKeywordAdapter:
                     "matches_brand": True,
                     "matched_brand": cross_hit,
                     "source": "cache",
-                    "content_preview": "",
                     "fetch_error": None,
                 })
                 continue
@@ -1845,6 +1897,18 @@ class BaiduKeywordAdapter:
                         "[baidu] title fallback matched (正文抓取失败): host=%s brand=%s title=%r",
                         host, matched_brand, title[:80],
                     )
+                else:
+                    # R1 摘要兜底：标题也没命中时，再用 SERP 摘要判一层（软文品牌常
+                    # 出现在摘要里）。同样只在正文彻底抓不到时触发，且 matched_from_content
+                    # 仍为 False → 弱兜底命中不写跨轮缓存。
+                    snippet = link.get("snippet", "") or ""
+                    snip_match = match_brand(snippet, brands) if snippet else None
+                    if snip_match:
+                        matched_brand = snip_match
+                        logger.info(
+                            "[baidu] snippet fallback matched (正文+标题都未命中): host=%s brand=%s",
+                            host, matched_brand,
+                        )
             # 诊断日志（漏检 debug 用）：title / content_len / matched / fetch_error
             # 用 INFO 级让用户开 default log level 就能看到。漏检的 root cause
             # 通常是：① content_len=0（SPA 壳页 / fetch fail）② content_len>200
@@ -1863,7 +1927,6 @@ class BaiduKeywordAdapter:
                 "matches_brand": matched_brand is not None,
                 "matched_brand": matched_brand,
                 "source": attempt.get("source") or "http",
-                "content_preview": content[:160],
                 "fetch_error": attempt.get("fetch_error"),
             })
             # T5：只把"真·正文命中"写进跨轮缓存供后续 run 复用（title fallback
