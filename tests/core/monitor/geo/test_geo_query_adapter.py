@@ -305,7 +305,7 @@ def test_fetch_rpa_lane_reuses_session_per_platform(fresh_db, monkeypatch):
     class _RpaProv:
         def __init__(self, p): self.platform = p; self.mode = "rpa"
         @contextlib.contextmanager
-        def session(self, *, web_search=True, cancel_token=None):
+        def session(self, *, web_search=True, cancel_token=None, retry=1):
             opens["n"] += 1
             from csm_core.monitor.geo.models import GeoAnswer
             def query_one(kw):
@@ -356,7 +356,7 @@ def test_fetch_rpa_session_open_failure_isolates_platform(fresh_db, monkeypatch)
             self.mode = "rpa"
 
         @contextlib.contextmanager
-        def session(self, *, web_search=True, cancel_token=None):
+        def session(self, *, web_search=True, cancel_token=None, retry=1):
             opens["n"] += 1
             raise RuntimeError("browser launch failed")
             yield  # pragma: no cover
@@ -426,7 +426,7 @@ def _fake_provider_yielding(script):
     class _P:
         mode = "rpa"
         @contextlib.contextmanager
-        def session(self, *, web_search, cancel_token=None):
+        def session(self, *, web_search, cancel_token=None, retry=1):
             def query_one(kw):
                 st, err = script[kw]
                 if st == "ok":
@@ -520,7 +520,7 @@ def test_rpa_batch_cancellation_mid_loop_propagates(monkeypatch):
     class _StopMidProv:
         mode = "rpa"
         @contextlib.contextmanager
-        def session(self, *, web_search, cancel_token=None):
+        def session(self, *, web_search, cancel_token=None, retry=1):
             def query_one(kw):
                 if kw == "k1":
                     tok.set()          # 模拟用户在第 1 个关键词执行期间点 Stop

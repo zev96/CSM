@@ -1,4 +1,5 @@
 from __future__ import annotations
+import pytest
 from csm_core.monitor.geo.providers.rpa import _driver, _flow
 from csm_core.monitor.geo.providers.rpa.sites import SITES
 
@@ -53,3 +54,32 @@ def test_run_one_keyword_empty_when_no_answer(monkeypatch):
     ans = _driver.run_one_keyword(page, SITES["deepseek"], "k",
                                   web_search=True, cancel_token=None, logged_in=True)
     assert ans.status == "empty"
+
+
+def _raise_timeout(*a, **k):
+    raise TimeoutError("wait_stream_done exceeded")
+
+
+def test_run_one_keyword_salvages_on_timeout(monkeypatch):
+    # wait_stream_done 抛超时,但页面已有长答案 → 验尸救回、不 retry、status=ok
+    monkeypatch.setattr(_flow, "wait_stream_done", _raise_timeout)
+    html = ('<textarea></textarea>'
+            '<div class="ds-markdown ds-assistant-message-main-content">' + "推荐小鹏G6。" * 20 +
+            '</div>')
+    page = _FakePage(html)
+    ans = _driver.run_one_keyword(page, SITES["deepseek"], "k",
+                                  web_search=True, cancel_token=None, logged_in=True, retry=1)
+    assert ans.status == "ok"
+    assert "小鹏G6" in ans.answer_text
+    assert page.gotos == ["https://chat.deepseek.com/"]        # 只跑一次(验尸救回,未 retry)
+
+
+def test_run_one_keyword_retries_then_raises_on_confirmed_timeout(monkeypatch):
+    # wait_stream_done 恒超时 + 页面无答案(验尸不足) → retry 用尽后抛 TimeoutError
+    monkeypatch.setattr(_flow, "wait_stream_done", _raise_timeout)
+    page = _FakePage('<textarea></textarea>'
+                     '<div class="ds-markdown ds-assistant-message-main-content"></div>')
+    with pytest.raises(TimeoutError):
+        _driver.run_one_keyword(page, SITES["deepseek"], "k",
+                                web_search=True, cancel_token=None, logged_in=True, retry=1)
+    assert page.gotos == ["https://chat.deepseek.com/"] * 2    # 首跑 + 1 retry = 2 次 goto

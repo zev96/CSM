@@ -88,6 +88,7 @@ class GeoQueryAdapter:
         api_pool_size = _int_cfg("geo_api_pool_size", 5, 16)
         rpa_conc = _int_cfg("geo_rpa_platform_concurrency", 3, 8)
         consec_skip = _int_cfg("geo_consecutive_fail_skip", 3, 999)
+        rpa_retry = _int_cfg("geo_rpa_retry", 1, 5)
 
         # 预计算每个平台的车道(mode)。get_provider 可能抛(未知/废弃平台 key、
         # provider 模块 import 失败)——逐平台兜住,把失败平台并入 API 车道,让
@@ -117,7 +118,7 @@ class GeoQueryAdapter:
             cancel_token=cancel_token,
             rpa_batch=lambda plat, kws, t: self._rpa_batch(
                 plat, kws, t, web_search=web_search, brand=brand, aliases=aliases,
-                client=client, consec_skip=consec_skip),
+                client=client, consec_skip=consec_skip, rpa_retry=rpa_retry),
         )
 
         # C1 修复:runner 返回后复查取消。API cell 的同步 httpx POST 只在
@@ -227,7 +228,7 @@ class GeoQueryAdapter:
                            raw={"error": repr(e)})
 
     def _rpa_batch(self, plat, plat_keywords, tok, *, web_search, brand, aliases,
-                   client, consec_skip):
+                   client, consec_skip, rpa_retry=1, jitter_min=15, jitter_max=45):
         """每平台开一次 session,循环关键词逐 cell yield(浏览器跨关键词复用)。
 
         登录 gate(§4.3):首关键词返回 blocked = 平台没登录 → 余下关键词全出合成
@@ -247,7 +248,7 @@ class GeoQueryAdapter:
 
         try:
             provider = get_provider(plat)
-            session_cm = provider.session(web_search=web_search, cancel_token=tok)
+            session_cm = provider.session(web_search=web_search, cancel_token=tok, retry=rpa_retry)
         except Exception as e:                       # 构造失败:全隔离成 error
             reason = classify_fail_reason(status="error", error=repr(e))
             for li, kw in enumerate(plat_keywords):

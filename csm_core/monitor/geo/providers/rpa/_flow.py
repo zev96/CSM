@@ -18,6 +18,11 @@ from csm_core.monitor.geo.models import Citation
 logger = logging.getLogger(__name__)
 
 
+class StreamInterrupted(Exception):
+    """流式等待期间检出 monotonic 跳变(机器睡眠/挂起唤醒)—— 非站点故障。
+    不 retry、不计入连败短路;classify_fail_reason 归 'interrupted'(消息含「睡眠唤醒」)。"""
+
+
 # ── 纯解析（吃 HTML 串）─────────────────────────────────────────────
 def extract_citations(html: str, *, container_sel: str | None = None,
                       exclude_hosts: tuple[str, ...] = ()) -> list[Citation]:
