@@ -507,6 +507,42 @@ def test_sleep_jitter_zero_max_is_noop():
     gq._sleep_jitter(None, 0, 0)            # hi<=0 → 直接返回,不睡不抛(禁用 jitter)
 
 
+def test_shuffled_keywords_stable_within_day_varies_across_days():
+    from datetime import date
+    kws = ["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7"]
+    a = geo_mod._shuffled_keywords(kws, 7, date(2026, 7, 11))
+    b = geo_mod._shuffled_keywords(kws, 7, date(2026, 7, 11))
+    c = geo_mod._shuffled_keywords(kws, 7, date(2026, 7, 12))
+    assert a == b                     # 同 task+同日 → 稳定(当日断点续跑 resume 安全)
+    assert sorted(a) == sorted(kws)   # 只换序、不增删
+    assert a != c                     # 跨天变序(8 元素撞同序概率 1/8! 可忽略)
+
+
+def test_fetch_shuffles_keywords_into_cells_plan(fresh_db, monkeypatch):
+    # 验证 fetch 真把洗牌后的顺序喂给调度器(而非只定义函数没接线)
+    from datetime import datetime as _dt
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _fake_runner(cells_plan, run_cell, **kw):
+        seen["order"] = [k for k, _ in cells_plan]
+        raise _Stop                                  # 抓到顺序即中止,不必跑完聚合
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: FakeProvider(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+    monkeypatch.setattr(geo_mod.geo_runner, "run_cells_dual_lane", _fake_runner)
+    kws = ["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7"]
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "b", "keywords": kws, "platforms": ["tongyi"],
+                "extract_provider": "mock"}))
+    with pytest.raises(_Stop):
+        geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    expected = geo_mod._shuffled_keywords(kws, tid, _dt.utcnow().date())
+    assert seen["order"] == expected            # cells_plan 用了洗牌序(单平台 → 顺序即关键词序)
+
+
 def test_rpa_batch_consecutive_fail_short_circuits(monkeypatch):
     from csm_core.monitor.platforms import geo_query as gq
     adapter = gq.GeoQueryAdapter()
