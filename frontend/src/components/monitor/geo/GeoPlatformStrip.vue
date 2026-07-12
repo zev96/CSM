@@ -11,6 +11,7 @@
  */
 import {
   cellStatus,
+  failReasonLabel,
   isFailed,
   isPending,
   sentDotColor,
@@ -65,7 +66,7 @@ const cols = () => `repeat(${Math.max(props.platforms.length, 1)}, 1fr)`;
           :style="{ fontSize: '15px', fontWeight: 700, color: cellStatus(p).color, marginTop: '5px' }"
         >{{ cellStatus(p).label }}</div>
         <div :style="{ fontSize: '10px', color: 'var(--ink-3)', marginTop: '3px' }">
-          {{ isPending(p) ? "待采集" : isFailed(p) ? "够不到平台" : `引用 ${p.citations} · ${sentLabel(p.sentiment)}` }}
+          {{ isPending(p) ? "待采集" : isFailed(p) ? failReasonLabel(p.failReason) : `引用 ${p.citations} · ${sentLabel(p.sentiment)}` }}
         </div>
       </div>
     </div>

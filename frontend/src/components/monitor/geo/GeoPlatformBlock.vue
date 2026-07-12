@@ -9,6 +9,7 @@ import { computed } from "vue";
 
 import {
   cellStatus,
+  failReasonLabel,
   isFailed,
   isPending,
   sentDotColor,
@@ -115,7 +116,7 @@ const excerptSegs = computed<Seg[]>(() => {
       :style="{ padding: '14px 16px', fontSize: '12px', color: 'var(--ink-3)', gap: '7px' }"
     >
       <span :style="{ width: '6px', height: '6px', borderRadius: '999px', background: 'var(--red)' }" />
-      本平台本次采集失败，未取到结果。
+      本平台本次{{ failReasonLabel(platform.failReason) }}，未取到结果。
     </div>
     <div v-else :style="{ padding: '13px 16px 15px' }">
       <!-- 关于品牌的原文 -->
