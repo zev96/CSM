@@ -500,3 +500,44 @@ def test_rpa_batch_no_early_skip_when_recovers(monkeypatch):
     cells = [c for _, c in out]
     assert [c.raw.get("synthetic") for c in cells] == [None, None, None, None]
     assert [c.status for c in cells] == ["error", "error", "ok", "error"]
+
+
+def test_rpa_batch_cancellation_mid_loop_propagates(monkeypatch):
+    # 锁定:_rpa_batch 循环内(第 2 个关键词起)token 置位 → maybe_cancel 抛取消,必须
+    # 原样上抛给 runner/loop,绝不被 except 吞成合成/error cell。首格 ok 先产出,取消发生在
+    # 第 2 次 maybe_cancel(tok),此后不再产出任何 cell。
+    import contextlib
+    import threading as _t
+    from csm_core.monitor.platforms import geo_query as gq
+    from csm_core.monitor.geo.models import GeoAnswer, GeoExtraction
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        pytest.skip("sidecar 不可用,无法区分取消")
+
+    tok = _t.Event()
+
+    class _StopMidProv:
+        mode = "rpa"
+        @contextlib.contextmanager
+        def session(self, *, web_search, cancel_token=None):
+            def query_one(kw):
+                if kw == "k1":
+                    tok.set()          # 模拟用户在第 1 个关键词执行期间点 Stop
+                return GeoAnswer(platform="kimi", keyword=kw, answer_text="有内容", status="ok")
+            yield query_one
+
+    monkeypatch.setattr(gq, "get_provider", lambda p: _StopMidProv())
+    monkeypatch.setattr(gq, "extract",
+                        lambda answer, *, brand, aliases, client: GeoExtraction(mentioned=False))
+
+    adapter = gq.GeoQueryAdapter()
+    gen = adapter._rpa_batch("kimi", ["k1", "k2", "k3"], tok, web_search=True,
+                             brand="云野", aliases=[], client=object(), consec_skip=3)
+    produced = []
+    with pytest.raises(_CancelledFetch):
+        for item in gen:
+            produced.append(item)
+    # 只产出第 1 个真实 cell(k1, ok);取消上抛,k2/k3 未被合成/兜底成任何 cell。
+    assert [li for li, _ in produced] == [0]
+    assert produced[0][1].status == "ok"
