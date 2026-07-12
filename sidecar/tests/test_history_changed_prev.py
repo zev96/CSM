@@ -105,3 +105,95 @@ def test_baidu_daily_series_buckets_by_local_day(client: TestClient, monitor_db:
 def test_zhihu_search_changed_prev_field_present_when_empty(client: TestClient, monitor_db: Path):
     out = history_service.get_zhihu_search_history("7d")
     assert out["kpis"]["changed_prev"] == 0
+
+
+# ── R6收尾：comment_retention + zhihu_ranking daily_series 本地日桶 ─────────
+# #163 已把 baidu/zhihu_search 的 daily_series 改成本地日分桶（前端本地日 + KPI
+# 口径一致）。这两处遗留仍按 UTC 日分桶 —— 跨日结果（本地凌晨/深夜、UTC 落相邻
+# 日）会错分到相邻桶。checked_at 仍须保持原始 UTC 供 _iso_utc 输出用。
+
+def _seed_comment(client: TestClient, *, ptype: str = "bilibili_comment",
+                  name: str = "0514 - BV001", url: str = "https://b23.tv/r6a") -> int:
+    body = {"type": ptype, "name": name, "target_url": url,
+            "config": {"my_comment_text": "测试评论"}, "schedule_cron": "manual", "enabled": True}
+    return client.post("/api/monitor/tasks", json=body).json()["id"]
+
+
+def _res_comment(tid: int, at: datetime, matched: bool):
+    storage.save_result(MonitorResult(
+        task_id=tid, checked_at=at, status="ok", rank=1 if matched else -1,
+        metric={"matched": matched, "my_comment_text": "测试评论"}, error_message=""))
+
+
+def _cross_tz_hour() -> "int | None":
+    """挑一个让本地墙钟与 UTC 落在相邻日的小时；UTC 机器返回 None（测不出）。"""
+    offset = datetime.now().astimezone().utcoffset()
+    if offset is None or offset == timedelta(0):
+        return None
+    return 6 if offset > timedelta(0) else 22
+
+
+def test_comment_retention_daily_series_buckets_by_local_day(client: TestClient, monitor_db: Path):
+    import pytest
+    from datetime import timezone as _tz
+    hour = _cross_tz_hour()
+    if hour is None:
+        pytest.skip("UTC 机器无本地/UTC 日偏移，测不出")
+
+    tid = _seed_comment(client)
+    target_local = (datetime.now() - timedelta(days=2)).replace(
+        hour=hour, minute=0, second=0, microsecond=0)
+    target_utc = target_local.astimezone(_tz.utc).replace(tzinfo=None)  # 运行器按 UTC 存
+    d_local = target_local.strftime("%Y-%m-%d")
+    d_utc = target_utc.strftime("%Y-%m-%d")
+    assert d_local != d_utc, "构造前提：本地日与 UTC 日必须不同"
+
+    _res_comment(tid, target_utc, matched=True)
+    out = history_service.get_comment_retention_history("30d")
+    bili = out["platforms"]["bilibili_comment"]
+    hit = next((b["date"] for b in bili["daily_series"] if b["total"] > 0), None)
+    assert hit == d_local, f"应按本地日 {d_local} 分桶，实际 {hit}（UTC 日 {d_utc}）"
+
+
+def test_zhihu_ranking_daily_series_buckets_by_local_day(client: TestClient, monitor_db: Path):
+    import pytest
+    from datetime import timezone as _tz
+    hour = _cross_tz_hour()
+    if hour is None:
+        pytest.skip("UTC 机器无本地/UTC 日偏移，测不出")
+
+    tid = _seed_zhihu_q(client)
+    target_local = (datetime.now() - timedelta(days=2)).replace(
+        hour=hour, minute=0, second=0, microsecond=0)
+    target_utc = target_local.astimezone(_tz.utc).replace(tzinfo=None)
+    d_local = target_local.strftime("%Y-%m-%d")
+    d_utc = target_utc.strftime("%Y-%m-%d")
+    assert d_local != d_utc, "构造前提：本地日与 UTC 日必须不同"
+
+    _res_q(tid, target_utc, 3)  # matched_count=3 → avg_share>0
+    out = history_service.get_zhihu_ranking_history("30d")
+    hit = next((b["date"] for b in out["daily_series"] if b["avg_share"] > 0), None)
+    assert hit == d_local, f"应按本地日 {d_local} 分桶，实际 {hit}（UTC 日 {d_utc}）"
+
+
+def test_comment_retention_event_at_stays_utc(client: TestClient, monitor_db: Path):
+    """events[].at 仍是原始 UTC —— 本地日桶只影响分桶，不能把本地时间喂进
+    _iso_utc（它只归一化 aware 值，naive-本地会被误盖 Z、偏移一个时区）。"""
+    tid = _seed_comment(client, ptype="kuaishou_comment", name="B - vid1", url="https://k.sr/r6b")
+    at_in = (datetime.now() - timedelta(hours=2)).replace(microsecond=0)
+    _res_comment(tid, at_in, matched=False)
+    out = history_service.get_comment_retention_history("30d")
+    assert out["events"], "matched=False 应产出一条删除事件"
+    parsed = storage._parse_iso(out["events"][0]["at"])  # noqa: SLF001
+    assert parsed == at_in, f"event.at 应为原始 UTC {at_in}，实际 {out['events'][0]['at']}"
+
+
+def test_zhihu_ranking_question_checked_at_stays_utc(client: TestClient, monitor_db: Path):
+    """questions[].checked_at 仍是原始 UTC（同上，供 _iso_utc 输出）。"""
+    tid = _seed_zhihu_q(client)
+    at_in = (datetime.now() - timedelta(hours=2)).replace(microsecond=0)
+    _res_q(tid, at_in, 2)
+    out = history_service.get_zhihu_ranking_history("30d")
+    q = next(q for q in out["questions"] if q["task_id"] == tid)
+    parsed = storage._parse_iso(q["checked_at"])  # noqa: SLF001
+    assert parsed == at_in, f"checked_at 应为原始 UTC {at_in}，实际 {q['checked_at']}"
