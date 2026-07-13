@@ -36,16 +36,25 @@ def test_parse_serp_default_only_no_news():
 
 
 def test_parse_serp_with_news_extracts_both_blocks():
+    """2026-07 cosc 改版后「最新资讯」= 「{关键词}的最新相关信息」聚合卡
+    （tpl=rel_base_realtime）。fixture 是真实 SERP 抠出的卡：按表头文字定位、
+    抽卡内 3 篇文章链接、排除表头那条聚合页链接；默认区块的 www_index 软文卡
+    与之严格分开（资讯卡本身按 tpl 黑名单排除出默认区，不污染软文 rank）。"""
     html = _load("serp_with_news.html")
     parsed = baidu_keyword.parse_serp(html)
     assert parsed["news_present"] is True
-    assert len(parsed["news_links"]) == 4
-    # 8 = 7 条常规 + 1 条 cosc-title-slot 卡（2026-07 起 cosc 结构排除移除）
-    assert len(parsed["default_links"]) == 8
-    # 两个 list 严格分开，不重复
+    assert len(parsed["news_links"]) == 3
+    assert len(parsed["default_links"]) == 3
+    # 表头那条「…的最新相关信息」聚合链接不是文章，必须被排除
+    assert all(
+        baidu_keyword._NEWS_HEADER_MARK not in l["title"]
+        for l in parsed["news_links"]
+    )
+    # 两个 list 严格分开、各自 href 不重复
     default_hrefs = {l["href"] for l in parsed["default_links"]}
     news_hrefs = {l["href"] for l in parsed["news_links"]}
     assert default_hrefs.isdisjoint(news_hrefs)
+    assert len(news_hrefs) == 3
 
 
 def test_parse_serp_empty_html_returns_empty():
@@ -138,18 +147,62 @@ def test_parse_serp_partial_token_drift_warns(caplog):
     assert any("兜底选择器比主选择器多" in r.getMessage() for r in caplog.records)
 
 
-def test_parse_serp_news_container_present_but_zero_rows_warns(caplog):
-    """cos-space 资讯容器存在但一行都没解出 = 内层结构漂移信号，必须告警
-    （页面根本没有资讯区是常态，不告警 —— news_present=False 本身无法
-    区分这两种情况）。"""
+def test_parse_serp_news_extracts_articles_excludes_header():
+    """资讯卡：表头 h3「…的最新相关信息」链向百度聚合页，不算文章；其余 h3//a
+    才是文章链接。新版 a 嵌在 h3>span>span>a，必须用 //h3//a 后代匹配。"""
     html = """
     <html><body><div id="content_left">
-      <div class="c-container xpath-log new-pmd" tpl="se_com_default">
+      <div class="result-op c-container xpath-log new-pmd" tpl="rel_base_realtime">
+        <div class="cosc-card">
+          <h3 class="cosc-title"><a href="https://www.baidu.com/link?url=AGG">猫粮的最新相关信息</a></h3>
+          <div class="cos-row"><div class="cos-col-9"><h3 class="cosc-title"><span class="cosc-title-a"><span class="cosc-title-slot"><a href="https://www.baidu.com/link?url=ART1">文章一</a></span></span></h3></div></div>
+          <div class="cos-row"><div class="cos-col-9"><h3 class="cosc-title"><span class="cosc-title-a"><span class="cosc-title-slot"><a href="https://www.baidu.com/link?url=ART2">文章二</a></span></span></h3></div></div>
+        </div>
+      </div>
+    </div></body></html>
+    """
+    parsed = baidu_keyword.parse_serp(html)
+    assert parsed["news_present"] is True
+    hrefs = [l["href"] for l in parsed["news_links"]]
+    assert hrefs == [
+        "https://www.baidu.com/link?url=ART1",
+        "https://www.baidu.com/link?url=ART2",
+    ]
+    assert "https://www.baidu.com/link?url=AGG" not in hrefs
+
+
+def test_parse_serp_news_dedups_repeated_href():
+    """资讯卡内同一 href 出现多次（如缩略图 a + 标题 a）只算一篇文章。"""
+    html = """
+    <html><body><div id="content_left">
+      <div class="result-op c-container new-pmd" tpl="rel_base_realtime">
+        <h3 class="cosc-title"><a href="https://www.baidu.com/link?url=AGG">测试词的最新相关信息</a></h3>
+        <div class="cos-row">
+          <h3><a href="https://www.baidu.com/link?url=SAME">标题</a></h3>
+          <h3><a href="https://www.baidu.com/link?url=SAME">同链接重复</a></h3>
+        </div>
+      </div>
+    </div></body></html>
+    """
+    parsed = baidu_keyword.parse_serp(html)
+    assert [l["href"] for l in parsed["news_links"]] == [
+        "https://www.baidu.com/link?url=SAME",
+    ]
+
+
+def test_parse_serp_news_header_present_but_zero_articles_warns(caplog):
+    """页面出现「最新相关信息」表头文字却抽不出文章 = 资讯卡内层结构漂移信号，
+    必须告警（表头文字都没有 = 该词本就没资讯区、属常态，不告警）。"""
+    html = """
+    <html><body><div id="content_left">
+      <div class="c-container xpath-log new-pmd" tpl="www_index">
         <h3><a href="https://example.com/a">A</a></h3>
       </div>
-      <div class="cos-space">
-        <div class="cos-header">最新资讯</div>
-        <div class="cos-line-v2">全新内层结构，没有 cos-row</div>
+      <div class="result-op c-container new-pmd" tpl="rel_base_realtime">
+        <div class="cosc-card">
+          <h3 class="cosc-title">宠物空气净化器哪个牌子好的最新相关信息</h3>
+          <div class="cos-line-v2">全新内层结构，文章标题不再包在 h3 里</div>
+        </div>
       </div>
     </div></body></html>
     """
@@ -157,7 +210,59 @@ def test_parse_serp_news_container_present_but_zero_rows_warns(caplog):
         parsed = baidu_keyword.parse_serp(html)
     assert parsed["news_links"] == []
     assert parsed["news_present"] is False
-    assert any("cos-space" in r.getMessage() for r in caplog.records)
+    assert any(
+        "最新相关信息" in r.getMessage() and "0 条" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_parse_serp_news_absent_is_silent(caplog):
+    """没有「最新相关信息」表头 = 该关键词当下没资讯区（常态）：news_present
+    =False 且**不**告警（否则每个无资讯词都刷屏 WARNING）。"""
+    html = """
+    <html><body><div id="content_left">
+      <div class="c-container xpath-log new-pmd" tpl="www_index">
+        <h3><a href="https://example.com/a">A</a></h3>
+      </div>
+    </div></body></html>
+    """
+    with caplog.at_level("WARNING"):
+        parsed = baidu_keyword.parse_serp(html)
+    assert parsed["news_present"] is False
+    assert parsed["news_links"] == []
+    assert not any("最新相关信息" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_serp_excludes_new_cosc_junk_tpls():
+    """2026-07 cosc 改版新观察到的杂卡（百科实体 / AI 问答 / 爱采购批发 /
+    百科多义 / 建站服务）即使带 xpath-log+new-pmd，也必须被 tpl 黑名单挡在
+    默认软文 rank 之外 —— 谁把这些 tpl 从 _EXCLUDED_TPLS 拿掉，这里立刻红。"""
+    html = """
+    <html><body><div id="content_left">
+      <div class="result c-container xpath-log new-pmd" tpl="www_index">
+        <h3><a href="https://baijiahao.baidu.com/s?id=1">软文</a></h3>
+      </div>
+      <div class="result-op c-container xpath-log new-pmd" tpl="sg_kg_entity_san">
+        <h3><a href="https://baike.baidu.com/x">百科实体</a></h3>
+      </div>
+      <div class="result-op c-container xpath-log new-pmd" tpl="wenda_generate">
+        <h3><a href="https://zhidao.baidu.com/x">AI问答</a></h3>
+      </div>
+      <div class="result-op c-container xpath-log new-pmd" tpl="b2b_goods_wholesale">
+        <h3><a href="https://b2b.baidu.com/x">爱采购批发</a></h3>
+      </div>
+      <div class="result-op c-container xpath-log new-pmd" tpl="bk_polysemy">
+        <h3><a href="https://baike.baidu.com/y">多义词</a></h3>
+      </div>
+      <div class="result-op c-container xpath-log new-pmd" tpl="fw_on_newsite_three_san">
+        <h3><a href="https://example.com/svc">建站服务</a></h3>
+      </div>
+    </div></body></html>
+    """
+    parsed = baidu_keyword.parse_serp(html)
+    assert [l["href"] for l in parsed["default_links"]] == [
+        "https://baijiahao.baidu.com/s?id=1",
+    ]
 
 
 # ── 品牌词匹配 ───────────────────────────────────────────────────────────
@@ -1235,18 +1340,21 @@ def test_parse_serp_extracts_show_host_from_showurl():
 
 
 def test_parse_serp_show_host_fail_open_on_multi_item_container():
-    """防误杀（结构排除=灾难）：一个 c-container 里有多条结果标题（资讯簇 /
-    聚合卡）时，showurl 无法可靠归属到具体某一条 → show_host 必须 fail-open 为
-    None，绝不能让簇内某一条的来源域名污染整簇、把整簇一起 resolve 前预过滤掉。"""
-    # 模拟资讯簇：一个 c-container 内 4 条 cos-item，其中一条来源是排除域名。
+    """防误杀（结构排除=灾难）：资讯卡（「最新相关信息」聚合卡）一个 c-container
+    内有表头 + 多篇文章标题时，showurl 无法可靠归属到具体某一条 → show_host 必须
+    fail-open 为 None，绝不能让簇内某一条的来源域名污染整簇被一起预过滤掉。"""
+    # 模拟资讯卡：一个 c-container 内表头 + 2 篇文章，其中一条来源是排除域名。
     html = """
     <div id="content_left">
-      <div class="result c-container xpath-log new-pmd" tpl="news-realtime">
-        <div class="cos-space">
+      <div class="result-op c-container xpath-log new-pmd" tpl="rel_base_realtime">
+        <div class="cosc-card">
+          <h3 class="cosc-title"><a href="http://www.baidu.com/link?url=HDR">测试词的最新相关信息</a></h3>
           <div class="cos-row">
-            <div><h3 class="cos-item-title"><a href="http://www.baidu.com/link?url=A">竞品资讯</a></h3>
+            <div class="cos-col-9"><h3 class="cosc-title"><a href="http://www.baidu.com/link?url=A">竞品资讯</a></h3>
                  <span class="cos-source">mall.jd.com</span></div>
-            <div><h3 class="cos-item-title"><a href="http://www.baidu.com/link?url=B">我的软文</a></h3>
+          </div>
+          <div class="cos-row">
+            <div class="cos-col-9"><h3 class="cosc-title"><a href="http://www.baidu.com/link?url=B">我的软文</a></h3>
                  <span class="cos-source">知乎</span></div>
           </div>
         </div>
@@ -1254,6 +1362,7 @@ def test_parse_serp_show_host_fail_open_on_multi_item_container():
     </div>
     """
     news = baidu_keyword.parse_serp(html)["news_links"]
+    # 表头「…的最新相关信息」那条聚合链接排除，剩 A / B 两篇文章
     assert len(news) == 2
     # 多条结果同容器 → 全部 fail-open，B（我的软文）绝不能被 A 的 jd 来源连累
     assert all(l.get("show_host") is None for l in news), (
