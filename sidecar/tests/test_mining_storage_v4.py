@@ -53,14 +53,14 @@ def test_fresh_db_has_video_comments_and_ai_summary(fresh_db: Path):
 
 
 def test_schema_version_is_4(fresh_db: Path):
-    # Now expects "10" — the geo module's v10 migration (geo_cells.fail_reason)
-    # bumped the global schema stamp. Test name kept for git-blame continuity;
-    # the check is really "schema_meta tracks the current stamp".
+    # Now expects "11" — R2's v11 migration (monitor_run_progress) bumped the
+    # global schema stamp past geo's v10. Test name kept for git-blame
+    # continuity; the check is really "schema_meta tracks the current stamp".
     with sqlite3.connect(str(fresh_db)) as conn:
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key='version'"
         ).fetchone()
-    assert row[0] == "10"
+    assert row[0] == "11"
 
 
 def test_video_comments_index_present(fresh_db: Path):
@@ -106,14 +106,14 @@ def test_v3_to_v4_upgrade_preserves_video_rows(tmp_path: Path, monkeypatch):
     monitor_storage.init_db(db)
 
     # Post-upgrade: row preserved + new shape applied + version bumped.
-    # init_db now runs all migrations through v10, so the recorded version is "10".
+    # init_db now runs all migrations through v11, so the recorded version is "11".
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute("SELECT title FROM videos").fetchall()
         assert rows == [("kept",)]
         ver = conn.execute(
             "SELECT value FROM schema_meta WHERE key='version'"
         ).fetchone()[0]
-    assert ver == "10"
+    assert ver == "11"
     assert "ai_summary" in _video_columns(db)
     assert "video_comments" in _table_names(db)
 

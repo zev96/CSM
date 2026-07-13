@@ -28,10 +28,10 @@ def test_v9_tables_exist(fresh_db):
 
 def test_v9_schema_version(fresh_db):
     # schema_meta tracks the CURRENT global version stamp, not v9 specifically;
-    # bumped to "10" by the geo module's v10 migration (geo_cells.fail_reason).
+    # bumped to "11" by R2's v11 migration (monitor_run_progress), past geo's v10.
     conn = fb.get_conn()
     v = conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()[0]
-    assert v == "10"
+    assert v == "11"
 
 
 def test_record_creation_roundtrip(fresh_db):

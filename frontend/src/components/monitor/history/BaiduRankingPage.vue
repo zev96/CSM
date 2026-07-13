@@ -20,6 +20,7 @@ import SplitPane from "@/components/ui/SplitPane.vue";
 import Dropdown from "@/components/ui/Dropdown.vue";
 import LineChart from "./LineChart.vue";
 import AlertDetailModal from "@/components/monitor/AlertDetailModal.vue";
+import { breakpointKind } from "./breakpointBanner";
 
 // ──────────────────────────── types ────────────────────────────
 
@@ -510,6 +511,12 @@ const riskControlMeta = computed<{
     lastResumedKeyword: typeof m.last_resumed_keyword === "number" ? m.last_resumed_keyword : 0,
   };
 });
+
+// 断点原因三分类（auth / interrupted / risk）—— R2 崩溃中断走 'interrupted'，与
+// 风控（dom/text/验证码…）分开显示不同文案。分类逻辑抽到 breakpointBanner.ts 单测。
+const breakpointBannerKind = computed(() =>
+  breakpointKind(riskControlMeta.value?.layer ?? null),
+);
 
 const prevMetric = computed<BaiduMetric | null>(
   () => (history.value.length > 1 ? history.value[1]?.metric ?? null : null),
@@ -1381,26 +1388,32 @@ defineExpose({ reload: loadTasks, selectTask });
             (见 monitor_loop.py 的 risk_control breakpoint 分支)；提示用户在哪一
             个 keyword 卡断的，点 Level 2 底部「启动监测」会从断点续抓。
 
-            分层：当 layer=auth 时表示账户未登录或已过期，显示专用提示+设置链接；
-            其他 layer 表示验证码或其他风控，显示通用提示。
+            分层（见 breakpointBanner.ts）：auth=账户未登录/过期，红底 + 设置链接；
+            interrupted=R2 崩溃中断（程序退出/崩溃/硬杀恢复，非反爬）；其余=验证码/
+            风控通用提示。三者续抓入口相同（POST /resume + 头尾合并）。
           -->
           <div
             v-if="riskControlMeta"
             class="mb-3 flex-shrink-0 rounded text-[11.5px]"
             :style="{
-              background: riskControlMeta.layer === 'auth'
+              background: breakpointBannerKind === 'auth'
                 ? 'rgba(220, 38, 38, 0.08)'
                 : 'rgba(238, 106, 42, 0.10)',
               color: 'var(--primary-deep)',
-              borderLeft: riskControlMeta.layer === 'auth'
+              borderLeft: breakpointBannerKind === 'auth'
                 ? '3px solid #dc2626'
                 : '3px solid var(--primary)',
               padding: '10px 12px',
             }"
           >
-            <template v-if="riskControlMeta.layer === 'auth'">
+            <template v-if="breakpointBannerKind === 'auth'">
               百度账号未登录或已过期。请到设置页重新登录后，回到这里点「从断点续抓」继续。
               <a href="#" class="ml-2 underline" @click.prevent="router.push({ name: 'settings' })">前往设置</a>
+            </template>
+            <template v-else-if="breakpointBannerKind === 'interrupted'">
+              上次监测意外中断（程序退出或崩溃），已抓完的头段没丢。断点位置：keyword
+              #{{ riskControlMeta.lastResumedKeyword }}。点下方「从断点续抓」，会从断点
+              继续、只补抓剩下的关键词。
             </template>
             <template v-else>
               上次抓取被百度风控拦截
