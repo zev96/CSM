@@ -198,13 +198,14 @@ def test_cookie_add_empty_text_422(client: TestClient, monitor_db: Path):
 
 # ── Summary ────────────────────────────────────────────────────────────────
 def test_summary_empty(client: TestClient, monitor_db: Path):
+    from csm_sidecar.services.monitor_service import PLATFORM_TYPES
+
     resp = client.get("/api/monitor/summary")
     assert resp.status_code == 200
     data = resp.json()
-    # All five platform types present (geo_query 在 Task 10 注册进 PLATFORM_TYPES)，each with task_count=0.
-    assert set(data["platforms"].keys()) == {
-        "zhihu_question", "bilibili_comment", "douyin_comment", "kuaishou_comment", "geo_query",
-    }
+    # summary 必须为每个已注册平台类型各出一个 key(空库时 count=0)。从 PLATFORM_TYPES
+    # 派生而非硬编码 —— 新增平台类型(如后来加的 zhihu_search)时不再悄悄 stale。
+    assert set(data["platforms"].keys()) == set(PLATFORM_TYPES)
     for p in data["platforms"].values():
         assert p["task_count"] == 0
 
