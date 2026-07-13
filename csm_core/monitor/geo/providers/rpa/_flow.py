@@ -307,15 +307,17 @@ def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
                      poll_ms: int = 500,
                      cancel_token: "Any | None" = None,
                      length_fn: "Callable[[], int] | None" = None,
-                     jump_threshold_s: float = 30.0,
+                     jump_threshold_s: float = 120.0,
                      _now=time.monotonic, _sleep=time.sleep) -> None:
     """轮询直到 done_predicate() 为真且长度静默 idle_ms。超 timeout_s 抛 TimeoutError;
     每轮 maybe_cancel(cancel_token)(取消即抛)。
 
-    中断分类:Win time.monotonic() 含睡眠时间——若**单轮**推进 > jump_threshold_s
-    (≫ 轮询间隔),判定机器睡眠/挂起过;到 deadline 时抛 StreamInterrupted 而非
-    TimeoutError(上层不 retry、不喂连败短路),避免睡眠唤醒引发假超时风暴。
-    _now/_sleep 为测试注入缝(默认 time.monotonic/time.sleep)。"""
+    中断分类:Win time.monotonic() 含睡眠时间——若**单轮**推进 > jump_threshold_s,
+    判定机器睡眠/挂起过;到 deadline 时抛 StreamInterrupted 而非 TimeoutError(上层不
+    retry、不喂连败短路),避免睡眠唤醒引发假超时风暴。阈值取 120s:远大于任何单轮
+    计算耗时(即便重载/CDP 卡顿的慢轮),又远小于真实挂起的分钟级跳变——把 30-120s
+    的重载慢轮留给正常 TimeoutError(可 retry、喂连败),只有分钟级跳变才归中断,
+    避免误判卡死平台为中断而绕过连败短路。_now/_sleep 为测试注入缝。"""
     if length_fn is None:
         def length_fn():                      # 默认:整页长度(与旧版逐字节等价,保既有测试)
             return len(page.content())

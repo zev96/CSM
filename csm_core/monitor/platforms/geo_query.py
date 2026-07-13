@@ -91,7 +91,11 @@ class GeoQueryAdapter:
                                  status="failed", rank=-1,
                                  error_message="geo_query 配置缺 brand/keywords/platforms")
 
-        # 关键词顺序洗牌(防固定顺序指纹);确定性种子保当日断点续跑 resume_from 仍有效。
+        # 关键词顺序洗牌(防固定顺序指纹)。种子 = sha256(task_id:UTC日期) → 同日复现同序。
+        # 注:geo 目前从不 resume —— fetch resume_from 恒 0(geo 不抛 _RiskControlException,
+        # get_last_resumed_keyword 恒 None)。故洗牌当下绝不破断点。若将来接入 geo 续跑,
+        # 跨 UTC 零点会换序,linear resume_from 会索引错 cell,须先改「已完成(平台,关键词)
+        # 集合」续跑模型(设计§4.1;并发下 linear 前缀本就不成立)。
         keywords = _shuffled_keywords(keywords, task.id or 0, datetime.utcnow().date())
         cells_plan = [(kw, plat) for kw in keywords for plat in platforms]
         total = len(cells_plan)
