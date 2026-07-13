@@ -5,7 +5,11 @@ import threading
 
 import pytest
 
-from csm_core.monitor import rate_limit
+# 直接指向真实实现模块:csm_core.monitor.rate_limit 已是 re-export shim
+# (`from ...browser_infra.rate_limit import *`),而 `import *` 不导出下划线私有名,
+# 故 shim 上没有 _sems/_max_concurrent/_pacers/_breakers。这些并发信号量/限速器/
+# 熔断器的模块级单例真身都在 browser_infra.rate_limit,测试须复位真身。
+from csm_core.browser_infra import rate_limit
 
 
 @pytest.fixture(autouse=True)
