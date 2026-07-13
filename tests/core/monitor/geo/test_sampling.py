@@ -124,6 +124,19 @@ class TestVoteCell:
         assert out.raw.get("error") == "未登录"                   # 保留首个失败原文
         assert len(out.raw["samples"]) == 2                      # 附样本摘要供追溯
 
+    def test_all_failed_prefers_non_interrupt_representative(self):
+        # 首样本是中断(睡眠唤醒)、次样本是真 timeout → 代表 cell 应取 timeout,
+        # 否则被 interrupted 掩盖会漏喂连败短路(reviewer Obs B)。
+        out = vote_cell([fail(status="error", fail_reason="interrupted", err="睡眠唤醒"),
+                         fail(status="error", fail_reason="timeout", err="流超时")])
+        assert out.fail_reason == "timeout"
+        assert out.raw.get("error") == "流超时"
+
+    def test_all_failed_all_interrupt_stays_interrupt(self):
+        out = vote_cell([fail(status="error", fail_reason="interrupted"),
+                         fail(status="error", fail_reason="interrupted")])
+        assert out.fail_reason == "interrupted"                  # 全中断才归中断
+
     def test_mixed_votes_over_ok_only(self):
         # 2 ok(1 提及 1 未提及)+ 1 error → ok 内 1-1 平局 → prev。
         out = vote_cell([ok(mentioned=True, rank=1), ok(mentioned=False), fail()],
@@ -203,6 +216,30 @@ class TestSampledCell:
         fn, box = _scripted([fail(), fail()])
         out = sampled_cell(fn, k=2, flip_recheck=True, prev_mentioned=True)
         assert box["i"] == 2 and out.status == "error"
+
+    def test_between_samples_called_between_not_before_first(self):
+        # between_samples 只在第 2 个样本起调用(反软封:同关键词样本间隔一拍);
+        # 首样本前不调(那是本关键词第一次问)。K=3 → 恰 2 次。
+        fn, box = _scripted([ok(mentioned=True, rank=1)] * 3)
+        paces = {"n": 0}
+        sampled_cell(fn, k=3, flip_recheck=False,
+                     between_samples=lambda: paces.__setitem__("n", paces["n"] + 1))
+        assert box["i"] == 3 and paces["n"] == 2                 # 3 样本之间 2 个间隔
+
+    def test_between_samples_paces_flip_recheck(self):
+        # 翻转补采前也调一次 between_samples(补采样本不背靠背)。K=1+翻转 → 1 次间隔。
+        fn, box = _scripted([ok(mentioned=True, rank=1), ok(mentioned=True, rank=1)])
+        paces = {"n": 0}
+        sampled_cell(fn, k=1, flip_recheck=True, prev_mentioned=False,
+                     between_samples=lambda: paces.__setitem__("n", paces["n"] + 1))
+        assert box["i"] == 2 and paces["n"] == 1
+
+    def test_between_samples_not_called_when_k1_no_flip(self):
+        fn, box = _scripted([ok(mentioned=True, rank=1)])
+        paces = {"n": 0}
+        sampled_cell(fn, k=1, flip_recheck=True, prev_mentioned=True,   # 未翻转
+                     between_samples=lambda: paces.__setitem__("n", paces["n"] + 1))
+        assert box["i"] == 1 and paces["n"] == 0                 # 单样本 → 无间隔
 
     def test_cancel_between_samples_raises(self):
         try:

@@ -133,7 +133,8 @@ class GeoQueryAdapter:
         jitter_min = _int_cfg0("geo_rpa_jitter_min", 15, 600)
         jitter_max = _int_cfg0("geo_rpa_jitter_max", 45, 600)
 
-        # 多采样(§4.6):K 默认 1(=单采样,逐字节向后兼容);翻转复核默认开。
+        # 多采样(§4.6):K 默认 1;翻转复核默认开(K=1 时翻转格仍补采 1 次确认,
+        # 非零成本——见 sampling.sampled_cell)。K=1 且未翻转 = 单采样等价。
         sample_count = _int_cfg("geo_sample_count", 1, 5)
         flip_recheck = bool(cfg.get("geo_flip_recheck", True))
 
@@ -330,12 +331,14 @@ class GeoQueryAdapter:
             with session_cm as query_one:
                 for li, kw in enumerate(plat_keywords):
                     maybe_cancel(tok)
-                    # 多采样:同一 session 上对该关键词采 K 次投票(§4.6)。K=1 →
-                    # sampled_cell 原样返回单样本。sample_fn 同 session 复用浏览器。
+                    # 多采样:同一 session 上对该关键词采 K 次投票(§4.6)。K=1 且未翻转
+                    # → sampled_cell 原样返回单样本。sample_fn 同 session 复用浏览器;
+                    # between_samples 让样本间也隔一拍 jitter(反软封,同关键词不背靠背连问)。
                     cell = sampling.sampled_cell(
                         lambda kw=kw: self._run_cell_on_session(query_one, kw, plat, brand, aliases, client),
                         k=sample_count, flip_recheck=flip_recheck,
-                        prev_mentioned=(prev_map or {}).get((plat, kw)), cancel_token=tok)
+                        prev_mentioned=(prev_map or {}).get((plat, kw)), cancel_token=tok,
+                        between_samples=lambda: _sleep_jitter(tok, jitter_min, jitter_max))
                     produced = li + 1
                     yield li, cell
                     failed = cell.status in ("error", "blocked")

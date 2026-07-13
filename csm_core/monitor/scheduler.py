@@ -30,6 +30,9 @@ from .base import MonitorTask
 # 任务可用 config["geo_start_jitter_max"] 覆盖(含设 0 关闭)。
 _START_JITTER_DEFAULT_MIN: dict[str, int] = {"geo_query": 20}
 _JITTER_MAX_CAP_MIN = 120   # 上限护栏(防配置误填天文数字把任务推到明天)
+# 抖动后至少留这么多秒到午夜,保证 ~60s 的 tick 至少有一次落进 [抖动时刻, 午夜)
+# 触发窗;否则近午夜 target 抖到 23:59:5x 可能夹在两 tick 之间当天漏跑(reviewer LOW-1)。
+_MIDNIGHT_MARGIN_SEC = 120
 
 
 def parse_schedule(schedule: str) -> dtime | None:
@@ -92,13 +95,14 @@ def _jitter_offset_seconds(task_id: int, day, jitter_max_min: int, target: dtime
     - **确定性种子**:只依赖 (task_id, 当日),不读 ``now``。否则每次 tick 重算
       不同偏移 → 到点判定 flicker(任务可能永不触发或乱触发)。用 sha256 而非
       ``hash()``——后者被 PYTHONHASHSEED 随机化,跨进程/tick 变值。
-    - **clamp 同日**:上限夹到「target 到当日午夜前」。否则近午夜的 target(如
-      23:55)抖过午夜 → 该实例是在 day N 算出的 day N+1 时刻,第二天用的却是
-      day N+1 自己的 target,该实例永不被看见 → 当天漏跑。
+    - **clamp 同日 + 留 tick 余量**:上限夹到「target 到当日午夜前再留 _MIDNIGHT_MARGIN_SEC」。
+      否则近午夜的 target(如 23:55)抖过午夜 → 该实例是在 day N 算出的 day N+1 时刻,
+      第二天用的却是 day N+1 自己的 target,该实例永不被看见 → 当天漏跑;且留够余量
+      保证 ~60s tick 能落进触发窗(不夹在两 tick 之间)。
     """
     if jitter_max_min <= 0:
         return 0
-    secs_to_midnight = 86400 - (target.hour * 3600 + target.minute * 60 + target.second) - 1
+    secs_to_midnight = 86400 - (target.hour * 3600 + target.minute * 60 + target.second) - _MIDNIGHT_MARGIN_SEC
     max_sec = max(0, min(jitter_max_min * 60, secs_to_midnight))
     if max_sec <= 0:
         return 0

@@ -166,11 +166,14 @@ class TestStartJitterOffset:
         assert a == b                      # 同 task+同日 → 稳定(跨 tick 不 flicker)
 
     def test_varies_across_days_and_tasks(self):
-        d1 = scheduler._jitter_offset_seconds(7, date(2026, 5, 9), 20, dtime(9, 0))
-        d2 = scheduler._jitter_offset_seconds(7, date(2026, 5, 10), 20, dtime(9, 0))
-        t2 = scheduler._jitter_offset_seconds(8, date(2026, 5, 9), 20, dtime(9, 0))
-        assert d1 != d2                    # 跨天变序(反周期指纹)
-        assert d1 != t2                    # 不同任务错峰
+        # 跨天/跨任务应产生多样偏移(反周期指纹)。用「多样本去重 > 1」而非单点 !=,
+        # 避免 20min 档值域 ~1201 下 1/1201 概率的偶发相等 flaky(reviewer Obs D)。
+        over_days = {scheduler._jitter_offset_seconds(7, date(2026, 5, d), 20, dtime(9, 0))
+                     for d in range(1, 28)}
+        over_tasks = {scheduler._jitter_offset_seconds(t, date(2026, 5, 9), 20, dtime(9, 0))
+                      for t in range(30)}
+        assert len(over_days) > 1          # 27 天全同概率 ~(1/1201)^26 ≈ 0
+        assert len(over_tasks) > 1         # 不同任务错峰
 
     def test_bounded_by_max(self):
         for tid in range(200):
@@ -180,11 +183,12 @@ class TestStartJitterOffset:
     def test_zero_max_is_no_offset(self):
         assert scheduler._jitter_offset_seconds(7, date(2026, 5, 9), 0, dtime(9, 0)) == 0
 
-    def test_clamps_near_midnight_no_cross_day(self):
-        # target 23:55 + 20min 会跨午夜 → 夹到当日午夜前(299s = 到 23:59:59)。
+    def test_clamps_near_midnight_leaves_tick_margin(self):
+        # target 23:55 + 20min 会跨午夜 → 夹到当日午夜前再留 120s 余量:
+        # 86400 - 86100 - 120 = 180s(至多 23:58:00),保证 ~60s tick 能落进触发窗。
         for tid in range(200):
             off = scheduler._jitter_offset_seconds(tid, date(2026, 5, 9), 20, dtime(23, 55))
-            assert 0 <= off <= 299         # 绝不把实例推到次日
+            assert 0 <= off <= 180         # 不跨午夜 + 留 tick 余量
 
 
 class TestStartJitterDue:

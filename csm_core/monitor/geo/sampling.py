@@ -1,7 +1,9 @@
 """GEO 多次采样投票(§4.6)—— 每 (关键词,平台) 采 K 次,投票产出一个 GeoCell。
 
-在 **cell 级**投票 → runner「每关键词一 cell」契约天然保持。默认 K=1 = 单样本
-原样返回,逐字节等价单采样(零成本向后兼容)。
+在 **cell 级**投票 → runner「每关键词一 cell」契约天然保持。**K=1 且未触发翻转
+复核时** = 单样本原样返回,逐字节等价单采样(向后兼容)。注:翻转复核默认开
+(geo_flip_recheck),故 K=1 时「相对上轮翻转」的格子仍会补采 1 次确认——那不是
+零成本,是 §4.6 有意的抑噪。
 
 投票**只用于判定**(mention/rank/sentiment);信源/答案/recommended/summary
 取**首个成功样本**(§4.6 致命修复④:并集会把 geo_citations 行数×K 放大,污染
@@ -51,8 +53,10 @@ def vote_cell(samples: list[GeoCell], prev_mentioned: "bool | None" = None) -> G
 
     ok = [s for s in samples if s.status == "ok"]
     if not ok:
-        # 全失败:保留首个失败样本(status/fail_reason 原样),附样本摘要供追溯。
-        base = samples[0]
+        # 全失败:代表 cell 优先取「首个非中断失败样本」。中断(睡眠唤醒)豁免连败
+        # 短路,但若同格另有真失败(timeout/selector_drift 等),应以真失败为代表——
+        # 否则被 interrupted 掩盖会漏喂 _rpa_batch 的连败短路计数。全为中断才归中断。
+        base = next((s for s in samples if s.fail_reason != "interrupted"), samples[0])
         return base.model_copy(update={"raw": {**base.raw, "samples": samples_digest(samples)}})
 
     yes = sum(1 for s in ok if s.mentioned)
@@ -83,23 +87,31 @@ def vote_cell(samples: list[GeoCell], prev_mentioned: "bool | None" = None) -> G
 
 def sampled_cell(sample_fn: "Callable[[], GeoCell]", *, k: int = 1,
                  flip_recheck: bool = True, prev_mentioned: "bool | None" = None,
-                 cancel_token=None) -> GeoCell:
+                 cancel_token=None, between_samples: "Callable[[], None] | None" = None) -> GeoCell:
     """跑 K 次 ``sample_fn`` 投票产出一个 cell;翻转复核时补采 1 次确认。
 
     - 每次 ``sample_fn`` 前 ``maybe_cancel``(用户 Stop 不必等满 K 次;取消由
       ``sample_fn`` 或此处 ``maybe_cancel`` 上抛,不吞)。
+    - ``between_samples``:**样本之间**(第 2 个起、含翻转补采前)的节奏钩子。RPA
+      车道传答后 jitter —— 同一关键词短时间内 K 次相同提问会像机器人(反软封,而
+      软封不可逆、无 429 那样的自愈),故样本间也要隔一拍;API 车道无需(快、429
+      可自愈)→ 传 None。首个样本前不调(那是本关键词第一次问)。
     - **翻转复核**:``voted.status=='ok'`` 且 ``voted.mentioned != prev``(prev 已知)
       → 补采 1 次再投票。翻转复核 = 确认:补采后若 1-1 平局回落 prev(翻转未确认
       则维持上轮结论,抑制单次采样误翻转)。
     """
     k = max(1, k)
     samples: list[GeoCell] = []
-    for _ in range(k):
+    for i in range(k):
+        if i > 0 and between_samples is not None:
+            between_samples()                    # 样本间节奏(可被 Stop 打断,见 _sleep_jitter)
         maybe_cancel(cancel_token)
         samples.append(sample_fn())
     voted = vote_cell(samples, prev_mentioned)
     if (flip_recheck and prev_mentioned is not None
             and voted.status == "ok" and voted.mentioned != prev_mentioned):
+        if between_samples is not None:
+            between_samples()                    # 翻转补采前也隔一拍(同 session 同关键词不背靠背)
         maybe_cancel(cancel_token)
         samples.append(sample_fn())
         voted = vote_cell(samples, prev_mentioned)
