@@ -28,7 +28,7 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Literal
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -703,13 +703,15 @@ class MonitorLoop:
                 error_message=err_msg,
                 now=self._clock(),
             )
+            # R2：断点落库 + 清草稿在**同一事务**（clear_progress_task_id）——避免硬杀
+            # 夹在两者间留残草稿被启动恢复重造一条重复断点、且改写风控原因为 interrupted。
             try:
-                storage.save_result(breakpoint_result, alert_triggered=False)
+                storage.save_result(
+                    breakpoint_result, alert_triggered=False,
+                    clear_progress_task_id=(task_id_local if owns_scratchpad else None),
+                )
             except Exception:
                 logger.exception("monitor task %s: failed to persist risk_control breakpoint", task.id)
-            # R2：风控断点已存（e.partial_keywords 权威），清掉草稿避免孤儿被误恢复。
-            if owns_scratchpad:
-                self._clear_run_progress_safe(task_id_local)
             self._untrack_active(task_id_local)
             self._publish(MonitorEvent(
                 kind="risk_control",
@@ -821,8 +823,14 @@ class MonitorLoop:
             logger.exception("monitor task %s: should_alert raised; treating as no-alert", task.id)
             alert_now = False
 
+        # R2：结果落库 + 清草稿在**同一事务**（ok run 收尾；非 ok 未 materialize 的草稿
+        # 此前已在 _recover_interrupted_or_clear 里清过，DELETE 幂等）。仅本 run 拥有草稿
+        # 时才清，避免 override run 误删别的崩溃残留 run 的草稿。
         try:
-            storage.save_result(result, alert_triggered=alert_now)
+            storage.save_result(
+                result, alert_triggered=alert_now,
+                clear_progress_task_id=(task_id_local if owns_scratchpad else None),
+            )
         except Exception as e:
             msg = f"persist failed: {e}"
             logger.exception("monitor task %s: %s", task.id, msg)
@@ -831,12 +839,6 @@ class MonitorLoop:
             ))
             self._untrack_active(task_id_local)
             return None
-
-        # R2：结果已落库 → 清掉 run-progress 草稿（ok run 收尾；非 ok 未 materialize
-        # 的草稿此前已在 _recover_interrupted_or_clear 里清过，这里幂等）。仅本 run 拥有
-        # 草稿时才清，避免 override run 误删别的崩溃残留 run 的草稿。
-        if owns_scratchpad:
-            self._clear_run_progress_safe(task_id_local)
 
         # Normal completion: drop from active set BEFORE publishing so any
         # frontend that listens and then immediately calls /running sees a
@@ -913,8 +915,8 @@ class MonitorLoop:
                 error_message="监测中断：上次运行未完成，可从断点续抓",
                 now=self._clock(),
             )
-            storage.save_result(bp, alert_triggered=False)
-            self._clear_run_progress_safe(task.id)
+            # 断点落库 + 清草稿同一事务（避免硬杀夹中间留残草稿→重复断点）。
+            storage.save_result(bp, alert_triggered=False, clear_progress_task_id=task.id)
         except Exception:
             logger.exception(
                 "monitor task %s: materialize interrupted breakpoint failed", task.id)
@@ -1211,6 +1213,13 @@ def recover_run_progress(*, now: "datetime | None" = None) -> int:
             ]
             head = _merge_resumed_baidu_keywords(
                 prog["keywords"], prog["resume_from"], task_id, configured)
+            # 单调时钟钳位：materialize 的 checked_at 须 > 现有最新结果，否则若上次
+            # 那条（旧断点/结果）的 checked_at 因时钟倒退反而更晚，ORDER BY checked_at
+            # DESC 会让**旧断点**排前面、续抓退回更早位置。钳到 latest+1ms 保证本断点
+            # 恒为最新。（跨重启才可能撞上时钟倒退；进程内 loop 路径不需要。）
+            bp_now = now
+            if latest is not None and latest.checked_at is not None and bp_now <= latest.checked_at:
+                bp_now = latest.checked_at + timedelta(milliseconds=1)
             bp = _build_baidu_breakpoint(
                 task_id,
                 next_kw=prog["next_keyword"],
@@ -1220,10 +1229,10 @@ def recover_run_progress(*, now: "datetime | None" = None) -> int:
                 layer="interrupted",
                 detail="上次监测因程序退出中断",
                 error_message="监测中断：上次运行未完成（程序退出/崩溃），可从断点续抓",
-                now=now,
+                now=bp_now,
             )
-            storage.save_result(bp, alert_triggered=False)
-            storage.clear_run_progress(task_id)
+            # 断点落库 + 清草稿同一事务（避免恢复途中硬杀留残草稿→下次再重造一条）。
+            storage.save_result(bp, alert_triggered=False, clear_progress_task_id=task_id)
             recovered += 1
             logger.warning(
                 "R2 recover: task %s 上次中断于关键词 %s/%s，已存为可续抓断点",
