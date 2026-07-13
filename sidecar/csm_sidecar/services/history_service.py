@@ -89,7 +89,10 @@ def get_comment_retention_history(range_str: str) -> dict[str, Any]:
         checked = storage._parse_iso(row["checked_at"])  # noqa: SLF001
         if not checked:
             continue
-        date_key = checked.strftime("%Y-%m-%d")
+        # R6：按**本地日**分桶（daily_series 的 day 用本地 now 生成、前端也是本地日）。
+        # checked 原始 UTC 只留给 events 的 _iso_utc 输出；拿它算 date_key 会把本地
+        # 凌晨/深夜跑的结果错分到相邻一天。见 _utc_to_local_naive / #163 baidu 同款。
+        date_key = _utc_to_local_naive(checked).strftime("%Y-%m-%d")
         prev = by_platform_date[row["task_type"]][date_key].get(row["task_id"])
         if prev is None or prev["checked_at"] < checked:
             by_platform_date[row["task_type"]][date_key][row["task_id"]] = {
@@ -207,7 +210,10 @@ def get_zhihu_ranking_history(range_str: str) -> dict[str, Any]:
         if not checked:
             continue
         per_task[row["task_id"]].append({
+            # checked_at 原始 UTC 供 questions[].checked_at 的 _iso_utc 输出；
+            # checked_at_local 供 _zhihu_daily_series 本地日分桶（见 #163 baidu 同款）。
             "checked_at": checked,
+            "checked_at_local": _utc_to_local_naive(checked),
             "matched_count": int(m.get("matched_count") or 0),
             "matched_ranks": list(m.get("matched_ranks") or []),
             "best_rank": int(min(m["matched_ranks"])) if m.get("matched_ranks") else -1,
@@ -379,8 +385,10 @@ def _zhihu_daily_series(
         topn = 0
         changed_up = changed_down = 0
         for results in per_task.values():
-            # results is DESC; find first result whose checked_at < day_end
-            curr_on_day = next((r for r in results if r["checked_at"] < day_end), None)
+            # results is DESC; find first result whose checked_at < day_end。
+            # 用 checked_at_local（本地日边界比对，与 day_start/day_end 同为本地墙钟）
+            # ——checked_at 是 UTC，直接比会把本地凌晨/深夜结果错分到相邻桶。
+            curr_on_day = next((r for r in results if r["checked_at_local"] < day_end), None)
             if not curr_on_day:
                 continue
             hits += curr_on_day["matched_count"]
@@ -391,7 +399,7 @@ def _zhihu_daily_series(
             # 而 questions[] 可能算 up/down。这是有意为之：日级别系列要稳定
             # 反映「跨天的变化」，不被同一天的两次抓取扰动。
             prev_for_day = next(
-                (r for r in results if r["checked_at"] < day_start),
+                (r for r in results if r["checked_at_local"] < day_start),
                 None,
             )
             kind, _ = _classify_zhihu_change(curr_on_day, prev_for_day)
