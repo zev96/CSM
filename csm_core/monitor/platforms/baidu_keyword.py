@@ -67,6 +67,15 @@ logger = logging.getLogger(__name__)
 #     uer_feedback          用户反馈卡
 #     new_baikan_index      百看图文视频聚合
 #     note_lead             笔记类聚合卡
+#   2026-07-13 cosc 改版 live 探针新观察到的杂卡（非软文本体，补齐防污染）——
+#     sg_kg_entity_san      百科实体知识卡（搜品牌词必含品牌名，计入会假报）
+#     bk_polysemy           百科多义词卡
+#     wenda_generate        AI 问答生成卡
+#     b2b_goods_wholesale   爱采购商品批发卡（b2b_prod 的另一模板名）
+#     fw_on_newsite_three_san 服务/建站类卡
+# 注意 news-realtime / rel_base_realtime（实时资讯卡）留在这里：它们不是软文
+# 本体、不进默认 rank；而「最新资讯」区块另按表头文字「最新相关信息」定位抓取
+# （见 _XPATH_NEWS_CARD），两条路径互不冲突。
 _EXCLUDED_TPLS: tuple[str, ...] = (
     "sp_purc_pc",
     "short_video",
@@ -79,6 +88,11 @@ _EXCLUDED_TPLS: tuple[str, ...] = (
     "uer_feedback",
     "new_baikan_index",
     "note_lead",
+    "sg_kg_entity_san",
+    "bk_polysemy",
+    "wenda_generate",
+    "b2b_goods_wholesale",
+    "fw_on_newsite_three_san",
 )
 
 
@@ -125,11 +139,51 @@ _XPATH_DEFAULT_RELAXED = (
     + "]//h3/a"
 )
 
-_XPATH_NEWS = (
-    "//div[contains(@class, 'cos-space')]"
-    "/div[contains(@class, 'cos-row')]"
-    "//h3//a"
+# ── 「最新资讯」区块 ────────────────────────────────────────────────
+# 百度 2026-07 cosc 改版把旧「资讯簇」(cos-space/cos-row) 整个换掉：cos-space
+# 退化成通用排版类（accordion / 头像徽章 / 分隔线都在用它），旧
+# _XPATH_NEWS(cos-space/cos-row//h3//a) 对真实页面**恒解出 0 行**。资讯现在
+# 以「{关键词}的最新相关信息」聚合卡呈现（tpl=rel_base_realtime，
+# result-op c-container，内含表头 h3 + 若干篇文章行 cos-row）。
+#
+# 定位锚点用**表头可见文字**「的最新相关信息」—— 用户可见文案比内部 tpl 名
+# 稳定得多（tpl 一年内 news-realtime → rel_base_realtime 就变过一次；而资讯卡
+# 表头恒为「{关键词}的最新相关信息」）。带上「的」而非只认「最新相关信息」：
+# 后者太宽，会把恰好标题含「…最新相关信息…」的普通结果卡（如「2026最新相关
+# 信息大盘点」）误判成资讯卡、把卡内其它 h3 链接当成幽灵资讯文章（对抗测试
+# 实证）。不用 tpl 兜底：真资讯卡必带该表头，tpl 兜底反而会把只是恰好带
+# rel_base_realtime 属性的杂卡桩误判成资讯。文章链接 = 卡内 h3//a，但排除
+# 表头那条 h3（它文字含该表头、链向百度聚合页而非软文）。注意新版 a 是 h3 的
+# **后代**而非直接子（h3>span>span>a），必须 .//h3//a 不能 .//h3/a。收窄到
+# content_left 主结果列，防右栏 / 页脚里出现同字样时误匹配。
+_NEWS_HEADER_MARK = "的最新相关信息"
+_XPATH_NEWS_CARD = (
+    "//div[@id='content_left']//div[" + _class_token("c-container")
+    + f" and .//h3[contains(normalize-space(.), '{_NEWS_HEADER_MARK}')]]"
 )
+_XPATH_NEWS_ARTICLE = (
+    f".//h3[not(contains(normalize-space(.), '{_NEWS_HEADER_MARK}'))]//a"
+)
+
+
+def _extract_news_links(cards: list[Any]) -> list[dict[str, Any]]:
+    """从「最新相关信息」资讯卡（已由 _XPATH_NEWS_CARD 选好）抽文章链接，
+    排除聚合页表头那条链接。去重（同一 href 只留一条）。
+
+    ``cards`` 为空 → 返回空 → news_present=False（该关键词当下没有资讯区，
+    属常态）。
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for card in cards:
+        for link in _extract_a_tags(card, _XPATH_NEWS_ARTICLE):
+            href = link.get("href") or ""
+            if not href or href in seen:
+                continue
+            seen.add(href)
+            out.append(link)
+    return out
+
 
 def parse_serp(html: str) -> dict[str, Any]:
     """从一段 SERP HTML 抽取两组 (title, href) 链接。
@@ -195,20 +249,22 @@ def parse_serp(html: str) -> dict[str, Any]:
                 _tpl_inventory(doc),
             )
 
-    news_links = _extract_a_tags(doc, _XPATH_NEWS)
-    if not news_links:
-        # 资讯区静默死亡观测：cos-space 容器存在但一行都没解出 ≠ 页面没有
-        # 资讯区（后者常见且正常）—— 前者是内层结构（cos-row/h3）漂移信号。
-        try:
-            cos_blocks = int(doc.xpath("count(//div[contains(@class, 'cos-space')])"))
-        except Exception:
-            cos_blocks = 0
-        if cos_blocks:
-            logger.warning(
-                "baidu parse_serp: 页面存在 %d 个 cos-space 资讯容器但解出 0 行 "
-                "—— 资讯区内层结构可能已变更，请核对 _XPATH_NEWS",
-                cos_blocks,
-            )
+    try:
+        news_cards = doc.xpath(_XPATH_NEWS_CARD)
+    except Exception as e:
+        logger.warning("baidu news card xpath raised: %s", e)
+        news_cards = []
+    news_links = _extract_news_links(news_cards)
+    if not news_links and news_cards:
+        # 漂移哨兵：确实检出了「…的最新相关信息」资讯卡（表头 h3 命中）却一条
+        # 文章都没抽出 —— 卡内文章结构可能又变了（比如标题不再包在 h3 里）。
+        # 留 WARNING 证据，行为不变（news_present 仍 False）。基于「卡已命中」
+        # 而非「html 里有该字样」判断：后者会被摘要/JSON 里的同字样误触发刷屏。
+        logger.warning(
+            "baidu parse_serp: 检出 %d 张「%s」资讯卡但文章解出 0 条 —— 资讯卡内层"
+            "结构可能已变更，请核对 _XPATH_NEWS_ARTICLE",
+            len(news_cards), _NEWS_HEADER_MARK,
+        )
     return {
         "default_links": default_links,
         "news_links": news_links,
