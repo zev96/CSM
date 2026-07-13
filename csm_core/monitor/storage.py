@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -119,6 +119,11 @@ def init_db(db_path: Path) -> None:
         conn = sqlite3.connect(str(_db_path), isolation_level=None)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
+            # busy_timeout：WAL 下读不挡写，但写-写仍抢独占 WAL 锁；默认 timeout=0 时
+            # 抢锁失败的一方立刻 "database is locked" 抛错。R2 把 baidu 从 1 写/轮变成
+            # ~N 写/轮，撞上并发 zhihu/comment 的 save_result 概率升高 —— 后者失败会
+            # 被当成整条结果落库失败误报。给 5s 退避把这类瞬时抢锁抹平。
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA foreign_keys=ON")
             _migrate(conn)
         finally:
@@ -156,6 +161,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # v10: geo_cells.fail_reason —— 失败原因分类列(前端替掉写死「够不到平台」)。
     # geo_storage 已在 v7 段 import(同一函数作用域)。幂等。
     geo_storage.apply_v10_migration(conn)
+    # v11: R2 增量落库 —— 在跑 run 的崩溃安全草稿表（task_id 主键，一行一个在跑的
+    # baidu run）。每抓完一个关键词 UPSERT 头段；任何中断后 materialize 成断点。
+    # 属核心 monitor 域（同 monitor_results），直接建在这里，不走 lazy 子模块。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS monitor_run_progress (
+            task_id INTEGER PRIMARY KEY REFERENCES monitor_tasks(id) ON DELETE CASCADE,
+            next_keyword INTEGER NOT NULL,
+            keywords_json TEXT NOT NULL DEFAULT '[]',
+            resume_from INTEGER NOT NULL DEFAULT 0,
+            total_keywords INTEGER NOT NULL DEFAULT 0,
+            search_keywords_json TEXT NOT NULL DEFAULT '[]',
+            target_brand TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+        """
+    )
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),
@@ -191,6 +213,8 @@ def get_conn() -> sqlite3.Connection:
         conn = sqlite3.connect(str(_db_path), isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        # 见 init_db：5s 退避避免写-写抢锁瞬时失败误报（R2 高频落库放大了该窗口）。
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         _local.conn = conn
     return conn
@@ -526,6 +550,92 @@ def get_last_resumed_keyword(task_id: int) -> int | None:
     metric = json.loads(row["metric_json"])
     v = metric.get("last_resumed_keyword")
     return v if isinstance(v, int) else None
+
+
+# ── Run-progress scratchpad (R2 增量落库：崩溃安全) ─────────────────────────
+def save_run_progress(
+    task_id: int,
+    *,
+    next_keyword: int,
+    keywords: "list[dict[str, Any]]",
+    resume_from: int = 0,
+    total_keywords: int = 0,
+    search_keywords: "list[str] | None" = None,
+    target_brand: str = "",
+) -> None:
+    """UPSERT 一个在跑 baidu run 的头段进度（崩溃安全草稿）。
+
+    一行一个 task（task_id PRIMARY KEY），每抓完一个关键词覆盖一次，让硬杀 /
+    崩溃后已抓完的头段仍可恢复。任何 clean 终态由 ``clear_run_progress`` 清掉 ——
+    所以存活到下次启动的草稿行 = 定义上的「孤儿中断 run」。
+
+    ``next_keyword`` 绝对 0-based 下一个待抓关键词（= resume 位置）；
+    ``keywords`` 本轮已抓完的行（[resume_from:next_keyword]）；
+    ``resume_from`` 本 run 自己的起点（恢复时和上次断点头段合并的依据）。
+    """
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO monitor_run_progress(
+            task_id, next_keyword, keywords_json, resume_from,
+            total_keywords, search_keywords_json, target_brand, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        ON CONFLICT(task_id) DO UPDATE SET
+            next_keyword=excluded.next_keyword,
+            keywords_json=excluded.keywords_json,
+            resume_from=excluded.resume_from,
+            total_keywords=excluded.total_keywords,
+            search_keywords_json=excluded.search_keywords_json,
+            target_brand=excluded.target_brand,
+            updated_at=excluded.updated_at
+        """,
+        (
+            task_id,
+            int(next_keyword),
+            json.dumps(keywords or [], ensure_ascii=False),
+            int(resume_from),
+            int(total_keywords),
+            json.dumps(search_keywords or [], ensure_ascii=False),
+            target_brand or "",
+        ),
+    )
+
+
+def get_run_progress(task_id: int) -> "dict[str, Any] | None":
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM monitor_run_progress WHERE task_id=?", (task_id,)
+    ).fetchone()
+    return _row_to_run_progress(row) if row else None
+
+
+def list_run_progress() -> "list[dict[str, Any]]":
+    """所有在跑草稿行。启动恢复扫描用（进程还活着时不该有别的 run 在写）。"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM monitor_run_progress ORDER BY task_id"
+    ).fetchall()
+    return [_row_to_run_progress(r) for r in rows]
+
+
+def clear_run_progress(task_id: int) -> None:
+    conn = get_conn()
+    conn.execute("DELETE FROM monitor_run_progress WHERE task_id=?", (task_id,))
+
+
+def _row_to_run_progress(row: sqlite3.Row) -> "dict[str, Any]":
+    return {
+        "task_id": row["task_id"],
+        "next_keyword": row["next_keyword"],
+        "keywords": json.loads(row["keywords_json"]) if row["keywords_json"] else [],
+        "resume_from": row["resume_from"],
+        "total_keywords": row["total_keywords"],
+        "search_keywords": (
+            json.loads(row["search_keywords_json"]) if row["search_keywords_json"] else []
+        ),
+        "target_brand": row["target_brand"] or "",
+        "updated_at": _parse_iso(row["updated_at"]),
+    }
 
 
 # ── Maintenance ────────────────────────────────────────────────────────────

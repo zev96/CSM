@@ -19,7 +19,7 @@ from csm_core.monitor.rate_limit import configure_pacing, configure_concurrency
 from csm_core.monitor.tikhub import build_api_adapters
 
 from . import config_service
-from .monitor_loop import MonitorLoop
+from .monitor_loop import MonitorLoop, recover_run_progress
 from ..monitor_bus import monitor_bus
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,14 @@ def start(*, db_path: Path | None = None) -> MonitorLoop:
         target = Path(db_path) if db_path else _default_db_path()
         storage.init_db(target)
         logger.info("monitor storage initialised at %s", target)
+        # R2 崩溃恢复：上次进程崩溃残留的 run-progress 草稿 → 可续抓断点。放在 loop
+        # 起跑之前（此刻不会有 run 在写草稿）。fail-soft：恢复失败绝不打断启动。
+        try:
+            n = recover_run_progress()
+            if n:
+                logger.warning("R2: 恢复了 %d 个上次中断的 baidu run 为可续抓断点", n)
+        except Exception:
+            logger.exception("R2 recover_run_progress failed (non-fatal)")
 
     cfg = config_service.load()
     _apply_runtime_settings(cfg)

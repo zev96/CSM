@@ -366,6 +366,72 @@ def test_resume_from_greater_than_keyword_count_yields_empty_scan(monkeypatch, n
     assert visited == [], f"expected no keywords visited, got: {visited}"
 
 
+def test_fetch_calls_partial_cb_after_each_keyword(monkeypatch, no_wait_pacer):
+    """R2 增量落库：adapter 每抓完一个关键词就调用 ``partial_cb(next_kw, rows)``。
+
+    ``rows`` 是本轮已抓完的头段快照、``next_kw`` 是绝对下一个待抓下标（= resume
+    位置）—— runner 拿它落进 monitor_run_progress 草稿，硬杀/崩溃后可恢复。
+    与 progress_cb 同一处触发（关键词收尾）。"""
+    visited: list[str] = []
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", _make_fake_session_ctx(visited))
+    monkeypatch.setattr(baidu_keyword, "detect_risk", lambda page, response=None: None)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+    monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp())
+
+    task = MonitorTask(
+        id=1,
+        type="baidu_keyword",
+        name="partial-cb-test",
+        target_url="https://www.baidu.com/s?wd=kw0",
+        config={
+            "search_keywords": [f"kw{i}" for i in range(4)],
+            "target_brand": "TestBrand",
+        },
+    )
+
+    calls: list[tuple[int, int]] = []  # (next_kw, len(rows_at_call_time))
+
+    def _partial_cb(next_kw: int, rows: list) -> None:
+        calls.append((next_kw, len(rows)))
+
+    result = baidu_keyword.ADAPTER.fetch(task, partial_cb=_partial_cb)
+
+    assert result.status == "ok", f"unexpected status {result.status!r}: {result.error_message}"
+    # 4 个关键词 → 4 次 flush；next_kw = 1..4（绝对下标），rows 累积 1..4 行
+    assert calls == [(1, 1), (2, 2), (3, 3), (4, 4)]
+
+
+def test_fetch_partial_cb_absolute_index_after_resume(monkeypatch, no_wait_pacer):
+    """resume_from=2 时 partial_cb 的 next_kw 仍是**绝对**下标（3,4,...），rows 只含
+    本轮尾段（[2:]），供 runner 与上次断点头段合并。"""
+    monkeypatch.setattr(baidu_keyword, "baidu_browser_session", _make_fake_session_ctx([]))
+    monkeypatch.setattr(baidu_keyword, "detect_risk", lambda page, response=None: None)
+    monkeypatch.setattr(baidu_keyword, "resolve_baidu_link", lambda u: u)
+    monkeypatch.setattr(baidu_keyword, "_cc_get", lambda url, **kw: _FakeResp())
+
+    task = MonitorTask(
+        id=1,
+        type="baidu_keyword",
+        name="partial-cb-resume-test",
+        target_url="https://www.baidu.com/s?wd=kw0",
+        config={
+            "search_keywords": [f"kw{i}" for i in range(5)],
+            "target_brand": "TestBrand",
+        },
+    )
+
+    calls: list[tuple[int, int]] = []
+
+    def _partial_cb(next_kw: int, rows: list) -> None:
+        calls.append((next_kw, len(rows)))
+
+    result = baidu_keyword.ADAPTER.fetch(task, resume_from=2, partial_cb=_partial_cb)
+
+    assert result.status == "ok"
+    # 抓 kw2..kw4（3 个）；next_kw 绝对 = 3,4,5；rows 本轮尾段累积 = 1,2,3
+    assert calls == [(3, 1), (4, 2), (5, 3)]
+
+
 # ── MonitorLoop runner _RiskControlException handler tests ───────────────────
 
 

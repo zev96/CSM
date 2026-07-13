@@ -1181,6 +1181,7 @@ class BaiduKeywordAdapter:
         progress_cb: "Callable[[int, int], None] | None" = None,
         cancel_token: Any = None,
         resume_from: int = 0,
+        partial_cb: "Callable[[int, list], None] | None" = None,
     ) -> MonitorResult:
         """Run one round of SERP scraping for all configured keywords.
 
@@ -1300,6 +1301,7 @@ class BaiduKeywordAdapter:
                 task, keywords, brand, effective_headless, progress_cb, cancel_token,
                 aliases=aliases,
                 resume_from=resume_from,
+                partial_cb=partial_cb,
                 session=session,
                 session_kwargs=session_kwargs,
             )
@@ -1320,6 +1322,7 @@ class BaiduKeywordAdapter:
         *,
         aliases: list[str],
         resume_from: int = 0,
+        partial_cb: "Callable[[int, list], None] | None" = None,
         session: Any = None,
         session_kwargs: "dict[str, Any] | None" = None,
     ) -> MonitorResult:
@@ -1333,6 +1336,7 @@ class BaiduKeywordAdapter:
                 task, keywords, brand, headless, progress_cb, cancel_token,
                 aliases=aliases,
                 resume_from=resume_from,
+                partial_cb=partial_cb,
                 session=session,
                 session_kwargs=session_kwargs,
             )
@@ -1384,6 +1388,7 @@ class BaiduKeywordAdapter:
         *,
         aliases: list[str],
         resume_from: int = 0,
+        partial_cb: "Callable[[int, list], None] | None" = None,
         session: Any = None,
         session_kwargs: "dict[str, Any] | None" = None,
     ) -> MonitorResult:
@@ -1608,6 +1613,15 @@ class BaiduKeywordAdapter:
                         progress_cb(kw_idx + 1, total_kw)
                     except Exception:
                         logger.exception("progress_cb(%s,%s) raised; ignoring", kw_idx + 1, total_kw)
+
+                # R2 增量落库：把本轮已抓完的头段（[resume_from:kw_idx+1]）flush 给
+                # runner 落草稿。next_kw=kw_idx+1 是绝对下一个待抓下标（崩溃后从这里
+                # 续）。传 list(...) 浅拷贝快照，避免消费方存引用被后续 append 污染。
+                if partial_cb is not None:
+                    try:
+                        partial_cb(kw_idx + 1, list(keyword_results))
+                    except Exception:
+                        logger.exception("partial_cb(%s) raised; ignoring", kw_idx + 1)
 
         # Compute task-level aggregations
         total_keywords = len(all_keywords)

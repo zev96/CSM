@@ -1698,7 +1698,7 @@ def test_fetch_drops_session_on_normal_return(monkeypatch):
     captured: dict[str, Any] = {}
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, aliases=(), resume_from, session, session_kwargs=None):
+                       *, aliases=(), resume_from, partial_cb=None, session, session_kwargs=None):
         captured["session"] = session
         captured["task_id"] = task.id
         return MonitorResult(
@@ -1749,7 +1749,7 @@ def test_fetch_drops_session_on_risk_control(monkeypatch):
     adapter.apply_settings(default_excluded_domains=())
 
     def fake_promotion(self, task, keywords, brand, headless, progress_cb, cancel_token,
-                       *, aliases=(), resume_from, session, session_kwargs=None):
+                       *, aliases=(), resume_from, partial_cb=None, session, session_kwargs=None):
         raise RiskControlException(
             RiskSignal(layer="url", detail="wappass triggered"), progress=2,
         )

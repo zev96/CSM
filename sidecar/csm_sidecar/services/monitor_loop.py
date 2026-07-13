@@ -576,23 +576,65 @@ class MonitorLoop:
             except Exception:
                 logger.exception("progress event publish failed (task %s)", task_id_local)
 
+        # R2 增量落库：每抓完一个关键词把头段落进 monitor_run_progress 草稿。仅全量
+        # baidu_keyword run 拥有草稿（唯一多关键词长 run）；单关键词 override「启动监测」
+        # 只重抓 1 个、崩溃安全无意义，跳过。owns_scratchpad 同时把守下面所有收尾分支的
+        # 清理/materialize —— 不拥有草稿的 run（override / 非 baidu）绝不碰它，免得误删
+        # 别的（崩溃残留）run 的草稿。
+        owns_scratchpad = (
+            task.type == "baidu_keyword"
+            and not (task.config or {}).get("_keyword_override")
+        )
+        # closure 内自带 try/except：既 fail-soft（落库失败不打断抓取），也保证绝不向外
+        # 抛 TypeError 触发 _dispatch_fetch 的签名回退重调（= 重复抓取）。
+        _partial_cb = None
+        if owns_scratchpad:
+            def _partial_cb(next_kw: int, rows: "list[dict[str, Any]]") -> None:
+                try:
+                    cfg = task.config or {}
+                    # 与适配器同源地 strip + 过滤空白项（baidu_keyword._fetch_once 也是
+                    # [k.strip() for k in raw if k and k.strip()]）；否则草稿的 total /
+                    # search_keywords 用未过滤 raw → 进度分母虚高，且合并时 by_kw 用
+                    # stripped 名而 configured 用 raw 名 → 关键词漏配、行丢失。
+                    configured = [
+                        k.strip() for k in cfg.get("search_keywords", []) if k and k.strip()
+                    ]
+                    storage.save_run_progress(
+                        task_id_local,
+                        next_keyword=int(next_kw),
+                        keywords=rows,
+                        resume_from=resume_from,
+                        total_keywords=len(configured),
+                        search_keywords=configured,
+                        target_brand=cfg.get("target_brand", ""),
+                    )
+                except Exception:
+                    logger.exception(
+                        "monitor task %s: save_run_progress failed (non-fatal)", task_id_local)
+
         def _dispatch_fetch() -> MonitorResult:
-            # 4 级签名回退(老适配器没有 resume_from/cancel_token kwarg 时逐级降级)
+            # 5 级签名回退(老适配器缺 partial_cb/resume_from/cancel_token kwarg 时逐级降级)
             try:
                 return adapter.fetch(
                     task, progress_cb=_progress_cb, cancel_token=cancel_token,
-                    resume_from=resume_from,
+                    resume_from=resume_from, partial_cb=_partial_cb,
                 )
             except TypeError:
                 try:
                     return adapter.fetch(
                         task, progress_cb=_progress_cb, cancel_token=cancel_token,
+                        resume_from=resume_from,
                     )
                 except TypeError:
                     try:
-                        return adapter.fetch(task, progress_cb=_progress_cb)
+                        return adapter.fetch(
+                            task, progress_cb=_progress_cb, cancel_token=cancel_token,
+                        )
                     except TypeError:
-                        return adapter.fetch(task)
+                        try:
+                            return adapter.fetch(task, progress_cb=_progress_cb)
+                        except TypeError:
+                            return adapter.fetch(task)
 
         _is_api = (self._data_source_mode == "tikhub_api"
                    and task.type in self._api_adapters)
@@ -622,6 +664,9 @@ class MonitorLoop:
             # reason so the UI knows the user's «停止» click was honored.
             msg = "cancelled by user"
             logger.info("monitor task %s: %s (%s)", task.id, msg, e)
+            # R2：停止=放弃（保持现语义）—— 清草稿、不留断点（仅本 run 拥有时）。
+            if owns_scratchpad:
+                self._clear_run_progress_safe(task_id_local)
             self._publish(MonitorEvent(
                 kind="failed", task_id=task.id, at=self._clock(), error=msg,
             ))
@@ -647,29 +692,24 @@ class MonitorLoop:
             )
             err_msg = f"风控拦截：layer={e.signal.layer} detail={e.signal.detail}"
             logger.warning("monitor task %s: %s, saving breakpoint at %s", task.id, err_msg, next_kw)
-            breakpoint_metric: dict[str, Any] = {
-                "last_resumed_keyword": next_kw,
-                "captcha_signal_layer": e.signal.layer,
-                "captcha_signal_detail": e.signal.detail,
-                "keywords": head_keywords,
-                # total_keywords 保持完整 N（不是头段长度）→ 前端进度显示「3/10」。
-                "total_keywords": len(configured),
-                "search_keywords": configured,
-                "target_brand": (task.config or {}).get("target_brand", ""),
-            }
-            breakpoint_metric.update(_baidu_keyword_aggregates(head_keywords))
-            breakpoint_result = MonitorResult(
-                task_id=task.id,
-                checked_at=self._clock(),
-                status="risk_control",
-                rank=-1,
-                metric=breakpoint_metric,
+            breakpoint_result = _build_baidu_breakpoint(
+                task.id,
+                next_kw=next_kw,
+                head_keywords=head_keywords,
+                configured=configured,
+                target_brand=(task.config or {}).get("target_brand", ""),
+                layer=e.signal.layer,
+                detail=e.signal.detail,
                 error_message=err_msg,
+                now=self._clock(),
             )
             try:
                 storage.save_result(breakpoint_result, alert_triggered=False)
             except Exception:
                 logger.exception("monitor task %s: failed to persist risk_control breakpoint", task.id)
+            # R2：风控断点已存（e.partial_keywords 权威），清掉草稿避免孤儿被误恢复。
+            if owns_scratchpad:
+                self._clear_run_progress_safe(task_id_local)
             self._untrack_active(task_id_local)
             self._publish(MonitorEvent(
                 kind="risk_control",
@@ -684,6 +724,9 @@ class MonitorLoop:
         except TimeoutError as e:
             msg = f"timeout waiting for platform slot: {e}"
             logger.warning("monitor task %s: %s", task.id, msg)
+            # slot 超时 = 根本没进适配器，草稿通常为空；防御性清一下（仅本 run 拥有时）。
+            if owns_scratchpad:
+                self._clear_run_progress_safe(task_id_local)
             self._publish(MonitorEvent(
                 kind="failed", task_id=task.id, at=self._clock(), error=msg,
             ))
@@ -692,12 +735,27 @@ class MonitorLoop:
         except Exception as e:  # noqa: BLE001 — worker boundary
             msg = f"{type(e).__name__}: {e}"
             logger.exception("monitor task %s adapter crashed", task.id)
+            # R2：若草稿显示 run 中途崩了（异常穿透适配器自身的 catch），用草稿
+            # materialize 断点保住已抓头段（否则整批已抓关键词全丢）。
+            recovered = self._recover_interrupted_or_clear(task) if owns_scratchpad else None
+            self._untrack_active(task_id_local)
+            if recovered is not None:
+                return None  # 中断断点已落库 + 发事件
             self._publish(MonitorEvent(
                 kind="failed", task_id=task.id, at=self._clock(),
                 error=f"{msg}\n{traceback.format_exc()}",
             ))
-            self._untrack_active(task_id_local)
             return None
+
+        # R2：适配器返回非 ok（如 Chrome 崩溃被 _fetch_with_promotion 吞成 failed
+        # 返回、不 raise）时，若草稿显示 run 中途崩了 → 用草稿 materialize 断点，保住
+        # 已抓头段。放在 resume-failure guard 之前：materialize 出的新断点（[0:next]）
+        # 比 guard「保留旧断点」（[0:resume_from]）进度更多、应取而代之。
+        if owns_scratchpad and result is not None and result.status != "ok":
+            recovered = self._recover_interrupted_or_clear(task)
+            if recovered is not None:
+                self._untrack_active(task_id_local)
+                return recovered
 
         # Resume 失败保护：resume（resume_from>0）返回非 ok（尾段全失败 / 坏副本 /
         # 熔断）时，绝不能用失败结果覆盖断点 —— 否则断点里精心保全的头段从最新
@@ -774,6 +832,12 @@ class MonitorLoop:
             self._untrack_active(task_id_local)
             return None
 
+        # R2：结果已落库 → 清掉 run-progress 草稿（ok run 收尾；非 ok 未 materialize
+        # 的草稿此前已在 _recover_interrupted_or_clear 里清过，这里幂等）。仅本 run 拥有
+        # 草稿时才清，避免 override run 误删别的崩溃残留 run 的草稿。
+        if owns_scratchpad:
+            self._clear_run_progress_safe(task_id_local)
+
         # Normal completion: drop from active set BEFORE publishing so any
         # frontend that listens and then immediately calls /running sees a
         # consistent (drained) view.
@@ -801,6 +865,70 @@ class MonitorLoop:
                 error=result.error_message or f"任务结束状态：{result.status}",
             ))
         return result
+
+    def _clear_run_progress_safe(self, task_id: int) -> None:
+        """清掉 task 的 run-progress 草稿。fail-soft：清理失败绝不打断收尾。"""
+        try:
+            storage.clear_run_progress(task_id)
+        except Exception:
+            logger.exception("monitor task %s: clear_run_progress failed", task_id)
+
+    def _recover_interrupted_or_clear(self, task: MonitorTask) -> "MonitorResult | None":
+        """R2：run 非正常收尾时的草稿处理（materialize 中断断点 or 清草稿）。
+
+        若草稿显示 run 未跑完（next_keyword < total_keywords 且有头段）→ 用它
+        materialize 一个 interrupted 断点（落库 + 发 risk_control 事件 + 清草稿），
+        返回该断点结果 —— 复用 #162 续抓链路，前端 banner 显示「中断」。否则（跑完
+        却失败 / 无头段 / 非 baidu）→ 清掉草稿、返回 None，调用方走常规失败处理。
+        fail-soft：任何异常都返回 None、不打断收尾。"""
+        if task.id is None or task.type != "baidu_keyword":
+            return None
+        try:
+            prog = storage.get_run_progress(task.id)
+        except Exception:
+            logger.exception("monitor task %s: get_run_progress failed", task.id)
+            return None
+        if not prog:
+            return None
+        interrupted = (
+            prog["next_keyword"] < prog["total_keywords"] and bool(prog["keywords"])
+        )
+        if not interrupted:
+            # 跑完却失败（如全部 fetch_error）或无头段 → 完整失败 run，不是中断。
+            self._clear_run_progress_safe(task.id)
+            return None
+        try:
+            configured = prog["search_keywords"] or list(
+                (task.config or {}).get("search_keywords", []))
+            head = _merge_resumed_baidu_keywords(
+                prog["keywords"], prog["resume_from"], task.id, configured)
+            bp = _build_baidu_breakpoint(
+                task.id,
+                next_kw=prog["next_keyword"],
+                head_keywords=head,
+                configured=configured,
+                target_brand=prog["target_brand"],
+                layer="interrupted",
+                detail="上次监测意外中断（程序退出或崩溃）",
+                error_message="监测中断：上次运行未完成，可从断点续抓",
+                now=self._clock(),
+            )
+            storage.save_result(bp, alert_triggered=False)
+            self._clear_run_progress_safe(task.id)
+        except Exception:
+            logger.exception(
+                "monitor task %s: materialize interrupted breakpoint failed", task.id)
+            return None
+        self._publish(MonitorEvent(
+            kind="risk_control",
+            task_id=task.id,
+            at=self._clock(),
+            error=bp.error_message,
+            result=bp,
+            last_resumed_keyword=prog["next_keyword"],
+            total_keywords=prog["total_keywords"],
+        ))
+        return bp
 
     def _publish(self, event: MonitorEvent) -> None:
         try:
@@ -913,6 +1041,46 @@ def _baidu_keyword_aggregates(keywords: "list[dict[str, Any]]") -> "dict[str, An
     }
 
 
+def _build_baidu_breakpoint(
+    task_id: int,
+    *,
+    next_kw: int,
+    head_keywords: "list[dict[str, Any]]",
+    configured: "list[str]",
+    target_brand: str,
+    layer: str,
+    detail: str,
+    error_message: str,
+    now: datetime,
+) -> MonitorResult:
+    """构造一个 status='risk_control' 断点结果（风控中断 + R2 崩溃中断共用）。
+
+    metric 形态与前端断点 meta 读取一致（last_resumed_keyword / captcha_signal_*
+    / keywords 头段 / total_keywords 完整 N / 聚合）。``layer`` 区分中断原因：
+    风控走 signal.layer（auth/dom/text/...），R2 崩溃恢复走 'interrupted'，前端据此
+    显示不同 banner 文案；续抓链路（/resume + 头尾合并）两者完全一致。
+    """
+    metric: dict[str, Any] = {
+        "last_resumed_keyword": next_kw,
+        "captcha_signal_layer": layer,
+        "captcha_signal_detail": detail,
+        "keywords": head_keywords,
+        # total_keywords 保持完整 N（不是头段长度）→ 前端进度显示「5/10」。
+        "total_keywords": len(configured),
+        "search_keywords": configured,
+        "target_brand": target_brand,
+    }
+    metric.update(_baidu_keyword_aggregates(head_keywords))
+    return MonitorResult(
+        task_id=task_id,
+        checked_at=now,
+        status="risk_control",
+        rank=-1,
+        metric=metric,
+        error_message=error_message,
+    )
+
+
 def _merge_resumed_baidu_keywords(
     new_rows: "list[dict[str, Any]]",
     resume_from: int,
@@ -1001,3 +1169,65 @@ def _merge_resumed_baidu_metric(
     metric.update(_baidu_keyword_aggregates(merged))
     # rank 列必须跟 metric 一致 —— should_alert 读的是 result.rank。
     result.rank = metric["best_default_first_rank"]
+
+
+def recover_run_progress(*, now: "datetime | None" = None) -> int:
+    """R2 启动恢复：把上次进程崩溃残留的 run-progress 草稿变成可续抓断点。
+
+    存活到本次启动的草稿行 = 上次进程被硬杀/崩溃（更新器 taskkill / 关应用 / 断电 /
+    OOM）时正在跑的 run。但「清草稿」和「落终态结果」不是一个事务，硬杀可能卡在两者
+    之间：结果已落库、草稿没来得及清。所以残留草稿分两种，靠「是否已有 checked_at >=
+    草稿最后 flush 时刻的结果」区分：
+      - 有更新结果 → 终态其实跑完了（ok 落库 / 风控断点），草稿是清理前的残骸。再
+        materialize 会遮蔽真 ok 结果、丢它的告警、或把风控原因改写成 interrupted。→ 清掉。
+      - 没有 → run 崩在落任何结果之前，草稿是唯一进度记录。→ materialize 成
+        status='risk_control' 断点（layer='interrupted'），用户下次打开即见续抓入口。
+    返回恢复的任务数。fail-soft：单个任务失败不影响其余；全程异常不打断启动。"""
+    now = now or datetime.utcnow()
+    try:
+        progs = storage.list_run_progress()
+    except Exception:
+        logger.exception("recover_run_progress: list_run_progress failed")
+        return 0
+    recovered = 0
+    for prog in progs:
+        task_id = prog["task_id"]
+        try:
+            if not prog["keywords"]:
+                # 空头段（崩在第 0 个关键词之前）→ 无数据可恢复，清掉即可。
+                storage.clear_run_progress(task_id)
+                continue
+            # 上次 run 已落过终态结果（checked_at >= 草稿最后 flush）→ 草稿是清理前
+            # 的残骸，不能重造断点（会遮蔽真结果 / 丢告警 / 改写风控原因）。清掉即可。
+            updated_at = prog.get("updated_at")
+            latest = storage.latest_result(task_id)
+            if (latest is not None and updated_at is not None
+                    and latest.checked_at is not None
+                    and latest.checked_at >= updated_at):
+                storage.clear_run_progress(task_id)
+                continue
+            configured = prog["search_keywords"] or [
+                k.get("keyword") for k in prog["keywords"] if k.get("keyword")
+            ]
+            head = _merge_resumed_baidu_keywords(
+                prog["keywords"], prog["resume_from"], task_id, configured)
+            bp = _build_baidu_breakpoint(
+                task_id,
+                next_kw=prog["next_keyword"],
+                head_keywords=head,
+                configured=configured,
+                target_brand=prog["target_brand"],
+                layer="interrupted",
+                detail="上次监测因程序退出中断",
+                error_message="监测中断：上次运行未完成（程序退出/崩溃），可从断点续抓",
+                now=now,
+            )
+            storage.save_result(bp, alert_triggered=False)
+            storage.clear_run_progress(task_id)
+            recovered += 1
+            logger.warning(
+                "R2 recover: task %s 上次中断于关键词 %s/%s，已存为可续抓断点",
+                task_id, prog["next_keyword"], prog["total_keywords"])
+        except Exception:
+            logger.exception("recover_run_progress: task %s materialize failed", task_id)
+    return recovered
