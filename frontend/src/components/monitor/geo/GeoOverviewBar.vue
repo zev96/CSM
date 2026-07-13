@@ -15,6 +15,8 @@ const props = defineProps<{
   socDelta: number; // 分数（soc 近 7 天首末差）
   sentiment: number;
   sentimentDelta: number;
+  platformsMeasured?: number; // 完整度(§4.7)：本次实际测到(≥1 ok cell)平台数
+  platformsExpected?: number; // 本次请求的平台数（旧数据无 → 不显示）
 }>();
 
 const segs = computed(() => {
@@ -47,6 +49,11 @@ const sentDeltaText = computed(() => {
   const a = Math.abs(d).toFixed(2);
   return `${d > 0 ? "↑" : d < 0 ? "↓" : ""}${a}`;
 });
+// 完整度(§4.7)：本次采集覆盖了几个平台。不满 → 红字提示数据不完整。
+const measured = computed(() => props.platformsMeasured ?? 0);
+const incomplete = computed(
+  () => !!props.platformsExpected && measured.value < props.platformsExpected,
+);
 </script>
 
 <template>
@@ -82,6 +89,13 @@ const sentDeltaText = computed(() => {
           :key="s.key"
           :style="{ width: s.w + '%', height: '100%', background: s.color, transition: 'width .3s ease' }"
         />
+      </div>
+      <!-- 完整度(§4.7)：本次采集覆盖 M/N 平台（旧数据无 platformsExpected → 不显示）-->
+      <div
+        v-if="platformsExpected"
+        :style="{ fontSize: '10.5px', marginTop: '6px', fontVariantNumeric: 'tabular-nums', color: incomplete ? 'var(--red)' : 'var(--ink-3)' }"
+      >
+        本次采集覆盖 {{ measured }}/{{ platformsExpected }} 平台<template v-if="incomplete"> · 数据不完整</template>
       </div>
     </div>
 

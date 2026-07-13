@@ -14,7 +14,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import type { HistoryPoint } from "@/components/monitor/geo/geoDetail";
-import { pct } from "@/components/monitor/geo/geoDetail";
+import { median, pct } from "@/components/monitor/geo/geoDetail";
 
 const props = defineProps<{ history: HistoryPoint[] }>();
 
@@ -126,6 +126,13 @@ const bars = computed(() =>
   }),
 );
 
+// 7 天滚动中位（跨天稳定器）：可见日选中指标的中位数，≥2 天才有意义。
+const medianVal = computed<number | null>(() =>
+  nReal.value >= 2
+    ? median(realCols.value.map((c) => (metric.value === "soc" ? c.point.soc : c.point.first)))
+    : null,
+);
+
 // Y 轴：刻度线 0/25/50/75/100，标签 0/50/100。
 const yGrid = [0, 0.25, 0.5, 0.75, 1];
 const yLabels = [
@@ -189,6 +196,26 @@ const yLabels = [
             text-anchor="middle"
             :style="{ fontSize: '10.5px', fontWeight: 700, fill: barColor, fontVariantNumeric: 'tabular-nums' }"
           >{{ b.label }}</text>
+        </template>
+
+        <!-- 7 天滚动中位参考线（跨天稳定器：忽略单日抖动，看典型水平）-->
+        <template v-if="medianVal != null">
+          <line
+            :x1="padL"
+            :x2="vw - padR"
+            :y1="y(medianVal)"
+            :y2="y(medianVal)"
+            :stroke="barColor"
+            stroke-width="1"
+            stroke-dasharray="4 3"
+            opacity="0.55"
+          />
+          <text
+            :x="vw - padR"
+            :y="y(medianVal) - 3"
+            text-anchor="end"
+            :style="{ fontSize: '9px', fontWeight: 700, fill: barColor, fontVariantNumeric: 'tabular-nums', opacity: 0.85 }"
+          >中位 {{ pct(medianVal) }}</text>
         </template>
 
         <!-- 日期轴（有数据的天加粗深色，空天浅色）-->

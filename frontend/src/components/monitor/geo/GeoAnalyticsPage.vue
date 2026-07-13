@@ -213,6 +213,8 @@ onMounted(async () => {
         :soc-delta="analytics.socDelta"
         :sentiment="sentiment"
         :sentiment-delta="analytics.sentimentDelta"
+        :platforms-measured="analytics.metric?.platforms_measured"
+        :platforms-expected="analytics.metric?.platforms_expected"
       />
 
       <!-- 关键词 × AI平台 · 覆盖 -->
