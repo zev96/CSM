@@ -579,6 +579,126 @@ def test_rpa_batch_no_early_skip_when_recovers(monkeypatch):
     assert [c.status for c in cells] == ["error", "error", "ok", "error"]
 
 
+def _sampling_extract_stub(monkeypatch):
+    """把 extract 打桩成「按 answer_text 判 mention」——MENTION→提及#1,其余未提及。"""
+    from csm_core.monitor.geo.models import GeoExtraction
+    monkeypatch.setattr(geo_mod, "extract", lambda ans, *, brand, aliases, client:
+                        GeoExtraction(mentioned=(ans.answer_text == "MENTION"),
+                                      target_rank=(1 if ans.answer_text == "MENTION" else -1)))
+
+
+def test_fetch_multi_sampling_votes_mention(fresh_db, monkeypatch):
+    # K=3:同一关键词三样本 [提及,提及,未提及] → 多数投票 mentioned=True,rank 中位 1。
+    from csm_core.monitor.geo.models import GeoAnswer
+    seq = {"i": 0}
+    answers = ["MENTION", "MENTION", "MISS"]
+
+    class _Prov:
+        def __init__(self, p): self.platform = p; self.mode = "api"
+        def query(self, kw, *, web_search=True, cancel_token=None):
+            a = answers[seq["i"]]; seq["i"] += 1
+            return GeoAnswer(platform=self.platform, keyword=kw, answer_text=a)
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _Prov(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: object())
+    _sampling_extract_stub(monkeypatch)
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "b", "keywords": ["k1"], "platforms": ["tongyi"], "extract_provider": "mock",
+                "geo_sample_count": 3, "geo_flip_recheck": False}))
+    result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert seq["i"] == 3                              # 采了 3 次
+    assert result.metric["sample_count"] == 3
+    conn = storage.get_conn()
+    row = conn.execute("SELECT mentioned, rank FROM geo_cells WHERE task_id=?", (tid,)).fetchone()
+    assert row["mentioned"] == 1                      # 2/3 提及 → True
+    assert row["rank"] == 1                           # 命中样本 rank 中位
+
+
+def test_fetch_flip_recheck_fires_on_flip(fresh_db, monkeypatch):
+    # 上轮该格提及;本轮单样本判未提及(翻转)→ 自动补采 1 次确认;补采也未提及 → 确认未提及。
+    from csm_core.monitor.geo.models import GeoAnswer, GeoCell
+    from csm_core.monitor.geo import storage as geo_storage
+    import datetime as _dt
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "b", "keywords": ["k1"], "platforms": ["tongyi"], "extract_provider": "mock",
+                "geo_sample_count": 1, "geo_flip_recheck": True}))
+    geo_storage.record_run(tid, _dt.datetime(2020, 1, 1),
+                           [GeoCell(platform="tongyi", keyword="k1", mentioned=True, rank=1, status="ok")])
+    calls = {"n": 0}
+
+    class _Prov:
+        def __init__(self, p): self.platform = p; self.mode = "api"
+        def query(self, kw, *, web_search=True, cancel_token=None):
+            calls["n"] += 1
+            return GeoAnswer(platform=self.platform, keyword=kw, answer_text="MISS")
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _Prov(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: object())
+    _sampling_extract_stub(monkeypatch)
+    geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert calls["n"] == 2                            # 翻转(True→False)→ 补采 1 次
+    conn = storage.get_conn()
+    latest = conn.execute(
+        "SELECT mentioned FROM geo_cells WHERE task_id=? ORDER BY checked_at DESC", (tid,)
+    ).fetchone()
+    assert latest["mentioned"] == 0                   # 补采确认未提及
+
+
+def test_fetch_flip_recheck_skips_when_no_flip(fresh_db, monkeypatch):
+    # 上轮提及、本轮也提及 → 未翻转 → 不补采(K=1 只采一次)。
+    from csm_core.monitor.geo.models import GeoAnswer, GeoCell
+    from csm_core.monitor.geo import storage as geo_storage
+    import datetime as _dt
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "b", "keywords": ["k1"], "platforms": ["tongyi"], "extract_provider": "mock",
+                "geo_sample_count": 1, "geo_flip_recheck": True}))
+    geo_storage.record_run(tid, _dt.datetime(2020, 1, 1),
+                           [GeoCell(platform="tongyi", keyword="k1", mentioned=True, rank=1, status="ok")])
+    calls = {"n": 0}
+
+    class _Prov:
+        def __init__(self, p): self.platform = p; self.mode = "api"
+        def query(self, kw, *, web_search=True, cancel_token=None):
+            calls["n"] += 1
+            return GeoAnswer(platform=self.platform, keyword=kw, answer_text="MENTION")
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _Prov(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: object())
+    _sampling_extract_stub(monkeypatch)
+    geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert calls["n"] == 1                            # 未翻转 → 无补采
+
+
+def test_fetch_flip_recheck_ignores_prev_error_baseline(fresh_db, monkeypatch):
+    # 上轮该格 error(无可信 mention 基线)→ 本轮不进 prev_map → 不补采,即便结论看似翻转。
+    from csm_core.monitor.geo.models import GeoAnswer, GeoCell
+    from csm_core.monitor.geo import storage as geo_storage
+    import datetime as _dt
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "b", "keywords": ["k1"], "platforms": ["tongyi"], "extract_provider": "mock",
+                "geo_sample_count": 1, "geo_flip_recheck": True}))
+    geo_storage.record_run(tid, _dt.datetime(2020, 1, 1),
+                           [GeoCell(platform="tongyi", keyword="k1", status="error",
+                                    fail_reason="timeout", raw={"error": "boom"})])
+    calls = {"n": 0}
+
+    class _Prov:
+        def __init__(self, p): self.platform = p; self.mode = "api"
+        def query(self, kw, *, web_search=True, cancel_token=None):
+            calls["n"] += 1
+            return GeoAnswer(platform=self.platform, keyword=kw, answer_text="MENTION")
+
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: _Prov(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: object())
+    _sampling_extract_stub(monkeypatch)
+    geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    assert calls["n"] == 1                            # error 上轮无基线 → 不补采
+
+
 def test_rpa_batch_cancellation_mid_loop_propagates(monkeypatch):
     # 锁定:_rpa_batch 循环内(第 2 个关键词起)token 置位 → maybe_cancel 抛取消,必须
     # 原样上抛给 runner/loop,绝不被 except 吞成合成/error cell。首格 ok 先产出,取消发生在
