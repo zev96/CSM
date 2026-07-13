@@ -305,7 +305,7 @@ def test_fetch_rpa_lane_reuses_session_per_platform(fresh_db, monkeypatch):
     class _RpaProv:
         def __init__(self, p): self.platform = p; self.mode = "rpa"
         @contextlib.contextmanager
-        def session(self, *, web_search=True, cancel_token=None):
+        def session(self, *, web_search=True, cancel_token=None, retry=1):
             opens["n"] += 1
             from csm_core.monitor.geo.models import GeoAnswer
             def query_one(kw):
@@ -319,7 +319,8 @@ def test_fetch_rpa_lane_reuses_session_per_platform(fresh_db, monkeypatch):
     tid = storage.create_task(MonitorTask(
         type="geo_query", name="t", target_url="geo://x",
         config={"brand": "小鹏", "keywords": ["k1", "bad", "k2"], "platforms": ["kimi"],
-                "extract_provider": "mock"}))
+                "extract_provider": "mock",
+                "geo_rpa_jitter_min": 0, "geo_rpa_jitter_max": 0}))   # 单测关 jitter,别真睡
     result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
 
     assert opens["n"] == 1                        # kimi 只开一次 session(3 关键词复用)
@@ -356,7 +357,7 @@ def test_fetch_rpa_session_open_failure_isolates_platform(fresh_db, monkeypatch)
             self.mode = "rpa"
 
         @contextlib.contextmanager
-        def session(self, *, web_search=True, cancel_token=None):
+        def session(self, *, web_search=True, cancel_token=None, retry=1):
             opens["n"] += 1
             raise RuntimeError("browser launch failed")
             yield  # pragma: no cover
@@ -426,7 +427,7 @@ def _fake_provider_yielding(script):
     class _P:
         mode = "rpa"
         @contextlib.contextmanager
-        def session(self, *, web_search, cancel_token=None):
+        def session(self, *, web_search, cancel_token=None, retry=1):
             def query_one(kw):
                 st, err = script[kw]
                 if st == "ok":
@@ -464,6 +465,82 @@ def test_rpa_batch_login_gate_synthesizes_rest(monkeypatch):
         assert c.status == "blocked"
         assert c.fail_reason == "not_logged_in"
         assert c.raw.get("synthetic") is True
+
+
+def test_rpa_batch_interrupt_does_not_feed_consecutive_skip(monkeypatch):
+    from csm_core.monitor.platforms import geo_query as gq
+    adapter = gq.GeoQueryAdapter()
+    kws = ["k1", "k2", "k3", "k4"]
+    # 连续 interrupted(睡眠唤醒)error → 不喂连败计数 → 不短路,逐个照跑到底(即便 consec_skip=2)
+    provider = _fake_provider_yielding({k: ("error", "睡眠唤醒 interrupted") for k in kws})
+    out = _drain_batch(adapter, "kimi", kws, provider, monkeypatch, consec_skip=2)
+    assert [li for li, _ in out] == [0, 1, 2, 3]                 # 四个都真跑,无短路
+    cells = [c for _, c in out]
+    assert all(c.fail_reason == "interrupted" for c in cells)
+    assert not any(c.raw.get("synthetic") for c in cells)        # 未产合成 cell
+
+
+def test_sleep_jitter_waits_random_delay_and_is_cancelable():
+    from csm_core.monitor.platforms import geo_query as gq
+    import threading
+    try:
+        from csm_sidecar.services.monitor_loop import _CancelledFetch
+    except ImportError:
+        _CancelledFetch = RuntimeError
+    calls = {}
+    tok = threading.Event()
+    def _fake_wait(d):
+        calls["delay"] = d
+        return False                        # 未取消 → 睡满
+    tok.wait = _fake_wait                    # type: ignore[method-assign]
+    gq._sleep_jitter(tok, 10, 20, _rand=lambda a, b: 12.5)
+    assert calls["delay"] == 12.5           # 把 random.uniform 的值交给 Event.wait
+
+    tok2 = threading.Event(); tok2.set()     # 已取消 → wait 立刻 True → maybe_cancel 抛
+    import pytest
+    with pytest.raises(_CancelledFetch):
+        gq._sleep_jitter(tok2, 10, 20, _rand=lambda a, b: 1.0)
+
+
+def test_sleep_jitter_zero_max_is_noop():
+    from csm_core.monitor.platforms import geo_query as gq
+    gq._sleep_jitter(None, 0, 0)            # hi<=0 → 直接返回,不睡不抛(禁用 jitter)
+
+
+def test_shuffled_keywords_stable_within_day_varies_across_days():
+    from datetime import date
+    kws = ["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7"]
+    a = geo_mod._shuffled_keywords(kws, 7, date(2026, 7, 11))
+    b = geo_mod._shuffled_keywords(kws, 7, date(2026, 7, 11))
+    c = geo_mod._shuffled_keywords(kws, 7, date(2026, 7, 12))
+    assert a == b                     # 同 task+同日 → 稳定(当日断点续跑 resume 安全)
+    assert sorted(a) == sorted(kws)   # 只换序、不增删
+    assert a != c                     # 跨天变序(8 元素撞同序概率 1/8! 可忽略)
+
+
+def test_fetch_shuffles_keywords_into_cells_plan(fresh_db, monkeypatch):
+    # 验证 fetch 真把洗牌后的顺序喂给调度器(而非只定义函数没接线)
+    from datetime import datetime as _dt
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _fake_runner(cells_plan, run_cell, **kw):
+        seen["order"] = [k for k, _ in cells_plan]
+        raise _Stop                                  # 抓到顺序即中止,不必跑完聚合
+    monkeypatch.setattr(geo_mod, "get_provider", lambda p: FakeProvider(p))
+    monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: FakeClient())
+    monkeypatch.setattr(geo_mod.geo_runner, "run_cells_dual_lane", _fake_runner)
+    kws = ["k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7"]
+    tid = storage.create_task(MonitorTask(
+        type="geo_query", name="t", target_url="geo://x",
+        config={"brand": "b", "keywords": kws, "platforms": ["tongyi"],
+                "extract_provider": "mock"}))
+    with pytest.raises(_Stop):
+        geo_mod.ADAPTER.fetch(storage.get_task(tid))
+    expected = geo_mod._shuffled_keywords(kws, tid, _dt.utcnow().date())
+    assert seen["order"] == expected            # cells_plan 用了洗牌序(单平台 → 顺序即关键词序)
 
 
 def test_rpa_batch_consecutive_fail_short_circuits(monkeypatch):
@@ -520,7 +597,7 @@ def test_rpa_batch_cancellation_mid_loop_propagates(monkeypatch):
     class _StopMidProv:
         mode = "rpa"
         @contextlib.contextmanager
-        def session(self, *, web_search, cancel_token=None):
+        def session(self, *, web_search, cancel_token=None, retry=1):
             def query_one(kw):
                 if kw == "k1":
                     tok.set()          # 模拟用户在第 1 个关键词执行期间点 Stop

@@ -100,6 +100,7 @@ class _FakePage:
         self.typed = []
         self.evaluated = []
         self._eval_return = None       # start_new_chat 的 JS 点击返回（True=点到/False=icon 不在）
+        self._eval_seq = None          # 设为列表 → evaluate 依次返回（末值定格），用于 answer_text_len
         self.keyboard = _FakeKeyboard(self)
 
     def content(self):
@@ -107,6 +108,8 @@ class _FakePage:
 
     def evaluate(self, expression, arg=None):
         self.evaluated.append((expression, arg))
+        if self._eval_seq is not None:
+            return self._eval_seq.pop(0) if len(self._eval_seq) > 1 else self._eval_seq[0]
         return self._eval_return
 
     def wait_for_timeout(self, ms):
@@ -120,7 +123,7 @@ class _FakePage:
     def fill(self, sel, text):
         self.filled = (sel, text)
 
-    def click(self, sel):
+    def click(self, sel, **kwargs):
         self.clicked.append(sel)
 
     def press(self, sel, key):
@@ -151,6 +154,33 @@ def test_submit_query_types_and_enters_when_no_send_sel():
     _flow.submit_query(page, composer_sel="textarea", send_sel=None, text="k")
     assert page.typed == ["k"]
     assert page.pressed == [("<kbd>", "Enter")]
+
+
+class _FlakyClickPage(_FakePage):
+    """指定 selector 的 click 抛异常(模拟发送键选择器漂移),验证 Enter 兜底/下一候选。"""
+    def __init__(self, contents, fail_sels=()):
+        super().__init__(contents)
+        self._fail = set(fail_sels)
+
+    def click(self, sel, **kwargs):
+        if sel in self._fail:
+            raise RuntimeError(f"click timeout: {sel}")
+        self.clicked.append(sel)
+
+
+def test_submit_query_falls_back_to_enter_when_send_click_fails():
+    page = _FlakyClickPage(["<html></html>"], fail_sels={"button.send"})
+    _flow.submit_query(page, composer_sel="textarea", send_sel="button.send", text="k")
+    assert page.clicked == ["textarea"]              # composer 聚焦成功、发送键失败
+    assert page.pressed == [("<kbd>", "Enter")]      # 回落 Enter
+
+
+def test_submit_query_tries_second_candidate_before_enter():
+    page = _FlakyClickPage(["<html></html>"], fail_sels={"button.a"})
+    _flow.submit_query(page, composer_sel="textarea",
+                       send_sel=("button.a", "button.b"), text="k")
+    assert page.clicked == ["textarea", "button.b"]  # 首候选失败→次候选成功
+    assert page.pressed == []                         # 无需 Enter
 
 
 def test_ensure_web_toggle_clicks_when_off():
@@ -252,6 +282,27 @@ def test_wait_stream_done_honors_cancel_token():
                                idle_ms=1, timeout_s=5, poll_ms=10, cancel_token=tok)
 
 
+def test_wait_stream_done_sleep_wake_raises_interrupted():
+    # monotonic 单轮从 1→61 跳变(睡眠),越 deadline 时归 StreamInterrupted 而非 TimeoutError
+    times = iter([0.0, 0.0, 1.0, 61.0, 130.0])   # deadline,last_tick,iter1,iter2(跳变),iter3(越界)
+    page = _FakePage(["<a>"])
+    with pytest.raises(_flow.StreamInterrupted):
+        _flow.wait_stream_done(page, done_predicate=lambda: False, idle_ms=1, timeout_s=120,
+                               poll_ms=1, jump_threshold_s=30,
+                               _now=lambda: next(times), _sleep=lambda s: None)
+
+
+def test_wait_stream_done_normal_timeout_is_not_interrupted():
+    # 平稳小步推进(每轮 <阈值)→ 仍是 TimeoutError(不误判中断)
+    times = iter([0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    page = _FakePage(["<a>"])
+    with pytest.raises(TimeoutError) as ei:
+        _flow.wait_stream_done(page, done_predicate=lambda: False, idle_ms=1, timeout_s=5,
+                               poll_ms=1, jump_threshold_s=30,
+                               _now=lambda: next(times), _sleep=lambda s: None)
+    assert not isinstance(ei.value, _flow.StreamInterrupted)
+
+
 def test_sites_deepseek_present_and_css_selectors_valid():
     from bs4 import BeautifulSoup
     from csm_core.monitor.geo.providers.rpa.sites import SITES, SiteSpec
@@ -276,11 +327,19 @@ def test_make_done_predicate_generating_requires_started():
     assert done() is True   # 曾出现且现已消失 → 完成
 
 
-def test_make_done_predicate_answer_growth_requires_started():
-    # 无 generating：测「回答容器」文本增长判「已开始」（空 → 仍空 → 出文）
-    seq = ['<div class="a"></div>', '<div class="a"></div>',
-           '<div class="a">' + "字" * 100 + '</div>']
-    page = _FakePage(seq)
+def test_answer_text_len_uses_evaluate_and_guards_errors():
+    page = _FakePage(["x"]); page._eval_seq = [123]
+    assert _flow.answer_text_len(page, "div.a") == 123
+    assert page.evaluated and page.evaluated[0][1] == "div.a"   # 把 selector 传进 JS
+    boom = _FakePage(["x"])
+    def _raise(*a, **k): raise RuntimeError("eval boom")
+    boom.evaluate = _raise
+    assert _flow.answer_text_len(boom, "div.a") == 0            # 出错→0,不外抛
+
+
+def test_make_done_predicate_answer_growth_uses_evaluate():
+    # 无 generating：内容分支改走 answer_text_len(evaluate) —— 空 → 仍空 → 出文>基线+30 判「已开始」
+    page = _FakePage(["x"]); page._eval_seq = [0, 0, 200]
     done = _flow.make_done_predicate(page, generating_sel=None, answer_sel="div.a")
     assert done() is False   # 回答容器空 → 记基线
     assert done() is False   # 仍空 → 还没开始

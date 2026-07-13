@@ -18,6 +18,11 @@ from csm_core.monitor.geo.models import Citation
 logger = logging.getLogger(__name__)
 
 
+class StreamInterrupted(Exception):
+    """流式等待期间检出 monotonic 跳变(机器睡眠/挂起唤醒)—— 非站点故障。
+    不 retry、不计入连败短路;classify_fail_reason 归 'interrupted'(消息含「睡眠唤醒」)。"""
+
+
 # ── 纯解析（吃 HTML 串）─────────────────────────────────────────────
 def extract_citations(html: str, *, container_sel: str | None = None,
                       exclude_hosts: tuple[str, ...] = ()) -> list[Citation]:
@@ -129,8 +134,9 @@ def wait_login_ready(page: Any, *, logged_in_sel: str, logged_out_sel: str | Non
     return False
 
 
-def submit_query(page: Any, *, composer_sel: str, send_sel: str | None, text: str,
-                 focus_ms: int = 250, key_delay_ms: int = 20, commit_ms: int = 400) -> None:
+def submit_query(page: Any, *, composer_sel: str, send_sel, text: str,
+                 focus_ms: int = 250, key_delay_ms: int = 20, commit_ms: int = 400,
+                 send_timeout_ms: int = 4000) -> None:
     """聚焦 composer + 真键盘逐字打字（带节流），再点 send_sel（无则按 Enter）。
 
     用 page.keyboard.type 而非 page.fill —— Lexical/Quill 等受控富文本编辑器
@@ -145,10 +151,16 @@ def submit_query(page: Any, *, composer_sel: str, send_sel: str | None, text: st
     page.wait_for_timeout(focus_ms)
     page.keyboard.type(text, delay=key_delay_ms)
     page.wait_for_timeout(commit_ms)
-    if send_sel:
-        page.click(send_sel)
-    else:
-        page.keyboard.press("Enter")
+    # 发送键多候选(str / 元组 / None):逐个 click(带超时),全失败或 None → Enter 兜底。
+    # 站点改版把某发送键选择器打漂时不再整条关键词失败(选择器漂 = 采集失败大头)。
+    candidates = (send_sel,) if isinstance(send_sel, str) else tuple(send_sel or ())
+    for sel in candidates:
+        try:
+            page.click(sel, timeout=send_timeout_ms)
+            return
+        except Exception as e:
+            logger.info("submit_query: 发送键 %r 点击失败(试下一候选/Enter): %s", sel, e)
+    page.keyboard.press("Enter")
 
 
 def ensure_web_toggle(page: Any, *, toggle_sel: str, want_on: bool = True,
@@ -276,18 +288,54 @@ def expand_search_toolcalls(page: Any, *, toolcall_sel: str, hint: str = "搜索
     return clicked
 
 
+def answer_text_len(page: Any, answer_sel: str) -> int:
+    """答案容器可见文本长度(page 端 textContent 求和,不过 bs4)。缺失/出错→0。
+    热轮询(每 500ms × 3 车道)用它替代 page.content()+bs4,省 GIL/整页序列化。
+    三站 answer_sel 均为合法 querySelectorAll CSS(复合类 / [class*=] / :not())。"""
+    try:
+        return int(page.evaluate(
+            """(sel) => { let n = 0;
+                 for (const el of document.querySelectorAll(sel)) n += (el.textContent || '').length;
+                 return n; }""",
+            answer_sel))
+    except Exception:
+        return 0
+
+
 def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
                      idle_ms: int = 1500, timeout_s: float = 90.0,
                      poll_ms: int = 500,
-                     cancel_token: "Any | None" = None) -> None:
-    """轮询直到 done_predicate() 为真且 page.content() 长度静默 idle_ms。
-    超 timeout_s 抛 TimeoutError；每轮 maybe_cancel(cancel_token)（取消即抛）。"""
-    deadline = time.monotonic() + timeout_s
-    stable_since: float | None = None
+                     cancel_token: "Any | None" = None,
+                     length_fn: "Callable[[], int] | None" = None,
+                     jump_threshold_s: float = 120.0,
+                     _now=time.monotonic, _sleep=time.sleep) -> None:
+    """轮询直到 done_predicate() 为真且长度静默 idle_ms。超 timeout_s 抛 TimeoutError;
+    每轮 maybe_cancel(cancel_token)(取消即抛)。
+
+    中断分类:Win time.monotonic() 含睡眠时间——若**单轮**推进 > jump_threshold_s,
+    判定机器睡眠/挂起过;到 deadline 时抛 StreamInterrupted 而非 TimeoutError(上层不
+    retry、不喂连败短路),避免睡眠唤醒引发假超时风暴。阈值取 120s:远大于任何单轮
+    计算耗时(即便重载/CDP 卡顿的慢轮),又远小于真实挂起的分钟级跳变——把 30-120s
+    的重载慢轮留给正常 TimeoutError(可 retry、喂连败),只有分钟级跳变才归中断,
+    避免误判卡死平台为中断而绕过连败短路。_now/_sleep 为测试注入缝。"""
+    if length_fn is None:
+        def length_fn():                      # 默认:整页长度(与旧版逐字节等价,保既有测试)
+            return len(page.content())
+    deadline = _now() + timeout_s
+    stable_since = None
     last_len = -1
+    last_tick = _now()
+    slept = False
     while True:
         maybe_cancel(cancel_token)
-        if time.monotonic() > deadline:
+        now = _now()
+        if now - last_tick > jump_threshold_s:   # 单轮跳变 ≫ 轮询间隔 = 机器睡眠/挂起过
+            slept = True
+        last_tick = now
+        if now > deadline:
+            if slept:                            # 睡眠唤醒:归中断(上层不 retry/不喂连败),别误判站点超时
+                raise StreamInterrupted(
+                    f"wait_stream_done 检出睡眠唤醒/时钟跳变(interrupted),窗口 {timeout_s}s")
             raise TimeoutError(f"wait_stream_done exceeded {timeout_s}s")
         try:
             done = bool(done_predicate())
@@ -295,19 +343,19 @@ def wait_stream_done(page: Any, *, done_predicate: Callable[[], bool],
             logger.debug("done_predicate raised: %s", e)
             done = False
         try:
-            cur_len = len(page.content())
+            cur_len = length_fn()
         except Exception:
             cur_len = last_len
         quiet = cur_len == last_len
         last_len = cur_len
         if done and quiet:
             if stable_since is None:
-                stable_since = time.monotonic()
-            elif (time.monotonic() - stable_since) * 1000 >= idle_ms:
+                stable_since = now
+            elif (now - stable_since) * 1000 >= idle_ms:
                 return
         else:
             stable_since = None
-        time.sleep(poll_ms / 1000.0)
+        _sleep(poll_ms / 1000.0)
 
 
 def make_done_predicate(page: Any, *, generating_sel: str | None,
@@ -330,10 +378,7 @@ def make_done_predicate(page: Any, *, generating_sel: str | None,
             if present:
                 started["v"] = True
             return started["v"] and not present
-        try:
-            cur = len(extract_answer_text(page.content(), container_sel=answer_sel))
-        except Exception:
-            return False
+        cur = answer_text_len(page, answer_sel)   # page.evaluate textContent(热轮询降本,不过 bs4)
         if base_len["v"] is None:
             base_len["v"] = cur
         if cur > (base_len["v"] or 0) + 30:

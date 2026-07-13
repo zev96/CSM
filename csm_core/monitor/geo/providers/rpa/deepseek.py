@@ -25,7 +25,7 @@ class DeepSeekProvider:
 
     @contextlib.contextmanager
     def session(self, *, web_search: bool = True,
-                cancel_token: "threading.Event | None" = None):
+                cancel_token: "threading.Event | None" = None, retry: int = 1):
         """开浏览器 + 登录检查**一次**,yield query_one(keyword) 复用同一 page。"""
         spec = _SPEC
         with rpa_page(self.platform, headless=False) as page:
@@ -35,7 +35,8 @@ class DeepSeekProvider:
 
             def query_one(keyword: str) -> GeoAnswer:
                 return _driver.run_one_keyword(page, spec, keyword, web_search=web_search,
-                                               cancel_token=cancel_token, logged_in=logged_in)
+                                               cancel_token=cancel_token, logged_in=logged_in,
+                                               retry=retry)
             yield query_one
 
     def query(self, keyword: str, *, web_search: bool = True,

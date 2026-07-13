@@ -48,8 +48,17 @@ def _block(cells: list[GeoCell]) -> dict[str, Any]:
     }
 
 
-def aggregate(cells: list[GeoCell]) -> dict[str, Any]:
+def aggregate(cells: list[GeoCell], *, platforms_expected: "int | None" = None) -> dict[str, Any]:
     agg = _block(cells)
+    # 完整度(§4.7):本次实际测到几个平台(≥1 ok cell)/ 请求了几个平台。附加信号,
+    # 不改 SoC/首推率的 ok_total 分母语义 —— 是独立的「数据基于 N/M 平台」指示。
+    # platforms_expected 由 fetch 传「请求平台数」;缺省从 cells 推(Phase3a 合成 cell
+    # 保证被跳平台也在 cells 里,故推导值一般等于请求数)。
+    measured = len({c.platform for c in cells if c.status == "ok"})
+    expected = platforms_expected if platforms_expected is not None else len({c.platform for c in cells})
+    agg["platforms_expected"] = expected
+    agg["platforms_measured"] = measured
+    agg["completeness"] = (measured / expected) if expected else 0.0
     # Sentiment distribution
     dist = {"pos": 0, "neu": 0, "neg": 0}
     for c in cells:

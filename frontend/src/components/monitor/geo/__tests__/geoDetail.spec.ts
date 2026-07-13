@@ -8,6 +8,7 @@ import {
   filterBoard,
   placeholderPlatform,
   failReasonLabel,
+  median,
   type PlatformVM,
   type BoardRow,
 } from "@/components/monitor/geo/geoDetail";
@@ -203,5 +204,18 @@ describe("failReasonLabel", () => {
     expect(failReasonLabel("")).toBe("够不到平台");
     expect(failReasonLabel("unknown")).toBe("够不到平台");
     expect(failReasonLabel("这不是已知code")).toBe("够不到平台");
+  });
+});
+
+describe("median (7天滚动中位稳定器)", () => {
+  it("奇数取中、偶数取两中均值、乱序先排序", () => {
+    expect(median([0.3])).toBe(0.3);
+    expect(median([0.5, 0.1, 0.3])).toBe(0.3); // 排序 [.1,.3,.5] 中位 .3
+    expect(median([0.2, 0.4, 0.6, 0.8])).toBeCloseTo(0.5); // (.4+.6)/2
+  });
+  it("空数组返回 null、过滤 NaN", () => {
+    expect(median([])).toBeNull();
+    expect(median([Number.NaN, 0.4, Number.NaN])).toBe(0.4);
+    expect(median([Number.NaN])).toBeNull();
   });
 });

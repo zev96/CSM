@@ -125,6 +125,10 @@ export interface GeoTopMetric {
   total: number;
   status_band?: string;
   first_rank_rate?: number;
+  // 完整度(§4.7):本次基于 measured/expected 个平台的数据。可选(旧数据无)。
+  platforms_expected?: number;
+  platforms_measured?: number;
+  completeness?: number;
 }
 /** 覆盖榜单行（数据中心覆盖榜表派生）。 */
 export interface GeoKeywordRow {
@@ -165,6 +169,13 @@ export interface GeoAnalytics {
 // ── helper（移植 geo-shared.jsx）─────────────────────────────────────────
 export function pct(v: number | undefined | null): string {
   return typeof v !== "number" || Number.isNaN(v) ? "—" : `${Math.round(v * 100)}%`;
+}
+/** 数值中位(升序取中;偶数取两中均值)。空数组返回 null。用于 7 天滚动中位稳定线。 */
+export function median(nums: number[]): number | null {
+  const xs = nums.filter((n) => typeof n === "number" && !Number.isNaN(n)).sort((a, b) => a - b);
+  if (!xs.length) return null;
+  const mid = Math.floor(xs.length / 2);
+  return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
 }
 export function sentimentText(v: number | undefined | null): string {
   if (typeof v !== "number" || Number.isNaN(v)) return "—";
