@@ -171,7 +171,7 @@ class GeoQueryAdapter:
         # 而不是悄悄按 status="ok" 持久化(甚至误发告警)。
         maybe_cancel(cancel_token)
 
-        agg = metrics.aggregate(cells)
+        agg = metrics.aggregate(cells, platforms_expected=len(set(platforms)))
         # I2：把"够不到平台"和"曝光低"区分开 —— error_cells 让仪表盘知道
         # 是采集失败还是真没提及（现由 metrics._block 算出：total-ok_total，
         # cell 只会是 ok/error/blocked，无 empty，等价旧的 error+blocked 计数）。

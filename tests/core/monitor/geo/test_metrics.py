@@ -82,3 +82,33 @@ def test_representative_rank_is_median_of_mentioned():
              _cell("t", "k4", False, -1)]
     assert metrics.representative_rank(cells) == 3
     assert metrics.representative_rank([_cell("t", "k", False, -1)]) == -1
+
+
+def test_completeness_measured_over_expected():
+    # 完整度(§4.7):实际测到(≥1 ok cell)平台数 / 请求平台数。附加信号,不动分母。
+    cells = [_cell("tongyi", "k1", True, 1),                       # tongyi 有 ok
+             _cell("tongyi", "k2", False, -1),
+             _cell("kimi", "k1", False, -1, status="blocked"),     # kimi 全 blocked = 没测到
+             _cell("kimi", "k2", False, -1, status="blocked")]
+    agg = metrics.aggregate(cells)
+    assert agg["platforms_expected"] == 2            # 默认从 cells 推(tongyi/kimi)
+    assert agg["platforms_measured"] == 1            # 只 tongyi 有 ok cell
+    assert agg["completeness"] == 0.5
+
+
+def test_completeness_expected_override_and_no_denominator_change():
+    # fetch 以「请求平台数」为 expected(口径以请求为准);且完整度不改 SoC 分母。
+    cells = [_cell("tongyi", "k1", True, 1)]
+    agg = metrics.aggregate(cells, platforms_expected=5)
+    assert agg["platforms_expected"] == 5
+    assert agg["platforms_measured"] == 1
+    assert agg["completeness"] == 0.2
+    assert agg["soc"] == 1.0                          # SoC 仍按 ok_total,不被完整度污染
+    assert agg["ok_total"] == 1
+
+
+def test_completeness_empty_cells():
+    agg = metrics.aggregate([])
+    assert agg["platforms_expected"] == 0
+    assert agg["platforms_measured"] == 0
+    assert agg["completeness"] == 0.0
