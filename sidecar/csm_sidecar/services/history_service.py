@@ -97,7 +97,10 @@ def get_comment_retention_history(range_str: str) -> dict[str, Any]:
         if prev is None or prev["checked_at"] < checked:
             by_platform_date[row["task_type"]][date_key][row["task_id"]] = {
                 "matched": bool(m.get("matched")),
+                # checked_at 原始 UTC 供 events 的 _iso_utc 输出；checked_at_local
+                # 供 _collect_deletion_events 的 cutoff 比对（本地墙钟，同分桶口径）。
                 "checked_at": checked,
+                "checked_at_local": _utc_to_local_naive(checked),
                 "metric": m,
                 "task_name": row["task_name"],
             }
@@ -305,15 +308,17 @@ def _classify_zhihu_change(curr: dict | None, prev: dict | None) -> tuple[str, f
 
 
 def _changed_prev_task(per_task: dict[int, list[dict]], range_days: int, now: datetime) -> int:
-    """上一窗口（checked_at < now-range_days）每个 task 最近两条的异动计数。
+    """上一窗口（checked_at_local < now-range_days）每个 task 最近两条的异动计数。
 
     per-task 形态：entry 直接含 matched_count/best_rank/top_n（zhihu_ranking 用）。
     供大数字卡算「较上周净增减」：徽章 = changed(本窗口) - changed_prev。
+    窗口 cutoff 用本地墙钟（now=datetime.now()），故比 checked_at_local 而非原始 UTC
+    checked_at —— 与 daily_series 本地日分桶口径一致，边界 8h 内的结果不错分窗口。
     """
     cutoff = now - timedelta(days=range_days)
     changed = 0
     for results in per_task.values():
-        older = [r for r in results if r["checked_at"] < cutoff]  # results 已 DESC
+        older = [r for r in results if r["checked_at_local"] < cutoff]  # results 已 DESC
         if not older:
             continue
         curr = {"matched_count": older[0]["matched_count"],
@@ -336,13 +341,14 @@ def _changed_prev_keyword(
     per-keyword 形态：entry 存整条 run 的 ``metric``，按 config 的 search_keywords
     展开（baidu 用 default_matched_count/default_first_rank；zhihu_search 用
     matched_count/first_rank）。``_find_keyword_entry`` 在本模块稍后定义，运行时已可用。
+    窗口 cutoff 比 checked_at_local（本地墙钟，同 daily_series 口径），非原始 UTC。
     """
     cutoff = now - timedelta(days=range_days)
     kw_map = {t["id"]: list(json.loads(t["config_json"] or "{}").get("search_keywords") or [])
               for t in all_tasks}
     changed = 0
     for tid, results in per_task.items():
-        older = [r for r in results if r["checked_at"] < cutoff]
+        older = [r for r in results if r["checked_at_local"] < cutoff]
         if not older:
             continue
         cm = older[0]["metric"]
@@ -872,7 +878,9 @@ def _collect_deletion_events(
     for ptype, daily in by_platform_date.items():
         for date_key, entries in daily.items():
             for task_id, entry in entries.items():
-                if entry["checked_at"] < cutoff:
+                # cutoff 用本地墙钟（now-range_days）→ 比 checked_at_local，不比原始
+                # UTC checked_at（后者会让边界 8h 内的删除事件被错误收/漏；at 输出仍 UTC）。
+                if entry["checked_at_local"] < cutoff:
                     continue
                 if entry["matched"]:
                     continue

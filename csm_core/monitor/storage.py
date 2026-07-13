@@ -313,11 +313,22 @@ def _row_to_task(row: sqlite3.Row) -> MonitorTask:
 
 
 # ── Result writes & reads ───────────────────────────────────────────────────
-def save_result(result: MonitorResult, alert_triggered: bool = False) -> int:
+def save_result(
+    result: MonitorResult,
+    alert_triggered: bool = False,
+    *,
+    clear_progress_task_id: int | None = None,
+) -> int:
     """Insert a result row and bump the parent task's last_* columns.
 
     Atomicity: both writes happen in one transaction so a crash mid-save
     can't leave the task pointing at a result that was never persisted.
+
+    ``clear_progress_task_id`` — when set (R2), also delete that task's
+    monitor_run_progress scratchpad **in the same transaction**. Used when
+    materializing an interrupted breakpoint: a crash between an out-of-band
+    save + clear (two separate txns) would leave the scratchpad → a duplicate
+    breakpoint on next startup recovery. One txn makes save+clear all-or-nothing.
     """
     conn = get_conn()
     conn.execute("BEGIN")
@@ -343,6 +354,11 @@ def save_result(result: MonitorResult, alert_triggered: bool = False) -> int:
             "UPDATE monitor_tasks SET last_check_at=?, last_status=? WHERE id=?",
             (_format_iso(result.checked_at), result.status, result.task_id),
         )
+        if clear_progress_task_id is not None:
+            conn.execute(
+                "DELETE FROM monitor_run_progress WHERE task_id=?",
+                (clear_progress_task_id,),
+            )
         conn.execute("COMMIT")
         return result_id
     except Exception:

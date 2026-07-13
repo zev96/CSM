@@ -197,3 +197,69 @@ def test_zhihu_ranking_question_checked_at_stays_utc(client: TestClient, monitor
     q = next(q for q in out["questions"] if q["task_id"] == tid)
     parsed = storage._parse_iso(q["checked_at"])  # noqa: SLF001
     assert parsed == at_in, f"checked_at 应为原始 UTC {at_in}，实际 {q['checked_at']}"
+
+
+# ── R6 收尾-2：changed_prev 窗口 + events cutoff 也按本地日 ─────────────────
+# daily_series 已按本地日分桶（#163/#165）；changed_prev 的「上一窗口」cutoff 与
+# comment events 的 cutoff 仍拿原始 UTC 和本地 now-cutoff 比 → 边界 8h 内的结果落错
+# 窗口。构造一个 checked_at：本地日分类与 UTC 分类落在 cutoff **两侧**，断言按本地
+# （正确）分类计数/收录 —— buggy(UTC) 会给相反答案。offset 符号无关、UTC 机器 skip。
+
+def _straddle_utc(cutoff_local: datetime) -> "tuple[datetime, bool] | None":
+    """返回一个 naive-UTC checked_at，使其在「本地日 vs UTC」比对下落在 cutoff 两侧；
+    外加「本地(正确)分类是否属于上一窗口(< cutoff)」。|offset| 不足则 None(skip)。"""
+    offset = datetime.now().astimezone().utcoffset()
+    if offset is None or abs(offset) < timedelta(hours=2):
+        return None
+    half = offset / 2
+    checked_local = cutoff_local + half         # offset>0→cutoff 后(当前)；offset<0→前(上一)
+    checked_utc = checked_local - offset         # _utc_to_local_naive 映射回 checked_local
+    fixed_in_prev = checked_local < cutoff_local  # 本地(正确)分类
+    return checked_utc, fixed_in_prev
+
+
+def test_zhihu_ranking_changed_prev_uses_local_window(client: TestClient, monitor_db: Path):
+    import pytest
+    now = datetime.now()
+    cutoff = now - timedelta(days=7)
+    st = _straddle_utc(cutoff)
+    if st is None:
+        pytest.skip("UTC/小偏移机器测不出")
+    checked_utc, fixed_in_prev = st
+    tid = _seed_zhihu_q(client)
+    _res_q(tid, cutoff - timedelta(days=3), 2)   # 明确在上一窗口，mc=2
+    _res_q(tid, checked_utc, 4)                  # 边界结果，mc=4（若落上一窗口=up）
+    out = history_service.get_zhihu_ranking_history("7d")
+    # 本地(正确)：落上一窗口 → older=[边界,老]=up → 1；落当前窗口 → older=[老]=flat → 0
+    assert out["kpis"]["changed_prev"] == (1 if fixed_in_prev else 0)
+
+
+def test_baidu_changed_prev_uses_local_window(client: TestClient, monitor_db: Path):
+    import pytest
+    now = datetime.now()
+    cutoff = now - timedelta(days=7)
+    st = _straddle_utc(cutoff)
+    if st is None:
+        pytest.skip("UTC/小偏移机器测不出")
+    checked_utc, fixed_in_prev = st
+    tid = _seed_baidu(client)
+    _res_baidu(tid, cutoff - timedelta(days=3), "扫地机", 1, 5)  # 上一窗口
+    _res_baidu(tid, checked_utc, "扫地机", 4, 2)                 # 边界，mc↑（若落上一窗口=up）
+    out = history_service.get_baidu_keyword_history("7d")
+    assert out["kpis"]["changed_prev"] == (1 if fixed_in_prev else 0)
+
+
+def test_comment_events_cutoff_uses_local_window(client: TestClient, monitor_db: Path):
+    import pytest
+    now = datetime.now()
+    cutoff = now - timedelta(days=7)
+    st = _straddle_utc(cutoff)
+    if st is None:
+        pytest.skip("UTC/小偏移机器测不出")
+    checked_utc, fixed_in_prev = st
+    tid = _seed_comment(client, ptype="kuaishou_comment", name="C - vid2", url="https://k.sr/r6c")
+    _res_comment(tid, checked_utc, matched=False)  # 一条删除事件，卡窗口边界
+    out = history_service.get_comment_retention_history("7d")
+    present = any(storage._parse_iso(e["at"]) == checked_utc for e in out["events"])  # noqa: SLF001
+    # events 收录窗口内(本地 >= cutoff)的删除；本地落当前窗口→收录，落上一窗口→不收录
+    assert present == (not fixed_in_prev)

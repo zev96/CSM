@@ -90,9 +90,14 @@ def test_comment_retention_rate_prev_uses_range_days_offset(client: TestClient, 
     """rate_prev 取 N 日前同形态的快照。7d range → 7 天前；1d range → 昨天。"""
     tid = _seed_task(client, type="douyin_comment", name="A - vid1")
     now = datetime.now()
+    # daily_series 按**本地日**分桶（#165），production 存的是 UTC。测试要模拟「N 日
+    # 前 / 今天」的结果，必须存「映射回目标本地日」的 UTC 值（= 本地时刻 - offset），
+    # 否则把本地 now 当 UTC 存、再 +offset 转回会漂到相邻日 —— 当前时刻靠近日界时
+    # 该测试会 flaky（#165 合并时恰好没撞上）。
+    _off = now.astimezone().utcoffset() or timedelta(0)
     # 7 天前 matched=True，今天 matched=False → rate 从 1.0 → 0.0
-    _seed_result(tid, checked_at=now - timedelta(days=7), matched=True)
-    _seed_result(tid, checked_at=now, matched=False)
+    _seed_result(tid, checked_at=(now - timedelta(days=7)) - _off, matched=True)
+    _seed_result(tid, checked_at=now - _off, matched=False)
 
     resp = client.get("/api/monitor/history/comment-retention?range=7d")
     douyin = resp.json()["platforms"]["douyin_comment"]

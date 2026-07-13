@@ -408,3 +408,39 @@ def test_override_run_does_not_clear_foreign_scratchpad(monitor_db: Path):
     # 草稿仍在、未被 override run 误删
     prog = storage.get_run_progress(tid)
     assert prog is not None and prog["next_keyword"] == 4
+
+
+# ── 收尾-2：save→clear 原子化 + materialize 单调时钟 ───────────────────────
+
+def test_save_result_atomic_clear_progress(monitor_db: Path):
+    """审查修（2a）：save_result 落断点 + 清草稿在**一个事务**里完成，硬杀夹在两语句
+    之间不会留残草稿 → 下次启动重造一条重复断点。"""
+    tid = _mk_baidu_task(10)
+    storage.save_run_progress(tid, next_keyword=4, keywords=_head(4), total_keywords=10,
+                              search_keywords=[f"kw{i}" for i in range(10)])
+    bp = MonitorResult(task_id=tid, checked_at=datetime.utcnow(), status="risk_control",
+                       rank=-1, metric={"last_resumed_keyword": 4, "keywords": _head(4)},
+                       error_message="")
+    storage.save_result(bp, clear_progress_task_id=tid)
+    assert storage.get_run_progress(tid) is None            # 同事务清掉
+    assert storage.latest_result(tid).status == "risk_control"  # 断点已落
+
+
+def test_startup_recovery_clamps_checked_at_above_latest_on_backward_clock(monitor_db: Path):
+    """审查修（2c）：时钟倒退时，materialize 的断点 checked_at 须钳到 > 现有最新结果，
+    否则 ORDER BY checked_at DESC 会让**旧断点**排前面、续抓退回更早位置。"""
+    from csm_sidecar.services.monitor_loop import recover_run_progress
+    tid = _mk_baidu_task(10)
+    t0 = datetime.utcnow() - timedelta(hours=2)   # 旧断点（更早一次中断）
+    storage.save_result(MonitorResult(
+        task_id=tid, checked_at=t0, status="risk_control", rank=-1,
+        metric={"last_resumed_keyword": 2, "keywords": _head(2), "total_keywords": 10,
+                "search_keywords": [f"kw{i}" for i in range(10)]}), alert_triggered=False)
+    # 之后的 run flush 了更多进度（草稿 updated_at = 真 now > t0，故不触发 skip 守卫）
+    storage.save_run_progress(tid, next_keyword=5, keywords=_head(5), resume_from=0,
+                              total_keywords=10, search_keywords=[f"kw{i}" for i in range(10)])
+    # 时钟倒退：materialize 用一个 < t0 的 now
+    recover_run_progress(now=t0 - timedelta(hours=1))
+    latest = storage.latest_result(tid)
+    # 尽管时钟倒退，materialize 的断点(next=5)仍排在旧断点(next=2)之上
+    assert latest.metric["last_resumed_keyword"] == 5
