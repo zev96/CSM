@@ -1,9 +1,9 @@
 """Tests for the schedule decision logic."""
 from __future__ import annotations
-import datetime
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, time as dtime
 
 from csm_core.monitor.base import MonitorTask
+from csm_core.monitor import scheduler
 from csm_core.monitor.scheduler import is_task_due, parse_schedule, parse_weekly, select_due
 
 
@@ -94,11 +94,13 @@ class TestParseWeekly:
 
 
 def _wtask(cron, last=None):
+    # geo_start_jitter_max=0 隔离启动抖动 —— 本组测通用周调度语义,不该被
+    # geo 默认 20min 抖动缠上(抖动/窗口有独立测试组覆盖)。
     return MonitorTask(
         type="geo_query",
         name="t",
         target_url="geo://b",
-        config={"brand": "b"},
+        config={"brand": "b", "geo_start_jitter_max": 0},
         schedule_cron=cron,
         enabled=True,
         last_check_at=last,
@@ -145,3 +147,104 @@ class TestSelectDue:
         ]
         due = select_due(tasks, now=now)
         assert [t.id for t in due] == [1]
+
+
+def _geo_task(*, id=42, cron="09:00", last=None, config=None):
+    cfg = {"brand": "b"}
+    if config:
+        cfg.update(config)
+    return MonitorTask(id=id, type="geo_query", name="t", target_url="geo://b",
+                       config=cfg, schedule_cron=cron, enabled=True, last_check_at=last)
+
+
+class TestStartJitterOffset:
+    """确定性启动抖动偏移(§4.2):纯 per-day 种子,不读 now。"""
+
+    def test_deterministic_same_task_same_day(self):
+        a = scheduler._jitter_offset_seconds(7, date(2026, 5, 9), 20, dtime(9, 0))
+        b = scheduler._jitter_offset_seconds(7, date(2026, 5, 9), 20, dtime(9, 0))
+        assert a == b                      # 同 task+同日 → 稳定(跨 tick 不 flicker)
+
+    def test_varies_across_days_and_tasks(self):
+        # 跨天/跨任务应产生多样偏移(反周期指纹)。用「多样本去重 > 1」而非单点 !=,
+        # 避免 20min 档值域 ~1201 下 1/1201 概率的偶发相等 flaky(reviewer Obs D)。
+        over_days = {scheduler._jitter_offset_seconds(7, date(2026, 5, d), 20, dtime(9, 0))
+                     for d in range(1, 28)}
+        over_tasks = {scheduler._jitter_offset_seconds(t, date(2026, 5, 9), 20, dtime(9, 0))
+                      for t in range(30)}
+        assert len(over_days) > 1          # 27 天全同概率 ~(1/1201)^26 ≈ 0
+        assert len(over_tasks) > 1         # 不同任务错峰
+
+    def test_bounded_by_max(self):
+        for tid in range(200):
+            off = scheduler._jitter_offset_seconds(tid, date(2026, 5, 9), 20, dtime(9, 0))
+            assert 0 <= off <= 20 * 60     # ∈ [0, max]
+
+    def test_zero_max_is_no_offset(self):
+        assert scheduler._jitter_offset_seconds(7, date(2026, 5, 9), 0, dtime(9, 0)) == 0
+
+    def test_clamps_near_midnight_leaves_tick_margin(self):
+        # target 23:55 + 20min 会跨午夜 → 夹到当日午夜前再留 120s 余量:
+        # 86400 - 86100 - 120 = 180s(至多 23:58:00),保证 ~60s tick 能落进触发窗。
+        for tid in range(200):
+            off = scheduler._jitter_offset_seconds(tid, date(2026, 5, 9), 20, dtime(23, 55))
+            assert 0 <= off <= 180         # 不跨午夜 + 留 tick 余量
+
+
+class TestStartJitterDue:
+    def test_non_geo_task_no_jitter_fires_at_exact_target(self):
+        # 类型门控:非 geo 任务偏移恒 0 → 到点即触发(逐字节等价旧行为)。
+        task = MonitorTask(id=42, type="zhihu_question", name="t",
+                           target_url="https://www.zhihu.com/question/1", config={},
+                           schedule_cron="09:00", enabled=True, last_check_at=None)
+        assert is_task_due(task, now=datetime(2026, 5, 9, 9, 0, 0)) is True
+
+    def test_geo_task_delayed_by_deterministic_offset(self):
+        task = _geo_task(id=42, cron="09:00")     # geo → 默认 20min 抖动
+        off = scheduler._jitter_offset_seconds(42, date(2026, 5, 9), 20, dtime(9, 0))
+        assert off > 0                             # 选定 id 确有非零偏移(证明抖动生效)
+        jittered = datetime(2026, 5, 9, 9, 0, 0) + timedelta(seconds=off)
+        # 抖动时刻前一秒:即便已过原始 09:00,也还没到抖动后时刻 → 不触发
+        assert is_task_due(task, now=jittered - timedelta(seconds=1)) is False
+        # 抖动时刻后:触发
+        assert is_task_due(task, now=jittered + timedelta(seconds=1)) is True
+
+    def test_geo_jitter_stable_across_ticks(self):
+        # 同一天多次 tick(不同 now)判定必须一致地在抖动时刻翻转,不 flicker。
+        task = _geo_task(id=99, cron="09:00")
+        off = scheduler._jitter_offset_seconds(99, date(2026, 5, 9), 20, dtime(9, 0))
+        jittered = datetime(2026, 5, 9, 9, 0, 0) + timedelta(seconds=off)
+        # 抖动前的每一分钟都 False
+        for m in range(0, off // 60):
+            assert is_task_due(task, now=datetime(2026, 5, 9, 9, m, 0)) is False
+        # 抖动后 True
+        assert is_task_due(task, now=jittered + timedelta(seconds=30)) is True
+
+
+class TestRunWindowGuard:
+    def test_default_off_late_boot_still_fires(self):
+        # 无 geo_run_window_hours → 迟到多久都补跑(向后兼容)。
+        task = _geo_task(id=1, cron="09:00", config={"geo_start_jitter_max": 0})
+        assert is_task_due(task, now=datetime(2026, 5, 9, 20, 0)) is True
+
+    def test_window_skips_when_too_late(self):
+        # 窗口 2h,开机在 09:00 后 5h → 跳过本周期(不补跑)。
+        task = _geo_task(id=1, cron="09:00",
+                         config={"geo_start_jitter_max": 0, "geo_run_window_hours": 2})
+        assert is_task_due(task, now=datetime(2026, 5, 9, 14, 0)) is False
+
+    def test_window_fires_when_within(self):
+        # 窗口 6h,09:00 后 3h → 仍在窗内 → 触发。
+        task = _geo_task(id=1, cron="09:00",
+                         config={"geo_start_jitter_max": 0, "geo_run_window_hours": 6})
+        assert is_task_due(task, now=datetime(2026, 5, 9, 12, 0)) is True
+
+    def test_window_counts_from_jittered_instant(self):
+        # 窗口从抖动后时刻起算:抖动 20min + 窗口 2h,现在 09:00 后 5h 仍超窗 → 跳过。
+        task = _geo_task(id=42, cron="09:00", config={"geo_run_window_hours": 2})
+        assert is_task_due(task, now=datetime(2026, 5, 9, 14, 30)) is False
+
+    def test_invalid_window_treated_as_off(self):
+        task = _geo_task(id=1, cron="09:00",
+                         config={"geo_start_jitter_max": 0, "geo_run_window_hours": "abc"})
+        assert is_task_due(task, now=datetime(2026, 5, 9, 20, 0)) is True

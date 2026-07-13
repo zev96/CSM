@@ -36,6 +36,7 @@ from ..geo.extract import extract, build_extract_client
 from ..geo.fail_reason import classify_fail_reason
 from ..geo import metrics
 from ..geo import runner as geo_runner
+from ..geo import sampling
 from ..geo import storage as geo_storage
 from ..rate_limit import configure_concurrency
 
@@ -132,6 +133,23 @@ class GeoQueryAdapter:
         jitter_min = _int_cfg0("geo_rpa_jitter_min", 15, 600)
         jitter_max = _int_cfg0("geo_rpa_jitter_max", 45, 600)
 
+        # 多采样(§4.6):K 默认 1;翻转复核默认开(K=1 时翻转格仍补采 1 次确认,
+        # 非零成本——见 sampling.sampled_cell)。K=1 且未翻转 = 单采样等价。
+        sample_count = _int_cfg("geo_sample_count", 1, 5)
+        flip_recheck = bool(cfg.get("geo_flip_recheck", True))
+
+        # 翻转复核基线:上轮每 (平台,关键词) 的 mention。只收上轮 ok cell —— 上轮
+        # 失败无可信 mention,不作翻转基线。跑前读(record_run 在末尾 → latest = 上
+        # 一轮)。读失败 → 降级为无基线(不补采),绝不因此崩整轮。
+        prev_map: "dict[tuple[str, str], bool]" = {}
+        if task.id and (sample_count > 1 or flip_recheck):
+            try:
+                for pc in geo_storage.cells_for_latest_run(task.id):
+                    if pc.get("status") == "ok":
+                        prev_map[(pc["platform"], pc["keyword"])] = bool(pc["mentioned"])
+            except Exception:
+                logger.warning("[geo] 读取上轮 cells 失败,翻转复核降级为无基线", exc_info=True)
+
         # 预计算每个平台的车道(mode)。get_provider 可能抛(未知/废弃平台 key、
         # provider 模块 import 失败)——逐平台兜住,把失败平台并入 API 车道,让
         # _run_cell 执行时再次 get_provider 抛错并隔离成 error cell(恢复串行版的
@@ -145,8 +163,13 @@ class GeoQueryAdapter:
                 mode_map[_p] = "api"
 
         def _cell(kw: str, plat: str) -> GeoCell:
-            return self._run_cell(kw, plat, brand, aliases, web_search, client,
-                                  cancel_token=cancel_token)
+            # 多采样:每 cell 采 K 次投票产出一个 GeoCell(runner「每关键词一 cell」
+            # 契约不变)。K=1 → sampled_cell 原样返回单样本(零成本)。
+            return sampling.sampled_cell(
+                lambda: self._run_cell(kw, plat, brand, aliases, web_search, client,
+                                       cancel_token=cancel_token),
+                k=sample_count, flip_recheck=flip_recheck,
+                prev_mentioned=prev_map.get((plat, kw)), cancel_token=cancel_token)
 
         maybe_cancel(cancel_token)               # 开跑前先检一次取消(等价串行版首个 maybe_cancel)
         tail = cells_plan[resume_from:]
@@ -161,7 +184,8 @@ class GeoQueryAdapter:
             rpa_batch=lambda plat, kws, t: self._rpa_batch(
                 plat, kws, t, web_search=web_search, brand=brand, aliases=aliases,
                 client=client, consec_skip=consec_skip, rpa_retry=rpa_retry,
-                jitter_min=jitter_min, jitter_max=jitter_max),
+                jitter_min=jitter_min, jitter_max=jitter_max,
+                sample_count=sample_count, flip_recheck=flip_recheck, prev_map=prev_map),
         )
 
         # C1 修复:runner 返回后复查取消。API cell 的同步 httpx POST 只在
@@ -172,6 +196,7 @@ class GeoQueryAdapter:
         maybe_cancel(cancel_token)
 
         agg = metrics.aggregate(cells, platforms_expected=len(set(platforms)))
+        agg["sample_count"] = sample_count       # 可观测:本轮每格采样次数(§4.6)
         # I2：把"够不到平台"和"曝光低"区分开 —— error_cells 让仪表盘知道
         # 是采集失败还是真没提及（现由 metrics._block 算出：total-ok_total，
         # cell 只会是 ok/error/blocked，无 empty，等价旧的 error+blocked 计数）。
@@ -271,7 +296,8 @@ class GeoQueryAdapter:
                            raw={"error": repr(e)})
 
     def _rpa_batch(self, plat, plat_keywords, tok, *, web_search, brand, aliases,
-                   client, consec_skip, rpa_retry=1, jitter_min=0, jitter_max=0):
+                   client, consec_skip, rpa_retry=1, jitter_min=0, jitter_max=0,
+                   sample_count=1, flip_recheck=True, prev_map=None):
         """每平台开一次 session,循环关键词逐 cell yield(浏览器跨关键词复用)。
 
         登录 gate(§4.3):首关键词返回 blocked = 平台没登录 → 余下关键词全出合成
@@ -305,7 +331,14 @@ class GeoQueryAdapter:
             with session_cm as query_one:
                 for li, kw in enumerate(plat_keywords):
                     maybe_cancel(tok)
-                    cell = self._run_cell_on_session(query_one, kw, plat, brand, aliases, client)
+                    # 多采样:同一 session 上对该关键词采 K 次投票(§4.6)。K=1 且未翻转
+                    # → sampled_cell 原样返回单样本。sample_fn 同 session 复用浏览器;
+                    # between_samples 让样本间也隔一拍 jitter(反软封,同关键词不背靠背连问)。
+                    cell = sampling.sampled_cell(
+                        lambda kw=kw: self._run_cell_on_session(query_one, kw, plat, brand, aliases, client),
+                        k=sample_count, flip_recheck=flip_recheck,
+                        prev_mentioned=(prev_map or {}).get((plat, kw)), cancel_token=tok,
+                        between_samples=lambda: _sleep_jitter(tok, jitter_min, jitter_max))
                     produced = li + 1
                     yield li, cell
                     failed = cell.status in ("error", "blocked")
