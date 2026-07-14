@@ -58,3 +58,15 @@ def test_note_identity_unresolvable_returns_none():
     # 品牌既不在 frontmatter 也解析不出 → None(registry 的 skip 行为)
     assert note_identity("某杂牌X9-产品参数", {}, ALIASES) is None
     assert note_identity("某杂牌X9-产品参数", None, ALIASES) is None
+
+
+def test_note_identity_empty_string_frontmatter_falls_through():
+    # 空串 frontmatter 值等同缺失(钉住 or 链,防重构成 is not None 判断)
+    fm = {"品牌": "", "型号": ""}
+    assert note_identity("CEWEYDS18-产品参数", fm, ALIASES) == ("CEWEY", "CEWEYDS18")
+
+
+def test_note_identity_brand_only_frontmatter():
+    # 只有 品牌 没有 型号 → 型号走 full-stem 兜底
+    fm = {"品牌": "DARZ"}
+    assert note_identity("DARZD9-产品参数", fm, ALIASES) == ("DARZ", "DARZD9")

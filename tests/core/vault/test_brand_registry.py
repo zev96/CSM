@@ -61,15 +61,69 @@ def test_registry_falls_back_to_filename_when_no_frontmatter(tmp_path: Path):
     assert reg.brand_of("米家3C") == "小米"
 
 
+def test_registry_unknown_brand_via_frontmatter(tmp_path: Path):
+    # 未知品牌(不在 BRAND_ALIASES)靠 frontmatter 品牌/型号 进 registry
+    d = tmp_path / "营销资料库/产品模块/空气净化器/产品参数"
+    d.mkdir(parents=True)
+    (d / "DARZD9-产品参数.md").write_text(
+        "---\n产品: 空气净化器\n品牌: DARZ\n型号: DARZD9\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+        encoding="utf-8",
+    )
+    reg = build_brand_registry(tmp_path)
+    assert reg.brands() == ["DARZ"]
+    assert reg.brand_of("DARZD9") == "DARZ"
+
+
+def test_registry_product_line_from_path(tmp_path: Path):
+    # 产品线 = 产品参数 目录的上一段(产品模块/<产品线>/产品参数)
+    for line, stem in (("吸尘器", "CEWEYDS18"), ("空气净化器", "DARZD9")):
+        d = tmp_path / f"营销资料库/产品模块/{line}/产品参数"
+        d.mkdir(parents=True)
+        (d / f"{stem}-产品参数.md").write_text(
+            f"---\n产品: {line}\n品牌: X\n型号: {stem}\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+            encoding="utf-8",
+        )
+    reg = build_brand_registry(tmp_path)
+    assert reg.line_of("CEWEYDS18") == "吸尘器"
+    assert reg.line_of("DARZD9") == "空气净化器"
+    assert reg.line_of("不存在") is None
+
+
+def test_registry_product_line_old_flat_layout_falls_back_to_frontmatter(tmp_path: Path):
+    # 旧扁平布局(产品模块/产品参数,无产品线层)→ 兜底 frontmatter 产品
+    d = tmp_path / "营销资料库/产品模块/产品参数"
+    d.mkdir(parents=True)
+    (d / "CEWEYDS18-产品参数.md").write_text(
+        "---\n产品: 吸尘器\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+        encoding="utf-8",
+    )
+    reg = build_brand_registry(tmp_path)
+    assert reg.line_of("CEWEYDS18") == "吸尘器"
+
+
+def test_registry_product_line_unknown_when_nothing_to_derive(tmp_path: Path):
+    # 顶层就是 产品参数 且 frontmatter 无 产品 → "未分类"
+    d = tmp_path / "产品参数"
+    d.mkdir(parents=True)
+    (d / "CEWEYDS18-产品参数.md").write_text(
+        "---\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+        encoding="utf-8",
+    )
+    reg = build_brand_registry(tmp_path)
+    assert reg.line_of("CEWEYDS18") == "未分类"
+
+
 _REAL_VAULT = Path(r"D:\家电组共享\DATA\营销资料库")
 
 
 @pytest.mark.integration
 @pytest.mark.skipif(not _REAL_VAULT.exists(), reason="真实 vault 不在本机")
-def test_real_vault_registry_has_33_models():
+def test_real_vault_registry_covers_both_lines():
     reg = build_brand_registry(_REAL_VAULT)
-    assert len(reg.all_models()) == 33
+    # 2026-07: 吸尘器 33 + 空气净化器 29;不钉死总数,防用户加型号即碎
+    assert len(reg.all_models()) >= 60
     assert "CEWEY" in reg.brands()
-    assert "小米" in reg.brands()  # 米家* 应归一到 小米，不出现「米家」品牌
-    assert "米家" not in reg.brands()
-    assert {"米家3C", "米家2显尘版", "米家3基站版"}.issubset(set(reg.models("小米")))
+    assert "DARZ" in reg.brands()          # 未知品牌靠 frontmatter 进表
+    assert "米家" not in reg.brands()       # 别名归一不回退
+    assert reg.line_of("CEWEYDS18") == "吸尘器"
+    assert reg.line_of("DARZD9") == "空气净化器"

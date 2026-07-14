@@ -70,8 +70,9 @@ def note_identity(
     """产品参数/测试结果笔记的 (canonical品牌, 型号全名) 单一判定链。
 
     frontmatter ``品牌``/``型号`` 优先(未知品牌靠它命中,别名表不再是白名单),
-    文件名解析兜底 —— 与 build_brand_registry 的历史行为完全一致,registry 与
-    resolver 都必须走这里,两处永不分歧。型号保持 full-stem 约定(CEWEYDS18)。
+    文件名解析兜底 —— 与 build_brand_registry 的历史行为一致(另:frontmatter
+    值先 strip 再折叠,全空白视同缺失,较历史更稳);registry 与 resolver 都
+    必须走这里,两处永不分歧。型号保持 full-stem 约定(CEWEYDS18)。
     """
     fm = frontmatter or {}
     parsed = parse_brand_model(stem, aliases)

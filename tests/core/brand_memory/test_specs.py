@@ -70,3 +70,10 @@ def test_section_retained_in_note_order():
         "吸力(AW)", "真空度(Pa)", "最低噪音（dB）", "电机功率",
         "不同档位续航", "认证检测",
     ]
+
+
+def test_section_uses_raw_title_not_normalized():
+    # section 必须是 H2 原文;normalize 会把「测试认证」剥成「认证」(前缀剥离)。
+    body = "## 测试认证\n\n| 参数 | 数值 |\n|--|--|\n| 认证检测 | CE |\n"
+    specs = parse_spec_table(body)
+    assert specs["认证检测"].section == "测试认证"
