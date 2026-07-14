@@ -30,6 +30,7 @@ import {
   isFailed,
   targetAppears,
   targetAvgRank,
+  competitorRankOnPlatform,
   platformShort,
   SRC_COLORS,
   COMPETITOR_BLUE,
@@ -138,11 +139,12 @@ const competeConclusion = computed(() => {
   if (!head || competitors.value.length === 0) {
     return "暂无足够竞品数据 · 多平台采集后这里给出竞品压制格局。";
   }
-  // 头号对手排第 1 的平台数。
+  // 头号对手排第 1 的平台数。用 competitorRankOnPlatform（与热力矩阵、竞品聚合同一口径：
+  // 归一化键匹配 + 取该平台最优位次）——不能按原始名精确匹配，否则合并后的行名在别的平台
+  // 是另一种写法就数不到，出现「图里 3 个平台 #1、文案却说 2 个」的自相矛盾。
   let headFirst = 0;
   for (const p of platforms.value) {
-    const it = p.recommended.find((r) => r.name === head);
-    if (it && it.position === 1) headFirst++;
+    if (competitorRankOnPlatform(p, head) === 1) headFirst++;
   }
   const youFirst = platforms.value
     .filter((p) => !isFailed(p) && p.mentioned && p.rank === 1)

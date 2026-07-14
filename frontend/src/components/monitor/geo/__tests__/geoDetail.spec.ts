@@ -9,6 +9,10 @@ import {
   placeholderPlatform,
   failReasonLabel,
   median,
+  targetRankOnPlatform,
+  competitorRankOnPlatform,
+  cellStatus,
+  deriveCompetitors,
   type PlatformVM,
   type BoardRow,
 } from "@/components/monitor/geo/geoDetail";
@@ -35,6 +39,139 @@ const first = (id: string) => vm(id, { mentioned: true, rank: 1 }); // 首推 #1
 const hit = (id: string, rank = 3) => vm(id, { mentioned: true, rank }); // 提及 #rank
 const miss = (id: string) => vm(id, { mentioned: false }); // 未提及
 const fail = (id: string) => vm(id, { status: "error" }); // 采集失败
+
+describe("targetRankOnPlatform", () => {
+  it("提及且有顺位 → 用 cell.rank（与概览卡一致）", () => {
+    expect(targetRankOnPlatform(vm("tongyi", { mentioned: true, rank: 1 }))).toBe(1);
+    expect(targetRankOnPlatform(vm("tongyi", { mentioned: true, rank: 3 }))).toBe(3);
+  });
+
+  it("未提及 → 0（即便 recommended 残留 is_target 位次也不上榜；复现千问 bug）", () => {
+    // cell 判「未提及」，但 recommended 里因别名/旧数据残留一个 is_target@1。
+    // 热力矩阵必须以 mentioned 为准 → 0（·），不能显示 #1。
+    const p = vm("tongyi", {
+      mentioned: false,
+      rank: -1,
+      recommended: [{ name: "CEWEY DS18", position: 1, is_target: true }],
+    });
+    expect(targetRankOnPlatform(p)).toBe(0);
+  });
+
+  it("提及但无有效顺位（rank<=0）→ 0", () => {
+    expect(targetRankOnPlatform(vm("tongyi", { mentioned: true, rank: -1 }))).toBe(0);
+    expect(targetRankOnPlatform(vm("tongyi", { mentioned: true, rank: 0 }))).toBe(0);
+  });
+});
+
+describe("competitorRankOnPlatform", () => {
+  it("按归一化键匹配，取该平台最优位次（不是碰到的第一条）", () => {
+    const p = vm("doubao", {
+      recommended: [
+        { name: "戴森 V12", position: 7, is_target: false },
+        { name: "戴森V12", position: 1, is_target: false },
+      ],
+    });
+    expect(competitorRankOnPlatform(p, "戴森V12")).toBe(1);
+    expect(competitorRankOnPlatform(p, "戴森 V12")).toBe(1);
+  });
+  it("第一条 position=0（LLM 漏给位次）不能把它当成「未上榜」", () => {
+    const p = vm("doubao", {
+      recommended: [
+        { name: "戴森", position: 0, is_target: false },
+        { name: "戴森", position: 2, is_target: false },
+      ],
+    });
+    expect(competitorRankOnPlatform(p, "戴森")).toBe(2);
+  });
+  it("未上榜 → 0", () => {
+    const p = vm("doubao", { recommended: [{ name: "追觅", position: 1, is_target: false }] });
+    expect(competitorRankOnPlatform(p, "戴森")).toBe(0);
+  });
+});
+
+describe("cellStatus 提及但未入榜（rank<=0）", () => {
+  it("mentioned=true, rank=-1 → 「已提及」而非破损的「提及 #-1」", () => {
+    const s = cellStatus(vm("t", { mentioned: true, rank: -1 }));
+    expect(s.kind).toBe("hit");
+    expect(s.label).toBe("已提及");
+    expect(s.label).not.toContain("-1");
+  });
+  it("mentioned=true, rank=0 → 「已提及」", () => {
+    expect(cellStatus(vm("t", { mentioned: true, rank: 0 })).label).toBe("已提及");
+  });
+  it("mentioned=true, rank>=2 → 「提及 #N」（正常排名不受影响）", () => {
+    expect(cellStatus(vm("t", { mentioned: true, rank: 2 })).label).toBe("提及 #2");
+  });
+  it("mentioned=true, rank=1 → 「首推 #1」", () => {
+    expect(cellStatus(vm("t", { mentioned: true, rank: 1 })).label).toBe("首推 #1");
+  });
+});
+
+describe("deriveCompetitors：is_target 仅在 mentioned 时排除", () => {
+  it("未提及的 cell 里残留的 is_target 按普通竞品处理（复现千问脏数据）", () => {
+    const p = vm("tongyi", {
+      mentioned: false,
+      recommended: [{ name: "CEWEY DS18", position: 1, is_target: true }],
+    });
+    expect(deriveCompetitors([p]).map((c) => c.name)).toContain("CEWEY DS18");
+  });
+  it("同一竞品的不同写法（差空格/大小写）跨平台合并成一行（复现「希亦 V800」/「希亦V800」重复）", () => {
+    const tongyi = vm("tongyi", {
+      mentioned: true, rank: 1,
+      recommended: [{ name: "希亦 V800", position: 4, is_target: false }],
+    });
+    const doubao = vm("doubao", {
+      mentioned: true, rank: 11,
+      recommended: [{ name: "希亦V800", position: 2, is_target: false }],
+    });
+    const kimi = vm("kimi", {
+      mentioned: true, rank: 2,
+      recommended: [{ name: "希亦 V800", position: 1, is_target: false }],
+    });
+    const comp = deriveCompetitors([tongyi, doubao, kimi]);
+    expect(comp).toHaveLength(1);              // 只剩一行，不再重复
+    expect(comp[0].appears).toBe(3);           // 三个平台都算它出现
+    expect(comp[0].avgRank).toBeCloseTo((4 + 2 + 1) / 3);
+  });
+
+  it("同一平台把同一竞品列了多条（多型号）→ 只按该平台最优位次计一次，avgRank 不被拉高", () => {
+    const doubao = vm("doubao", {
+      mentioned: true, rank: 3,
+      recommended: [
+        { name: "戴森 V12", position: 4, is_target: false },
+        { name: "戴森V12", position: 1, is_target: false }, // 同一条，仅空格不同
+      ],
+    });
+    const tongyi = vm("tongyi", {
+      mentioned: true, rank: 2,
+      recommended: [{ name: "戴森 V12", position: 1, is_target: false }],
+    });
+    const kimi = vm("kimi", {
+      mentioned: true, rank: 5,
+      recommended: [{ name: "戴森 V12", position: 2, is_target: false }],
+    });
+    const comp = deriveCompetitors([doubao, tongyi, kimi]);
+    expect(comp).toHaveLength(1);
+    expect(comp[0].appears).toBe(3);
+    // 豆包取该平台最优位次 1（不是 4），且同平台的两条只计一次 → (1+1+2)/3
+    expect(comp[0].avgRank).toBeCloseTo((1 + 1 + 2) / 3);
+    expect(comp[0].name).toBe("戴森 V12"); // 展示名取出现次数最多的写法（2 票 vs 1 票）
+  });
+
+  it("已提及的 cell 里 is_target 仍作为「你」排除，不混进竞品", () => {
+    const p = vm("doubao", {
+      mentioned: true,
+      rank: 2,
+      recommended: [
+        { name: "希喂", position: 2, is_target: true },
+        { name: "戴森", position: 1, is_target: false },
+      ],
+    });
+    const names = deriveCompetitors([p]).map((c) => c.name);
+    expect(names).toContain("戴森");
+    expect(names).not.toContain("希喂");
+  });
+});
 
 describe("classifyKeywordCoverage", () => {
   const PLATS = ["doubao", "tongyi", "kimi"];

@@ -233,7 +233,9 @@ export function cellStatus(p: PlatformVM): CellBadge {
   if (isFailed(p)) return { kind: "fail", label: "采集失败", short: "⚠ 失败", color: "var(--red)" };
   if (!p.mentioned) return { kind: "miss", label: "未提及", short: "✗ 未提及", color: "var(--red)" };
   if (p.rank === 1) return { kind: "first", label: "首推 #1", short: "★ #1", color: "var(--green)" };
-  return { kind: "hit", label: `提及 #${p.rank}`, short: `#${p.rank}`, color: "var(--primary-deep)" };
+  if (p.rank > 1) return { kind: "hit", label: `提及 #${p.rank}`, short: `#${p.rank}`, color: "var(--primary-deep)" };
+  // 提及但未进排名序列(rank<=0):显示「已提及」，而非破损的「提及 #-1」；与热力矩阵(·)口径一致。
+  return { kind: "hit", label: "已提及", short: "已提及", color: "var(--primary-deep)" };
 }
 
 /**
@@ -502,25 +504,78 @@ function cellToPlatform(c: RawCell, brandTerms: string[]): PlatformVM {
 }
 
 /**
+ * 竞品名归一化键：小写 + 去掉所有空白（\s 含全角空格 U+3000）。用于跨平台合并同一竞品的
+ * 不同写法 —— LLM 会把同一个产品在不同平台写成「希亦 V800」/「希亦V800」，按原始字符串
+ * 分组会裂成两行（实测热力矩阵出现重复竞品）。只用于分组/查位次，展示仍用原名。
+ * 注：品牌 vs 型号（「戴森」vs「戴森V8 Cyclone」）的粒度统一在抽取层解决（prompt 要求
+ * 只回品牌名），这里不做模糊前缀合并，避免误并不同品牌。
+ */
+export function competitorKey(name: string): string {
+  return (name || "").toLowerCase().replace(/\s+/g, "");
+}
+
+/**
+ * 某竞品（按归一化键匹配）在某平台的**最优**位次；未上榜 / 无有效位次 → 0（渲染成 ·）。
+ * 同一平台可能被 LLM 列了同一品牌的多条（不同型号/写法），取最靠前的那条 —— 不能用
+ * find() 拿「碰到的第一条」，否则可能拿到 position=0（LLM 漏给位次）而误显示「未上榜」。
+ * 热力矩阵格子 / 竞争结论文案 / 竞品聚合三处共用这一个口径，避免各算各的。
+ */
+export function competitorRankOnPlatform(p: PlatformVM, name: string): number {
+  const key = competitorKey(name);
+  if (!key) return 0;
+  let best = 0;
+  for (const r of p.recommended) {
+    if (competitorKey(r.name) !== key) continue;
+    const pos = typeof r.position === "number" ? r.position : 0;
+    if (pos > 0 && (best === 0 || pos < best)) best = pos;
+  }
+  return best;
+}
+
+/**
  * 跨平台竞品聚合（README）：对每个 recommended 实体（is_target=false），
  * 按 name 归组 → {name, appears=出现的不同平台数, avgRank=出现平台位次均值}。
  * appears 降序、avgRank 升序。"榜首" = avgRank 最小（并列取 appears 多）。
  */
 export function deriveCompetitors(platforms: PlatformVM[]): CompetitorVM[] {
-  const byName = new Map<string, { plats: Set<string>; ranks: number[] }>();
+  // key → { 各写法出现次数(定展示名), 出现过的平台, 每平台各计一次的最优位次 }
+  const agg = new Map<string, { names: Map<string, number>; plats: Set<string>; ranks: number[] }>();
   for (const p of platforms) {
+    // 先在**单个平台内**按归一化键收敛：LLM 常把同一品牌的多个型号各列一条
+    // （戴森 V12 / 戴森 V11 Fluffy…），只取该平台最优位次并只计一次，否则
+    // avgRank 会被同平台的多条重复拉高、appears 与 ranks 口径也会不一致。
+    const bestOnPlat = new Map<string, { name: string; pos: number }>();
     for (const r of p.recommended) {
-      if (r.is_target) continue;
+      // 只有当该 cell 确实「提及你」时，才把 is_target 条目当作「你」排除；未提及的 cell
+      // 里残留的 is_target（别名误判 / 旧数据）按普通竞品处理，避免真实竞品从榜上凭空消失。
+      if (r.is_target && p.mentioned) continue;
       const name = (r.name || "").trim();
-      if (!name) continue;
-      const e = byName.get(name) ?? { plats: new Set<string>(), ranks: [] };
+      const key = competitorKey(name);
+      if (!key) continue;
+      const pos = typeof r.position === "number" && r.position > 0 ? r.position : Infinity;
+      const cur = bestOnPlat.get(key);
+      if (!cur || pos < cur.pos) bestOnPlat.set(key, { name, pos });
+    }
+    for (const [key, v] of bestOnPlat) {
+      const e = agg.get(key) ?? { names: new Map<string, number>(), plats: new Set<string>(), ranks: [] };
+      e.names.set(v.name, (e.names.get(v.name) ?? 0) + 1);
       e.plats.add(p.id);
-      if (typeof r.position === "number" && r.position > 0) e.ranks.push(r.position);
-      byName.set(name, e);
+      if (Number.isFinite(v.pos)) e.ranks.push(v.pos);
+      agg.set(key, e);
     }
   }
   const out: CompetitorVM[] = [];
-  for (const [name, e] of byName) {
+  for (const e of agg.values()) {
+    // 展示名取「出现次数最多」的写法（并列取先出现的）——否则会被少数派写法代表，
+    // 且某平台失败/掉出时行名会在两次运行之间莫名改变。
+    let name = "";
+    let top = -1;
+    for (const [n, c] of e.names) {
+      if (c > top) {
+        top = c;
+        name = n;
+      }
+    }
     const appears = e.plats.size;
     const avgRank = e.ranks.length
       ? e.ranks.reduce((a, b) => a + b, 0) / e.ranks.length
@@ -543,6 +598,17 @@ export function targetAvgRank(platforms: PlatformVM[]): number {
 /** 你出现的（提及）平台数 —— 散点 X 用。 */
 export function targetAppears(platforms: PlatformVM[]): number {
   return platforms.filter((p) => !isFailed(p) && p.mentioned).length;
+}
+
+/**
+ * 你（目标品牌）在某平台热力矩阵里的位次：以 cell 的**权威判定**（mentioned + rank）
+ * 为准，与概览卡 / KPI / 竞品散点同源。**不**直接用 recommended 里的 is_target 位次——
+ * 后者可能与 mentioned 矛盾：LLM 判「未提及」，但 recommended 因别名匹配/旧数据残留了
+ * 一个 is_target 条目，会造成「概览未提及、热力矩阵却 #1」的自相矛盾（实测千问）。
+ * 未提及 / 无有效顺位（rank<=0）→ 0（未上榜，渲染成 ·）。
+ */
+export function targetRankOnPlatform(p: PlatformVM): number {
+  return p.mentioned && typeof p.rank === "number" && p.rank > 0 ? p.rank : 0;
 }
 
 // 上次运行时间本地化简写（详情头副标用）。
