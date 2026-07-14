@@ -12,6 +12,8 @@ import { computed } from "vue";
 
 import {
   platformShort,
+  targetRankOnPlatform,
+  competitorRankOnPlatform,
   type PlatformVM,
   type CompetitorVM,
 } from "@/components/monitor/geo/geoDetail";
@@ -33,11 +35,12 @@ const rows = computed<Row[]>(() => {
   return [...comp, { name: `${props.targetName}（你）`, isYou: true }];
 });
 
-// 某品牌在某平台的位次（0 = 未上榜）。你 → 找 is_target 的 recommended；
-// 竞品 → 按 name 匹配。
+// 某品牌在某平台的位次（0 = 未上榜）。你 → 用 cell 权威判定（mentioned+rank，
+// targetRankOnPlatform），与概览一致，避免 recommended 里残留的 is_target 位次
+// 与「未提及」自相矛盾；竞品 → competitorRankOnPlatform（归一化键 + 取该平台最优位次），
+// 与竞品聚合 / 竞争结论文案共用同一口径。
 function rankOf(p: PlatformVM, row: Row): number {
-  const it = p.recommended.find((r) => (row.isYou ? r.is_target : r.name === row.name));
-  return it && typeof it.position === "number" ? it.position : 0;
+  return row.isYou ? targetRankOnPlatform(p) : competitorRankOnPlatform(p, row.name);
 }
 
 interface CellStyle {

@@ -139,9 +139,12 @@ class NotMentionedClient:
 def test_fetch_writes_geo_alerts_into_metric(fresh_db, monkeypatch):
     monkeypatch.setattr(geo_mod, "get_provider", lambda p: FakeProvider(p))
     monkeypatch.setattr(geo_mod, "build_extract_client", lambda p: NotMentionedClient())
+    # brand 用「蔚来」而非「小鹏」：FakeProvider 的回答正文是「… 推荐 小鹏 G6」，含「小鹏」。
+    # extract() 以正文为准，品牌字面出现即判提及；要测「未提及 → hidden 告警」必须让品牌
+    # 真的不在正文里，否则文本接地会（正确地）把它上调成提及。
     tid = storage.create_task(MonitorTask(
         type="geo_query", name="t", target_url="geo://b",
-        config={"brand": "小鹏", "keywords": ["k"], "platforms": ["tongyi"], "extract_provider": "mock"}))
+        config={"brand": "蔚来", "keywords": ["k"], "platforms": ["tongyi"], "extract_provider": "mock"}))
     result = geo_mod.ADAPTER.fetch(storage.get_task(tid))
     assert result.status == "ok"                       # provider succeeded → cell ok
     assert any(a["kind"] == "hidden" for a in result.metric.get("alerts", []))
