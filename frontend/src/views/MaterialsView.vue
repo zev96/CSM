@@ -32,10 +32,14 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 const summary = computed(() => {
-  const total = m.models.length;
+  const pool = m.lineFilter === "全部"
+    ? m.models
+    : m.models.filter((r) => (r.product_line || "未分类") === m.lineFilter);
+  const total = pool.length;
   if (!total) return "";
-  const primary = m.models.filter((r) => r.role === "主推").length;
-  return `共 ${total} 个型号 · 主推 ${primary} · 竞品 ${total - primary}`;
+  const primary = pool.filter((r) => r.role === "主推").length;
+  const prefix = m.lineFilter === "全部" ? "" : `${m.lineFilter} · `;
+  return `${prefix}共 ${total} 个型号 · 主推 ${primary} · 竞品 ${total - primary}`;
 });
 </script>
 

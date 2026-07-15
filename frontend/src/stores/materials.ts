@@ -73,6 +73,7 @@ function errMsg(e: any): string {
 
 export const useMaterials = defineStore("materials", () => {
   const models = ref<BrandModelRow[]>([]);
+  const lineFilter = ref<string>("全部");   // 品牌型号页产品线筛选(汇总栏联动)
   const loading = ref(false);
   const error = ref<string | null>(null);
   const selectedModel = ref<string | null>(null);
@@ -234,7 +235,7 @@ export const useMaterials = defineStore("materials", () => {
   }
 
   return {
-    models, loading, error, selectedModel, detail, detailLoading, list, select,
+    models, lineFilter, loading, error, selectedModel, detail, detailLoading, list, select,
     writableFolders, foldersLoading, currentPlan, lastReceipt, intakeError,
     loadFolders, planNote, commitNote, undoLast,
     atomizeText, commitAtom, undoAtom,

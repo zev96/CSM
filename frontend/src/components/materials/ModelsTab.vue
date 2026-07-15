@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
- * 品牌型号页（素材库 V2）：左型号列表（主推/竞品·品牌分组·搜索）+ 右详情
- * （摘要卡 + 分组锚点 scroll-spy + 6 组参数卡）。数据接 useMaterials，分组本体
- * 见 modelSpecs.ts（用户拍板照设计稿 6 组）。
+ * 品牌型号页（素材库 V3）：左型号列表（产品线筛选·主推/竞品·品牌分组·搜索）
+ * + 右详情（摘要卡 + 按笔记真实 H2 小节分组的参数卡）。数据接 useMaterials，
+ * 分组/摘要逻辑见 modelSpecs.ts（V3 起数据驱动，设计稿 6 组本体已废）。
  */
 import { computed, nextTick, ref } from "vue";
 import { useMaterials } from "@/stores/materials";
 import { useFactsChanges } from "@/stores/factsChanges";
 import Spinner from "@/components/ui/Spinner.vue";
+import Select from "@/components/ui/Select.vue";
 import {
   buildSpecGroups,
   buildStats,
@@ -21,6 +22,23 @@ const facts = useFactsChanges();
 const query = ref("");
 const activeGroup = ref(0);
 const scrollRef = ref<HTMLElement | null>(null);
+
+// ── 产品线筛选(store 持有,汇总栏联动) ─────────────────────────────
+const lineOptions = computed(() => {
+  const counts = new Map<string, number>();
+  for (const r of m.models) {
+    const line = r.product_line || "未分类";
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  const opts = [{ value: "全部", label: `全部产品线（${m.models.length}）` }];
+  for (const [line, n] of counts) opts.push({ value: line, label: `${line}（${n}）` });
+  return opts;
+});
+const lineModels = computed(() =>
+  m.lineFilter === "全部"
+    ? m.models
+    : m.models.filter((r) => (r.product_line || "未分类") === m.lineFilter),
+);
 
 // ── 左侧：搜索 + 主推/竞品 + 品牌分组 ──────────────────────────────
 const q = computed(() => query.value.trim().toLowerCase());
@@ -58,8 +76,8 @@ function mkModel(r: { model: string; brand: string; coverage: any }, showBrand: 
 }
 
 const sideSections = computed<SideSection[]>(() => {
-  const primary = m.models.filter((r) => r.role === "主推" && match(r.brand, r.model));
-  const comps = m.models.filter((r) => r.role !== "主推" && match(r.brand, r.model));
+  const primary = lineModels.value.filter((r) => r.role === "主推" && match(r.brand, r.model));
+  const comps = lineModels.value.filter((r) => r.role !== "主推" && match(r.brand, r.model));
   const out: SideSection[] = [];
   if (primary.length) {
     out.push({
@@ -110,8 +128,9 @@ const paramGroups = computed(() => specData.value?.groups ?? []);
 const filled = computed(() => specData.value?.filled ?? 0);
 const total = computed(() => specData.value?.total ?? 0);
 const pctW = computed(() => (total.value ? Math.round((filled.value / total.value) * 100) : 0) + "%");
-const stats = computed(() => (detail.value ? buildStats(detail.value.specs) : []));
+const stats = computed(() => (detail.value ? buildStats(detail.value.specs, detail.value.category) : []));
 const href = computed(() => (detail.value ? productHref(detail.value.specs) : null));
+const hasSpecs = computed(() => !!detail.value && Object.keys(detail.value.specs).length > 0);
 
 const selTitle = computed(() => {
   const d = detail.value;
@@ -153,6 +172,14 @@ function onDetailScroll(): void {
     <!-- ── 左：型号列表 ── -->
     <aside class="mat-panel flex flex-none flex-col overflow-hidden" style="width: 264px">
       <div class="flex-none px-3.5 pb-2.5 pt-3.5">
+        <Select
+          v-if="lineOptions.length > 2"
+          v-model="m.lineFilter"
+          :options="lineOptions"
+          size="sm"
+          min-width="100%"
+          class="mb-2 w-full"
+        />
         <div class="relative">
           <svg class="pointer-events-none absolute left-[11px] top-1/2 -translate-y-1/2" width="14" height="14"
             viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -217,12 +244,13 @@ function onDetailScroll(): void {
             </span>
             <span v-if="selMissing" class="mat-tag-miss">缺话术</span>
             <div class="ml-auto flex items-center gap-3.5">
-              <div class="flex items-center gap-2">
+              <div v-if="hasSpecs" class="flex items-center gap-2">
                 <span class="text-[11.5px]" style="color: var(--ink-3)">参数 {{ filled }} / {{ total }}</span>
                 <span class="inline-block h-[5px] w-[88px] overflow-hidden rounded-full" style="background: rgba(var(--ink-rgb), 0.08)">
                   <span class="block h-full rounded-full" :style="{ width: pctW, background: 'var(--primary)' }" />
                 </span>
               </div>
+              <span v-if="!hasSpecs" class="text-[11.5px]" style="color: var(--ink-4)">暂无参数笔记</span>
               <a v-if="href" :href="href" target="_blank" rel="noopener" class="mat-linkbtn">
                 商品页
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -231,7 +259,7 @@ function onDetailScroll(): void {
               </a>
             </div>
           </div>
-          <div class="flex min-w-0 items-stretch overflow-x-auto">
+          <div v-if="stats.length" class="flex min-w-0 items-stretch overflow-x-auto">
             <div v-for="(s, si) in stats" :key="si" class="flex flex-none flex-col gap-[3px] px-[26px]"
               :style="{ borderLeft: si === 0 ? 'none' : '1px solid rgba(var(--ink-rgb), 0.08)' }">
               <span class="text-[17px] font-bold" :style="{ color: s.dim ? 'var(--ink-4)' : 'var(--ink)' }">{{ s.value }}</span>
@@ -241,14 +269,14 @@ function onDetailScroll(): void {
         </section>
 
         <!-- 分组锚点导航 -->
-        <div class="flex flex-none items-center gap-[7px]">
+        <div v-if="hasSpecs" class="flex flex-none items-center gap-[7px]">
           <button v-for="g in paramGroups" :key="g.idx" class="mat-chip" :class="{ 'mat-chip--on': activeGroup === g.idx }"
             @click="goGroup(g.idx)">{{ g.title }}</button>
           <span class="ml-auto text-[11.5px]" style="color: var(--ink-4)">「—」为未收集 · 可在录入页补齐</span>
         </div>
 
         <!-- 参数分组卡 -->
-        <div ref="scrollRef" class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-0.5" @scroll="onDetailScroll">
+        <div v-if="hasSpecs" ref="scrollRef" class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-0.5" @scroll="onDetailScroll">
           <section v-for="g in paramGroups" :id="`pg-${g.idx}`" :key="g.idx" class="flex-none"
             style="background: var(--card); border: 1px solid rgba(var(--ink-rgb), 0.08); border-radius: 18px; padding: 16px var(--density-pad) 8px">
             <div class="mb-1.5 flex items-baseline justify-between">
@@ -264,6 +292,9 @@ function onDetailScroll(): void {
             </div>
           </section>
           <div class="h-1 flex-none" />
+        </div>
+        <div v-if="!hasSpecs" class="grid flex-1 place-items-center text-sm" style="color: var(--ink-4)">
+          该型号暂无产品参数笔记 · 可在「录入」页选择对应产品线的「产品参数」文件夹补录
         </div>
       </template>
     </div>

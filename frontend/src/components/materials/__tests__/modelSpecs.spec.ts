@@ -58,6 +58,19 @@ describe("modelSpecs.buildSpecGroups(按笔记真实 H2 小节分组)", () => {
     expect(filled).toBe(0);
     expect(total).toBe(0);
   });
+
+  it("交错同名小节(A,B,A)合并进首见组,组序不变", () => {
+    const specs: Record<string, SpecValue> = {
+      "f1": sv({ raw: "1", section: "A" }),
+      "f2": sv({ raw: "2", section: "B" }),
+      "f3": sv({ raw: "3", section: "A" }),
+    };
+    const { groups } = buildSpecGroups(specs);
+    expect(groups.map((g) => g.title)).toEqual(["A", "B"]);
+    expect(groups[0].rows.map((r) => r.label)).toEqual(["f1", "f3"]);
+    expect(groups[0].idx).toBe(0);
+    expect(groups[1].idx).toBe(1);
+  });
 });
 
 describe("modelSpecs.buildStats(分产品线精选 + 通用兜底)", () => {
@@ -105,6 +118,25 @@ describe("modelSpecs.buildStats(分产品线精选 + 通用兜底)", () => {
 
   it("未知产品线无可用字段 → 空数组(上层隐藏 stat 行)", () => {
     expect(buildStats({}, "扫地机器人")).toEqual([]);
+  });
+
+  it("精选项配了 unit 但 numbers 为空 → 回落 raw 原文", () => {
+    const stats = buildStats({ "吸力(AW)": sv({ raw: "220AW", numbers: [] }) }, "吸尘器");
+    expect(stats.find((s) => s.label === "吸力")!.value).toBe("220AW");
+  });
+
+  it("通用兜底封顶 5 项(价格 + 4 个数值字段)", () => {
+    const specs: Record<string, SpecValue> = {
+      "价格": sv({ raw: "599", numbers: [599] }),
+      "a": sv({ raw: "1x", numbers: [1] }),
+      "b": sv({ raw: "2x", numbers: [2] }),
+      "c": sv({ raw: "3x", numbers: [3] }),
+      "d": sv({ raw: "4x", numbers: [4] }),
+      "e": sv({ raw: "5x", numbers: [5] }),
+    };
+    const stats = buildStats(specs, "扫地机器人");
+    expect(stats).toHaveLength(5);
+    expect(stats.map((s) => s.label)).toEqual(["价格", "a", "b", "c", "d"]);
   });
 });
 
