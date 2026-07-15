@@ -57,3 +57,23 @@ def test_placeholder_flag_marks_gaps_not_certs():
     assert specs["电机功率"].is_placeholder is True        # 未说明
     assert specs["吸力(AW)"].is_placeholder is False       # 有数值
     assert specs["认证检测"].is_placeholder is False       # 认证名清单，非缺口
+
+
+def test_section_retained_in_note_order():
+    # 每字段记录所属 H2 小节名(原文),dict 插入序 = 笔记顺序(前端分组渲染依赖)。
+    specs = parse_spec_table(BODY)
+    assert specs["吸力(AW)"].section == "性能参数"
+    assert specs["电机功率"].section == "性能参数"      # 占位字段也带 section
+    assert specs["不同档位续航"].section == "续航电池"
+    assert specs["认证检测"].section == "基础信息"      # 认证字段也带 section
+    assert list(specs) == [
+        "吸力(AW)", "真空度(Pa)", "最低噪音（dB）", "电机功率",
+        "不同档位续航", "认证检测",
+    ]
+
+
+def test_section_uses_raw_title_not_normalized():
+    # section 必须是 H2 原文;normalize 会把「测试认证」剥成「认证」(前缀剥离)。
+    body = "## 测试认证\n\n| 参数 | 数值 |\n|--|--|\n| 认证检测 | CE |\n"
+    specs = parse_spec_table(body)
+    assert specs["认证检测"].section == "测试认证"

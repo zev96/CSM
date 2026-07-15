@@ -21,6 +21,43 @@ def test_build_menu_excludes_spec_table_and_lists_types():
     assert "产品模块/吸尘器/产品参数" not in menu     # spec_table 不进菜单
 
 
+def _mixed_folders():
+    # 全目录枚举后的三类:(a) 有笔记 (b) 空但借到兄弟模板 (c) 空且无模板(通用兜底,
+    # 中间层/基础设施目录) —— (c) 不该进 LLM 菜单也不该进 grounding 白名单
+    return [
+        FolderProfile(rel_folder="科普模块/吸尘器/挑选攻略",
+                      frontmatter_keys=["产品", "素材类型", "核心关键词"],
+                      defaults={"产品": "吸尘器"}, body_shape="variants",
+                      sample_count=2, material_types=["科普选购"]),
+        FolderProfile(rel_folder="科普模块/空气净化器/挑选攻略",
+                      frontmatter_keys=["产品", "素材类型", "核心关键词"],
+                      defaults={"产品": "空气净化器"}, body_shape="variants",
+                      sample_count=0, material_types=["科普选购"],
+                      template_from="科普模块/吸尘器/挑选攻略"),
+        FolderProfile(rel_folder="科普模块",
+                      frontmatter_keys=["产品", "素材类型", "核心关键词"],
+                      body_shape="variants", sample_count=0, template_from=None),
+    ]
+
+
+def test_build_menu_skips_generic_fallback_dirs():
+    menu = A.build_menu(_mixed_folders())
+    lines = menu.splitlines()
+    assert any("科普模块/吸尘器/挑选攻略" in l for l in lines)       # (a) 有笔记
+    assert any("科普模块/空气净化器/挑选攻略" in l for l in lines)   # (b) 借模板的空叶目录
+    assert not any(l.startswith("- 科普模块 ") for l in lines)       # (c) 通用兜底不进菜单
+
+
+def test_parse_atoms_whitelist_excludes_generic_fallback():
+    # 白名单只与菜单在「通用兜底目录」上口径一致;spec_table 目录不进菜单但仍在白名单(既有行为)。
+    # grounding 白名单与菜单一致:(c) 类目录即使被 LLM 建议也置空 + warning
+    raw = _json.dumps([{"正文": "x", "建议文件夹": "科普模块", "置信度": "high"}],
+                      ensure_ascii=False)
+    atoms = A.parse_atoms(raw, _mixed_folders())
+    assert atoms[0].rel_folder is None
+    assert any("不在素材库" in w for w in atoms[0].warnings)
+
+
 def test_safe_filename_spaces_and_seps():
     assert A._safe_filename("吸力 选购", "kw") == "吸力-选购.md"
     assert A._safe_filename("a/b\\c", "kw") == "a-b-c.md"

@@ -2,7 +2,8 @@
 
 产品参数 notes are H2 sections (## 性能参数 …) each holding a two-column
 markdown table ``| 参数 | 数值 |``. We reuse the test_framework H2 splitter
-then parse each table row. Placeholder cells (未说明/-/无/暂无/0) are kept
+then parse each table row. 扁平 dict 保序,每个 SpecValue 带 section 小节名
+(前端按它分组);字段本身不再按小节嵌套。Placeholder cells (未说明/-/无/暂无/0) are kept
 as fields (so 缺口体检 can flag them) but yield no numbers (so they never
 enter the fact whitelist). The 认证检测 row is a cert-name list (CE、3C…),
 not a measurement, so it is kept raw with no numbers — its certs are
@@ -43,6 +44,7 @@ def _extract_unit(value: str) -> str:
 def parse_spec_table(body: str) -> dict[str, SpecValue]:
     specs: dict[str, SpecValue] = {}
     for section in extract_brand_sections(body):
+        sec_title = section.raw_title.strip()
         for line in section.body.splitlines():
             m = _ROW_RE.match(line)
             if not m:
@@ -52,16 +54,18 @@ def parse_spec_table(body: str) -> dict[str, SpecValue]:
                 continue
             # 占位/0：保留字段但标记为缺口（供缺口体检），不出数字。
             if _is_placeholder(value):
-                specs[field] = SpecValue(field=field, raw=value, is_placeholder=True)
+                specs[field] = SpecValue(
+                    field=field, raw=value, is_placeholder=True, section=sec_title)
                 continue
             # 认证字段：认证名清单（含 3C），非数值但也非缺口 → 不抽数字、不算占位。
             if _is_cert_field(field):
-                specs[field] = SpecValue(field=field, raw=value)
+                specs[field] = SpecValue(field=field, raw=value, section=sec_title)
                 continue
             numbers = [float(n) for n in _NUM_RE.findall(value)]
             specs[field] = SpecValue(
                 field=field, raw=value, numbers=numbers,
                 unit=_extract_unit(value),
                 is_approx=any(mark in value for mark in _APPROX),
+                section=sec_title,
             )
     return specs

@@ -26,12 +26,13 @@ def _resolve_one(
     brand = registry.brand_of(model_full)
     if brand is None:
         return None
-    # registry 存 full-stem（CEWEYDS18）；resolver 期望品牌剥离（DS18）。
-    # 边界：frontmatter-only 的未知品牌 parse 不出前缀 → 回退 full-stem，
-    # resolver spec-match 落空 → 空记忆（coverage.has_specs=False），不崩。
+    # registry 存 full-stem（CEWEYDS18）；已知品牌剥前缀（DS18）保竞品 intro 文件名
+    # 匹配质量；未知品牌回退 full-stem —— resolver 的 spec 匹配两种形式都接受。
     parsed = parse_brand_model(model_full)
     resolver_model = parsed[1] if parsed is not None else model_full
-    mem = resolve_memory(brand, resolver_model, category, index, own_brands=own_brands)
+    # category = 真实产品线(路径推导),registry 不知道时才用调用方兜底值。
+    line = registry.line_of(model_full) or category
+    mem = resolve_memory(brand, resolver_model, line, index, own_brands=own_brands)
     return brand, mem
 
 
@@ -51,6 +52,7 @@ def list_models(
             "model": model_full,
             "brand": brand,
             "role": mem.role,            # 主推 | 竞品
+            "product_line": mem.category,
             "coverage": mem.coverage,
         })
     return out

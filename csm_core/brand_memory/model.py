@@ -11,6 +11,7 @@ class SpecValue(BaseModel):
     unit: str = ""                   # 单位，如 "min" / "Pa"
     is_approx: bool = False          # 含 约/近/≤/起 等近似标记
     is_placeholder: bool = False     # 占位/缺口（0/未说明/无/-/暂无…），供缺口体检
+    section: str = ""                # 所属 H2 小节名(原文),如 "核心净化性能"
 
 
 class BrandModelMemory(BaseModel):

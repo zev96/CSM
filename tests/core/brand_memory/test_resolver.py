@@ -75,3 +75,37 @@ def test_competitor_model_match_is_word_bounded(tmp_path):
     index = scan_vault(tmp_path)
     mem = resolve_memory("戴森", "V1", "吸尘器", index, own_brands={"CEWEY"})
     assert mem.intro == []   # V1 ≠ V12
+
+
+def test_resolves_unknown_brand_specs_via_frontmatter(tmp_path):
+    # DARZ 不在 BRAND_ALIASES;调用方(service)对未知品牌回退 full-stem 型号。
+    # 修复前 specs 恒空(参数 0/32 根因),修复后靠 frontmatter 命中。
+    _write(tmp_path / "营销资料库/产品模块/空气净化器/产品参数/DARZD9-产品参数.md",
+           "---\n产品: 空气净化器\n素材类型: 产品参数\n品牌: DARZ\n型号: DARZD9\n核心关键词: x\n---\n"
+           "## 核心净化性能\n\n| 参数 | 数值 |\n|--|--|\n| 颗粒物CADR | 512m³/h |\n| 甲醛CADR | 308m³/h |\n")
+    index = scan_vault(tmp_path)
+    mem = resolve_memory("DARZ", "DARZD9", "空气净化器", index,
+                         own_brands={"CEWEY", "DARZ"})
+    assert mem.role == "主推"
+    assert mem.specs["颗粒物CADR"].numbers == [512.0]
+    assert mem.specs["颗粒物CADR"].section == "核心净化性能"
+    assert mem.coverage["has_specs"] is True
+
+
+def test_known_brand_stripped_model_still_matches(tmp_path):
+    # 已知品牌 + 剥品牌型号(DS18)的既有调用形态不回归(两种型号形式都接受)。
+    _make_vault(tmp_path)
+    index = scan_vault(tmp_path)
+    mem = resolve_memory("CEWEY", "DS18", "吸尘器", index, own_brands={"CEWEY"})
+    assert mem.specs["吸力(AW)"].numbers == [220.0]
+
+
+def test_spec_note_of_other_brand_not_matched(tmp_path):
+    # 品牌相同才比对型号;不同品牌同型号名不误命中。
+    _write(tmp_path / "营销资料库/产品模块/空气净化器/产品参数/权尚KJ410-产品参数.md",
+           "---\n产品: 空气净化器\n素材类型: 产品参数\n品牌: 权尚\n型号: 权尚KJ410\n核心关键词: x\n---\n"
+           "## 基础信息\n\n| 参数 | 数值 |\n|--|--|\n| 价格 | 999 |\n")
+    index = scan_vault(tmp_path)
+    mem = resolve_memory("DARZ", "权尚KJ410", "空气净化器", index,
+                         own_brands={"CEWEY", "DARZ"})
+    assert mem.specs == {}

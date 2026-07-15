@@ -29,7 +29,7 @@ function pick(f: FolderProfile): void {
 
 const isVariants = computed(() => selected.value?.body_shape !== "spec_table");
 
-// 素材树：由可写文件夹扁平列表按路径深度缩进渲染（真实数据无中间可写节点）。
+// 素材树:后端已含中间层与空文件夹(空文件夹借兄弟产品线模板),按路径深度缩进渲染。
 const treeRows = computed(() =>
   m.writableFolders.map((f) => {
     const segs = f.rel_folder.split("/");
@@ -142,6 +142,9 @@ function rmSpecRow(i: number): void { specRows.value.splice(i, 1); }
             </svg>
             <span class="truncate">{{ selected.rel_folder }}</span>
           </span>
+        </div>
+        <div v-if="selected.template_from" class="flex-none px-[var(--density-pad)] pt-1 text-[11px]" style="color: var(--ink-4)">
+          空文件夹 · 表单模板借自「{{ selected.template_from }}」
         </div>
 
         <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-[var(--density-pad)] pb-1.5 pt-3">

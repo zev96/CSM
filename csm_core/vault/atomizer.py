@@ -26,12 +26,19 @@ class AtomDraft:
     warnings: list[str] = field(default_factory=list)
 
 
+def _is_generic_fallback(f: FolderProfile) -> bool:
+    """全目录枚举带进来的通用兜底行（中间层/基础设施目录）：既无笔记也没借到
+    兄弟模板。不进 LLM 菜单，也不进 grounding 白名单（借模板的空叶目录保留
+    ——新产品线正是拆条该去的地方）。"""
+    return f.sample_count == 0 and f.template_from is None
+
+
 def build_menu(folders: list[FolderProfile]) -> str:
     """把可写文件夹拼成喂 LLM 的菜单串。只取内容型（body_shape != spec_table）
     ——产品参数表归 3a 手动录入，prose 拆条不该落进参数表。"""
     lines = []
     for f in folders:
-        if f.body_shape == "spec_table":
+        if f.body_shape == "spec_table" or _is_generic_fallback(f):
             continue
         types = "/".join(f.material_types) if f.material_types else "（无固定类型）"
         lines.append(f"- {f.rel_folder} ｜ 素材类型: {types}")
@@ -90,7 +97,7 @@ def parse_atoms(raw_llm_text: str, folders: list[FolderProfile]) -> list[AtomDra
     data = _loads_array(raw_llm_text)
     if not isinstance(data, list):
         return []
-    allowed = {f.rel_folder for f in folders}
+    allowed = {f.rel_folder for f in folders if not _is_generic_fallback(f)}
     out: list[AtomDraft] = []
     for item in data:
         if not isinstance(item, dict):

@@ -40,4 +40,18 @@ describe("materials store", () => {
     expect(s.error).toBe("boom");
     expect(s.models).toEqual([]);
   });
+
+  it("lineModels: 命中按线过滤;陈旧筛选值(产品线已消失)自愈返回全量", () => {
+    const s = useMaterials();
+    s.models = [
+      { model: "CEWEYDS18", brand: "CEWEY", role: "主推", product_line: "吸尘器", coverage: {} },
+      { model: "DARZD9", brand: "DARZ", role: "竞品", product_line: "除湿机", coverage: {} },
+    ] as any;
+    s.lineFilter = "吸尘器";
+    expect(s.lineModels.map((r) => r.model)).toEqual(["CEWEYDS18"]);
+    s.lineFilter = "空气净化器"; // 该线已不存在 → pool 空 → 自愈按「全部」
+    expect(s.lineModels).toHaveLength(2);
+    s.lineFilter = "全部";
+    expect(s.lineModels).toHaveLength(2);
+  });
 });

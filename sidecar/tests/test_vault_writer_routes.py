@@ -99,3 +99,16 @@ def test_unknown_body_shape_422(client, tmp_path):
     body = {"rel_folder": "科普模块/吸尘器/挑选攻略", "filename": "吸尘器-x.md",
             "frontmatter": {"产品": "吸尘器"}, "body_shape": "banana", "variants": ["x"]}
     assert client.post("/api/vault/commit", json=body).status_code == 422
+
+
+def test_writable_folders_includes_empty_with_borrowed_template(client, tmp_path):
+    root = _seed_vault(tmp_path)
+    (root / "科普模块/空气净化器/挑选攻略").mkdir(parents=True, exist_ok=True)
+    _use_vault(root)
+    folders = {f["rel_folder"]: f for f in
+               client.get("/api/vault/writable-folders").json()["folders"]}
+    empty = folders["科普模块/空气净化器/挑选攻略"]
+    assert empty["sample_count"] == 0
+    assert empty["template_from"] == "科普模块/吸尘器/挑选攻略"
+    assert empty["defaults"]["产品"] == "空气净化器"
+    assert "科普模块/空气净化器" in folders          # 中间层也在树里
