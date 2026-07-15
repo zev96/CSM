@@ -4,8 +4,8 @@ The vault is the source of truth (CLAUDE.md has drifted), so the intake form
 mirrors a target folder's existing notes rather than a hardcoded taxonomy.
 
 2026-07 起 vault 是多产品线布局(模块/<产品线>/子类),树枚举走文件系统全目录
-(含中间层与空目录);空目录借"同叶名、同深度、恰差一段"的兄弟目录模板,产品
-默认值随差异段替换。
+(含中间层与空目录);空叶目录借兄弟目录模板(同叶名跨段的形态 A,或叶名即产品
+线的同模块镜像形态 B,双侧限叶),容器目录一律通用兜底,产品默认值随差异段替换。
 """
 from __future__ import annotations
 
@@ -102,31 +102,48 @@ def _all_dirs(root) -> list[str]:
     return sorted(out)
 
 
-def _borrow_profile(rel: str, profiled: dict[str, FolderProfile]) -> FolderProfile:
-    """空目录模板:借"同叶名、同深度、恰差一段"的兄弟;取样本最多者。
+def _borrow_profile(rel: str, profiled: dict[str, FolderProfile],
+                    leaves: set[str]) -> FolderProfile:
+    """空叶目录借兄弟模板;容器目录与无兄弟者 → 通用三件套。
 
-    产品默认值仅当兄弟的差异段==其 产品 默认值时才替换(即差异段确为产品线);
-    同线跨模块借用时差异段是模块名,不动 产品。无兄弟 → 通用三件套。
+    双侧限叶:目标是容器(下有子目录)不借——容器不该直接进笔记;候选源也必须
+    是叶(排除被索引笔记污染的 hub 目录,如 科普模块/空气净化器)。候选两种形态:
+    - 形态 A:同深度、恰差一段且差异不在叶位(故同叶名)——跨模块/跨线同类目录。
+    - 形态 B(产品线轴):同深度、恰差一段且差异在叶位,且候选叶名==其 产品
+      默认值(叶名即产品线,如 标题模块/吸尘器)——同模块产品线镜像。
+    形态 B 优先于形态 A;同形态取 sample_count 最大,平局按插入序。
+    产品默认值仅当候选差异段==其 产品 默认值时才替换(形态 B 天然成立;形态 A
+    同线跨模块借用时差异段是模块名,不动 产品)。
     """
+    generic = FolderProfile(
+        rel_folder=rel, frontmatter_keys=list(_LEAD_KEYS), body_shape="variants")
+    if rel not in leaves:
+        return generic
     segs = rel.split("/")
     best: FolderProfile | None = None
+    best_is_mirror = False
     best_target_seg = ""
     best_cand_seg = ""
     for cand_rel, prof in profiled.items():
+        if cand_rel not in leaves:
+            continue
         csegs = cand_rel.split("/")
-        if len(csegs) != len(segs) or csegs[-1] != segs[-1]:
+        if len(csegs) != len(segs):
             continue
         diffs = [i for i in range(len(segs)) if csegs[i] != segs[i]]
         if len(diffs) != 1:
             continue
-        if best is None or prof.sample_count > best.sample_count:
+        i = diffs[0]
+        is_mirror = i == len(segs) - 1          # 形态 B:差异段在叶位
+        if is_mirror and prof.defaults.get("产品") != csegs[-1]:
+            continue                             # 叶名不是产品线名 → 非镜像
+        if best is None or (is_mirror, prof.sample_count) > (best_is_mirror, best.sample_count):
             best = prof
-            best_target_seg = segs[diffs[0]]
-            best_cand_seg = csegs[diffs[0]]
+            best_is_mirror = is_mirror
+            best_target_seg = segs[i]
+            best_cand_seg = csegs[i]
     if best is None:
-        return FolderProfile(
-            rel_folder=rel, frontmatter_keys=list(_LEAD_KEYS),
-            body_shape="variants")
+        return generic
     defaults = dict(best.defaults)
     if defaults.get("产品") == best_cand_seg:
         defaults["产品"] = best_target_seg
@@ -142,14 +159,19 @@ def _borrow_profile(rel: str, profiled: dict[str, FolderProfile]) -> FolderProfi
 
 
 def list_writable_folders(index: VaultIndex) -> list[FolderProfile]:
-    """vault 全部非隐藏目录:有直属笔记的照常 profile,空目录借兄弟模板。"""
+    """vault 全部非隐藏目录:有直属笔记的照常 profile,空叶目录借兄弟模板,
+    容器目录(下有子目录且无直属笔记)通用兜底。叶判定由目录集自身推导:
+    rel 是叶 ⇔ 没有其他 rel 以 rel+"/" 开头。"""
     with_notes: dict[str, None] = {}
     for n in index.notes:
         rel = _rel_folder_of(n, index.root)
         if rel:
             with_notes.setdefault(rel, None)
     profiled = {r: profile_folder(index, r) for r in with_notes}
+    all_dirs = _all_dirs(index.root)
+    parents = {r.rsplit("/", 1)[0] for r in all_dirs if "/" in r}
+    leaves = set(all_dirs) - parents
     out: list[FolderProfile] = []
-    for rel in _all_dirs(index.root):
-        out.append(profiled.get(rel) or _borrow_profile(rel, profiled))
+    for rel in all_dirs:
+        out.append(profiled.get(rel) or _borrow_profile(rel, profiled, leaves))
     return out
