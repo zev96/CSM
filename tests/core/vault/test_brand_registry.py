@@ -80,10 +80,11 @@ def test_registry_product_line_from_path(tmp_path: Path):
         d = tmp_path / f"营销资料库/产品模块/{line}/产品参数"
         d.mkdir(parents=True)
         (d / f"{stem}-产品参数.md").write_text(
-            f"---\n产品: {line}\n品牌: X\n型号: {stem}\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
+            f"---\n产品: 错误值\n品牌: X\n型号: {stem}\n素材类型: 产品参数\n核心关键词: [x]\n---\n体\n",
             encoding="utf-8",
         )
     reg = build_brand_registry(tmp_path)
+    # frontmatter 产品 故意写错值:钉住「路径段优先于 frontmatter」
     assert reg.line_of("CEWEYDS18") == "吸尘器"
     assert reg.line_of("DARZD9") == "空气净化器"
     assert reg.line_of("不存在") is None

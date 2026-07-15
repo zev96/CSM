@@ -3,13 +3,14 @@
 Mapping (see spec §2.2): specs/certs ← 产品参数；scripts ← <品牌>推荐内容/
 {核心,次要}技术（维度取文件夹+文件名，不依赖 素材类型）；endorsements ←
 品牌背书；intro ← 竞品推荐内容/希喂推荐内容；tests ← 品牌产品测试结果。
+产品参数匹配走 note_identity,未知品牌靠 frontmatter 命中(别名表不再是白名单)。
 """
 from __future__ import annotations
 import re
 from csm_core.vault.scanner import VaultIndex
 from csm_core.vault.note_parser import ParsedNote
 from csm_core.test_framework.section_parser import extract_brand_sections
-from .identity import BRAND_ALIASES, canonical_brand, parse_brand_model
+from .identity import BRAND_ALIASES, canonical_brand, note_identity, parse_brand_model
 from .specs import parse_spec_table
 from .model import BrandModelMemory, SpecValue
 
@@ -41,6 +42,19 @@ def _model_in_stem(model: str, stem: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9]){re.escape(model)}(?![A-Za-z0-9])", stem) is not None
 
 
+def _spec_model_matches(
+    full_model: str, brand: str, model: str, aliases: dict[str, list[str]],
+) -> bool:
+    # 调用方传入的 model 有两种历史形态:full-stem(DARZD9)或剥品牌(DS18)。
+    # note_identity 恒返 full-stem → 直等,或剥掉本品牌任一别名前缀后相等。
+    if full_model == model:
+        return True
+    for al in _brand_folder_aliases(brand, aliases):
+        if full_model.startswith(al) and full_model[len(al):] == model:
+            return True
+    return False
+
+
 def resolve_memory(
     brand: str, model: str, category: str, index: VaultIndex,
     *, own_brands: set[str], aliases: dict[str, list[str]] = BRAND_ALIASES,
@@ -63,10 +77,11 @@ def resolve_memory(
         parts = _rel_parts(note, index)
         if not parts:
             continue
-        # 产品参数：按文件名解析出的 (品牌,型号) 命中
+        # 产品参数：note_identity(frontmatter 优先)命中 —— 与 registry 同一判定链
         if "产品参数" in parts:
-            bm = parse_brand_model(note.id, aliases)
-            if bm == (brand, model):
+            ident = note_identity(note.id, note.frontmatter, aliases)
+            if (ident is not None and ident[0] == brand
+                    and _spec_model_matches(ident[1], brand, model, aliases)):
                 specs = parse_spec_table(note.raw_body)
                 certs = _certs_from_specs(specs)
             continue

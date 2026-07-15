@@ -54,7 +54,7 @@ def build_brand_registry(
 
     (品牌, 型号) 判定链见 brand_memory.identity.note_identity(frontmatter 优先、
     文件名兜底,与 resolver 共用)。型号保持 full-stem 约定(incl. brand prefix,
-    e.g. CEWEYDS18)used across the assembler 型号-join (sampler.py /
+    e.g. CEWEYDS18) used across the assembler 型号-join (sampler.py /
     constraints.py); see plan §关键设计决定 #1。产品线取自路径
     产品模块/<产品线>/产品参数 的中间段,旧扁平布局兜底 frontmatter 产品。
     """
