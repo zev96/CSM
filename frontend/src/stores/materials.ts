@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useSidecar } from "@/stores/sidecar";
 
 export interface Coverage {
@@ -74,6 +74,12 @@ function errMsg(e: any): string {
 export const useMaterials = defineStore("materials", () => {
   const models = ref<BrandModelRow[]>([]);
   const lineFilter = ref<string>("全部");   // 品牌型号页产品线筛选(汇总栏联动)
+  /** 筛选后的型号池;陈旧筛选值(产品线已消失)自愈按「全部」,防列表死锁空态。 */
+  const lineModels = computed(() => {
+    if (lineFilter.value === "全部") return models.value;
+    const pool = models.value.filter((r) => (r.product_line || "未分类") === lineFilter.value);
+    return pool.length ? pool : models.value;
+  });
   const loading = ref(false);
   const error = ref<string | null>(null);
   const selectedModel = ref<string | null>(null);
@@ -235,7 +241,7 @@ export const useMaterials = defineStore("materials", () => {
   }
 
   return {
-    models, lineFilter, loading, error, selectedModel, detail, detailLoading, list, select,
+    models, lineFilter, lineModels, loading, error, selectedModel, detail, detailLoading, list, select,
     writableFolders, foldersLoading, currentPlan, lastReceipt, intakeError,
     loadFolders, planNote, commitNote, undoLast,
     atomizeText, commitAtom, undoAtom,

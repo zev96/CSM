@@ -32,13 +32,12 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 const summary = computed(() => {
-  const pool = m.lineFilter === "全部"
-    ? m.models
-    : m.models.filter((r) => (r.product_line || "未分类") === m.lineFilter);
+  const pool = m.lineModels;   // 筛选谓词在 store;陈旧线名自愈按「全部」
   const total = pool.length;
   if (!total) return "";
   const primary = pool.filter((r) => r.role === "主推").length;
-  const prefix = m.lineFilter === "全部" ? "" : `${m.lineFilter} · `;
+  // 自愈发生时 pool == 全部型号,此时不显旧线名前缀(避免误导)
+  const prefix = m.lineFilter !== "全部" && pool.length !== m.models.length ? `${m.lineFilter} · ` : "";
   return `${prefix}共 ${total} 个型号 · 主推 ${primary} · 竞品 ${total - primary}`;
 });
 </script>

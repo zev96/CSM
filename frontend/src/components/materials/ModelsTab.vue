@@ -23,7 +23,7 @@ const query = ref("");
 const activeGroup = ref(0);
 const scrollRef = ref<HTMLElement | null>(null);
 
-// ── 产品线筛选(store 持有,汇总栏联动) ─────────────────────────────
+// ── 产品线筛选(筛选谓词在 store:m.lineModels,汇总栏联动 + 自愈) ────
 const lineOptions = computed(() => {
   const counts = new Map<string, number>();
   for (const r of m.models) {
@@ -34,11 +34,6 @@ const lineOptions = computed(() => {
   for (const [line, n] of counts) opts.push({ value: line, label: `${line}（${n}）` });
   return opts;
 });
-const lineModels = computed(() =>
-  m.lineFilter === "全部"
-    ? m.models
-    : m.models.filter((r) => (r.product_line || "未分类") === m.lineFilter),
-);
 
 // ── 左侧：搜索 + 主推/竞品 + 品牌分组 ──────────────────────────────
 const q = computed(() => query.value.trim().toLowerCase());
@@ -76,8 +71,8 @@ function mkModel(r: { model: string; brand: string; coverage: any }, showBrand: 
 }
 
 const sideSections = computed<SideSection[]>(() => {
-  const primary = lineModels.value.filter((r) => r.role === "主推" && match(r.brand, r.model));
-  const comps = lineModels.value.filter((r) => r.role !== "主推" && match(r.brand, r.model));
+  const primary = m.lineModels.filter((r) => r.role === "主推" && match(r.brand, r.model));
+  const comps = m.lineModels.filter((r) => r.role !== "主推" && match(r.brand, r.model));
   const out: SideSection[] = [];
   if (primary.length) {
     out.push({
@@ -219,7 +214,8 @@ function onDetailScroll(): void {
             </div>
           </div>
           <div v-if="noResults" class="px-2.5 py-6 text-center text-[12px]" style="color: var(--ink-4)">
-            没有匹配「<span style="color: var(--ink-2)">{{ query }}</span>」的型号
+            <template v-if="q">没有匹配「<span style="color: var(--ink-2)">{{ query }}</span>」的型号</template>
+            <template v-else>当前产品线下无型号</template>
           </div>
         </template>
       </div>

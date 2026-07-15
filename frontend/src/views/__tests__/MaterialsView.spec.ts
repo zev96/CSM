@@ -24,6 +24,7 @@ const state: any = {
     { model: "戴森V12", brand: "戴森", role: "竞品", product_line: "吸尘器", coverage: { has_specs: true } },
   ],
   lineFilter: "全部",
+  get lineModels() { return this.models; },   // 真 store 是 computed;mock 里等价 getter
   loading: false, error: null, selectedModel: null, detail: null, detailLoading: false,
   list: listMock, select: selectMock,
 };
