@@ -241,8 +241,20 @@ _REAL_VAULT = Path(r"D:\家电组共享\DATA\营销资料库")
 @pytest.mark.integration
 @pytest.mark.skipif(not _REAL_VAULT.exists(), reason="真实 vault 不在本机")
 def test_real_vault_dry_run_zero_unparseable():
+    # 2026-07 起 vault 是多产品线（吸尘器 + 空气净化器）。本脚本是吸尘器时代的
+    # 一次性回填，品牌解析钉在静态 BRAND_ALIASES（吸尘器品牌表）；新产品线的
+    # 笔记（DARZ 推荐内容、空气净化器竞品 产品参数 等）建库时 frontmatter 就
+    # 自带 品牌/型号，resolver 走 frontmatter 优先，本就不是回填对象 —— 脚本
+    # 对它们「拒绝猜测」进 unparseable 是正确行为，不是回归。
+    # 因此 pin 收窄为脚本的原始保证：吸尘器线零 unparseable；其余 unparseable
+    # 条目必须全部来自非吸尘器产品线（吸尘器线一旦混进新的解析失败仍会红）。
     report = run(_REAL_VAULT, apply=False, backup_dir=None)
-    assert report.unparseable == [], [r.reason for r in report.unparseable]
+    vacuum_unparseable = [
+        r for r in report.unparseable
+        if "吸尘器" in r.path.relative_to(_REAL_VAULT).parts
+    ]
+    assert vacuum_unparseable == [], [r.reason for r in vacuum_unparseable]
+    # 吸尘器线原始目标不受影响：
     # 产品参数 33 + 测试结果 33 + 品牌背书 3 + 技术话术 10 = 79 篇目标；
     # 已含 型号 的测试结果只补品牌，仍计入 added（除非 已 backfill 过）。
     assert len(report.added) + len(report.skipped) >= 79
