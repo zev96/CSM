@@ -123,9 +123,11 @@ const paramGroups = computed(() => specData.value?.groups ?? []);
 const filled = computed(() => specData.value?.filled ?? 0);
 const total = computed(() => specData.value?.total ?? 0);
 const pctW = computed(() => (total.value ? Math.round((filled.value / total.value) * 100) : 0) + "%");
-const stats = computed(() => (detail.value ? buildStats(detail.value.specs, detail.value.category) : []));
-const href = computed(() => (detail.value ? productHref(detail.value.specs) : null));
 const hasSpecs = computed(() => !!detail.value && Object.keys(detail.value.specs).length > 0);
+const stats = computed(() =>
+  detail.value && hasSpecs.value ? buildStats(detail.value.specs, detail.value.category) : [],
+);
+const href = computed(() => (detail.value ? productHref(detail.value.specs) : null));
 
 const selTitle = computed(() => {
   const d = detail.value;

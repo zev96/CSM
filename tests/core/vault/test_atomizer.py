@@ -48,7 +48,8 @@ def test_build_menu_skips_generic_fallback_dirs():
     assert not any(l.startswith("- 科普模块 ") for l in lines)       # (c) 通用兜底不进菜单
 
 
-def test_parse_atoms_whitelist_matches_menu_filter():
+def test_parse_atoms_whitelist_excludes_generic_fallback():
+    # 白名单只与菜单在「通用兜底目录」上口径一致;spec_table 目录不进菜单但仍在白名单(既有行为)。
     # grounding 白名单与菜单一致:(c) 类目录即使被 LLM 建议也置空 + warning
     raw = _json.dumps([{"正文": "x", "建议文件夹": "科普模块", "置信度": "high"}],
                       ensure_ascii=False)

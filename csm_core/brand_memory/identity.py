@@ -73,11 +73,18 @@ def note_identity(
     文件名解析兜底 —— 与 build_brand_registry 的历史行为一致(另:frontmatter
     值先 strip 再折叠,全空白视同缺失,较历史更稳);registry 与 resolver 都
     必须走这里,两处永不分歧。型号保持 full-stem 约定(CEWEYDS18)。
+    型号兜底 = 剥已知后缀后的完整 stem(旧 split("-")[0] 会把连字符型号截断成
+    幻影合并型号)。
     """
     fm = frontmatter or {}
     parsed = parse_brand_model(stem, aliases)
+    name = stem
+    for suffix in _STEM_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
     brand = str(fm.get("品牌") or "").strip() or (parsed[0] if parsed else "")
-    model = str(fm.get("型号") or "").strip() or stem.split("-")[0].strip()
+    model = str(fm.get("型号") or "").strip() or name.strip()
     if not brand or not model:
         return None
     return canonical_brand(brand, aliases), model

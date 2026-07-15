@@ -70,3 +70,13 @@ def test_note_identity_brand_only_frontmatter():
     # 只有 品牌 没有 型号 → 型号走 full-stem 兜底
     fm = {"品牌": "DARZ"}
     assert note_identity("DARZD9-产品参数", fm, ALIASES) == ("DARZ", "DARZD9")
+
+
+def test_note_identity_hyphenated_model_keeps_full_stem():
+    # 连字符型号不再被 split 截断成幻影型号(戴森V15-Pro ≠ 戴森V15);
+    # 兜底 = 剥已知后缀后的完整 stem,保 full-stem 约定。
+    assert note_identity("戴森V15-Pro-产品参数", {}, ALIASES) == ("戴森", "戴森V15-Pro")
+    # 两篇连字符型号笔记不得合并成同一型号
+    a = note_identity("戴森V15-Pro-产品参数", {}, ALIASES)
+    b = note_identity("戴森V15-Max-产品参数", {}, ALIASES)
+    assert a != b
