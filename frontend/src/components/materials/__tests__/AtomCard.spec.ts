@@ -14,7 +14,8 @@ import type { FolderProfile } from "@/stores/materials";
 
 const FOLDERS: FolderProfile[] = [
   { rel_folder: "科普模块/吸尘器/挑选攻略", frontmatter_keys: ["产品", "素材类型", "核心关键词"],
-    defaults: { 产品: "吸尘器" }, body_shape: "variants", sample_count: 2, material_types: ["科普选购"] },
+    defaults: { 产品: "吸尘器" }, body_shape: "variants", sample_count: 2, material_types: ["科普选购"],
+    template_from: null },
 ];
 
 function atom(over: any = {}) {

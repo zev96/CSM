@@ -40,6 +40,7 @@ export interface FolderProfile {
   body_shape: "variants" | "spec_table" | "unknown";
   sample_count: number;
   material_types: string[];
+  template_from: string | null;   // 空文件夹借模板来源(v3 录入树)
 }
 export interface NotePlan {
   rel_folder: string; filename: string; rel_path: string;
