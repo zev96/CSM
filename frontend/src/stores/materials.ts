@@ -13,11 +13,13 @@ export interface BrandModelRow {
   model: string;       // full-stem，如 CEWEYDS18
   brand: string;
   role: string;        // 主推 | 竞品
+  product_line: string; // 吸尘器 | 空气净化器 | 未分类…
   coverage: Coverage;
 }
 export interface SpecValue {
   field: string; raw: string; numbers: number[]; unit: string;
   is_approx: boolean; is_placeholder: boolean;
+  section: string;               // 所属 H2 小节名(后端 v2 起下发)
 }
 export interface ModelDetail {
   brand: string; model: string; model_full: string; category: string; role: string;
