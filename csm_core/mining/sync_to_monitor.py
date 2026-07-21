@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from csm_core.mining.config import DEFAULT_MONITOR_SCRAPE_TOP_N, DEFAULT_MONITOR_TOP_N
 from csm_core.mining.storage import is_video_in_monitor_tasks
+from csm_core.monitor.storage import task_dedup_key
 
 logger = logging.getLogger(__name__)
 
@@ -81,20 +82,24 @@ def run(
 
             task_type = f"{platform}_comment"
             name = f"{params.task_name_prefix} - {(title or '')[:30]}"
-            config_json = json.dumps({
+            config = {
                 "my_comment_text": comment_text,
                 "top_n": params.top_n,
                 "scrape_top_n": params.scrape_top_n,
-            })
+            }
+            config_json = json.dumps(config)
 
             schedule_cron = params.schedule_cron if params.schedule_cron is not None else "manual"
+            # dedup_key 与 monitor.storage.create_task 同口径 —— 评论任务身份
+            # 是 (type, url, 评论)，绕过 storage 层直插也必须维持这个不变量。
             conn.execute(
                 """
                 INSERT INTO monitor_tasks(type, name, target_url, config_json,
-                                          schedule_cron, enabled)
-                VALUES (?, ?, ?, ?, ?, 0)
+                                          schedule_cron, enabled, dedup_key)
+                VALUES (?, ?, ?, ?, ?, 0, ?)
                 """,
-                (task_type, name, url, config_json, schedule_cron),
+                (task_type, name, url, config_json, schedule_cron,
+                 task_dedup_key(task_type, config)),
             )
             result.created += 1
         except Exception as e:

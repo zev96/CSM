@@ -14,6 +14,7 @@ due?" query run concurrently with a worker writing the previous tick's
 result.
 """
 from __future__ import annotations
+import hashlib
 import json
 import sqlite3
 import threading
@@ -24,7 +25,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -47,7 +48,7 @@ _DDL_V1 = [
         last_check_at TEXT,
         last_status TEXT,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-        UNIQUE(type, target_url)
+        dedup_key TEXT NOT NULL DEFAULT ''
     )
     """,
     """
@@ -178,9 +179,160 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # v12: 评论任务身份键修复 —— 表级 UNIQUE(type, target_url) 让「同一视频
+    # 下的多条评论」在批量导入时互相 upsert 覆盖（65 行只剩 39 个任务，每个
+    # URL 只留最后一行的评论）。重建 monitor_tasks 去掉表级 UNIQUE，加
+    # dedup_key 列（评论任务 = sha256(strip 后的 my_comment_text)，其它类型
+    # = ''），唯一索引改为 (type, target_url, dedup_key)。
+    _apply_v12_comment_identity(conn)
+    # v12 重建表会连带删掉 v6 建在旧表上的 (type, target_url) 查询索引 ——
+    # 幂等重跑一次补回（首次安装 / 已重建库都是 no-op）。
+    mining_storage.apply_v6_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),
+    )
+
+
+def task_dedup_key(task_type: str, config: dict[str, Any] | None) -> str:
+    """任务身份键的第三分量。
+
+    评论留存任务的监测对象是「视频 + 某条评论」——身份键必须包含评论
+    文本，否则同一视频下的多条评论会互相覆盖（批量导入丢行 bug 的根因）。
+    非评论类型的监测对象就是 target_url 本身，返回 '' 让身份退回
+    (type, target_url) 的旧语义。
+
+    文本先 strip 再哈希，与 ``build_match_result`` 匹配评论时的 strip 口径
+    保持一致：首尾空白不同的两行是同一条评论。刻意**不**做更强的归一化
+    （标点 / emoji / 大小写 —— text_match.normalize_text 那套）：身份层若
+    采用模糊归一，仅标点不同的两条真评论会被再次合并丢行，重演本 bug；
+    宁可对"几乎相同"的两行多建一个任务，也不静默丢监测对象。空文本
+    （坏配置，adapter 会在 run 时报错）退回 '' —— 与老语义一致。
+    """
+    if not str(task_type).endswith("_comment"):
+        return ""
+    # config 防御成 dict：迁移回填会把任意年龄用户库里的 config_json 灌进来，
+    # 合法 JSON 但非对象（如 "[1,2]"）不能让 init_db 崩成永久启动失败。
+    cfg = config if isinstance(config, dict) else {}
+    text = str(cfg.get("my_comment_text") or "").strip()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# v11 老表 DDL 里的表级唯一约束原文 —— sqlite_master 的 SQL 文本含这个子串
+# 就说明还是旧形状，需要重建。历史上该 DDL 只有这一个来源（本文件），逐字
+# 稳定，文本门控可靠。
+_V11_TABLE_UNIQUE_GATE = "UNIQUE(type, target_url)"
+
+
+def _apply_v12_comment_identity(conn: sqlite3.Connection) -> None:
+    """v12：monitor_tasks 身份键从 (type, target_url) 改为
+    (type, target_url, dedup_key)。幂等。
+
+    SQLite 不能 DROP 表级约束，旧库走标准 12-step 重建：关外键 → 建新表 →
+    拷数据（保留 id，子表 FK 不受影响）→ drop 旧表 → rename → 回填
+    dedup_key → 开外键。新库（_DDL_V1 已是新形状）只补唯一索引。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='monitor_tasks'"
+    ).fetchone()
+    table_sql = (row[0] or "") if row else ""
+    if _V11_TABLE_UNIQUE_GATE in table_sql:
+        # PRAGMA foreign_keys 在事务内是 no-op，必须先于 BEGIN 执行；
+        # init_db 的连接是 isolation_level=None（autocommit），此处无悬挂事务。
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                CREATE TABLE monitor_tasks_v12 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    target_url TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    schedule_cron TEXT NOT NULL DEFAULT 'manual',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    last_check_at TEXT,
+                    last_status TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    dedup_key TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO monitor_tasks_v12(id, type, name, target_url, config_json,"
+                " schedule_cron, enabled, last_check_at, last_status, created_at, dedup_key)"
+                " SELECT id, type, name, target_url, config_json, schedule_cron, enabled,"
+                " last_check_at, last_status, created_at, '' FROM monitor_tasks"
+            )
+            # AUTOINCREMENT 序号必须显式搬运：拷数据只把新表 seq 推到现存
+            # max(id)，DROP 旧表会连带删掉旧 seq 行——若用户删过尾部 id 的任务
+            # （旧 seq > max(id)），不搬运则新任务会复用已删任务的 id，而
+            # geo_cells / geo_citations 按设计无外键、delete_task 不清它们，
+            # 孤儿明细行会被复用 id 的新任务"认领"（信源榜混入死任务数据）。
+            old_seq_row = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='monitor_tasks'"
+            ).fetchone()
+            new_seq_row = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='monitor_tasks_v12'"
+            ).fetchone()
+            target_seq = max(
+                int(old_seq_row[0]) if old_seq_row else 0,
+                int(new_seq_row[0]) if new_seq_row else 0,
+            )
+            if target_seq > 0:
+                # sqlite_sequence 没有唯一约束，INSERT OR REPLACE 只会追加
+                # 重复行（取号时读到旧值）—— 必须 UPDATE，0 行命中（空表拷贝，
+                # 新表还没取过号）才 INSERT。
+                cur = conn.execute(
+                    "UPDATE sqlite_sequence SET seq=? WHERE name='monitor_tasks_v12'",
+                    (target_seq,),
+                )
+                if cur.rowcount == 0:
+                    conn.execute(
+                        "INSERT INTO sqlite_sequence(name, seq)"
+                        " VALUES('monitor_tasks_v12', ?)",
+                        (target_seq,),
+                    )
+            # foreign_keys=OFF 下 DROP 不触发子表级联删除；rename 会同步更新
+            # sqlite_sequence 里的表名。
+            conn.execute("DROP TABLE monitor_tasks")
+            conn.execute("ALTER TABLE monitor_tasks_v12 RENAME TO monitor_tasks")
+            # 回填评论任务的 dedup_key。老表有 (type, target_url) 唯一约束，
+            # 同 (type, url) 至多一行，回填不可能撞出重复身份。sha256 没法在
+            # SQL 里算，Python 侧逐行做——任务表量级只有几十到几百行。
+            rows = conn.execute(
+                "SELECT id, type, config_json FROM monitor_tasks"
+            ).fetchall()
+            for tid, ttype, cfg_json in rows:
+                if not str(ttype).endswith("_comment"):
+                    continue
+                try:
+                    cfg = json.loads(cfg_json) if cfg_json else {}
+                except ValueError:
+                    cfg = {}
+                key = task_dedup_key(ttype, cfg)
+                if key:
+                    conn.execute(
+                        "UPDATE monitor_tasks SET dedup_key=? WHERE id=?", (key, tid)
+                    )
+            conn.execute("COMMIT")
+        except BaseException:
+            # BEGIN IMMEDIATE 自身失败（如另一实例持写锁）时并无活动事务，
+            # 裸 ROLLBACK 会二次抛错顶替真正的根因 —— 有事务才回滚。
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+    else:
+        # 新库 / 已重建库：列已在 _DDL_V1 里；防御半程状态幂等补列。
+        _ensure_column(conn, "monitor_tasks", "dedup_key", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_monitor_tasks_identity"
+        " ON monitor_tasks(type, target_url, dedup_key)"
     )
 
 
@@ -222,12 +374,15 @@ def get_conn() -> sqlite3.Connection:
 
 # ── Task CRUD ───────────────────────────────────────────────────────────────
 def create_task(task: MonitorTask) -> int:
+    # 身份键 = (type, target_url, dedup_key)：评论任务同视频不同评论是不同
+    # 监测对象（各建一条），同视频同评论重复导入仍走 upsert 更新；非评论
+    # 类型 dedup_key='' —— (type, target_url) 的旧 upsert 语义不变。
     conn = get_conn()
     cur = conn.execute(
         """
-        INSERT INTO monitor_tasks(type, name, target_url, config_json, schedule_cron, enabled)
-        VALUES(?, ?, ?, ?, ?, ?)
-        ON CONFLICT(type, target_url) DO UPDATE SET
+        INSERT INTO monitor_tasks(type, name, target_url, config_json, schedule_cron, enabled, dedup_key)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(type, target_url, dedup_key) DO UPDATE SET
             name=excluded.name,
             config_json=excluded.config_json,
             schedule_cron=excluded.schedule_cron,
@@ -241,6 +396,7 @@ def create_task(task: MonitorTask) -> int:
             json.dumps(task.config, ensure_ascii=False),
             task.schedule_cron,
             1 if task.enabled else 0,
+            task_dedup_key(task.type, task.config),
         ),
     )
     row = cur.fetchone()
@@ -254,7 +410,7 @@ def update_task(task: MonitorTask) -> None:
     conn.execute(
         """
         UPDATE monitor_tasks SET
-            name=?, target_url=?, config_json=?, schedule_cron=?, enabled=?
+            name=?, target_url=?, config_json=?, schedule_cron=?, enabled=?, dedup_key=?
         WHERE id=?
         """,
         (
@@ -263,6 +419,7 @@ def update_task(task: MonitorTask) -> None:
             json.dumps(task.config, ensure_ascii=False),
             task.schedule_cron,
             1 if task.enabled else 0,
+            task_dedup_key(task.type, task.config),
             task.id,
         ),
     )

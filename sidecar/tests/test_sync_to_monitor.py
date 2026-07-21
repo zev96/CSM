@@ -120,7 +120,8 @@ def test_sync_creates_monitor_tasks(db_with_job):
 
     # Verify in DB
     rows = conn.execute(
-        "SELECT type, name, target_url, config_json, enabled FROM monitor_tasks ORDER BY id"
+        "SELECT type, name, target_url, config_json, enabled, dedup_key "
+        "FROM monitor_tasks ORDER BY id"
     ).fetchall()
     assert len(rows) == 3
     for row in rows:
@@ -131,6 +132,9 @@ def test_sync_creates_monitor_tasks(db_with_job):
         assert "my_comment_text" in cfg
         assert cfg["top_n"] == 5
         assert cfg["scrape_top_n"] == 150
+        # 评论任务身份不变量：直插路径也必须写 dedup_key（与 storage 层同口径）。
+        assert row[5] == monitor_storage.task_dedup_key(row[0], cfg)
+        assert row[5] != ""
 
 
 def test_sync_skips_soft_deleted_videos(db_with_job):
