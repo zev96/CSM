@@ -278,7 +278,10 @@ const realVideosByBatchId = computed<Record<string, VideoEntry[]>>(() => {
       id: `task-${t.id}`,
       url: t.target_url,
       title: urlTail || t.target_url,
-      myComment: snap?.my_comment_text ?? "—",
+      // 快照优先（跑过至少一轮），没跑过的新任务回退读 task.config ——
+      // 同一视频下多条评论各是一个任务，不回退的话新导入的任务在详情里
+      // 看不到自己监测的是哪条评论。
+      myComment: snap?.my_comment_text ?? (t.config?.my_comment_text as string | undefined) ?? "—",
       rank: rank > 0 ? rank : 0,
       status,
       postedAt: t.last_check_at ? new Date(t.last_check_at).toLocaleDateString() : "—",
@@ -429,7 +432,9 @@ const commentAlerts = computed<HeroAlert[]>(() => {
     out.push({
       keyword: r.kw,
       headline: `评论被删 ${dropped} 条 · 留存跌至 ${ratio}%`,
-      subtitle: `${r.lastChecked} · ${r.total} 条视频`,
+      // r.total = 批次内任务数 = 监测的评论条数（同一视频可有多条评论任务），
+      // 不是视频数 —— 文案必须说"评论"。
+      subtitle: `${r.lastChecked} · ${r.total} 条评论`,
       batchName: r.id,
     });
     if (out.length >= 3) break;

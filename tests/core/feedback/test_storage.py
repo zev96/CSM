@@ -27,11 +27,13 @@ def test_v9_tables_exist(fresh_db):
 
 
 def test_v9_schema_version(fresh_db):
-    # schema_meta tracks the CURRENT global version stamp, not v9 specifically;
-    # bumped to "11" by R2's v11 migration (monitor_run_progress), past geo's v10.
+    # schema_meta tracks the CURRENT global version stamp, not v9 specifically —
+    # compare against monitor storage's _SCHEMA_VERSION so bumps don't break this.
+    from csm_core.monitor import storage as monitor_storage
+
     conn = fb.get_conn()
     v = conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()[0]
-    assert v == "11"
+    assert v == str(monitor_storage._SCHEMA_VERSION)
 
 
 def test_record_creation_roundtrip(fresh_db):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -71,7 +72,16 @@ def update_task(task_id: int, body: TaskBody) -> dict[str, Any]:
     if monitor_service.get_task(task_id) is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
     task = MonitorTask(id=task_id, **body.model_dump())
-    monitor_service.update_task(task)
+    try:
+        monitor_service.update_task(task)
+    except sqlite3.IntegrityError as e:
+        # 任务身份 = (类型, 链接[, 评论文本])。把任务改成与另一任务同身份
+        # （如同视频下把评论文本改得与兄弟任务相同）会撞唯一索引 ——
+        # 给 409 + 中文提示，而不是裸 500。
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="已存在相同身份的任务（同平台、同链接、同评论文本），请直接编辑那条任务或先删除其一",
+        ) from e
     return monitor_service.get_task(task_id) or {}
 
 

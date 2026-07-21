@@ -49,13 +49,13 @@ def test_v3_videos_unique_platform_video_id(fresh_db: Path):
 
 
 def test_v3_schema_version_recorded(fresh_db: Path):
-    # schema_meta tracks the CURRENT version stamp, not v3 specifically;
-    # bumped to "11" by R2's v11 migration (monitor_run_progress), past geo's v10.
+    # schema_meta tracks the CURRENT version stamp, not v3 specifically —
+    # compare against _SCHEMA_VERSION so schema bumps don't break this test.
     conn = sqlite3.connect(str(fresh_db))
     row = conn.execute(
         "SELECT value FROM schema_meta WHERE key='version'"
     ).fetchone()
-    assert row[0] == "11"
+    assert row[0] == str(monitor_storage._SCHEMA_VERSION)
 
 
 def test_models_import_and_validate():
