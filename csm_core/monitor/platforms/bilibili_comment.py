@@ -20,10 +20,12 @@ from typing import Any
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask, maybe_cancel
 from ..rate_limit import get_pacer, get_breaker
 from ..drivers.cookie_store import CookieStore
+from ..text_match import DEFAULT_SIMILARITY_THRESHOLD
 from ._comment_common import (
     build_match_result, fail_result, risk_control_result,
     DEFAULT_SCRAPE_TOP_N, ProgressCb, report_progress,
 )
+from ._comment_shared import CommentSnapshot, result_from_snapshot, shared_store
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +59,34 @@ class BilibiliCommentAdapter:
         # cancel_token 是真正用到的协作取消信号 —— 用户在 UI 点「停止」
         # 时 monitor_loop 会 set 它，本函数沿途多处 maybe_cancel(...) 检查
         # 后立刻退出（避免完整跑完一次 fetch 才听取消）。
-        if not self._breaker.allow():
-            return risk_control_result(task, "breaker_open")
+        my_text = str(task.config.get("my_comment_text") or "").strip()
+        if not my_text:
+            # 缺评论文本必然 failed —— 提前返回，别为坏配置白抓一轮。
+            return build_match_result(task, [], source="curl_cffi")
+        threshold = float(task.config.get("threshold") or DEFAULT_SIMILARITY_THRESHOLD)
+        scrape_top_n = int(task.config.get("scrape_top_n") or DEFAULT_SCRAPE_TOP_N)
+        store = shared_store()
+        task_id = task.id or 0
 
         vid_info = self._extract_video_id(task.target_url)
         if not vid_info:
             return fail_result(task, "extract", f"could not parse Bilibili URL: {task.target_url}")
         vid, id_type = vid_info
+        # BV 与 av 是同一视频的两种写法，但解析是纯正则、无从互认 —— 键上
+        # 带 id_type，同写法的任务共享（批量导入同视频的行 URL 一致）。
+        share_key = ("local", self.platform, f"{id_type}:{vid}")
+
+        # ① 同视频快照复用（纯内存）：同一条视频下的多条评论任务只有第一
+        #    个真正抓评论区（含 BV→aid 解析），其余对共享快照匹配。
+        snap = store.peek(
+            share_key, task_id=task_id,
+            my_text=my_text, threshold=threshold, depth=scrape_top_n,
+        )
+        if snap is not None:
+            return result_from_snapshot(task, snap, source="curl_cffi")
+
+        if not self._breaker.allow():
+            return risk_control_result(task, "breaker_open")
 
         try:
             from curl_cffi import requests as cc_requests
@@ -88,41 +111,60 @@ class BilibiliCommentAdapter:
         # Cancel check #1 —— pacer wait 之前快速退出
         maybe_cancel(cancel_token)
 
-        # 1. Resolve BV → AID. Bilibili's reply API takes the numeric aid
-        # (oid), not the BV. The /x/web-interface/view endpoint returns
-        # both for free.
-        self._pacer.wait()
-        maybe_cancel(cancel_token)
-        aid = self._resolve_aid(session, vid, id_type)
-        if not aid:
-            self._breaker.record_failure()
+        def do_fetch() -> CommentSnapshot:
+            # 真实抓取 + 全部簿记（pacer / 熔断 / cookie 标记）只由 fetcher
+            # 执行一次；BV→aid 解析也是网络请求，一并只付一次。
+            # 1. Resolve BV → AID. Bilibili's reply API takes the numeric aid
+            # (oid), not the BV. The /x/web-interface/view endpoint returns
+            # both for free.
+            self._pacer.wait()
+            maybe_cancel(cancel_token)
+            aid = self._resolve_aid(session, vid, id_type)
+            if not aid:
+                self._breaker.record_failure()
+                if cred:
+                    self._cookies.mark_failed(cred)
+                return CommentSnapshot(
+                    depth=scrape_top_n, error="could not resolve AV/BV → aid",
+                    error_source="resolve_aid",
+                )
+
+            # Cancel check #2 —— 进入主评论拉取（最长 20 页 × 数百毫秒）前再查
+            maybe_cancel(cancel_token)
+
+            # 2. Pull hot comments (mode=3). If we don't have enough, top up
+            # with mode=2 (time-sorted) but mark those rank=-1 so the matcher
+            # only counts the hot-sorted slice.
+            hot, ok, err = self._fetch_comments_by_mode(
+                session, aid, mode=3, limit=scrape_top_n,
+                cancel_token=cancel_token, progress_cb=progress_cb,
+            )
+            if not ok:
+                self._breaker.record_failure()
+                if cred:
+                    self._cookies.mark_failed(cred)
+                if err and "412" in err:
+                    return CommentSnapshot(
+                        depth=scrape_top_n, error=err, risk_source="http_412",
+                    )
+                return CommentSnapshot(
+                    depth=scrape_top_n, error=err or "unknown",
+                    error_source="fetch_hot",
+                )
             if cred:
-                self._cookies.mark_failed(cred)
-            return fail_result(task, "resolve_aid", "could not resolve AV/BV → aid")
+                self._cookies.mark_ok(cred)
+            self._breaker.record_success()
+            return CommentSnapshot(
+                comments=hot, depth=scrape_top_n,
+                exhausted=len(hot) < scrape_top_n,
+            )
 
-        # Cancel check #2 —— 进入主评论拉取（最长 20 页 × 数百毫秒）前再查
-        maybe_cancel(cancel_token)
-
-        # 2. Pull hot comments (mode=3). If we don't have enough, top up
-        # with mode=2 (time-sorted) but mark those rank=-1 so the matcher
-        # only counts the hot-sorted slice.
-        scrape_top_n = int(task.config.get("scrape_top_n") or DEFAULT_SCRAPE_TOP_N)
-        hot, ok, err = self._fetch_comments_by_mode(
-            session, aid, mode=3, limit=scrape_top_n,
-            cancel_token=cancel_token, progress_cb=progress_cb,
+        snap = store.run(
+            share_key, task_id=task_id,
+            my_text=my_text, threshold=threshold, depth=scrape_top_n,
+            cancel_token=cancel_token, do_fetch=do_fetch,
         )
-        if not ok:
-            self._breaker.record_failure()
-            if cred:
-                self._cookies.mark_failed(cred)
-            if err and "412" in err:
-                return risk_control_result(task, "http_412")
-            return fail_result(task, "fetch_hot", err or "unknown")
-
-        if cred:
-            self._cookies.mark_ok(cred)
-        self._breaker.record_success()
-        return build_match_result(task, hot, source="curl_cffi")
+        return result_from_snapshot(task, snap, source="curl_cffi")
 
     # ── HTTP helpers ───────────────────────────────────────────────────────
     def _resolve_aid(self, session: Any, vid: str, id_type: str) -> str | None:

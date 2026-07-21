@@ -26,6 +26,8 @@ from typing import Callable
 
 from csm_core.monitor.base import MonitorResult
 from csm_core.monitor.platforms._comment_common import build_match_result
+from csm_core.monitor.platforms._comment_shared import (
+    CommentSnapshot, group_comment_texts, shared_store)
 from csm_core.monitor.text_match import find_best_match, DEFAULT_SIMILARITY_THRESHOLD
 from .normalize import (
     normalize_douyin_comments, normalize_bilibili_comments, normalize_kuaishou_comments)
@@ -123,9 +125,17 @@ class CommentApiAdapter:
                              metric={"source": "tikhub"})
 
     def fetch(self, task, cancel_token=None, progress_cb=None, **_) -> MonitorResult:
-        vid, id_type = self._extract(task.target_url)
-        if not vid:
-            return self._failed(task, "无法从 URL 解析视频 ID")
+        store = shared_store()
+        # URL → vid 缓存:抖音/快手的 id_extractor 会真发一次短链展开请求,
+        # 同视频多任务只展开一次。
+        cached = store.get_video_id("tikhub", self.platform, task.target_url)
+        if cached:
+            vid, id_type = cached
+        else:
+            vid, id_type = self._extract(task.target_url)
+            if not vid:
+                return self._failed(task, "无法从 URL 解析视频 ID")
+            store.put_video_id("tikhub", self.platform, task.target_url, vid, id_type)
         depth = min(int(task.config.get("scrape_top_n") or self.spec.default_depth),
                     self.spec.depth_cap)
         # 顶部校验要监测的评论文本:缺了必然判 failed,提前返回省掉整轮白翻的付费请求
@@ -134,47 +144,76 @@ class CommentApiAdapter:
         if not my_text:
             return self._failed(task, "未填写要监测的评论内容")
         threshold = float(task.config.get("threshold") or DEFAULT_SIMILARITY_THRESHOLD)
-        client = self._cf()
-        first = {"v": True}
-        state = {"more": True}      # 记录最后一页 has_more,用于精确判断是否翻到评论区底部
 
-        def page_fn(cursor):
-            raw = client.get(self.spec.endpoint, self.spec.build_params(vid, id_type, cursor))
-            items, nxt, more = self.spec.parse_page(raw, first["v"])
-            first["v"] = False
-            state["more"] = more
-            return items, nxt, more
+        def do_fetch() -> CommentSnapshot:
+            client = self._cf()
+            first = {"v": True}
+            state = {"more": True}   # 记录最后一页 has_more,用于精确判断是否翻到评论区底部
 
-        # 命中即停:目标评论一旦出现在已抓到的评论里就停止翻页——留存的评论没必要
-        # 白翻到 depth 上限(付费 API 每页计费)。找不到的(可能被限流)才翻满,用于
-        # 确认"确实不在"。用与 build_match_result 完全相同的匹配口径(阈值 + find_best_match),
-        # 避免"停了但最终 build_match_result 又判没命中"的错位。
-        def stop_predicate(acc):
-            return find_best_match(my_text, acc, threshold)["found"]
+            def page_fn(cursor):
+                raw = client.get(self.spec.endpoint, self.spec.build_params(vid, id_type, cursor))
+                items, nxt, more = self.spec.parse_page(raw, first["v"])
+                first["v"] = False
+                state["more"] = more
+                return items, nxt, more
 
-        # max_pages 用 //10 而非 //20:抖音/TikHub 常返回不足 count 条(被删/折叠/末页),
-        # //20+2 只留 2 页余量,页面稍欠填就在到达 depth 前撞熔断、把"评论埋得深/找不到"
-        # 误判成整任务失败(恰是本功能要识别的限流场景)。//10+2 容忍到约 10 条/页;
-        # 真·病态(<9 条/页且 has_more 恒真)才熔断——那才是需要防的死循环/风控假状态。
-        try:
-            comments = paginate(page_fn, target=depth, max_pages=(depth // 10) + 2,
-                                cancel_token=cancel_token, stop_predicate=stop_predicate)
-        except TikHubError as e:
-            return self._failed(task, e.reason)
+            # 命中即停(组感知):快照由同视频的所有评论任务共享(任务身份键含评论
+            # 文本,同一条视频下常有多条任务)——必须扫到「该视频所有在监测的评论
+            # 都命中」或翻满深度才停;只按自己的评论停会让快照对组内其他任务不完整
+            # (共享层有防错位守卫兜底,但会退化成各自重抓、白付重复页费)。留存
+            # 的评论通常都在前排,组感知即停仍远省于翻满;找不到的(可能被删/限流)
+            # 才翻满,用于确认"确实不在"。匹配口径与 build_match_result 完全相同
+            # (阈值 + find_best_match),避免"停了但最终又判没命中"的错位。
+            texts = group_comment_texts(task)
 
-        # 关键:normalizer 给的是每页 1..N 的 rank,paginate 累积后必须按全局重排,
-        # 否则匹配到的排名会是"页内位置"而非真实全局排名。
-        for i, c in enumerate(comments):
-            c["rank"] = i + 1
+            def stop_predicate(acc):
+                return all(find_best_match(t, acc, threshold)["found"] for t in texts)
+
+            # max_pages 用 //10 而非 //20:抖音/TikHub 常返回不足 count 条(被删/折叠/末页),
+            # //20+2 只留 2 页余量,页面稍欠填就在到达 depth 前撞熔断、把"评论埋得深/找不到"
+            # 误判成整任务失败(恰是本功能要识别的限流场景)。//10+2 容忍到约 10 条/页;
+            # 真·病态(<9 条/页且 has_more 恒真)才熔断——那才是需要防的死循环/风控假状态。
+            try:
+                comments = paginate(page_fn, target=depth, max_pages=(depth // 10) + 2,
+                                    cancel_token=cancel_token, stop_predicate=stop_predicate)
+            except TikHubError as e:
+                return CommentSnapshot(depth=depth, error=e.reason)
+
+            # 关键:normalizer 给的是每页 1..N 的 rank,paginate 累积后必须按全局重排,
+            # 否则匹配到的排名会是"页内位置"而非真实全局排名。
+            for i, c in enumerate(comments):
+                c["rank"] = i + 1
+
+            cancelled = cancel_token is not None and cancel_token.is_set()
+            early = len(comments) < depth and state["more"] and not cancelled
+            # exhausted:最后一页 has_more=False(API 说没有更多了),或抓到的比 depth 少
+            # 且不是提前收工 —— 即"整个评论区都翻遍了"。⚠️ 仅当 depth 是每页条数(20)
+            # 的整数倍时才干净(无 out[:depth] 截断的溢出带)。前端不据它分档(改用留存
+            # 历史 prev 判断,见 CommentMonitorModule),此处仅作原始信号保留。
+            return CommentSnapshot(
+                comments=comments, depth=depth,
+                early_stopped=early or cancelled,
+                exhausted=(not state["more"]) or (len(comments) < depth and not early and not cancelled),
+                # 取消导致的截断快照只给取消者本人出结果,不入缓存 —— 它既不完整
+                # 也不是"故意截短到全组命中",复用会污染组内其他任务。
+                cacheable=not cancelled,
+            )
+
+        snap = store.run(
+            ("tikhub", self.platform, vid), task_id=task.id or 0,
+            my_text=my_text, threshold=threshold, depth=depth,
+            cancel_token=cancel_token, do_fetch=do_fetch,
+        )
+        if snap.error is not None:
+            return self._failed(task, snap.error)
 
         # scan_limit=depth:匹配窗口==抓取深度,防止 build_match_result 默认的 150 上限
         # 与 depth 不一致时把已抓到的评论切掉误判(depth 未来若再调大也不会有死区)。
-        result = build_match_result(task, comments, source="tikhub", scan_limit=depth)
+        # 评论 dict 逐条浅拷贝:metric.hot_comments 随结果落库/发事件,不能与
+        # 共享缓存里的快照互为别名(下游任何写者都会跨任务污染缓存)。
+        result = build_match_result(
+            task, [dict(c) for c in snap.comments], source="tikhub", scan_limit=depth)
         # depth_cap(前端"前 N 名"的 N)由 build_match_result 统一写(=scan_limit=depth),本地/API 口径一致。
         if isinstance(result.metric, dict):
-            # exhausted:最后一页 has_more=False(API 说没有更多了),或抓到的比 depth 少 —— 即
-            # "整个评论区都翻遍了"。⚠️ 仅当 depth 是每页条数(20)的整数倍时才干净(无 out[:depth]
-            # 截断的溢出带)。前端不据它分档(改用留存历史 prev 判断,见 CommentMonitorModule),
-            # 此处仅作原始信号保留。
-            result.metric["exhausted"] = (not state["more"]) or (len(comments) < depth)
+            result.metric["exhausted"] = snap.exhausted
         return result
