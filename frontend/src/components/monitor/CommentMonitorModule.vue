@@ -970,7 +970,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                   {{ selectedCommentRow?.kw }}
                 </div>
                 <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">
-                  {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} · 视频列表
+                  {{ PLATFORMS.find((p) => p.k === commentSubtab)?.l }} · 评论列表
                 </div>
               </div>
               <span
@@ -981,7 +981,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                   padding: '2px 8px',
                   border: '1px solid var(--line)',
                 }"
-              >{{ selectedTaskVideos.length }} 条</span>
+              >{{ selectedTaskVideos.length }} 条评论</span>
             </div>
             <!-- 视频列表列头 -->
             <div
@@ -993,7 +993,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 borderBottom: '1px solid var(--line)',
               }"
             >
-              <div>视频名字</div><div class="text-center">排名</div><div class="text-center">状态</div>
+              <div>视频 / 评论</div><div class="text-center">排名</div><div class="text-center">状态</div>
             </div>
             <!-- 视频行（无横向内边距，靠 section 22px 提供卡内缩进）-->
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -1020,6 +1020,18 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                       color: selectedVideoId === v.id ? 'var(--primary-deep)' : 'var(--ink)',
                     }"
                   >{{ truncate15(v.title) }}</div>
+                  <!--
+                    副标题 = 监测的评论片段。同一条视频下可有多条评论任务
+                    （任务身份键含评论文本），行标题（URL 尾段派生）会完全同名，
+                    必须靠评论文本区分。myComment 快照优先、config 兜底，
+                    新导入未跑的任务也能显示。
+                  -->
+                  <div
+                    v-if="v.myComment && v.myComment !== '—'"
+                    class="mt-0.5 truncate text-[10.5px]"
+                    :title="v.myComment"
+                    :style="{ color: 'var(--ink-3)' }"
+                  >「{{ v.myComment }}」</div>
                   <ProgressBar
                     v-if="isVideoRunning(v.id)"
                     :value="videoProgressValue(v.id)"
@@ -1075,7 +1087,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
             <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <div class="mb-3 flex flex-shrink-0 items-start justify-between gap-2">
                 <div class="min-w-0">
-                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">单视频详情</div>
+                  <div class="text-[10.5px]" :style="{ color: 'var(--ink-3)' }">评论监测详情</div>
                   <div
                     class="font-display mt-0.5 font-bold"
                     :title="selectedVideo.title"
@@ -1263,7 +1275,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                 {{ selectedCommentTaskId ? "任务留存汇总" : "全部留存汇总" }}
               </div>
               <div class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-                {{ selectedCommentTaskId ? "点左侧视频名查看单条评论详情" : "近 7 天" }}
+                {{ selectedCommentTaskId ? "点左侧评论行查看单条评论详情" : "近 7 天" }}
               </div>
             </div>
             <div class="mt-3 flex-shrink-0">
