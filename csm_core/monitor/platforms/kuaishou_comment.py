@@ -21,10 +21,12 @@ from typing import Any
 from ..base import BaseMonitorAdapter, MonitorResult, MonitorTask, maybe_cancel
 from ..rate_limit import get_pacer, get_breaker
 from ..drivers.cookie_store import CookieStore
+from ..text_match import DEFAULT_SIMILARITY_THRESHOLD
 from ._comment_common import (
     build_match_result, fail_result, risk_control_result,
     DEFAULT_SCRAPE_TOP_N, ProgressCb, report_progress,
 )
+from ._comment_shared import CommentSnapshot, result_from_snapshot, shared_store
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,29 @@ class KuaishouCommentAdapter:
         # **_kwargs 吞掉 monitor_loop 的 resume_from 等未来扩展参数。
         # cancel_token 让用户「停止」点击在 fetch 中途生效（不再等整个
         # GraphQL 分页拉完）。
+        my_text = str(task.config.get("my_comment_text") or "").strip()
+        if not my_text:
+            # 缺评论文本必然 failed —— 提前返回，别为坏配置白抓一轮。
+            # build_match_result 对空文本短路报 required，产出与旧路径一致。
+            return build_match_result(task, [], source="curl_cffi")
+        threshold = float(task.config.get("threshold") or DEFAULT_SIMILARITY_THRESHOLD)
+        scrape_top_n = int(task.config.get("scrape_top_n") or DEFAULT_SCRAPE_TOP_N)
+        store = shared_store()
+        task_id = task.id or 0
+
+        # ① 同视频快照复用（纯内存）：任务身份键含评论文本，同一条视频下
+        #    常有多条评论任务 —— 只有第一个真正抓评论区，其余对共享快照
+        #    匹配即可，零网络、不占熔断/节流预算。vid 没缓存（第一次见这
+        #    条 URL）就走完整路径。
+        cached_vid = store.get_video_id("local", self.platform, task.target_url)
+        if cached_vid:
+            snap = store.peek(
+                ("local", self.platform, cached_vid[0]), task_id=task_id,
+                my_text=my_text, threshold=threshold, depth=scrape_top_n,
+            )
+            if snap is not None:
+                return result_from_snapshot(task, snap, source="curl_cffi")
+
         if not self._breaker.allow():
             return risk_control_result(task, "breaker_open")
 
@@ -136,29 +161,46 @@ class KuaishouCommentAdapter:
         # Cancel check #1 —— 短链/HTML 解析前快速退出
         maybe_cancel(cancel_token)
 
-        photo_id, err = self._extract_video_id(session, task.target_url)
-        if not photo_id:
-            return fail_result(task, "extract", err or "could not parse Kuaishou URL")
+        if cached_vid:
+            photo_id = cached_vid[0]
+        else:
+            photo_id, err = self._extract_video_id(session, task.target_url)
+            if not photo_id:
+                return fail_result(task, "extract", err or "could not parse Kuaishou URL")
+            store.put_video_id("local", self.platform, task.target_url, photo_id)
 
         # Cancel check #2 —— GraphQL 拉取前再查（最长 15 页 POST 请求）
         maybe_cancel(cancel_token)
 
-        self._pacer.wait()
-        scrape_top_n = int(task.config.get("scrape_top_n") or DEFAULT_SCRAPE_TOP_N)
-        comments, ok, err = self._fetch_comments(
-            session, photo_id, limit=scrape_top_n,
-            cancel_token=cancel_token, progress_cb=progress_cb,
-        )
-        if not ok:
-            self._breaker.record_failure()
+        def do_fetch() -> CommentSnapshot:
+            # 真实抓取 + 全部簿记（pacer / 熔断 / cookie 标记）都在这里 ——
+            # 只有 fetcher 执行，复用方不重复计数。
+            self._pacer.wait()
+            comments, ok, err = self._fetch_comments(
+                session, photo_id, limit=scrape_top_n,
+                cancel_token=cancel_token, progress_cb=progress_cb,
+            )
+            if not ok:
+                self._breaker.record_failure()
+                if cred:
+                    self._cookies.mark_failed(cred)
+                return CommentSnapshot(
+                    depth=scrape_top_n, error=err or "unknown fetch failure",
+                )
             if cred:
-                self._cookies.mark_failed(cred)
-            return fail_result(task, "fetch", err or "unknown fetch failure")
+                self._cookies.mark_ok(cred)
+            self._breaker.record_success()
+            return CommentSnapshot(
+                comments=comments, depth=scrape_top_n,
+                exhausted=len(comments) < scrape_top_n,
+            )
 
-        if cred:
-            self._cookies.mark_ok(cred)
-        self._breaker.record_success()
-        return build_match_result(task, comments, source="curl_cffi")
+        snap = store.run(
+            ("local", self.platform, photo_id), task_id=task_id,
+            my_text=my_text, threshold=threshold, depth=scrape_top_n,
+            cancel_token=cancel_token, do_fetch=do_fetch,
+        )
+        return result_from_snapshot(task, snap, source="curl_cffi")
 
     @staticmethod
     def _extract_video_id(session: Any, raw_url: str) -> tuple[str | None, str]:

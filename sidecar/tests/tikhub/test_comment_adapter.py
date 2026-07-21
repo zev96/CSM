@@ -194,3 +194,105 @@ def test_kuaishou_pcursor_stops_at_no_more():
                             config={"my_comment_text": "hi", "top_n": 5}))
     assert client.get.call_count == 1        # pcursor=no_more → 单页停
     assert r.status == "ok" and r.rank == 1
+
+
+# ── 共享抓取:同视频多任务(身份键含评论文本)只付一次翻页费 ────────────────
+def _stored_task(tid_comment_pairs, url="https://www.douyin.com/video/7abc"):
+    """在 storage 里建同视频多任务,返回 MonitorTask 列表(带真实 id)。"""
+    from csm_core.monitor import storage as ms
+    out = []
+    for comment in tid_comment_pairs:
+        t = MonitorTask(type="douyin_comment", name=f"t-{comment}", target_url=url,
+                        config={"my_comment_text": comment, "top_n": 5})
+        t.id = ms.create_task(t)
+        out.append(t)
+    return out
+
+
+def test_group_stop_predicate_scans_until_all_group_comments_found(monitor_db):
+    # 组感知命中即停:任务 A 的评论在第 1 页、任务 B 的在第 3 页。
+    # 单任务旧行为抓 A 时第 1 页就停 → 快照对 B 不完整;
+    # 组感知必须翻到第 3 页(A、B 都命中)才停。
+    # 注意两条文本必须互不相似(相似度阈值 0.85 的模糊匹配会把
+    # "MINE_A"/"MINE_B" 这种只差一字的当成同一条)。
+    text_a = "希喂的烘焙粮我家猫特别爱吃"
+    text_b = "国产粮迭代换了一圈最后还是选了它"
+    task_a, task_b = _stored_task([text_a, text_b])
+
+    def page(endpoint, params):
+        base = params["cursor"]
+        comments = []
+        for i in range(20):
+            pos = base + i + 1
+            text = text_a if pos == 3 else (text_b if pos == 45 else f"o{pos}")
+            comments.append({"text": text, "user": {"nickname": "u"}, "digg_count": 0})
+        return {"data": {"status_code": 0, "has_more": 1, "cursor": base + 20,
+                         "comments": comments}}
+
+    client = MagicMock(); client.get.side_effect = page
+    a = CommentApiAdapter(DOUYIN_SPEC, client_factory=lambda: client,
+                          id_extractor=lambda url: ("7abc", ""))
+    r_a = a.fetch(task_a)
+    assert r_a.status == "ok" and r_a.rank == 3
+    assert client.get.call_count == 3, "须翻到组内全部评论命中(第 3 页)才停"
+
+    # 任务 B 复用同一份快照:不再产生任何付费翻页。
+    r_b = a.fetch(task_b)
+    assert client.get.call_count == 3, "同视频第二个任务必须复用快照"
+    assert r_b.status == "ok" and r_b.rank == 45
+
+
+def test_group_snapshot_shares_failure(monitor_db):
+    # 平台级错误负缓存:组内第二个任务不再发请求、报同一原因。
+    task_a, task_b = _stored_task(["AAA", "BBB"])
+    client = MagicMock()
+    client.get.return_value = {"data": {"status_code": 5, "status_msg": "参数不合法",
+                                        "comments": None}}
+    a = CommentApiAdapter(DOUYIN_SPEC, client_factory=lambda: client,
+                          id_extractor=lambda url: ("7abc", ""))
+    r_a = a.fetch(task_a)
+    calls_after_first = client.get.call_count
+    r_b = a.fetch(task_b)
+    assert r_a.status == "failed" and r_b.status == "failed"
+    assert r_a.error_message == r_b.error_message
+    assert client.get.call_count == calls_after_first, "失败应负缓存,组内不连环重试"
+
+
+def test_single_task_keeps_own_stop_behavior_without_storage():
+    # storage 未初始化(独立调用)→ 组文本退化为只看自己,命中即停行为不变。
+    def page(endpoint, params):
+        base = params["cursor"]
+        comments = [{"text": ("SOLO" if base + i + 1 == 21 else f"o{base+i+1}"),
+                     "user": {"nickname": "u"}, "digg_count": 0} for i in range(20)]
+        return {"data": {"status_code": 0, "has_more": 1, "cursor": base + 20,
+                         "comments": comments}}
+    client = MagicMock(); client.get.side_effect = page
+    a = CommentApiAdapter(DOUYIN_SPEC, client_factory=lambda: client,
+                          id_extractor=lambda url: ("x", ""))
+    r = a.fetch(_dtask({"my_comment_text": "SOLO", "top_n": 5}))
+    assert r.rank == 21
+    assert client.get.call_count == 2
+
+
+def test_cancelled_partial_fetch_not_cached(monitor_db):
+    # 取消导致的截断快照不得入缓存:下一个任务自己重抓。
+    import threading as _threading
+    task_a, task_b = _stored_task(["CANCEL_A", "CANCEL_B"])
+    cancel = _threading.Event()
+
+    def page(endpoint, params):
+        cancel.set()          # 第 1 页返回后置位 → paginate 下一轮循环收工
+        base = params["cursor"]
+        comments = [{"text": f"o{base+i+1}", "user": {"nickname": "u"}, "digg_count": 0}
+                    for i in range(20)]
+        return {"data": {"status_code": 0, "has_more": 1, "cursor": base + 20,
+                         "comments": comments}}
+
+    client = MagicMock(); client.get.side_effect = page
+    a = CommentApiAdapter(DOUYIN_SPEC, client_factory=lambda: client,
+                          id_extractor=lambda url: ("7abc", ""))
+    a.fetch(task_a, cancel_token=cancel)
+    calls_after_cancel = client.get.call_count
+    cancel2 = _threading.Event()   # 未置位
+    a.fetch(task_b, cancel_token=cancel2)
+    assert client.get.call_count > calls_after_cancel, "截断快照不能被复用"
