@@ -209,7 +209,10 @@ class CommentApiAdapter:
 
         # scan_limit=depth:匹配窗口==抓取深度,防止 build_match_result 默认的 150 上限
         # 与 depth 不一致时把已抓到的评论切掉误判(depth 未来若再调大也不会有死区)。
-        result = build_match_result(task, snap.comments, source="tikhub", scan_limit=depth)
+        # 评论 dict 逐条浅拷贝:metric.hot_comments 随结果落库/发事件,不能与
+        # 共享缓存里的快照互为别名(下游任何写者都会跨任务污染缓存)。
+        result = build_match_result(
+            task, [dict(c) for c in snap.comments], source="tikhub", scan_limit=depth)
         # depth_cap(前端"前 N 名"的 N)由 build_match_result 统一写(=scan_limit=depth),本地/API 口径一致。
         if isinstance(result.metric, dict):
             result.metric["exhausted"] = snap.exhausted

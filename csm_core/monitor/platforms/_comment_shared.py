@@ -28,9 +28,11 @@ run-now 都是），没有共享层时同一视频的评论区每轮会被完整
     自己重抓 —— 绝不把"快照没抓那么深"误报成"评论不在"。翻尽整个
     评论区（exhausted）或覆盖完整深度的快照对任何任务都是完整证据。
 
-直接调用适配器且 task.id 为 None（脚本 / 单测）时 task_id 记 0：首个
-调用会建快照，后续 task_id=0 的调用都因 served 命中而强制重抓 —— 即
-"无 id 就不共享"，与旧行为一致。
+task.id 为 None（mining 引流预筛 / 脚本 / 单测直接调适配器）时 task_id
+记 0，**完全绕过共享仓**：不读、不写、不单飞，每次都真实抓取 —— 即
+"无 id 就不共享"，与旧行为逐字节一致。这同时隔离了 mining 预筛：它用
+浅深度（scrape_top_n=30）+ 占位评论文本扫同一批视频，若与监控任务共
+仓，预筛失败会负缓存喂给监控、预筛浅快照会被监控当成本轮数据。
 """
 from __future__ import annotations
 
@@ -52,7 +54,10 @@ logger = logging.getLogger(__name__)
 _LINGER_SECONDS = 900.0
 
 #: 等待别的线程抓同一 key 的上限（秒）；超过则放弃共享、自己抓（防挂死）。
-_WAIT_FETCH_TIMEOUT = 600.0
+#: 必须 ≥ 最坏**合法** fetch 时长（bilibili 20 页 ×(pacer 15s + HTTP 20s) +
+#: aid 解析 ≈ 700s+），否则极慢但正常的抓取会让等待者提前放弃、对同一
+#: 视频开出第二路并发抓取 —— 恰是本功能要消除的机器人特征。
+_WAIT_FETCH_TIMEOUT = 900.0
 
 
 @dataclass
@@ -87,12 +92,18 @@ def result_from_snapshot(
     source: str,
     scan_limit: int | None = None,
 ) -> MonitorResult:
-    """快照 → MonitorResult。失败 / 风控快照映射回适配器的原有结果形状。"""
+    """快照 → MonitorResult。失败 / 风控快照映射回适配器的原有结果形状。
+
+    评论 dict 逐条浅拷贝再交给 build_match_result：metric.hot_comments 会
+    随结果落库 / 发事件，若与缓存快照共享同一批 dict，任何下游写者都会
+    跨任务 + 回溯污染缓存 —— 拷一层把别名面掐断（150 条 dict 的成本可忽略）。
+    """
     if snap.risk_source:
         return risk_control_result(task, snap.risk_source)
     if snap.error is not None:
         return fail_result(task, snap.error_source, snap.error)
-    return build_match_result(task, snap.comments, source=source, scan_limit=scan_limit)
+    comments = [dict(c) for c in snap.comments]
+    return build_match_result(task, comments, source=source, scan_limit=scan_limit)
 
 
 def group_comment_texts(task: MonitorTask) -> list[str]:
@@ -188,6 +199,9 @@ class SharedCommentStore:
         不等待、不抓取 —— 给本地适配器放在熔断 / 建会话之前用：复用命中
         时零网络、零副作用直接出结果。
         """
+        if task_id == 0:
+            # 无 id 调用（mining 预筛 / 脚本 / 单测）不参与共享 —— 见模块 docstring。
+            return None
         with self._lock:
             snap = self._snaps.get(key)
             if snap is None:
@@ -220,6 +234,11 @@ class SharedCommentStore:
         maybe_cancel 的取消）会清理单飞状态后原样传播 —— 等待者随后接棒
         自己抓，取消只作用于被取消的那个任务。
         """
+        if task_id == 0:
+            # 无 id 调用（mining 预筛 / 脚本 / 单测）完全绕过共享仓：不读、
+            # 不写、不单飞 —— 预筛的浅快照 / 失败绝不能污染监控任务，反之
+            # 监控快照也不该被预筛消费。见模块 docstring。
+            return do_fetch()
         deadline = time.monotonic() + self._wait_timeout
         while True:
             with self._lock:

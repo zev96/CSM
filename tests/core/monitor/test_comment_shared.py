@@ -361,6 +361,52 @@ class TestSharedCommentStore:
         # 已消费过（served）→ 同任务 peek 不再命中（重跑应强制刷新）
         assert store.peek(KEY, task_id=2, my_text="评论乙", threshold=0.85, depth=150) is None
 
+    def test_task_id_zero_bypasses_store_entirely(self):
+        # 无 id 调用（mining 预筛 / 脚本）不读、不写、不单飞：
+        #   - 预筛的浅抓/失败绝不污染监控任务的共享仓；
+        #   - 监控快照也不会被预筛消费。
+        store = SharedCommentStore()
+        calls = []
+
+        def shallow_fetch():
+            calls.append("prefilter")
+            return CommentSnapshot(comments=_comments(30), depth=30)
+
+        def full_fetch():
+            calls.append("monitor")
+            return _snap(150, depth=150, exhausted=True)
+
+        # 预筛（task_id=0）先抓 → 不入缓存
+        store.run(KEY, task_id=0, my_text="占位", threshold=0.85,
+                  depth=30, cancel_token=None, do_fetch=shallow_fetch)
+        assert store.peek(KEY, task_id=1, my_text="评论甲", threshold=0.85, depth=150) is None
+        # 监控任务照常真实抓取（不消费预筛残留）
+        store.run(KEY, task_id=1, my_text="评论甲", threshold=0.85,
+                  depth=150, cancel_token=None, do_fetch=full_fetch)
+        # 预筛再来（task_id=0）也不消费监控快照、每次都自己抓
+        store.run(KEY, task_id=0, my_text="占位", threshold=0.85,
+                  depth=30, cancel_token=None, do_fetch=shallow_fetch)
+        assert store.peek(KEY, task_id=0, my_text="评论甲", threshold=0.85, depth=150) is None
+        assert calls == ["prefilter", "monitor", "prefilter"]
+
+    def test_consumed_result_comments_not_aliased_to_cache(self):
+        # metric.hot_comments 随结果落库/发事件 —— 消费产物必须与缓存里的
+        # 快照解除别名，下游写者不能跨任务污染缓存。
+        from csm_core.monitor.base import MonitorTask
+        from csm_core.monitor.platforms._comment_shared import result_from_snapshot
+
+        store = SharedCommentStore()
+        snap = store.run(KEY, task_id=1, my_text="评论甲", threshold=0.85, depth=150,
+                         cancel_token=None,
+                         do_fetch=lambda: _snap(10, plant={2: "评论甲"}, exhausted=True))
+        task = MonitorTask(type="kuaishou_comment", name="t", target_url="u",
+                           config={"my_comment_text": "评论甲", "top_n": 5})
+        result = result_from_snapshot(task, snap, source="curl_cffi")
+        hot = result.metric["hot_comments"]
+        assert hot and all(a is not b for a, b in zip(hot, snap.comments))
+        hot[0]["text"] = "被下游改写"
+        assert snap.comments[0]["text"] != "被下游改写"
+
 
 # ── 快手本地适配器集成：同视频两任务只抓一轮 ────────────────────────────────
 class TestKuaishouSharedFetch:
