@@ -69,7 +69,16 @@ const isPool = computed(() => block.value.kind === "competitor_pool");
 /** 打开卡片模式：给块补上卡片专属字段的默认值。 */
 function enableCardMode() {
   if (isPool.value) {
+    // 预填规范里约定的筛选（素材类型: 竞品卡）—— schema 强制卡片模式必须有
+    // 筛选条件（否则同目录旧格式竞品笔记会混进名册），而筛选属性下拉是从
+    // vault 已有笔记聚合的：卡还没写时下拉是空的，不预填就直接卡死。
+    const existing = block.value.source?.filter ?? {};
     patch({
+      source: {
+        type: "notes_query",
+        module: block.value.source?.module ?? "",
+        filter: Object.keys(existing).length ? existing : { 素材类型: "竞品卡" },
+      },
       sections: [{ label: "市场口碑数据", h2: "", required: true, pick_variants: 1 }],
       heading_template: block.value.heading_template ?? "### {tier} TOP{n}. {title}",
       tier_key: block.value.tier_key ?? "层级标签",
@@ -163,6 +172,20 @@ const mismatchedRows = computed(() => {
     }))
     .filter((r: any) => r.mismatches.length);
 });
+
+/** 卡片竞品池缺筛选条件 —— schema 会拒收，但错误只在保存时才弹。 */
+const poolMissingFilter = computed(
+  () => isPool.value && isCardMode.value
+    && !Object.keys(block.value.source?.filter ?? {}).length,
+);
+
+function fillConventionalFilter() {
+  patchSource({
+    type: "notes_query",
+    module: block.value.source?.module ?? "",
+    filter: { 素材类型: "竞品卡" },
+  });
+}
 
 /** 检查前的自查：目录必填、小节名必填。 */
 const coverageBlocker = computed<string | null>(() => {
@@ -343,6 +366,25 @@ const vaultAttrs = ref<VaultAttribute[]>([]);
 const attrsLoading = ref(false);
 const attrsError = ref<string | null>(null);
 
+/** 用户点了「自定义属性…」后切成手填输入框（按块重置）。 */
+const customKeyMode = ref(false);
+const CUSTOM_KEY = "__custom__";
+
+watch(
+  () => block.value?.id,
+  () => { customKeyMode.value = false; },
+);
+
+function onKeySelect(v: string) {
+  if (v === CUSTOM_KEY) {
+    customKeyMode.value = true;
+    updateFilterRow(0, { key: "" });
+    return;
+  }
+  customKeyMode.value = false;
+  updateFilterRow(0, { key: v });
+}
+
 const attrKeyOptions = computed(() => {
   // 当前 filterRows 已经选过的 key 也得在选项里（不然切回 BlockEditor
   // 时已选的 key 会显示空白）。合并 vault scan 出来的 + 当前已用的。
@@ -356,6 +398,10 @@ const attrKeyOptions = computed(() => {
       : `${k}  ·  自定义`;
     return { label, value: k };
   });
+  // 末位插「自定义属性…」—— 下拉只列 vault 里已存在的属性，素材还没写
+  // 的时候（先配模板后写素材是常见顺序）它是空的，没这一项就填不进任何
+  // 筛选条件，而卡片模式的 schema 又强制要求有筛选 → 模板永远存不下去。
+  opts.push({ label: "＋ 自定义属性…", value: CUSTOM_KEY });
   // 首位插「不筛选」—— 单选模式下用户没有"删除筛选行"按钮，得在
   // 下拉里能选回空（覆盖之前选过的 key）
   return [{ label: "不筛选", value: "" }, ...opts];
@@ -687,6 +733,29 @@ function insertKeyword(field: "text") {
           :style="{ background: 'var(--card-2)' }"
         >
           本池排位从 TOP{{ startRank }} 开始（接续前面的卡）
+        </div>
+
+        <!--
+          缺筛选条件就地提示。schema 强制卡片模式必须有筛选（否则同目录的
+          旧格式竞品笔记会混进名册），但那个错误要等点保存才弹，而下面的
+          筛选下拉在素材还没写时是空的 —— 不给这条出路就是死锁。
+        -->
+        <div
+          v-if="poolMissingFilter"
+          class="mt-2 flex flex-wrap items-center gap-2 rounded px-2 py-1.5 text-[11px]"
+          :style="{ background: 'var(--card-2)', borderLeft: '2px solid var(--amber)' }"
+        >
+          <span>
+            卡片模式需要筛选条件，否则同目录下的旧格式竞品笔记会混进名册。
+          </span>
+          <button
+            type="button"
+            class="underline"
+            :style="{ color: 'var(--ink-2)' }"
+            @click="fillConventionalFilter"
+          >
+            填入约定值（素材类型 = 竞品卡）
+          </button>
         </div>
 
         <FormField label="标题行模板" class="mt-2">
@@ -1072,7 +1141,9 @@ function insertKeyword(field: "text") {
             v-else-if="!vaultAttrs.length"
             class="text-[10.5px]"
             :style="{ color: 'var(--ink-4)' }"
-          >当前范围未发现属性</div>
+          >
+            当前目录下还没有带 frontmatter 的素材 —— 选「＋ 自定义属性…」直接手填即可（先配模板后写素材是正常顺序）。
+          </div>
         </div>
         <!--
           单选筛选 —— 按用户要求改为只有一行 key + value 下拉。原来支持
@@ -1085,12 +1156,20 @@ function insertKeyword(field: "text") {
         -->
         <div class="flex items-center gap-2">
           <div class="flex-[2]" :style="{ minWidth: '0' }">
+            <FormInput
+              v-if="customKeyMode"
+              :model-value="filterRows[0]?.key ?? ''"
+              debounce="live"
+              placeholder="属性名，如 素材类型"
+              @update:model-value="(v) => updateFilterRow(0, { key: String(v ?? '') })"
+            />
             <FormSelect
+              v-else
               :model-value="filterRows[0]?.key ?? ''"
               :options="attrKeyOptions"
               placeholder="选择属性…"
               width="100%"
-              @update:model-value="(v) => updateFilterRow(0, { key: String(v) })"
+              @update:model-value="(v) => onKeySelect(String(v))"
             />
           </div>
           <div class="flex-[3]" :style="{ minWidth: '0' }">
