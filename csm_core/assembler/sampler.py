@@ -19,7 +19,7 @@ def _clean_competitor_title(raw: str) -> str:
     whitespace (``竞品 戴森``), or no separator (``竞品戴森``).
     """
     return _COMPETITOR_PREFIX_RE.sub("", raw).strip()
-from ..vault.scanner import VaultIndex
+from ..vault.scanner import VaultIndex, explain_empty_query
 from ..vault.brand_registry import BrandRegistry
 from ..vault.note_parser import ParsedNote, split_variants
 from ..template.schema import (
@@ -110,9 +110,12 @@ def _sample_notes_source(
     if not pool:
         # 带上筛选条件 —— 卡片小节的筛选值是手敲的（十几个新素材类型值），
         # 只说目录的话「市场口碑数据」敲成「市场口碑」根本查不出来。
+        # 再附一句归因：目录里明明有素材时，光说「没有符合条件的」不可行动。
         cond = f"，筛选 {source.filter}" if source.filter else ""
+        why = explain_empty_query(index, source.module, source.filter)
         raise EmptyPoolError(
             f"block '{block_id}': 目录 '{source.module}'{cond} 里没有符合条件的素材"
+            + (f"。{why}" if why else "")
         )
     requested = _resolve_pick_count(pick_notes, block_id, user_config, rng)
     if "unique_notes" in constraints:
@@ -303,11 +306,19 @@ def sample_competitor_cards(
     fixed = isinstance(block.pick_notes, int) or bool(
         getattr(block.pick_notes, "user_configurable", False)
     )
+    # 查询一篇都没捞到（目录/筛选写错）与「捞到了但都缺小节」是两回事：后者
+    # build_roster 已经逐条列了缺料清单，前者过去只留下一句「没有任何符合筛选
+    # 条件的竞品卡」，看不出是目录错了还是字段名错了 —— 补一句归因。
+    hint = f"{block.source.module} · {block.source.filter}"
+    if not pool:
+        why = explain_empty_query(index, block.source.module, block.source.filter)
+        if why:
+            hint = f"{hint}\n{why}"
     chosen, cap_note = sample_roster(
         roster, requested, rng,
         exclude_keys=exclude_keys, block_id=block.id, fixed_count=fixed,
         roster_warnings=roster_warnings,
-        source_hint=f"{block.source.module} · {block.source.filter}",
+        source_hint=hint,
     )
 
     picks: list[PickedVariant] = []

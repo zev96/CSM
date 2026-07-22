@@ -119,6 +119,7 @@ function updateSection(i: number, p: Record<string, any>) {
 function removeSection(i: number) {
   const sections = [...(block.value.sections ?? [])];
   sections.splice(i, 1);
+  sectionCustomKeys.value = [];      // 下标会整体移位，别让手填标记串到别的小节
   patch({ sections });
 }
 
@@ -127,6 +128,7 @@ function moveSection(i: number, dir: -1 | 1) {
   const j = i + dir;
   if (j < 0 || j >= sections.length) return;
   [sections[i], sections[j]] = [sections[j], sections[i]];
+  sectionCustomKeys.value = [];
   patch({ sections });
 }
 
@@ -136,8 +138,69 @@ function sectionFilterValue(sec: any): string {
   return v === undefined ? "" : String(v);
 }
 function sectionFilterKey(sec: any): string {
-  return Object.keys(sec.filter ?? {})[0] ?? "素材类型";
+  // 过去这里默认返回「素材类型」：filter 明明是空的，界面却显示一个用户从没
+  // 选过的字段名，他填上值就把这个幽灵默认烙进了模板。真实 vault 里区分小节
+  // 的字段可能叫「模块」，于是筛选恒空 —— 生成时报「没有符合条件的素材」，
+  // 而目录里明明躺着素材。空就显示「不筛选」，别替用户猜。
+  return Object.keys(sec.filter ?? {})[0] ?? "";
 }
+/** 小节可以覆盖目录 —— 属性集合得跟着它自己的目录走。 */
+const sectionAttrs = ref<Record<string, VaultAttribute[]>>({});
+
+function attrsForSection(sec: any): VaultAttribute[] {
+  const blockMod = block.value?.source?.module || "";
+  const mod = sec?.module || "";
+  if (!mod || mod === blockMod) return vaultAttrs.value;
+  return sectionAttrs.value[mod] ?? [];
+}
+
+function sectionKeyOptions(sec: any) {
+  const attrs = attrsForSection(sec);
+  const cur = sectionFilterKey(sec);
+  const set = new Set<string>(cur ? [cur] : []);
+  for (const a of attrs) set.add(a.key);
+  const opts = Array.from(set).map((k) => {
+    const meta = attrs.find((a) => a.key === k);
+    return {
+      label: meta ? `${k}  ·  ${meta.note_count} 篇` : `${k}  ·  自定义`,
+      value: k,
+    };
+  });
+  opts.push({ label: "＋ 自定义属性…", value: CUSTOM_KEY });
+  return [{ label: "不筛选", value: "" }, ...opts];
+}
+
+function sectionValueOptions(sec: any): string[] {
+  const key = sectionFilterKey(sec);
+  if (!key) return [];
+  const meta = attrsForSection(sec).find((a) => a.key === key);
+  if (!meta || meta.value_count > VALUE_OPTIONS_THRESHOLD) return [];
+  return meta.sample_values ?? [];
+}
+
+function sectionValueHint(sec: any): string {
+  const meta = attrsForSection(sec).find((a) => a.key === sectionFilterKey(sec));
+  if (!meta || !meta.sample_values.length) return "筛选值";
+  return `如：${meta.sample_values.slice(0, 2).join(" / ")}`;
+}
+
+/** 手填属性名的小节下标 —— 下拉里选了「自定义属性…」的。 */
+const sectionCustomKeys = ref<number[]>([]);
+
+function onSectionKeySelect(i: number, v: string) {
+  if (v === CUSTOM_KEY) {
+    if (!sectionCustomKeys.value.includes(i)) {
+      sectionCustomKeys.value = [...sectionCustomKeys.value, i];
+    }
+    setSectionFilter(i, "", "");
+    return;
+  }
+  sectionCustomKeys.value = sectionCustomKeys.value.filter((x) => x !== i);
+  // 换字段必须清值 —— 不同字段取值集不同，留着旧值就是个永远筛不出东西的
+  // 无效组合（而它看上去填得好好的）。
+  setSectionFilter(i, v, "");
+}
+
 function setSectionFilter(i: number, key: string, value: string) {
   // 键非空就落库（值可以暂时留空）—— 早期实现在值为空时整条丢掉，用户先填
   // 的键就没了，界面还继续显示他敲的键，实际存的是默认值「素材类型」。
@@ -472,9 +535,39 @@ watch(
   () => {
     if (
       block.value &&
-      ["paragraph", "numbered_list", "competitor_pool"].includes(block.value.kind)
+      ["paragraph", "numbered_list", "competitor_pool", "hero_brand"]
+        .includes(block.value.kind)
     ) {
       loadVaultAttrs();
+    }
+  },
+  { immediate: true },
+);
+
+// 主推卡小节各自覆盖目录时，再按小节目录补拉一次（块级目录的那份已有）。
+watch(
+  () => [
+    block.value?.id,
+    (block.value?.sections ?? []).map((s: any) => s?.module ?? "").join("\u0000"),
+  ] as const,
+  async () => {
+    sectionCustomKeys.value = [];
+    const blockMod = block.value?.source?.module || "";
+    const mods = new Set<string>(
+      (block.value?.sections ?? [])
+        .map((s: any) => String(s?.module ?? ""))
+        .filter((m: string) => m && m !== blockMod),
+    );
+    for (const mod of mods) {
+      if (sectionAttrs.value[mod]) continue;
+      try {
+        const r = await sidecar.client.get("/api/vault/attributes", {
+          params: { module: mod },
+        });
+        sectionAttrs.value = { ...sectionAttrs.value, [mod]: r.data?.attributes ?? [] };
+      } catch {
+        sectionAttrs.value = { ...sectionAttrs.value, [mod]: [] };
+      }
     }
   },
   { immediate: true },
@@ -984,18 +1077,43 @@ function insertKeyword(field: "text") {
                 placeholder="目录（留空 = 用块上的默认目录）"
                 @update:model-value="(v) => updateSection(si, { module: String(v ?? '') || null })"
               />
+              <!--
+                字段与值都走 vault 下拉：这两格原来是纯手敲，字段还带一个
+                「素材类型」的幽灵默认，用户照着填值就配出了一个恒空的筛选。
+                下拉直接列出该目录笔记里真实存在的字段与取值，填错的可能性
+                从「记得住吗」变成「选得到吗」。
+              -->
               <div class="flex flex-wrap items-center gap-2">
                 <FormInput
+                  v-if="sectionCustomKeys.includes(si)"
                   :model-value="sectionFilterKey(sec)"
                   debounce="live"
-                  placeholder="筛选字段"
-                  style="width: 110px"
-                  @update:model-value="(v) => setSectionFilter(si, String(v ?? '素材类型'), sectionFilterValue(sec))"
+                  placeholder="属性名"
+                  style="width: 120px"
+                  @update:model-value="(v) => setSectionFilter(si, String(v ?? ''), sectionFilterValue(sec))"
+                />
+                <FormSelect
+                  v-else
+                  :model-value="sectionFilterKey(sec)"
+                  :options="sectionKeyOptions(sec)"
+                  placeholder="筛选字段…"
+                  :width="120"
+                  @update:model-value="(v) => onSectionKeySelect(si, String(v))"
+                />
+                <FormSelect
+                  v-if="sectionValueOptions(sec).length > 0"
+                  :model-value="sectionFilterValue(sec)"
+                  :options="sectionValueOptions(sec).map((v) => ({ label: v, value: v }))"
+                  placeholder="筛选值…"
+                  :width="170"
+                  @update:model-value="(v) => setSectionFilter(si, sectionFilterKey(sec), String(v))"
                 />
                 <FormInput
+                  v-else
                   :model-value="sectionFilterValue(sec)"
                   debounce="live"
-                  placeholder="筛选值，如 市场口碑数据"
+                  :placeholder="sectionValueHint(sec)"
+                  :disabled="!sectionFilterKey(sec)"
                   style="width: 170px"
                   @update:model-value="(v) => setSectionFilter(si, sectionFilterKey(sec), String(v ?? ''))"
                 />

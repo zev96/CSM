@@ -6,6 +6,31 @@ from typing import Any
 from .note_parser import ParsedNote, parse_note
 
 
+def match_value(actual: Any, wanted: Any) -> bool:
+    """模板 filter 的单条判定：frontmatter 值 ``actual`` 是否满足 ``wanted``。
+
+    模板里的筛选值一律是字符串（下拉/输入框出来的），而 frontmatter 是
+    YAML —— 类型对不上就永远筛不出来，且失败是静默的（空池）：
+
+    * ``核心关键词: [模板二, 主推位, 品牌实力]`` 这类**列表**是标签集合，
+      单值筛选的语义只可能是「含这个标签」。严格相等的话，界面上明明列出
+      了「品牌实力」这个取值，选了却一篇都匹配不到。
+    * ``模板序号: 2`` 是 **int**，筛选值 ``"2"`` 严格比不等。
+
+    所以：列表按成员判定，标量按字符串判定。放宽不会改变任何「本来能用」
+    的筛选 —— 上面两类以前恒为空池（直接报错），没有模板能依赖它。
+    """
+    if actual is None:
+        return wanted is None
+    if actual == wanted:
+        return True
+    if isinstance(actual, list):
+        return any(str(item) == str(wanted) for item in actual)
+    if isinstance(actual, (str, int, float, bool)):
+        return str(actual) == str(wanted)
+    return False
+
+
 @dataclass
 class VaultIndex:
     root: Path
@@ -49,8 +74,81 @@ class VaultIndex:
             return candidates
         return [
             n for n in candidates
-            if all(n.frontmatter.get(k) == v for k, v in filters.items())
+            if all(match_value(n.frontmatter.get(k), v) for k, v in filters.items())
         ]
+
+
+def _values_of(notes: list[ParsedNote], key: str) -> list[str]:
+    """该批笔记里 ``key`` 出现过的去重取值（列表展开、保持出现顺序）。"""
+    seen: dict[str, None] = {}
+    for n in notes:
+        v = (n.frontmatter or {}).get(key)
+        if v is None or v == "":
+            continue
+        for item in (v if isinstance(v, list) else [v]):
+            if item is None or item == "":
+                continue
+            seen.setdefault(str(item), None)
+    return list(seen)
+
+
+def _keys_of(notes: list[ParsedNote]) -> list[str]:
+    """该批笔记 frontmatter 里出现过的字段名（去重、保持出现顺序）。"""
+    seen: dict[str, None] = {}
+    for n in notes:
+        for k in (n.frontmatter or {}):
+            seen.setdefault(k, None)
+    return list(seen)
+
+
+def _preview(items: list[str], cap: int = 8) -> str:
+    head = "、".join(f"「{x}」" for x in items[:cap])
+    return head + (f" 等 {len(items)} 种" if len(items) > cap else "")
+
+
+def explain_empty_query(
+    index: VaultIndex, module: str | None, filters: dict[str, Any] | None,
+) -> str:
+    """空池归因 —— 一句话说清「明明有素材，为什么筛不出来」。
+
+    "没有符合条件的素材" 本身不可行动：目录里躺着 8 篇，用户看得见，报错
+    却只说没有。真正要回答的是「差在哪」，而这三件事索引里都查得到：目录
+    到底空不空、筛选字段在不在、字段的实际取值是什么。
+
+    最值钱的是最后一句反查：把要筛的值拿去所有字段里搜一遍，命中就直接
+    报出「它在『模块』这个字段里」—— 填错字段名是这个 UI 最容易犯的错。
+    """
+    scope = index.by_module(module) if module else index.notes
+    if not scope:
+        return "该目录下一篇素材都没有 —— 检查目录名是否写错，或素材还没建。"
+    if not filters:
+        return ""
+
+    total = f"该目录下有 {len(scope)} 篇素材"
+    for key, wanted in filters.items():
+        if any(match_value(n.frontmatter.get(key), wanted) for n in scope):
+            continue                      # 这条不是凶手，看下一条
+        vals = _values_of(scope, key)
+        if not vals:
+            return (
+                f"{total}，但没有一篇写了「{key}」这个字段。"
+                f"该目录用到的字段：{_preview(_keys_of(scope))}。"
+            )
+        # 反查：值本身在哪些字段里出现过。全列出来不猜 —— 同一个值常常既在
+        # 标量字段（模块）又在标签列表（核心关键词）里，替用户选一个反而误导。
+        elsewhere = [
+            other for other in _keys_of(scope)
+            if other != key
+            and any(match_value(n.frontmatter.get(other), wanted) for n in scope)
+        ]
+        hint = ""
+        if elsewhere:
+            where = "、".join(f"「{k}」" for k in elsewhere[:3])
+            which = "该填它" if len(elsewhere) == 1 else "该填其中之一"
+            hint = f"你要的「{wanted}」在字段 {where} 里 —— 筛选字段大概{which}。"
+        return f"{total}，「{key}」的实际取值是：{_preview(vals)}。{hint}"
+
+    return f"{total}，每条筛选单独都能命中，但没有素材同时满足全部条件。"
 
 
 def parse_one(md_path: Path) -> tuple[ParsedNote | None, str | None]:
