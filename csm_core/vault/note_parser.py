@@ -92,19 +92,25 @@ def parse_note(path: Path) -> ParsedNote:
     )
 
 
-def _clean_chrome(text: str) -> str:
+def _clean_chrome(text: str, *, keep_bold: bool = False) -> str:
     """Strip markdown chrome (horizontal rules, heading prefixes) from ``text``.
 
     Horizontal-rule lines (``---``/``***``/``___``) are dropped entirely.
     ATX heading markers (``###``) are removed but the heading text is kept,
     so a ``### 产品优势`` line survives as plain ``产品优势``.
+
+    ``keep_bold`` 保留正文里的 ``**加粗**`` 标记。默认剥掉 —— 这是历史行为，
+    所有既有消费方（段落/编号列表/legacy 竞品池/测试框架）都依赖它，改默认
+    就是全线回归。榜单卡片模式要靠加粗突出关键数据（``**703.7 m³/h**``），
+    单独把这个开关打开。
     """
     out: list[str] = []
     for line in text.splitlines():
         if _HR_LINE_RE.match(line):
             continue
         line = _HEADING_PREFIX_RE.sub("", line)
-        line = _BOLD_RE.sub(r"\1", line)
+        if not keep_bold:
+            line = _BOLD_RE.sub(r"\1", line)
         # Strip any residual ①②③ markers that weren't at column 0 (e.g. nested
         # sub-lists inside a variant body); keeps the text that follows.
         line = _VARIANT_RE.sub("", line)
@@ -112,13 +118,23 @@ def _clean_chrome(text: str) -> str:
     return "\n".join(out).strip()
 
 
-def _split_variants(body: str) -> list[str]:
+def split_variants(body: str, *, keep_bold: bool = False) -> list[str]:
+    """Public entry point for variant splitting — see :func:`_split_variants`.
+
+    卡片模式按需重跑一遍 ``keep_bold=True`` 的切分（而不是在 ParsedNote 上
+    多存一份），避免整库笔记内存翻倍。切分逻辑与默认路径完全相同，所以
+    variant 序号一一对应，采样端可以按同一个 index 取到富文本版本。
+    """
+    return _split_variants(body, keep_bold=keep_bold)
+
+
+def _split_variants(body: str, *, keep_bold: bool = False) -> list[str]:
     """Split body on lines starting with ①/②/③/... Returns list of variant texts.
 
     If no numbered markers found, returns [body] as single variant.
     """
     if not any(marker in body for marker in VARIANT_MARKERS):
-        cleaned = _clean_chrome(body)
+        cleaned = _clean_chrome(body, keep_bold=keep_bold)
         return [cleaned] if cleaned else []
 
     # Split on lines starting with a variant marker — either bare (``① ...``)
@@ -128,13 +144,13 @@ def _split_variants(body: str) -> list[str]:
     for line in body.splitlines():
         if _VARIANT_START_RE.match(line):
             if current:
-                parts.append(_clean_chrome("\n".join(current)))
+                parts.append(_clean_chrome("\n".join(current), keep_bold=keep_bold))
                 current = []
             current.append(_VARIANT_RE.sub("", line, count=1))
         else:
             current.append(line)
     if current:
-        tail = _clean_chrome("\n".join(current))
+        tail = _clean_chrome("\n".join(current), keep_bold=keep_bold)
         if tail:
             parts.append(tail)
     return [p for p in parts if p]

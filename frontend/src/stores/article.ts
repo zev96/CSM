@@ -54,6 +54,9 @@ export interface GenerateRequest {
   skill_chain?: string[] | null;
   // Phase 4+ 成文契约档单次覆盖。不传 = 用全局 cfg.contract.mode。
   contract_mode?: "conservative" | "aggressive";
+  // 结构版本指定 {版本组 id: 版本名}。不传 = 按种子随机抽。
+  // 「重新随机」会带上当前版本以锁住结构。
+  version_overrides?: Record<string, string> | null;
 }
 
 /** 横评（多型号对比）提交意图 —— POST /api/generate/comparison 的 body 形。
@@ -513,16 +516,39 @@ export const useArticle = defineStore("article", {
         /* 静默 —— picker 走空词表兜底 */
       }
     },
-    /** Re-run the last request — useful for "重新随机" buttons. */
-    async rerun(): Promise<void> {
+    /** Re-run the last request — useful for "重新随机" buttons.
+     *
+     * 默认**锁住当前结构版本**：把这一篇抽中的 version_choices 原样传回去，
+     * 只换素材不换结构。否则 2 个版本下用户点一次「重新随机」有一半概率
+     * 整篇换成另一套结构——他想要的通常只是换个说法。
+     * 换版本走 rerunWithVersion()。 */
+    async rerun(versionOverrides?: Record<string, string> | null): Promise<void> {
       if (!this.lastRequest) return;
       // Bump seed by 1 so the assembler re-samples instead of giving the
       // exact same draft back.
-      const next = {
+      const locked =
+        versionOverrides === null
+          ? undefined
+          : (versionOverrides ?? this.plan?.version_choices ?? undefined);
+      const next: GenerateRequest = {
         ...this.lastRequest,
         seed: (this.lastRequest.seed ?? 0) + 1,
       };
+      if (locked && Object.keys(locked).length) {
+        next.version_overrides = locked;
+      } else {
+        // 必须显式擦除：lastRequest 里存着上一次重随写进去的锁，只是「不再
+        // 添加」的话它会被展开带出去，「换个版本」就永远换不掉了。
+        delete next.version_overrides;
+      }
       await this.submit(next);
+    },
+    /** 显式换结构版本。传 null = 放开锁、让种子重新抽。 */
+    async rerunWithVersion(groupId: string, option: string | null): Promise<void> {
+      if (option === null) return this.rerun(null);
+      const current = { ...(this.plan?.version_choices ?? {}) };
+      current[groupId] = option;
+      await this.rerun(current);
     },
     /** Cancel the live SSE subscription. The worker thread keeps going
      * (no /generate cancel endpoint yet), but the UI stops listening. */

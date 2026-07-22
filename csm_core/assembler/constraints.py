@@ -10,7 +10,8 @@ import random
 from ..vault.scanner import VaultIndex
 from ..vault.brand_registry import BrandRegistry
 from ..template.schema import (
-    Template, ParagraphBlock, TestResultsAlignedSource, TestFrameworkBlock,
+    Template, ParagraphBlock, HeroBrandBlock, TestResultsAlignedSource,
+    TestFrameworkBlock,
 )
 from csm_core.angle.model import Angle
 from .plan import AssemblyPlan, BlockResult
@@ -161,6 +162,33 @@ def _resolve_aligned_models(
     return models
 
 
+def draw_versions(
+    template: Template, *, seed: int,
+    overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """每个版本组抽一次签，返回 {group_id: option}。
+
+    - 命名空间 ``{seed}::version::{gid}`` 与块 RNG key ``{seed}-{block.id}``
+      不可能撞串（后者不含 ``::``），所以版本抽签不会与任何块的随机流相关。
+    - ``overrides`` 优先（生成表单指定版本 / 「重新随机」锁版本时传入）；
+      非法值直接忽略，退回抽签，不让脏输入把生成打挂。
+    - 被禁用的 option 不进抽签池（素材没铺齐的版本先别抽中）。
+    """
+    choices: dict[str, str] = {}
+    overrides = overrides or {}
+    for group in template.version_groups:
+        forced = overrides.get(group.id)
+        # 禁用的版本即使被显式指定也不采纳 —— 「重新随机」会把上一篇的
+        # version_choices 原样传回来，用户中途禁用了那个版本就该退回抽签。
+        if forced and forced in group.enabled_options():
+            choices[group.id] = forced
+            continue
+        pool = group.enabled_options()
+        rng = random.Random(f"{seed}::version::{group.id}")
+        choices[group.id] = rng.choice(pool)
+    return choices
+
+
 def assemble_plan(
     *, keyword: str, template: Template,
     index: VaultIndex, registry: BrandRegistry,
@@ -168,6 +196,8 @@ def assemble_plan(
     core_keyword: str | None = None,
     angle: Angle | None = None,
     note_weights: dict[str, float] | None = None,
+    version_overrides: dict[str, str] | None = None,
+    version_seed: int | None = None,
 ) -> AssemblyPlan:
     """Assemble a draft plan.
 
@@ -177,12 +207,34 @@ def assemble_plan(
     rendered draft for ``{keyword}`` substitution and brand-title append.
     When omitted, the extractor runs to derive it automatically; pass it
     explicitly when the user has manually overridden the auto-detection.
+
+    ``version_seed`` 让版本抽签用一个与 ``seed`` 不同的种子。批量候选靠
+    它保持「K 个候选同版本」：候选各自 seed 间隔 1000（素材各自随机），
+    但版本抽签统一用批次基准 seed —— 否则候选会落在不同结构上，而评分
+    是绝对次数扣分制（不按篇幅归一），长版本会被系统性打低分，候选对比
+    失去意义。缺省 = 跟随 ``seed``。
     """
     from csm_core.keyword import extract_core
     if core_keyword is None:
         core_keyword = extract_core(keyword)
     results_by_id: dict[str, BlockResult] = {}
     warnings: list[str] = []
+
+    # 结构 lint 的 error 上浮成生成告警。保存路径已经拦了，但手写 JSON 的
+    # 模板不经过保存端点（loader 直接读盘），那条防线覆盖不到。
+    from ..template.lint import lint_template
+    for issue in lint_template(template):
+        if issue.level == "error":
+            warnings.append(f"模板结构问题：{issue.message}")
+
+    version_choices = draw_versions(
+        template,
+        seed=version_seed if version_seed is not None else seed,
+        overrides=version_overrides,
+    )
+    active_blocks = [
+        b for b in template.blocks if template.is_visible(b, version_choices)
+    ]
 
     def sample_paragraph_tree(p: ParagraphBlock) -> BlockResult:
         aligned = None
@@ -211,7 +263,17 @@ def assemble_plan(
         return r
 
     top: list[BlockResult] = []
-    for b in template.blocks:
+    # 跨池竞品排除：深浅双池（TOP2-3 详细 / TOP4-10 简略）不能重复出同一款
+    # 产品。必须在**采样期**排除 —— 渲染期无 RNG 无索引，发现重复只能丢卡，
+    # 榜单就静默缩水，而且 pick 下标会与渲染项错位（reroll 寻址跟着崩）。
+    #
+    # 作用域 = 一个榜单区，与渲染的断区规则同源（标题/新主推处重置）。全文
+    # 累加会让第二个独立榜单区被第一个扣光名册，然后报「目录里没有竞品卡」
+    # ——目录里明明有，用户照着这句话永远查不出根因。
+    picked_competitor_keys: set[str] = set()
+    for b in active_blocks:
+        if b.kind == "heading" or isinstance(b, HeroBrandBlock):
+            picked_competitor_keys = set()
         if isinstance(b, ParagraphBlock):
             top.append(sample_paragraph_tree(b))
         elif isinstance(b, TestFrameworkBlock):
@@ -226,7 +288,15 @@ def assemble_plan(
             r = sample_block(
                 b, index, registry, seed=seed, user_config=user_config,
                 angle=angle, note_weights=note_weights,
+                exclude_competitor_keys=picked_competitor_keys,
             )
+            if r.meta.get("card") and r.kind == "competitor_pool":
+                picked_competitor_keys.update(r.meta.get("competitor_keys") or [])
+                for w in r.meta.get("roster_warnings") or []:
+                    warnings.append(f"block '{b.id}': {w}")
+            if r.note:
+                warnings.append(f"block '{b.id}': {r.note}")
+
             results_by_id[b.id] = r
             top.append(r)
 
@@ -234,4 +304,5 @@ def assemble_plan(
         keyword=keyword, core_keyword=core_keyword,
         template_id=template.id, seed=seed,
         results=top, warnings=warnings, angle=angle,
+        version_choices=version_choices,
     )

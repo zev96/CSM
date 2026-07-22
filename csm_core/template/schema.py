@@ -1,5 +1,6 @@
 """Pydantic models for the unified block-based template DSL."""
 from __future__ import annotations
+import re
 from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -61,8 +62,53 @@ NumberStyle = Literal["1.", "一、", "none"]
 TemplateType = Literal["导购文", "对比文", "单品文", "长文"]
 
 
+# ── Version groups ────────────────────────────────────────────────────
+class VersionGroup(BaseModel):
+    """一组互斥的文章结构版本（如 版本1·口碑权威型 / 版本2·功能拆解型）。
+
+    生成时每个组抽一次签，抽中的 option 决定哪些块可见。主推与竞品因此
+    永远同版本 —— 它们消费的是同一次抽签结果，而不是各自随机对齐。
+    权重按用户拍板不做：恒均匀随机。
+    """
+
+    id: str = Field(min_length=1)
+    label: str = ""
+    options: list[str] = Field(min_length=1)
+    # 素材还没铺齐的版本先禁用，不进抽签池（避免抽中后整区无内容）。
+    disabled_options: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if len(set(self.options)) != len(self.options):
+            raise ValueError(f"version group '{self.id}': duplicate options")
+        unknown = [o for o in self.disabled_options if o not in self.options]
+        if unknown:
+            raise ValueError(
+                f"version group '{self.id}': disabled_options {unknown} not in options"
+            )
+        if not self.enabled_options():
+            raise ValueError(
+                f"version group '{self.id}': all options disabled — 至少留一个可用版本"
+            )
+        return self
+
+    def enabled_options(self) -> list[str]:
+        return [o for o in self.options if o not in self.disabled_options]
+
+
 # ── Block types ───────────────────────────────────────────────────────
-class ParagraphBlock(BaseModel):
+class BlockBase(BaseModel):
+    """所有块共享的版本可见性字段。
+
+    ``versions`` 为空 = 全版本可见（旧模板天然如此，零迁移）。
+    ``version_group`` 只有多版本组时才需要填；单组模板留空即可。
+    """
+
+    versions: list[str] = Field(default_factory=list)
+    version_group: str | None = None
+
+
+class ParagraphBlock(BlockBase):
     kind: Literal["paragraph"] = "paragraph"
     id: str
     label: str = ""
@@ -74,7 +120,7 @@ class ParagraphBlock(BaseModel):
     children: list["ParagraphBlock"] = Field(default_factory=list)
 
 
-class HeadingBlock(BaseModel):
+class HeadingBlock(BlockBase):
     kind: Literal["heading"] = "heading"
     id: str
     level: Literal[1, 2, 3] = 2
@@ -82,7 +128,7 @@ class HeadingBlock(BaseModel):
     text: str = Field(min_length=1)
 
 
-class NumberedListBlock(BaseModel):
+class NumberedListBlock(BlockBase):
     kind: Literal["numbered_list"] = "numbered_list"
     id: str
     label: str = ""
@@ -99,15 +145,91 @@ class NumberedListBlock(BaseModel):
     item_separator: str = "\n\n"
 
 
-class HeroBrandBlock(BaseModel):
+# 卡片小节标签的排版：``inline`` = "**市场口碑数据** ：正文"（与用户范文
+# 一致），``line`` = 标签独占一行、正文换行。
+LabelLayout = Literal["inline", "line"]
+
+# 卡片标题行默认模板。占位符：{tier} 层级标签、{n} 排位、{title} 品牌+型号、
+# {brand}、{model}、{title_kw}（追加产品关键词的标题）。
+DEFAULT_CARD_HEADING = "### {tier} TOP{n}. {title}"
+
+_HEADING_VARS = {"tier", "n", "title", "title_kw", "brand", "model",
+                 "keyword", "search_keyword"}
+_HEADING_VAR_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _check_heading_template(block_id: str, template: str) -> None:
+    unknown = sorted(set(_HEADING_VAR_RE.findall(template)) - _HEADING_VARS)
+    if unknown:
+        raise ValueError(
+            f"'{block_id}' 标题模板里有未知占位符 {unknown} —— 它们会原样出现在"
+            f"正文里。可用：{sorted(_HEADING_VARS)}"
+        )
+
+
+class HeroSection(BaseModel):
+    """主推卡的一个「点」—— 从素材池抽内容，渲染成加粗小节。
+
+    ``label`` 留空 = 只输出正文不输出小节标题，用于把一个点拆成多段
+    （版本1 的「分维度硬核测评」下面是除醛/消毒/过敏原/体验四段，只有第
+    一段带标题）。
+    """
+
+    label: str = ""
+    module: str | None = None          # 缺省继承块级 source.module
+    filter: dict[str, Any] = Field(default_factory=dict)
+    pick_notes: PickNotes = 1
+    pick_variants_per_note: int = Field(default=1, ge=1)
+
+
+class HeroBrandBlock(BlockBase):
     kind: Literal["hero_brand"] = "hero_brand"
     id: str
     title: str = Field(min_length=1)
     reason_label: str = "推荐理由："
     number_style: NumberStyle = "1."
+    # ── 卡片模式（sections 非空即启用）──────────────────────────────
+    # 榜单文的主推是一张自包含卡片：自定义标题行 + 若干加粗小节，不再吞并
+    # 后续段落块、不输出 reason_label。sections 为空则一切照旧（legacy）。
+    source: NotesQuerySource | None = None    # 小节的默认素材目录
+    sections: list[HeroSection] = Field(default_factory=list)
+    heading_template: str = DEFAULT_CARD_HEADING
+    tier: str = ""                            # 层级标签，人工填写
+    label_layout: LabelLayout = "inline"
+
+    @model_validator(mode="after")
+    def _check_card(self):
+        if not self.sections:
+            return self
+        _check_heading_template(self.id, self.heading_template)
+        for i, sec in enumerate(self.sections):
+            if not (sec.module or (self.source and self.source.module)):
+                raise ValueError(
+                    f"hero_brand '{self.id}' 小节 #{i + 1} 没有目录："
+                    f"给小节填 module，或给块设置 source.module 作为默认"
+                )
+        return self
 
 
-class CompetitorPoolBlock(BaseModel):
+class CompetitorSection(BaseModel):
+    """竞品卡的一个「点」—— 对应卡片笔记里的一个 H2 小节。
+
+    素材形态是「每竞品一张卡」：frontmatter 定身份，正文 ``## 市场口碑数据``
+    这样分节，节内 ①②③ 放多份候选内容。一张覆盖了多版本点的「超集卡」可以
+    同时服务多个版本，不用每版本复制素材。
+    """
+
+    label: str = Field(min_length=1)   # 渲染成加粗小节标题
+    h2: str = ""                       # 卡片里的 H2 名；留空 = 用 label 宽松匹配
+    required: bool = True              # 缺这节的竞品不入名册；False = 缺则省略该节
+    # 0/负数会被采样端钳成 1，用户以为「这节不出」实际照出一条 —— 直接拒。
+    pick_variants: int = Field(default=1, ge=1)
+
+    def topic(self) -> str:
+        return (self.h2 or self.label).strip()
+
+
+class CompetitorPoolBlock(BlockBase):
     kind: Literal["competitor_pool"] = "competitor_pool"
     id: str
     source: SourceT
@@ -118,15 +240,51 @@ class CompetitorPoolBlock(BaseModel):
     pick_variants_per_note: int = 1
     constraints: list[str] = Field(default_factory=lambda: ["unique_notes"])
     reason_label: str = "推荐理由："
+    # ── 卡片模式（sections 非空即启用）──────────────────────────────
+    sections: list[CompetitorSection] = Field(default_factory=list)
+    heading_template: str = DEFAULT_CARD_HEADING
+    tier_key: str = "层级标签"          # 从卡片 frontmatter 取层级标签的键
+    label_layout: LabelLayout = "inline"
+    card_separator: str = "\n\n"
+
+    @model_validator(mode="after")
+    def _check_card(self):
+        if not self.sections:
+            return self
+        _check_heading_template(self.id, self.heading_template)
+        if not isinstance(self.source, NotesQuerySource):
+            raise ValueError(
+                f"competitor_pool '{self.id}' 卡片模式只支持 notes_query 素材源"
+            )
+        if not self.source.module:
+            raise ValueError(
+                f"competitor_pool '{self.id}' 卡片模式必须指定目录 —— "
+                f"空目录会把整个 vault 当成竞品名册"
+            )
+        if not self.source.filter:
+            raise ValueError(
+                f"competitor_pool '{self.id}' 卡片模式必须设置筛选条件"
+                f"（如 素材类型: 竞品卡）—— 否则同目录下的旧格式竞品笔记"
+                f"会混进名册，刷出一堆「缺全部小节」的假告警"
+            )
+        if not any(s.required for s in self.sections):
+            raise ValueError(
+                f"competitor_pool '{self.id}' 至少要有一个必需小节，"
+                f"否则任何笔记都能入册（含空卡）"
+            )
+        labels = [s.label for s in self.sections]
+        if len(set(labels)) != len(labels):
+            raise ValueError(f"competitor_pool '{self.id}' 小节名重复")
+        return self
 
 
-class LiteralBlock(BaseModel):
+class LiteralBlock(BlockBase):
     kind: Literal["literal"] = "literal"
     id: str
     text: str = Field(min_length=1)
 
 
-class TestFrameworkBlock(BaseModel):
+class TestFrameworkBlock(BlockBase):
     """随机抽 N 个测试项框架 + 自动填入 hero/pool 选中产品的对应结果。
 
     每篇框架笔记里写好"测试原理 / 测试方法 / 测试数据图 / 测试总结"等
@@ -175,7 +333,30 @@ class Template(BaseModel):
     # ``template_type`` 旧模板没有这个字段 — 默认 None，UI 端按需补默认值。
     template_type: TemplateType | None = None
     default_skill_id: str | None = None
+    # 版本组 — 空 = 没有版本概念（旧模板），过滤恒真、输出逐字节不变。
+    version_groups: list[VersionGroup] = Field(default_factory=list)
     blocks: list[Block] = Field(min_length=1)
+
+    def group_of(self, block) -> VersionGroup | None:
+        """返回块所属的版本组。未显式指定且只有一个组时默认那个组。"""
+        if not self.version_groups:
+            return None
+        gid = getattr(block, "version_group", None)
+        if gid:
+            return next((g for g in self.version_groups if g.id == gid), None)
+        if len(self.version_groups) == 1:
+            return self.version_groups[0]
+        return None
+
+    def is_visible(self, block, choices: dict[str, str]) -> bool:
+        """块在本次抽签结果下是否可见。无版本标签 = 全版本可见。"""
+        versions = getattr(block, "versions", None) or []
+        if not versions:
+            return True
+        group = self.group_of(block)
+        if group is None:
+            return True
+        return choices.get(group.id) in versions
 
     @model_validator(mode="after")
     def _validate_structure(self):
@@ -187,6 +368,13 @@ class Template(BaseModel):
                     raise ValueError(f"duplicate block id '{b.id}'")
                 ids.add(b.id)
                 if isinstance(b, ParagraphBlock):
+                    for c in b.children:
+                        if getattr(c, "versions", None):
+                            raise ValueError(
+                                f"子段落 '{c.id}' 不支持版本标签 —— 版本过滤只在"
+                                f"顶层块生效，标了也不会起作用。请把它提到顶层，"
+                                f"或给父块 '{b.id}' 打标签。"
+                            )
                     walk(b.children)
 
         walk(self.blocks)
@@ -212,4 +400,53 @@ class Template(BaseModel):
                     check_deps(b.children)
 
         check_deps(self.blocks)
+        self._validate_versions()
         return self
+
+    def _validate_versions(self) -> None:
+        """版本组引用完整性 —— 悬空 option / 未知组 / 多组歧义。
+
+        结构性问题（漏标、跨版本引用等）不在这里判：那需要模拟过滤后的
+        序列，放在 ``csm_core.template.lint`` 里做，保存时以警告呈现，
+        不阻断加载旧模板。
+        """
+        group_ids = [g.id for g in self.version_groups]
+        if len(set(group_ids)) != len(group_ids):
+            raise ValueError("duplicate version group id")
+
+        def walk(items: list) -> None:
+            for b in items:
+                versions = getattr(b, "versions", None) or []
+                gid = getattr(b, "version_group", None)
+                if gid and gid not in group_ids:
+                    raise ValueError(
+                        f"block '{b.id}' version_group unknown id '{gid}'"
+                    )
+                if versions:
+                    if not self.version_groups:
+                        raise ValueError(
+                            f"block '{b.id}' 标了版本 {versions} 但模板没有声明 version_groups"
+                        )
+                    group = self.group_of(b)
+                    if group is None:
+                        raise ValueError(
+                            f"block '{b.id}' 标了版本但没指明 version_group"
+                            f"（模板有 {len(self.version_groups)} 个版本组，必须显式指定）"
+                        )
+                    unknown = [v for v in versions if v not in group.options]
+                    if unknown:
+                        raise ValueError(
+                            f"block '{b.id}' versions {unknown} 不在版本组 "
+                            f"'{group.id}' 的 options 里"
+                        )
+                if isinstance(b, ParagraphBlock):
+                    for c in b.children:
+                        if getattr(c, "versions", None):
+                            raise ValueError(
+                                f"子段落 '{c.id}' 不支持版本标签 —— 版本过滤只在"
+                                f"顶层块生效，标了也不会起作用。请把它提到顶层，"
+                                f"或给父块 '{b.id}' 打标签。"
+                            )
+                    walk(b.children)
+
+        walk(self.blocks)

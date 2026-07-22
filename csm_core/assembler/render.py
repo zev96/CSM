@@ -111,6 +111,11 @@ def compose_draft(plan: AssemblyPlan) -> str:
     i = 0
     while i < len(plan.results):
         r = plan.results[i]
+        if r.meta.get("card") and r.kind in ("hero_brand", "competitor_pool"):
+            chunk, i = _render_card_region(plan.results, i, variables)
+            if chunk:
+                parts.append(chunk)
+            continue
         if r.kind == "hero_brand":
             chunk, i = _render_hero_region(plan.results, i, variables)
             if chunk:
@@ -155,6 +160,151 @@ def _render_standalone(r: BlockResult, variables: dict[str, str]) -> str:
     return ""
 
 
+# ── 榜单卡片 ──────────────────────────────────────────────────────────
+def _card_heading(
+    template: str, *, n: int, title: str, tier: str,
+    brand: str, model: str, variables: dict[str, str],
+) -> str:
+    """渲染卡片标题行。
+
+    ``{title}`` 卡片模式**不**追加产品关键词 —— 用户范文是「TOP2. 欧瑞达
+    X9」而不是「欧瑞达 X9 空气净化器」。要追加用 ``{title_kw}``。
+    多余空格收掉（tier 为空时 "### {tier} TOP1." 会留下双空格）。
+    """
+    keyword = variables.get("keyword", "")
+    text = _substitute(template, {
+        **variables,
+        "n": str(n), "title": title, "tier": tier,
+        "brand": brand, "model": model,
+        "title_kw": _append_keyword(title, keyword),
+    })
+    return re.sub(r"[ \t]{2,}", " ", text).replace(" \n", "\n").strip()
+
+
+def _render_card_sections(
+    picks: list[PickedVariant], layout: str,
+) -> str:
+    """把打平的 picks 按 section 顺序拼成加粗小节。
+
+    同一个 section 的多个 pick（``pick_variants`` > 1 或多篇笔记）合成一
+    段一段；section_label 为空表示「续段」——只出正文不出标题，用来把
+    「分维度硬核测评」这样的点拆成多段。
+    """
+    chunks: list[str] = []
+    current_index: int | None = None
+    for p in picks:
+        idx = p.meta.get("section_index")
+        label = str(p.meta.get("section_label") or "")
+        text = (p.text or "").strip()
+        if not text:
+            continue
+        new_section = idx != current_index
+        current_index = idx
+        if label and new_section:
+            if layout == "line":
+                # 双换行 —— 单个 \n 在 markdown 里会折回同一段，标签就黏在
+                # 正文上了（legacy hero 渲染早就为这条留过注释）。
+                chunks.append(f"**{label}**\n\n{text}")
+            else:
+                chunks.append(f"**{label}** ：{text}")
+        else:
+            chunks.append(text)
+    return "\n\n".join(chunks)
+
+
+def _render_hero_card(r: BlockResult, n: int, variables: dict[str, str]) -> str:
+    keyword = variables.get("keyword", "")
+    title = _substitute(r.text or "", variables).strip()
+    heading = _card_heading(
+        r.meta.get("heading_template", "### {tier} TOP{n}. {title}"),
+        n=n, title=title, tier=str(r.meta.get("tier") or ""),
+        brand="", model=title, variables=variables,
+    )
+    body = _render_card_sections(r.picks, r.meta.get("label_layout", "inline"))
+    return f"{heading}\n\n{body}" if body else heading
+
+
+def _render_competitor_cards(
+    r: BlockResult, start_index: int, variables: dict[str, str],
+) -> tuple[str, int]:
+    """渲染一个卡片竞品池，返回 (文本, 下一个可用排位)。"""
+    keyword = variables.get("keyword", "")
+    layout = r.meta.get("label_layout", "inline")
+    sep = r.meta.get("card_separator", "\n\n")
+    tmpl = r.meta.get("heading_template", "### {tier} TOP{n}. {title}")
+
+    grouped: list[tuple[str, list[PickedVariant]]] = []
+    for p in r.picks:
+        key = str(p.meta.get("competitor_key") or p.note_id)
+        if not grouped or grouped[-1][0] != key:
+            grouped.append((key, []))
+        grouped[-1][1].append(p)
+
+    cards: list[str] = []
+    n = start_index
+    for _, picks in grouped:
+        head = picks[0].meta
+        heading = _card_heading(
+            tmpl, n=n,
+            title=str(head.get("display_title") or head.get("title") or ""),
+            tier=str(head.get("tier") or ""),
+            brand=str(head.get("brand") or ""),
+            model=str(head.get("model") or ""),
+            variables=variables,
+        )
+        body = _render_card_sections(picks, layout)
+        cards.append(f"{heading}\n\n{body}" if body else heading)
+        n += 1
+    return sep.join(cards), n
+
+
+def ends_card_region(r: BlockResult) -> bool:
+    """榜单区终止条件 —— 渲染 / lint / 采样去重三处共用同一套语法。
+
+    区域从主推卡（或孤立卡池）开始，遇到 ``heading``（新章节）或下一个
+    ``hero_brand``（新榜单）收尾。中间的过渡段落、编号列表、固定文本都算
+    区内内容，正常渲染但**不打断排位计数** —— 榜单文里「下面看看这几款
+    竞品」这样的过渡句是自然写法，不该把 TOP 编号打回 1。
+
+    三处必须同源：早期版本里渲染在段落处断区、lint 在标题处断区，结果是
+    「插一句过渡段 → 竞品从 TOP1 重新编号，而 lint 认定模板合法」。
+    """
+    return r.kind == "heading" or r.kind == "hero_brand"
+
+
+def _render_card_region(
+    results: list[BlockResult], start: int, variables: dict[str, str],
+) -> tuple[str, int]:
+    """卡片榜单区：主推卡 = TOP1，后续卡片池连续编号。
+
+    一个区里可以放多个池（TOP2-3 深结构池 + TOP4-10 浅结构池），后池排位
+    接着前池数。跨池竞品去重已在采样期完成，这里只管排版。
+    """
+    parts: list[str] = []
+    n = 1
+    i = start
+    first = results[start]
+    if first.kind == "hero_brand":
+        parts.append(_render_hero_card(first, n, variables))
+        n += 1
+        i += 1
+    while i < len(results):
+        nxt = results[i]
+        if ends_card_region(nxt):
+            break
+        if nxt.kind == "competitor_pool" and nxt.meta.get("card"):
+            chunk, n = _render_competitor_cards(nxt, n, variables)
+            if chunk:
+                parts.append(chunk)
+            i += 1
+            continue
+        chunk = _render_standalone(nxt, variables)
+        if chunk:
+            parts.append(chunk)
+        i += 1
+    return "\n\n".join(p for p in parts if p), i
+
+
 def _render_hero_region(
     results: list[BlockResult], start: int, variables: dict[str, str],
 ) -> tuple[str, int]:
@@ -167,6 +317,12 @@ def _render_hero_region(
     while j < len(results):
         nxt = results[j]
         if nxt.kind == "competitor_pool":
+            if nxt.meta.get("card"):
+                # 卡片池不能被 legacy hero 收编 —— 收编会把「N 个竞品 × M 个
+                # 小节」摊成 N×M 条编号项（同一款产品重复出现 M 次），卡片
+                # 结构全灭。保存期 lint 已判这种混用为 error；这里保证即使
+                # 手写 JSON 绕过 lint 也只是各渲染各的，不出畸形输出。
+                break
             pool_result = nxt
             break
         if nxt.kind == "hero_brand":

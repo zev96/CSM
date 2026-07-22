@@ -53,6 +53,9 @@ class AssemblyPlan(BaseModel):
     results: list[BlockResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     angle: Angle | None = None         # Phase 2a 角度（旧 JSON 无此字段 → None）
+    # 本次抽中的结构版本 {version_group_id: option}。空 = 模板没有版本组。
+    # 前端展示、「重新随机」锁版本、批量候选记录都读这里。
+    version_choices: dict[str, str] = Field(default_factory=dict)
 
     def get_core_keyword(self) -> str:
         """Return the core keyword (always non-empty for valid plans)."""

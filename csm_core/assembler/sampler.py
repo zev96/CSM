@@ -21,7 +21,7 @@ def _clean_competitor_title(raw: str) -> str:
     return _COMPETITOR_PREFIX_RE.sub("", raw).strip()
 from ..vault.scanner import VaultIndex
 from ..vault.brand_registry import BrandRegistry
-from ..vault.note_parser import ParsedNote
+from ..vault.note_parser import ParsedNote, split_variants
 from ..template.schema import (
     ParagraphBlock, HeadingBlock, NumberedListBlock,
     HeroBrandBlock, CompetitorPoolBlock, LiteralBlock,
@@ -30,6 +30,7 @@ from ..template.schema import (
 )
 from csm_core.angle.model import Angle
 from csm_core.angle.filters import effective_filters
+from .cards import build_roster, pick_section_variants, sample_roster
 from .plan import BlockResult, PickedVariant
 
 
@@ -73,6 +74,21 @@ def _meta_for_note(note: ParsedNote) -> dict[str, Any]:
     return meta
 
 
+def _rich_variant(note: ParsedNote, variant_index: int, fallback: str) -> str:
+    """同一个变体的「保留加粗」版本。
+
+    重跑一遍 keep_bold 切分（切分逻辑完全相同，所以序号一一对应），只在
+    条数对得上时才替换 —— 对不上说明有意外差异，宁可退回普通文本也不能
+    错位取到别的变体。
+    """
+    if not note.variants:
+        return note.raw_body or fallback
+    rich = split_variants(note.raw_body, keep_bold=True)
+    if len(rich) == len(note.variants) and 0 <= variant_index < len(rich):
+        return rich[variant_index]
+    return fallback
+
+
 def _sample_notes_source(
     block_id: str, source: NotesQuerySource, constraints: list[str],
     pick_notes: PickNotes, pick_variants_per_note: int,
@@ -80,6 +96,7 @@ def _sample_notes_source(
     user_config: dict[str, int],
     angle: "Angle | None" = None,
     note_weights: dict[str, float] | None = None,
+    keep_bold: bool = False,
 ) -> list[PickedVariant]:
     eff = effective_filters(source, angle)
     pool = index.query(module=source.module, filters=eff)
@@ -110,6 +127,8 @@ def _sample_notes_source(
     for note in chosen:
         for _ in range(pick_variants_per_note):
             vi, text = _pick_variant(note, rng)
+            if keep_bold:
+                text = _rich_variant(note, vi, text)
             meta = _meta_for_note(note)
             if capped:
                 meta.update({"capped": True, "requested": requested, "available": actual})
@@ -125,6 +144,7 @@ def sample_block(
     aligned_models: list[str] | None = None,
     angle: "Angle | None" = None,
     note_weights: dict[str, float] | None = None,
+    exclude_competitor_keys: set[str] | None = None,
 ) -> BlockResult:
     rng = random.Random(f"{seed}-{block.id}")
 
@@ -139,6 +159,10 @@ def sample_block(
         return BlockResult(block_id=block.id, kind="literal", text=block.text)
 
     if isinstance(block, HeroBrandBlock):
+        if block.sections:
+            return _sample_hero_card(
+                block, index, rng, user_config, angle, note_weights,
+            )
         return BlockResult(
             block_id=block.id, kind="hero_brand", text=block.title,
             meta={
@@ -175,6 +199,11 @@ def sample_block(
     if isinstance(block, CompetitorPoolBlock):
         assert isinstance(block.source, NotesQuerySource), \
             f"competitor_pool block '{block.id}' only supports notes_query source"
+        if block.sections:
+            return sample_competitor_cards(
+                block, index, rng, user_config,
+                exclude_keys=exclude_competitor_keys or set(),
+            )
         picks = _sample_notes_source(
             block.id, block.source, constraints=block.constraints,
             pick_notes=block.pick_notes,
@@ -194,6 +223,124 @@ def sample_block(
         )
 
     raise EmptyPoolError(f"block '{block.id}': unsupported type {type(block).__name__}")
+
+
+def _sample_hero_card(
+    block: HeroBrandBlock, index: VaultIndex, rng: random.Random,
+    user_config: dict[str, int], angle: "Angle | None",
+    note_weights: dict[str, float] | None,
+) -> BlockResult:
+    """主推卡：逐小节从素材池抽内容，打平成 picks。
+
+    与 legacy hero 的区别是它自包含 —— 不吞并后续段落块、不输出
+    ``推荐理由：``，标题行由 heading_template 决定。每个小节独立配目录和
+    筛选，所以「品牌实力」和「核心参数」可以各自随机组合。
+    """
+    picks: list[PickedVariant] = []
+    for i, sec in enumerate(block.sections):
+        module = sec.module or (block.source.module if block.source else "")
+        src = NotesQuerySource(module=module, filter=dict(sec.filter))
+        sec_picks = _sample_notes_source(
+            f"{block.id}#{i + 1}·{sec.label or '正文'}", src,
+            constraints=["unique_notes"],
+            pick_notes=sec.pick_notes,
+            pick_variants_per_note=sec.pick_variants_per_note,
+            index=index, rng=rng, user_config=user_config, angle=angle,
+            note_weights=note_weights,
+            keep_bold=True,
+        )
+        for p in sec_picks:
+            meta = dict(p.meta)
+            meta.update({"section_index": i, "section_label": sec.label})
+            picks.append(p.model_copy(update={"meta": meta}))
+    # 小节素材不够时上浮告警。竞品那边「十大不许静默变七大」，主推卡少一
+    # 个点同样不能没人知道。
+    capped = [p for p in picks if p.meta.get("capped")]
+    note = ""
+    if capped:
+        labels = sorted({
+            str(p.meta.get("section_label") or f"#{p.meta.get('section_index', 0) + 1}")
+            for p in capped
+        })
+        note = f"小节「{'、'.join(labels)}」素材不足，实际出的条数少于设置"
+    return BlockResult(
+        block_id=block.id, kind="hero_brand", text=block.title, picks=picks,
+        note=note,
+        meta={
+            "card": True,
+            "number_style": block.number_style,
+            "heading_template": block.heading_template,
+            "tier": block.tier,
+            "label_layout": block.label_layout,
+            "section_labels": [s.label for s in block.sections],
+        },
+    )
+
+
+def sample_competitor_cards(
+    block: CompetitorPoolBlock, index: VaultIndex, rng: random.Random,
+    user_config: dict[str, int], *, exclude_keys: set[str],
+) -> BlockResult:
+    """竞品卡池：建名册 → 覆盖度预检 → 抽 N 个竞品 → 逐小节抽内容。
+
+    卡片模式不吃角度过滤（legacy 路径会按人群角度追加 filter 并在空池时
+    回退）—— 竞品目录不带人群标记，套角度只会把名册打空。
+    """
+    pool = index.query(module=block.source.module, filters=block.source.filter)
+    roster, roster_warnings = build_roster(
+        pool, block.sections, tier_key=block.tier_key,
+    )
+
+    requested = _resolve_pick_count(block.pick_notes, block.id, user_config, rng)
+    # 只有「随机区间」才允许抽不满时钳制。用户在 UI 上填死的数量
+    # （user_configurable）与写死的 int 一样是承诺 —— 榜单标题写「十大」
+    # 就不能静默出七个。
+    fixed = isinstance(block.pick_notes, int) or bool(
+        getattr(block.pick_notes, "user_configurable", False)
+    )
+    chosen, cap_note = sample_roster(
+        roster, requested, rng,
+        exclude_keys=exclude_keys, block_id=block.id, fixed_count=fixed,
+        roster_warnings=roster_warnings,
+        source_hint=f"{block.source.module} · {block.source.filter}",
+    )
+
+    picks: list[PickedVariant] = []
+    for card in chosen:
+        for i, spec in enumerate(block.sections):
+            body = card.sections.get(spec.label)
+            if body is None:
+                continue          # required 小节缺失的竞品已在建册时剔除
+            for vi, text in pick_section_variants(body, spec.pick_variants, rng):
+                picks.append(PickedVariant(
+                    note_id=card.note.id, variant_index=vi, text=text,
+                    meta={
+                        "brand": card.brand, "model": card.model,
+                        # title 必须保持 registry 口径（= 干净型号），下游
+                        # follow_slot 与品牌事实注入都按它查型号笔记。早期
+                        # 版本把展示串「小米 米家3C」塞进 title，导致测试
+                        # 框架查不到结果、竞品 specs 静默不进 brand_facts。
+                        "title": card.model,
+                        "display_title": card.title,
+                        "tier": card.tier,
+                        "competitor_key": card.key,
+                        "section_index": i, "section_label": spec.label,
+                    },
+                ))
+    result = BlockResult(
+        block_id=block.id, kind="competitor_pool", picks=picks,
+        meta={
+            "card": True,
+            "heading_template": block.heading_template,
+            "label_layout": block.label_layout,
+            "card_separator": block.card_separator,
+            "competitor_keys": [c.key for c in chosen],
+            "roster_warnings": roster_warnings,
+        },
+    )
+    if cap_note:
+        result.note = cap_note
+    return result
 
 
 def _sample_source_for_block(

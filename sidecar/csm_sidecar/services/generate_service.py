@@ -40,7 +40,7 @@ from csm_core.comparison import build_comparison_directive, compose_comparison_d
 from csm_core.feedback.model import FactSnapshot
 from csm_core.factcheck import check_facts
 from csm_core.factcheck.completeness import check_completeness
-from csm_core.llm import pricing
+from csm_core.llm import layout_guard, pricing
 
 from ..event_bus import bus
 from . import (
@@ -78,6 +78,10 @@ class GenerateRequest:
     skill_chain: list[str] | None = None
     # Phase 4+: 成文契约档单次覆盖。None = 用全局 cfg.contract.mode。
     contract_mode: str | None = None
+    # 结构版本指定 {version_group_id: option}。空 = 按种子随机抽。
+    # 「重新随机」按钮会把当前 plan.version_choices 原样传回来锁住版本，
+    # 只换素材不换结构。
+    version_overrides: dict[str, str] | None = None
 
 
 @dataclass
@@ -269,6 +273,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             angle=req.angle,
             # rank 关时 get_note_weights() 返回 {} → sampler 走零回归分支（今天行为）。
             note_weights=feedback_service.get_note_weights(),
+            version_overrides=req.version_overrides,
         )
         # Stash the plan so subsequent /api/assembler/reroll calls can
         # operate on it without re-scanning the vault.
@@ -634,6 +639,15 @@ def _rerun_job(job_id: str, pass_index: int) -> None:
             _cancelled.discard(job_id)
 
 
+def _card_signature(plan: Any):
+    """本篇卡片区的结构特征 —— 空则润色链走今天行为。"""
+    try:
+        sig = layout_guard.signature_from_plan(plan)
+        return sig if sig else None
+    except Exception:      # plan 形态异常时不该拖垮 finalize
+        return None
+
+
 def finalize_draft(
     job_id: str, *,
     chain_steps: list[chain_service.ChainStepInput],
@@ -707,8 +721,11 @@ def finalize_draft(
         provider=provider, model=model,
         checkpoint=checkpoint, on_pass=on_pass,
         contract_mode=contract_mode,
+        card_signature=_card_signature(plan),
     )
     final_text = state.final_text
+    for note in state.layout_rejections:
+        logger.warning("job %s 卡片排版守卫：%s", job_id, note)
     passes = [p.to_dict() for p in state.passes]
 
     # 链成本：在此算一次（吃 to_dict 出的 input_tokens/output_tokens），blocked 与

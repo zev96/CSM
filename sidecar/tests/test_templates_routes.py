@@ -107,3 +107,74 @@ def test_patch_path_id_mismatch_returns_400(client: TestClient, tmp_path: Path):
     body_b = _minimal_template_body("b")
     resp = client.patch("/api/templates/a", json=body_b)
     assert resp.status_code == 400
+
+
+# ── 版本组：结构 lint + 字段持久化 ──────────────────────────────────
+def _versioned_body(template_id: str = "ver") -> dict:
+    """带版本组、且 test_framework 跨版本引用 hero —— lint 应判 error。"""
+    return {
+        "id": template_id,
+        "name": "版本模板",
+        "product": "空气净化器",
+        "template_type": "导购文",
+        "version_groups": [{"id": "ver", "options": ["版本1", "版本2"]}],
+        "blocks": [
+            {"kind": "hero_brand", "id": "hero", "title": "DARZ D9",
+             "versions": ["版本1"]},
+            {"kind": "competitor_pool", "id": "pool",
+             "source": {"type": "notes_query", "module": "竞品"},
+             "versions": ["版本1"]},
+            {"kind": "test_framework", "id": "tf", "framework_module": "F",
+             "results_module": "R", "follow_slot": "hero+pool"},
+        ],
+    }
+
+
+def test_create_rejects_cross_version_reference(client: TestClient, tmp_path: Path):
+    tdir = tmp_path / "tpls"
+    tdir.mkdir()
+    client.patch("/api/config", json={"default_template": str(tdir / "anchor.json")})
+    resp = client.post("/api/templates", json=_versioned_body())
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(i["code"] == "cross_version_ref" for i in detail["issues"])
+
+
+def test_lint_endpoint_reports_without_saving(client: TestClient, tmp_path: Path):
+    tdir = tmp_path / "tpls"
+    tdir.mkdir()
+    client.patch("/api/config", json={"default_template": str(tdir / "anchor.json")})
+    resp = client.post("/api/templates/lint", json=_versioned_body("probe"))
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    # 没有落盘
+    assert client.get("/api/templates/probe").status_code == 404
+
+
+def test_version_groups_survive_create_and_get(client: TestClient, tmp_path: Path):
+    tdir = tmp_path / "tpls"
+    tdir.mkdir()
+    client.patch("/api/config", json={"default_template": str(tdir / "anchor.json")})
+    body = _versioned_body("ok")
+    # 修掉跨版本引用，让它能存下来
+    body["blocks"][2]["versions"] = ["版本1"]
+    body["blocks"].append(
+        {"kind": "literal", "id": "l2", "text": "版本2 内容", "versions": ["版本2"]}
+    )
+    assert client.post("/api/templates", json=body).status_code == 201
+    got = client.get("/api/templates/ok").json()
+    assert got["version_groups"] == [
+        {"id": "ver", "label": "", "options": ["版本1", "版本2"],
+         "disabled_options": []}
+    ]
+    assert got["blocks"][0]["versions"] == ["版本1"]
+
+
+def test_legacy_template_still_saves_clean(client: TestClient, tmp_path: Path):
+    """无版本组的老模板：lint 零告警、照常保存。"""
+    tdir = tmp_path / "tpls"
+    tdir.mkdir()
+    client.patch("/api/config", json={"default_template": str(tdir / "anchor.json")})
+    assert client.post("/api/templates", json=_minimal_template_body("legacy")).status_code == 201
+    lint = client.post("/api/templates/lint", json=_minimal_template_body("legacy")).json()
+    assert lint == {"ok": True, "issues": []}
