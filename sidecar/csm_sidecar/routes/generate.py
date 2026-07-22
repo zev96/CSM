@@ -40,6 +40,9 @@ class GenerateBody(BaseModel):
     skill_chain: list[str] | None = None
     # Phase 4+：成文契约档单次覆盖（None=用全局设置）。
     contract_mode: Literal["conservative", "aggressive"] | None = None
+    # 结构版本指定 {version_group_id: option}；空 = 随机抽。前端「重新
+    # 随机」把上一篇的 version_choices 传回来 = 锁版本只换素材。
+    version_overrides: dict[str, str] | None = None
 
 
 class JobAccepted(BaseModel):

@@ -78,6 +78,10 @@ class GenerateRequest:
     skill_chain: list[str] | None = None
     # Phase 4+: 成文契约档单次覆盖。None = 用全局 cfg.contract.mode。
     contract_mode: str | None = None
+    # 结构版本指定 {version_group_id: option}。空 = 按种子随机抽。
+    # 「重新随机」按钮会把当前 plan.version_choices 原样传回来锁住版本，
+    # 只换素材不换结构。
+    version_overrides: dict[str, str] | None = None
 
 
 @dataclass
@@ -269,6 +273,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             angle=req.angle,
             # rank 关时 get_note_weights() 返回 {} → sampler 走零回归分支（今天行为）。
             note_weights=feedback_service.get_note_weights(),
+            version_overrides=req.version_overrides,
         )
         # Stash the plan so subsequent /api/assembler/reroll calls can
         # operate on it without re-scanning the vault.

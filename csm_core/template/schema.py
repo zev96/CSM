@@ -61,8 +61,53 @@ NumberStyle = Literal["1.", "一、", "none"]
 TemplateType = Literal["导购文", "对比文", "单品文", "长文"]
 
 
+# ── Version groups ────────────────────────────────────────────────────
+class VersionGroup(BaseModel):
+    """一组互斥的文章结构版本（如 版本1·口碑权威型 / 版本2·功能拆解型）。
+
+    生成时每个组抽一次签，抽中的 option 决定哪些块可见。主推与竞品因此
+    永远同版本 —— 它们消费的是同一次抽签结果，而不是各自随机对齐。
+    权重按用户拍板不做：恒均匀随机。
+    """
+
+    id: str = Field(min_length=1)
+    label: str = ""
+    options: list[str] = Field(min_length=1)
+    # 素材还没铺齐的版本先禁用，不进抽签池（避免抽中后整区无内容）。
+    disabled_options: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if len(set(self.options)) != len(self.options):
+            raise ValueError(f"version group '{self.id}': duplicate options")
+        unknown = [o for o in self.disabled_options if o not in self.options]
+        if unknown:
+            raise ValueError(
+                f"version group '{self.id}': disabled_options {unknown} not in options"
+            )
+        if not self.enabled_options():
+            raise ValueError(
+                f"version group '{self.id}': all options disabled — 至少留一个可用版本"
+            )
+        return self
+
+    def enabled_options(self) -> list[str]:
+        return [o for o in self.options if o not in self.disabled_options]
+
+
 # ── Block types ───────────────────────────────────────────────────────
-class ParagraphBlock(BaseModel):
+class BlockBase(BaseModel):
+    """所有块共享的版本可见性字段。
+
+    ``versions`` 为空 = 全版本可见（旧模板天然如此，零迁移）。
+    ``version_group`` 只有多版本组时才需要填；单组模板留空即可。
+    """
+
+    versions: list[str] = Field(default_factory=list)
+    version_group: str | None = None
+
+
+class ParagraphBlock(BlockBase):
     kind: Literal["paragraph"] = "paragraph"
     id: str
     label: str = ""
@@ -74,7 +119,7 @@ class ParagraphBlock(BaseModel):
     children: list["ParagraphBlock"] = Field(default_factory=list)
 
 
-class HeadingBlock(BaseModel):
+class HeadingBlock(BlockBase):
     kind: Literal["heading"] = "heading"
     id: str
     level: Literal[1, 2, 3] = 2
@@ -82,7 +127,7 @@ class HeadingBlock(BaseModel):
     text: str = Field(min_length=1)
 
 
-class NumberedListBlock(BaseModel):
+class NumberedListBlock(BlockBase):
     kind: Literal["numbered_list"] = "numbered_list"
     id: str
     label: str = ""
@@ -99,7 +144,7 @@ class NumberedListBlock(BaseModel):
     item_separator: str = "\n\n"
 
 
-class HeroBrandBlock(BaseModel):
+class HeroBrandBlock(BlockBase):
     kind: Literal["hero_brand"] = "hero_brand"
     id: str
     title: str = Field(min_length=1)
@@ -107,7 +152,7 @@ class HeroBrandBlock(BaseModel):
     number_style: NumberStyle = "1."
 
 
-class CompetitorPoolBlock(BaseModel):
+class CompetitorPoolBlock(BlockBase):
     kind: Literal["competitor_pool"] = "competitor_pool"
     id: str
     source: SourceT
@@ -120,13 +165,13 @@ class CompetitorPoolBlock(BaseModel):
     reason_label: str = "推荐理由："
 
 
-class LiteralBlock(BaseModel):
+class LiteralBlock(BlockBase):
     kind: Literal["literal"] = "literal"
     id: str
     text: str = Field(min_length=1)
 
 
-class TestFrameworkBlock(BaseModel):
+class TestFrameworkBlock(BlockBase):
     """随机抽 N 个测试项框架 + 自动填入 hero/pool 选中产品的对应结果。
 
     每篇框架笔记里写好"测试原理 / 测试方法 / 测试数据图 / 测试总结"等
@@ -175,7 +220,30 @@ class Template(BaseModel):
     # ``template_type`` 旧模板没有这个字段 — 默认 None，UI 端按需补默认值。
     template_type: TemplateType | None = None
     default_skill_id: str | None = None
+    # 版本组 — 空 = 没有版本概念（旧模板），过滤恒真、输出逐字节不变。
+    version_groups: list[VersionGroup] = Field(default_factory=list)
     blocks: list[Block] = Field(min_length=1)
+
+    def group_of(self, block) -> VersionGroup | None:
+        """返回块所属的版本组。未显式指定且只有一个组时默认那个组。"""
+        if not self.version_groups:
+            return None
+        gid = getattr(block, "version_group", None)
+        if gid:
+            return next((g for g in self.version_groups if g.id == gid), None)
+        if len(self.version_groups) == 1:
+            return self.version_groups[0]
+        return None
+
+    def is_visible(self, block, choices: dict[str, str]) -> bool:
+        """块在本次抽签结果下是否可见。无版本标签 = 全版本可见。"""
+        versions = getattr(block, "versions", None) or []
+        if not versions:
+            return True
+        group = self.group_of(block)
+        if group is None:
+            return True
+        return choices.get(group.id) in versions
 
     @model_validator(mode="after")
     def _validate_structure(self):
@@ -212,4 +280,46 @@ class Template(BaseModel):
                     check_deps(b.children)
 
         check_deps(self.blocks)
+        self._validate_versions()
         return self
+
+    def _validate_versions(self) -> None:
+        """版本组引用完整性 —— 悬空 option / 未知组 / 多组歧义。
+
+        结构性问题（漏标、跨版本引用等）不在这里判：那需要模拟过滤后的
+        序列，放在 ``csm_core.template.lint`` 里做，保存时以警告呈现，
+        不阻断加载旧模板。
+        """
+        group_ids = [g.id for g in self.version_groups]
+        if len(set(group_ids)) != len(group_ids):
+            raise ValueError("duplicate version group id")
+
+        def walk(items: list) -> None:
+            for b in items:
+                versions = getattr(b, "versions", None) or []
+                gid = getattr(b, "version_group", None)
+                if gid and gid not in group_ids:
+                    raise ValueError(
+                        f"block '{b.id}' version_group unknown id '{gid}'"
+                    )
+                if versions:
+                    if not self.version_groups:
+                        raise ValueError(
+                            f"block '{b.id}' 标了版本 {versions} 但模板没有声明 version_groups"
+                        )
+                    group = self.group_of(b)
+                    if group is None:
+                        raise ValueError(
+                            f"block '{b.id}' 标了版本但没指明 version_group"
+                            f"（模板有 {len(self.version_groups)} 个版本组，必须显式指定）"
+                        )
+                    unknown = [v for v in versions if v not in group.options]
+                    if unknown:
+                        raise ValueError(
+                            f"block '{b.id}' versions {unknown} 不在版本组 "
+                            f"'{group.id}' 的 options 里"
+                        )
+                if isinstance(b, ParagraphBlock):
+                    walk(b.children)
+
+        walk(self.blocks)

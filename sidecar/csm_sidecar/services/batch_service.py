@@ -322,6 +322,11 @@ def _run_job(job_id: str) -> None:
                             keyword=item.keyword, template=template,
                             index=index, registry=registry,
                             seed=state.seed + (k - 1) * 1000, user_config={},
+                            # 候选素材各随机（seed 间隔 1000），但结构版本统一
+                            # 走批次基准 seed：评分是绝对次数扣分制、不按篇幅
+                            # 归一，候选落在不同结构上会让长版本被系统性打低分，
+                            # best-of-K 就退化成「总选最短的版本」。
+                            version_seed=state.seed,
                         )
                         draft = compose_draft(plan)
                         # 注入（与 finalize_draft 同条件：inject 或 factcheck 开才解析 scopes）

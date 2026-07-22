@@ -161,6 +161,31 @@ def _resolve_aligned_models(
     return models
 
 
+def draw_versions(
+    template: Template, *, seed: int,
+    overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """每个版本组抽一次签，返回 {group_id: option}。
+
+    - 命名空间 ``{seed}::version::{gid}`` 与块 RNG key ``{seed}-{block.id}``
+      不可能撞串（后者不含 ``::``），所以版本抽签不会与任何块的随机流相关。
+    - ``overrides`` 优先（生成表单指定版本 / 「重新随机」锁版本时传入）；
+      非法值直接忽略，退回抽签，不让脏输入把生成打挂。
+    - 被禁用的 option 不进抽签池（素材没铺齐的版本先别抽中）。
+    """
+    choices: dict[str, str] = {}
+    overrides = overrides or {}
+    for group in template.version_groups:
+        forced = overrides.get(group.id)
+        if forced and forced in group.options:
+            choices[group.id] = forced
+            continue
+        pool = group.enabled_options()
+        rng = random.Random(f"{seed}::version::{group.id}")
+        choices[group.id] = rng.choice(pool)
+    return choices
+
+
 def assemble_plan(
     *, keyword: str, template: Template,
     index: VaultIndex, registry: BrandRegistry,
@@ -168,6 +193,8 @@ def assemble_plan(
     core_keyword: str | None = None,
     angle: Angle | None = None,
     note_weights: dict[str, float] | None = None,
+    version_overrides: dict[str, str] | None = None,
+    version_seed: int | None = None,
 ) -> AssemblyPlan:
     """Assemble a draft plan.
 
@@ -177,12 +204,27 @@ def assemble_plan(
     rendered draft for ``{keyword}`` substitution and brand-title append.
     When omitted, the extractor runs to derive it automatically; pass it
     explicitly when the user has manually overridden the auto-detection.
+
+    ``version_seed`` 让版本抽签用一个与 ``seed`` 不同的种子。批量候选靠
+    它保持「K 个候选同版本」：候选各自 seed 间隔 1000（素材各自随机），
+    但版本抽签统一用批次基准 seed —— 否则候选会落在不同结构上，而评分
+    是绝对次数扣分制（不按篇幅归一），长版本会被系统性打低分，候选对比
+    失去意义。缺省 = 跟随 ``seed``。
     """
     from csm_core.keyword import extract_core
     if core_keyword is None:
         core_keyword = extract_core(keyword)
     results_by_id: dict[str, BlockResult] = {}
     warnings: list[str] = []
+
+    version_choices = draw_versions(
+        template,
+        seed=version_seed if version_seed is not None else seed,
+        overrides=version_overrides,
+    )
+    active_blocks = [
+        b for b in template.blocks if template.is_visible(b, version_choices)
+    ]
 
     def sample_paragraph_tree(p: ParagraphBlock) -> BlockResult:
         aligned = None
@@ -211,7 +253,7 @@ def assemble_plan(
         return r
 
     top: list[BlockResult] = []
-    for b in template.blocks:
+    for b in active_blocks:
         if isinstance(b, ParagraphBlock):
             top.append(sample_paragraph_tree(b))
         elif isinstance(b, TestFrameworkBlock):
@@ -234,4 +276,5 @@ def assemble_plan(
         keyword=keyword, core_keyword=core_keyword,
         template_id=template.id, seed=seed,
         results=top, warnings=warnings, angle=angle,
+        version_choices=version_choices,
     )

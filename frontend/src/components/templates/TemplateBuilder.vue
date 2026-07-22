@@ -88,6 +88,11 @@ const tplProduct = ref("");
 const tplType = ref<string | null>("导购文");
 const tplDefaultSkillId = ref<string | null>(null);
 const blocks = ref<any[]>([]);
+// 结构版本组（PR3 会在头部加编辑 UI；PR1 先保证加载→保存不丢）。
+const versionGroups = ref<any[]>([]);
+// 加载时的原始模板对象 —— save() 以它为底再覆盖已知字段，防止这个编辑器
+// 不认识的模板级字段在保存时被静默抹掉。
+const loadedRaw = ref<Record<string, any>>({});
 
 const selectedBlockIndex = ref<number>(-1);
 const saving = ref(false);
@@ -228,6 +233,10 @@ async function loadTemplate(id: string) {
     tplProduct.value = r.data.product;
     tplType.value = r.data.template_type ?? null;
     tplDefaultSkillId.value = r.data.default_skill_id ?? null;
+    // 模板级字段透传：save() 只手拼它认识的字段，不透传的话在这个编辑器里
+    // 存一次就会把 version_groups 这类字段抹掉（PATCH 是整体替换）。
+    loadedRaw.value = r.data ?? {};
+    versionGroups.value = r.data.version_groups ?? [];
     blocks.value = r.data.blocks ?? [];
     if (blocks.value.length > 0) selectedBlockIndex.value = 0;
   } catch (e: any) {
@@ -288,11 +297,13 @@ async function save() {
   }
   saving.value = true;
   const body: any = {
+    ...loadedRaw.value,
     id: tplId.value.trim(),
     name: tplName.value.trim(),
     product: tplProduct.value.trim(),
     template_type: tplType.value || null,
     default_skill_id: tplDefaultSkillId.value || null,
+    version_groups: versionGroups.value,
     blocks: blocks.value,
   };
   try {
