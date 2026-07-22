@@ -202,7 +202,9 @@ def _render_card_sections(
         current_index = idx
         if label and new_section:
             if layout == "line":
-                chunks.append(f"**{label}**\n{text}")
+                # 双换行 —— 单个 \n 在 markdown 里会折回同一段，标签就黏在
+                # 正文上了（legacy hero 渲染早就为这条留过注释）。
+                chunks.append(f"**{label}**\n\n{text}")
             else:
                 chunks.append(f"**{label}** ：{text}")
         else:
@@ -244,7 +246,7 @@ def _render_competitor_cards(
         head = picks[0].meta
         heading = _card_heading(
             tmpl, n=n,
-            title=str(head.get("title") or ""),
+            title=str(head.get("display_title") or head.get("title") or ""),
             tier=str(head.get("tier") or ""),
             brand=str(head.get("brand") or ""),
             model=str(head.get("model") or ""),
@@ -256,15 +258,27 @@ def _render_competitor_cards(
     return sep.join(cards), n
 
 
+def ends_card_region(r: BlockResult) -> bool:
+    """榜单区终止条件 —— 渲染 / lint / 采样去重三处共用同一套语法。
+
+    区域从主推卡（或孤立卡池）开始，遇到 ``heading``（新章节）或下一个
+    ``hero_brand``（新榜单）收尾。中间的过渡段落、编号列表、固定文本都算
+    区内内容，正常渲染但**不打断排位计数** —— 榜单文里「下面看看这几款
+    竞品」这样的过渡句是自然写法，不该把 TOP 编号打回 1。
+
+    三处必须同源：早期版本里渲染在段落处断区、lint 在标题处断区，结果是
+    「插一句过渡段 → 竞品从 TOP1 重新编号，而 lint 认定模板合法」。
+    """
+    return r.kind == "heading" or r.kind == "hero_brand"
+
+
 def _render_card_region(
     results: list[BlockResult], start: int, variables: dict[str, str],
 ) -> tuple[str, int]:
     """卡片榜单区：主推卡 = TOP1，后续卡片池连续编号。
 
-    区域语法 ``hero卡 → (literal)* → 竞品卡池+``：允许一个区里放多个池
-    （TOP2-3 深结构池 + TOP4-10 浅结构池），后池排位接着前池数。遇到别的
-    块类型（标题/段落/新的 hero）就收尾 —— 编号计数器绝不跨区泄漏。
-    跨池竞品去重已在采样期完成，这里只管排版。
+    一个区里可以放多个池（TOP2-3 深结构池 + TOP4-10 浅结构池），后池排位
+    接着前池数。跨池竞品去重已在采样期完成，这里只管排版。
     """
     parts: list[str] = []
     n = 1
@@ -276,17 +290,18 @@ def _render_card_region(
         i += 1
     while i < len(results):
         nxt = results[i]
+        if ends_card_region(nxt):
+            break
         if nxt.kind == "competitor_pool" and nxt.meta.get("card"):
             chunk, n = _render_competitor_cards(nxt, n, variables)
             if chunk:
                 parts.append(chunk)
             i += 1
             continue
-        if nxt.kind == "literal":
-            parts.append(_render_standalone(nxt, variables))
-            i += 1
-            continue
-        break
+        chunk = _render_standalone(nxt, variables)
+        if chunk:
+            parts.append(chunk)
+        i += 1
     return "\n\n".join(p for p in parts if p), i
 
 
@@ -302,6 +317,12 @@ def _render_hero_region(
     while j < len(results):
         nxt = results[j]
         if nxt.kind == "competitor_pool":
+            if nxt.meta.get("card"):
+                # 卡片池不能被 legacy hero 收编 —— 收编会把「N 个竞品 × M 个
+                # 小节」摊成 N×M 条编号项（同一款产品重复出现 M 次），卡片
+                # 结构全灭。保存期 lint 已判这种混用为 error；这里保证即使
+                # 手写 JSON 绕过 lint 也只是各渲染各的，不出畸形输出。
+                break
             pool_result = nxt
             break
         if nxt.kind == "hero_brand":

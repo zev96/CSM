@@ -28,6 +28,15 @@ def _migrate_competitor_pool_sources(data: dict[str, Any]) -> bool:
     for block in data.get("blocks") or []:
         if not isinstance(block, dict):
             continue
+        if block.get("kind") == "hero_brand":
+            # hero_brand 新增了 source 字段（卡片小节的默认目录），只接受
+            # notes_query。老 TemplateBuilder 曾给块无差别塞 brand_pool
+            # source，那种模板现在会加载即报错 —— 一并清掉。
+            src = block.get("source")
+            if isinstance(src, dict) and src.get("type") != "notes_query":
+                block["source"] = None
+                changed = True
+            continue
         if block.get("kind") != "competitor_pool":
             continue
         src = block.get("source") or {}

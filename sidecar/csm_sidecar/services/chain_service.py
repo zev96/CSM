@@ -61,8 +61,9 @@ class ChainState:
     steps: list[ChainStepInput]
     passes: list[ChainPass] = field(default_factory=list)
     contract_mode: str = "conservative"   # rerun 复用缓存值，保持同契约重跑
-    # 榜单卡片区在场时为 True：prompt 加排版硬约束 + 逐 pass 结构指纹校验。
-    preserve_layout: bool = False
+    # 榜单卡片区的结构特征（标题/小节名）。非空 = prompt 加排版硬约束 +
+    # 逐 pass 卡片区指纹校验。空 = 今天行为。
+    card_signature: Any = None
     # 被结构校验拦下并回退的 pass 说明（透给前端/日志，别静默）。
     layout_rejections: list[str] = field(default_factory=list)
 
@@ -106,11 +107,11 @@ def _prompt_for(state: ChainState, idx: int, prev_output: str) -> tuple[str, str
             brand_facts=state.brand_facts, title=state.title,
             angle_directive=state.angle_directive,
             contract_mode=state.contract_mode,
-            preserve_layout=state.preserve_layout,
+            preserve_layout=bool(state.card_signature),
         ))
         return system, user, state.draft
     system, user = build_refine_prompt(
-        step.body, prev_output, preserve_layout=state.preserve_layout,
+        step.body, prev_output, preserve_layout=bool(state.card_signature),
     )
     return system, user, prev_output
 
@@ -122,9 +123,9 @@ def _guard_layout(state: ChainState, idx: int, before: str, after: str) -> str:
     用户就拿不到榜单了。保结构优先于保润色：这一 pass 的成果作废，链继续
     往下走（后面的 pass 仍有机会在结构完好的文本上润色）。
     """
-    if not state.preserve_layout:
+    if not state.card_signature:
         return after
-    violation = layout_guard.check(before, after)
+    violation = layout_guard.check(before, after, state.card_signature)
     if violation is None:
         return after
     state.layout_rejections.append(f"pass {idx}: {violation} —— 已回退本轮润色")
@@ -143,7 +144,7 @@ def run_chain(
     checkpoint: Callable[[], None] = lambda: None,
     on_pass: Callable[[ChainPass], None] = lambda p: None,
     contract_mode: str = "conservative", cache: bool = True,
-    preserve_layout: bool = False,
+    card_signature: Any = None,
 ) -> ChainState:
     eff = steps or [ChainStepInput(None, "persona", "", None)]
     state = ChainState(
@@ -151,7 +152,7 @@ def run_chain(
         angle_directive=angle_directive, brand_facts=brand_facts,
         provider=provider, model=model, steps=eff,
         contract_mode=contract_mode,
-        preserve_layout=preserve_layout,
+        card_signature=card_signature,
     )
     if client is None:
         client = llm_factory.build_client(provider=provider, model=model)
@@ -193,6 +194,8 @@ def rerun(
         checkpoint()
         system, user, input_text = _prompt_for(state, idx, prev)
         out = client.complete(system=system, user=user)
+        # 「重跑这一段」同样要过排版守卫 —— 它恰恰是最容易把卡片揉平的入口。
+        out = _guard_layout(state, idx, input_text, out)
         old = state.passes[idx]
         p = ChainPass(
             index=idx, skill_id=old.skill_id, role=old.role,

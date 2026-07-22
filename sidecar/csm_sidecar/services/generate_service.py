@@ -40,7 +40,7 @@ from csm_core.comparison import build_comparison_directive, compose_comparison_d
 from csm_core.feedback.model import FactSnapshot
 from csm_core.factcheck import check_facts
 from csm_core.factcheck.completeness import check_completeness
-from csm_core.llm import pricing
+from csm_core.llm import layout_guard, pricing
 
 from ..event_bus import bus
 from . import (
@@ -639,15 +639,13 @@ def _rerun_job(job_id: str, pass_index: int) -> None:
             _cancelled.discard(job_id)
 
 
-def _plan_has_cards(plan: Any) -> bool:
-    """本篇是否含榜单卡片区 —— 决定要不要给润色链上排版硬约束。"""
+def _card_signature(plan: Any):
+    """本篇卡片区的结构特征 —— 空则润色链走今天行为。"""
     try:
-        return any(
-            getattr(r, "meta", {}).get("card")
-            for r in getattr(plan, "results", []) or []
-        )
+        sig = layout_guard.signature_from_plan(plan)
+        return sig if sig else None
     except Exception:      # plan 形态异常时不该拖垮 finalize
-        return False
+        return None
 
 
 def finalize_draft(
@@ -723,7 +721,7 @@ def finalize_draft(
         provider=provider, model=model,
         checkpoint=checkpoint, on_pass=on_pass,
         contract_mode=contract_mode,
-        preserve_layout=_plan_has_cards(plan),
+        card_signature=_card_signature(plan),
     )
     final_text = state.final_text
     for note in state.layout_rejections:

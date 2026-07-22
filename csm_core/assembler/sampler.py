@@ -30,9 +30,7 @@ from ..template.schema import (
 )
 from csm_core.angle.model import Angle
 from csm_core.angle.filters import effective_filters
-from .cards import (
-    build_roster, pick_section_variants, sample_roster, set_tier,
-)
+from .cards import build_roster, pick_section_variants, sample_roster
 from .plan import BlockResult, PickedVariant
 
 
@@ -255,8 +253,19 @@ def _sample_hero_card(
             meta = dict(p.meta)
             meta.update({"section_index": i, "section_label": sec.label})
             picks.append(p.model_copy(update={"meta": meta}))
+    # 小节素材不够时上浮告警。竞品那边「十大不许静默变七大」，主推卡少一
+    # 个点同样不能没人知道。
+    capped = [p for p in picks if p.meta.get("capped")]
+    note = ""
+    if capped:
+        labels = sorted({
+            str(p.meta.get("section_label") or f"#{p.meta.get('section_index', 0) + 1}")
+            for p in capped
+        })
+        note = f"小节「{'、'.join(labels)}」素材不足，实际出的条数少于设置"
     return BlockResult(
         block_id=block.id, kind="hero_brand", text=block.title, picks=picks,
+        note=note,
         meta={
             "card": True,
             "number_style": block.number_style,
@@ -278,16 +287,22 @@ def sample_competitor_cards(
     回退）—— 竞品目录不带人群标记，套角度只会把名册打空。
     """
     pool = index.query(module=block.source.module, filters=block.source.filter)
-    roster, roster_warnings = build_roster(pool, block.sections)
-    for card in roster:
-        set_tier(card, block.tier_key)
+    roster, roster_warnings = build_roster(
+        pool, block.sections, tier_key=block.tier_key,
+    )
 
     requested = _resolve_pick_count(block.pick_notes, block.id, user_config, rng)
-    fixed = isinstance(block.pick_notes, int)
+    # 只有「随机区间」才允许抽不满时钳制。用户在 UI 上填死的数量
+    # （user_configurable）与写死的 int 一样是承诺 —— 榜单标题写「十大」
+    # 就不能静默出七个。
+    fixed = isinstance(block.pick_notes, int) or bool(
+        getattr(block.pick_notes, "user_configurable", False)
+    )
     chosen, cap_note = sample_roster(
         roster, requested, rng,
         exclude_keys=exclude_keys, block_id=block.id, fixed_count=fixed,
         roster_warnings=roster_warnings,
+        source_hint=f"{block.source.module} · {block.source.filter}",
     )
 
     picks: list[PickedVariant] = []
@@ -301,7 +316,13 @@ def sample_competitor_cards(
                     note_id=card.note.id, variant_index=vi, text=text,
                     meta={
                         "brand": card.brand, "model": card.model,
-                        "title": card.title, "tier": card.tier,
+                        # title 必须保持 registry 口径（= 干净型号），下游
+                        # follow_slot 与品牌事实注入都按它查型号笔记。早期
+                        # 版本把展示串「小米 米家3C」塞进 title，导致测试
+                        # 框架查不到结果、竞品 specs 静默不进 brand_facts。
+                        "title": card.model,
+                        "display_title": card.title,
+                        "tier": card.tier,
                         "competitor_key": card.key,
                         "section_index": i, "section_label": spec.label,
                     },

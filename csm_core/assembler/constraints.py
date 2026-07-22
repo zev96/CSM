@@ -10,7 +10,8 @@ import random
 from ..vault.scanner import VaultIndex
 from ..vault.brand_registry import BrandRegistry
 from ..template.schema import (
-    Template, ParagraphBlock, TestResultsAlignedSource, TestFrameworkBlock,
+    Template, ParagraphBlock, HeroBrandBlock, TestResultsAlignedSource,
+    TestFrameworkBlock,
 )
 from csm_core.angle.model import Angle
 from .plan import AssemblyPlan, BlockResult
@@ -177,7 +178,9 @@ def draw_versions(
     overrides = overrides or {}
     for group in template.version_groups:
         forced = overrides.get(group.id)
-        if forced and forced in group.options:
+        # 禁用的版本即使被显式指定也不采纳 —— 「重新随机」会把上一篇的
+        # version_choices 原样传回来，用户中途禁用了那个版本就该退回抽签。
+        if forced and forced in group.enabled_options():
             choices[group.id] = forced
             continue
         pool = group.enabled_options()
@@ -216,6 +219,13 @@ def assemble_plan(
         core_keyword = extract_core(keyword)
     results_by_id: dict[str, BlockResult] = {}
     warnings: list[str] = []
+
+    # 结构 lint 的 error 上浮成生成告警。保存路径已经拦了，但手写 JSON 的
+    # 模板不经过保存端点（loader 直接读盘），那条防线覆盖不到。
+    from ..template.lint import lint_template
+    for issue in lint_template(template):
+        if issue.level == "error":
+            warnings.append(f"模板结构问题：{issue.message}")
 
     version_choices = draw_versions(
         template,
@@ -256,8 +266,14 @@ def assemble_plan(
     # 跨池竞品排除：深浅双池（TOP2-3 详细 / TOP4-10 简略）不能重复出同一款
     # 产品。必须在**采样期**排除 —— 渲染期无 RNG 无索引，发现重复只能丢卡，
     # 榜单就静默缩水，而且 pick 下标会与渲染项错位（reroll 寻址跟着崩）。
+    #
+    # 作用域 = 一个榜单区，与渲染的断区规则同源（标题/新主推处重置）。全文
+    # 累加会让第二个独立榜单区被第一个扣光名册，然后报「目录里没有竞品卡」
+    # ——目录里明明有，用户照着这句话永远查不出根因。
     picked_competitor_keys: set[str] = set()
     for b in active_blocks:
+        if b.kind == "heading" or isinstance(b, HeroBrandBlock):
+            picked_competitor_keys = set()
         if isinstance(b, ParagraphBlock):
             top.append(sample_paragraph_tree(b))
         elif isinstance(b, TestFrameworkBlock):
@@ -280,6 +296,7 @@ def assemble_plan(
                     warnings.append(f"block '{b.id}': {w}")
             if r.note:
                 warnings.append(f"block '{b.id}': {r.note}")
+
             results_by_id[b.id] = r
             top.append(r)
 

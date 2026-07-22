@@ -153,3 +153,99 @@ def test_legacy_template_without_versions_is_clean():
         {"kind": "competitor_pool", "id": "pool", "source": _src()},
     ])
     assert _codes(tpl) == set()
+
+
+def _card_pool(bid="pool", **extra):
+    return {
+        "kind": "competitor_pool", "id": bid,
+        "source": {"type": "notes_query", "module": "竞品",
+                   "filter": {"素材类型": "竞品卡"}},
+        "sections": [{"label": "市场口碑数据"}], **extra,
+    }
+
+
+def _card_hero(bid="hero", **extra):
+    return {
+        "kind": "hero_brand", "id": bid, "title": "DARZ D9",
+        "source": {"type": "notes_query", "module": "主推"},
+        "sections": [{"label": "市场口碑数据"}], **extra,
+    }
+
+
+def test_mixed_version_groups_in_one_region_is_error():
+    """主推挂 A 组、竞品挂 B 组 → 各抽各的签，同篇会出两个版本的内容。"""
+    groups = [{"id": "hero_ver", "options": ["版本1", "版本2"]},
+              {"id": "pool_ver", "options": ["版本1", "版本2"]}]
+    tpl = _tpl([
+        _card_hero(versions=["版本1"], version_group="hero_ver"),
+        _card_pool(versions=["版本1"], version_group="pool_ver"),
+    ], groups)
+    issues = lint_template(tpl)
+    assert has_errors(issues)
+    assert "mixed_version_group" in {i.code for i in issues}
+
+
+def test_untagged_card_block_in_tagged_region_warns():
+    """hero 漏标版本 → 它会在每个版本都出现（同一篇里两个 TOP1）。
+
+    早期只查 paragraph/numbered_list，恰好把最该查的 hero/竞品池漏掉了。
+    """
+    tpl = _tpl([
+        _card_hero("hero_v1"),                            # 漏标
+        _card_pool("pool_v1", versions=["版本1"]),
+        _card_hero("hero_v2", versions=["版本2"]),
+        _card_pool("pool_v2", versions=["版本2"]),
+    ], _GROUP)
+    issues = lint_template(tpl)
+    codes = {i.code for i in issues}
+    assert "untagged_card_block" in codes
+
+
+def test_hero_without_visible_pool_warns():
+    tpl = _tpl([
+        _card_hero("hero", versions=["版本1"]),
+        _card_pool("pool", versions=["版本2"]),
+        {"kind": "literal", "id": "l", "text": "x", "versions": ["版本2"]},
+    ], _GROUP)
+    assert "hero_without_pool" in _codes(tpl)
+
+
+def test_card_pool_without_hero_warns_without_version_groups():
+    """这条与版本无关 —— 榜单模板可以完全不用版本组。"""
+    assert "pool_without_hero" in _codes(_tpl([_card_pool()]))
+
+
+def test_disabled_option_not_linted_as_error():
+    """禁用的版本压根不会被抽中，不该拿它判 error 把模板锁得存不下去。"""
+    groups = [{"id": "ver", "options": ["版本1", "版本2"],
+               "disabled_options": ["版本2"]}]
+    tpl = _tpl([
+        {"kind": "hero_brand", "id": "hero", "title": "A", "versions": ["版本1"]},
+        {"kind": "competitor_pool", "id": "pool", "source": _src(),
+         "versions": ["版本1"]},
+        {"kind": "test_framework", "id": "tf", "framework_module": "F",
+         "results_module": "R", "follow_slot": "hero+pool",
+         "versions": ["版本1"]},
+    ], groups)
+    assert not has_errors(lint_template(tpl))
+
+
+def test_region_without_pool_does_not_flag_trailing_blocks():
+    """区域没有竞品池时不能一路查到文末，把收尾段落误报成夹心块。"""
+    tpl = _tpl([
+        {"kind": "hero_brand", "id": "hero", "title": "A", "versions": ["版本1"]},
+        {"kind": "literal", "id": "l2", "text": "v2", "versions": ["版本2"]},
+        {"kind": "paragraph", "id": "outro", "label": "收尾", "source": _src()},
+    ], _GROUP)
+    assert "untagged_in_region" not in _codes(tpl)
+
+
+def test_child_paragraph_version_tag_rejected():
+    """嵌套子段落的版本标签不生效（采样只过滤顶层），schema 直接拒绝。"""
+    with pytest.raises(ValueError, match="子段落"):
+        _tpl([{
+            "kind": "paragraph", "id": "p", "label": "父", "source": _src(),
+            "versions": ["版本1"],
+            "children": [{"kind": "paragraph", "id": "c", "label": "子",
+                          "source": _src(), "versions": ["版本2"]}],
+        }], _GROUP)

@@ -1,5 +1,6 @@
 """Pydantic models for the unified block-based template DSL."""
 from __future__ import annotations
+import re
 from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -152,6 +153,19 @@ LabelLayout = Literal["inline", "line"]
 # {brand}、{model}、{title_kw}（追加产品关键词的标题）。
 DEFAULT_CARD_HEADING = "### {tier} TOP{n}. {title}"
 
+_HEADING_VARS = {"tier", "n", "title", "title_kw", "brand", "model",
+                 "keyword", "search_keyword"}
+_HEADING_VAR_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _check_heading_template(block_id: str, template: str) -> None:
+    unknown = sorted(set(_HEADING_VAR_RE.findall(template)) - _HEADING_VARS)
+    if unknown:
+        raise ValueError(
+            f"'{block_id}' 标题模板里有未知占位符 {unknown} —— 它们会原样出现在"
+            f"正文里。可用：{sorted(_HEADING_VARS)}"
+        )
+
 
 class HeroSection(BaseModel):
     """主推卡的一个「点」—— 从素材池抽内容，渲染成加粗小节。
@@ -165,7 +179,7 @@ class HeroSection(BaseModel):
     module: str | None = None          # 缺省继承块级 source.module
     filter: dict[str, Any] = Field(default_factory=dict)
     pick_notes: PickNotes = 1
-    pick_variants_per_note: int = 1
+    pick_variants_per_note: int = Field(default=1, ge=1)
 
 
 class HeroBrandBlock(BlockBase):
@@ -187,6 +201,7 @@ class HeroBrandBlock(BlockBase):
     def _check_card(self):
         if not self.sections:
             return self
+        _check_heading_template(self.id, self.heading_template)
         for i, sec in enumerate(self.sections):
             if not (sec.module or (self.source and self.source.module)):
                 raise ValueError(
@@ -207,7 +222,8 @@ class CompetitorSection(BaseModel):
     label: str = Field(min_length=1)   # 渲染成加粗小节标题
     h2: str = ""                       # 卡片里的 H2 名；留空 = 用 label 宽松匹配
     required: bool = True              # 缺这节的竞品不入名册；False = 缺则省略该节
-    pick_variants: int = 1             # 该节抽几个 ①②③ 候选
+    # 0/负数会被采样端钳成 1，用户以为「这节不出」实际照出一条 —— 直接拒。
+    pick_variants: int = Field(default=1, ge=1)
 
     def topic(self) -> str:
         return (self.h2 or self.label).strip()
@@ -235,6 +251,7 @@ class CompetitorPoolBlock(BlockBase):
     def _check_card(self):
         if not self.sections:
             return self
+        _check_heading_template(self.id, self.heading_template)
         if not isinstance(self.source, NotesQuerySource):
             raise ValueError(
                 f"competitor_pool '{self.id}' 卡片模式只支持 notes_query 素材源"
@@ -351,6 +368,13 @@ class Template(BaseModel):
                     raise ValueError(f"duplicate block id '{b.id}'")
                 ids.add(b.id)
                 if isinstance(b, ParagraphBlock):
+                    for c in b.children:
+                        if getattr(c, "versions", None):
+                            raise ValueError(
+                                f"子段落 '{c.id}' 不支持版本标签 —— 版本过滤只在"
+                                f"顶层块生效，标了也不会起作用。请把它提到顶层，"
+                                f"或给父块 '{b.id}' 打标签。"
+                            )
                     walk(b.children)
 
         walk(self.blocks)
@@ -416,6 +440,13 @@ class Template(BaseModel):
                             f"'{group.id}' 的 options 里"
                         )
                 if isinstance(b, ParagraphBlock):
+                    for c in b.children:
+                        if getattr(c, "versions", None):
+                            raise ValueError(
+                                f"子段落 '{c.id}' 不支持版本标签 —— 版本过滤只在"
+                                f"顶层块生效，标了也不会起作用。请把它提到顶层，"
+                                f"或给父块 '{b.id}' 打标签。"
+                            )
                     walk(b.children)
 
         walk(self.blocks)

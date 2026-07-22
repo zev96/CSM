@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from csm_core.llm import layout_guard
+from csm_core.llm.layout_guard import CardSignature
 from csm_sidecar.services import chain_service
+
+_SIG = CardSignature(
+    titles=("霍尼韦尔 H-Max", "欧瑞达X9"),
+    labels=("市场口碑数据",),
+)
 
 _CARD = """### 综合性能首选 TOP1. 霍尼韦尔 H-Max
 
@@ -30,13 +36,13 @@ def _steps(n: int):
     ]
 
 
-def _run(client, *, preserve: bool, steps=1):
+def _run(client, *, preserve: bool, steps=1, cache=False):
     chain_service.reset_for_test()
     return chain_service.run_chain(
         "job", _steps(steps), draft=_CARD, keyword="空气净化器",
         title=None, angle_directive=None, brand_facts=None,
         provider=None, model=None, client=client,
-        preserve_layout=preserve, cache=False,
+        card_signature=_SIG if preserve else None, cache=cache,
     )
 
 
@@ -77,3 +83,15 @@ def test_later_pass_still_polishes_after_a_rollback():
     state = _run(_Client([broken, good]), preserve=True, steps=2)
     assert state.final_text == good
     assert len(state.layout_rejections) == 1
+
+
+def test_rerun_is_guarded_too():
+    """「重跑这一段」是最容易把卡片揉平的入口，同样要过守卫。"""
+    good = _CARD.replace("销量稳步增长", "销量走高")
+    state = _run(_Client([good]), preserve=True, cache=True)
+    assert state.final_text == good
+
+    broken = _Client(["全部揉成一段流水文，没有标题也没有加粗。"])
+    out = chain_service.rerun("job", 0, client=broken)
+    assert out["final_text"] == _CARD          # 回退到 pass 输入
+    assert chain_service.get_state("job").layout_rejections

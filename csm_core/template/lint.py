@@ -48,12 +48,13 @@ class LintIssue:
 def _combinations(groups: list[VersionGroup]) -> Iterable[dict[str, str]]:
     """所有版本组的抽签组合。单组模板就是每个 option 一条。
 
-    多版本组是笛卡尔积 —— 组数在 UI 上限制为 1，真出现多组时组合数也
-    可控（选项个位数），不做截断。
+    只枚举**启用**的 option —— 被禁用的版本压根不会被抽中（素材还没铺齐
+    才禁用的），拿它去判 error 会把一个正常模板锁得存不下去。
+    多版本组是笛卡尔积；组数在 UI 上限制为 1，真出现多组时组合数也可控。
     """
     if not groups:
         return []
-    for combo in product(*[g.options for g in groups]):
+    for combo in product(*[g.enabled_options() for g in groups]):
         yield {g.id: opt for g, opt in zip(groups, combo)}
 
 
@@ -113,14 +114,24 @@ def _lint_option_coverage(template: Template) -> list[LintIssue]:
 
 
 def _lint_regions_generic(template: Template) -> list[LintIssue]:
-    """与版本无关的榜单区检查 —— 卡片模式与 legacy 模式不能混用。
+    """与版本无关的榜单区检查。
 
-    卡片模式（``sections`` 非空）与旧的 hero 吞并模式渲染语义完全不同，
-    同一个榜单区里混用会得到一半卡片一半吞并的怪东西。
+    这些规则**不能**只在有版本组时跑 —— 榜单模板完全可以不用版本组，
+    而卡片/legacy 混用、卡片池没有主推这些问题与版本毫无关系。
     """
     issues: list[LintIssue] = []
     for hero, pools in _regions(template.blocks):
+        card_pools = [p for p in pools if getattr(p, "sections", None)]
         if hero is None:
+            if card_pools:
+                issues.append(LintIssue(
+                    level="warning", code="pool_without_hero",
+                    block_id=card_pools[0].id,
+                    message=(
+                        f"卡片竞品池 '{card_pools[0].id}' 前面没有主推卡 —— "
+                        f"排位会从 TOP1 开始编号。"
+                    ),
+                ))
             continue
         hero_card = bool(getattr(hero, "sections", None))
         for pool in pools:
@@ -134,6 +145,24 @@ def _lint_regions_generic(template: Template) -> list[LintIssue]:
                         f"要么两边都配小节，要么都不配。"
                     ),
                 ))
+        # 同一榜单区必须挂同一个版本组，否则主推与竞品各抽各的签 —— 「主推
+        # 版本1 ⇒ 竞品也版本1」这条核心约束会被彻底绕开（同篇出两个 TOP1）。
+        if len(template.version_groups) > 1:
+            hero_group = template.group_of(hero)
+            for pool in pools:
+                pool_group = template.group_of(pool)
+                if (hero_group and pool_group
+                        and hero_group.id != pool_group.id):
+                    issues.append(LintIssue(
+                        level="error", code="mixed_version_group",
+                        block_id=pool.id,
+                        message=(
+                            f"主推块 '{hero.id}' 挂在版本组 '{hero_group.id}'、"
+                            f"竞品池 '{pool.id}' 挂在 '{pool_group.id}' —— 两组各抽"
+                            f"各的签，主推和竞品会落到不同版本。同一榜单区必须"
+                            f"用同一个版本组。"
+                        ),
+                    ))
     return issues
 
 
@@ -194,16 +223,16 @@ def _lint_one_version(template: Template, choices: dict[str, str]) -> list[LintI
 
     # ② 漏标夹心块：某版本的 hero 区域中间夹着未标版本的块。它在别的版本
     #    里会变成孤儿顶层段落（或者被另一个版本的 hero 吞并），是最典型的
-    #    漏标事故。
-    tagged_regions = [
-        (hero, pools) for hero, pools in _regions(visible) if hero is not None
-    ]
-    for hero, pools in tagged_regions:
+    #    漏标事故。只在 hero…最后一个竞品池之间查 —— 区域没有池时不能一路
+    #    查到文末，否则收尾段落会被误报成夹心块。
+    for hero, pools in _regions(visible):
+        if hero is None or not pools:
+            continue
         hero_versions = getattr(hero, "versions", None) or []
         if not hero_versions:
             continue
         start = visible.index(hero)
-        end = visible.index(pools[-1]) if pools else len(visible) - 1
+        end = visible.index(pools[-1])
         for b in visible[start + 1:end + 1]:
             if b.kind not in _REGION_BODY_KINDS:
                 continue
@@ -218,7 +247,38 @@ def _lint_one_version(template: Template, choices: dict[str, str]) -> list[LintI
                 ),
             ))
 
-    # ③ 无主推的竞品池：编号会从 TOP1 开始，通常不是想要的。
+    # ③ 主推卡/竞品池自身漏标 —— 这两个才是本方案里真正需要打标签的块
+    #    （每版本就它俩），漏标的后果最严重：同一篇里出现两个 TOP1、两个
+    #    版本的点混在一起。早期版本只查 paragraph/numbered_list，恰好把最
+    #    该查的两类漏掉了。
+    for hero, pools in _regions(visible):
+        members = ([hero] if hero is not None else []) + list(pools)
+        tagged = [b for b in members if getattr(b, "versions", None)]
+        untagged = [b for b in members if not getattr(b, "versions", None)]
+        if tagged and untagged:
+            for b in untagged:
+                issues.append(LintIssue(
+                    level="warning", code="untagged_card_block",
+                    block_id=b.id, version=label,
+                    message=(
+                        f"榜单区里 '{b.id}' 没标版本，同区的其他块标了 —— "
+                        f"它会在每个版本都出现（同一篇里可能出现两个 TOP1）。"
+                    ),
+                ))
+
+    # ④ 有主推卡却没有可见竞品池：抽中这个版本时榜单只剩 TOP1。
+    for hero, pools in _regions(visible):
+        if hero is not None and getattr(hero, "sections", None) and not pools:
+            issues.append(LintIssue(
+                level="warning", code="hero_without_pool",
+                block_id=hero.id, version=label,
+                message=(
+                    f"版本「{label}」下主推卡 '{hero.id}' 后面没有可见的竞品池 —— "
+                    f"榜单只会出 TOP1。检查竞品池的版本标签。"
+                ),
+            ))
+
+    # ⑤ 无主推的竞品池（该版本下）：编号会从 TOP1 开始。
     for hero, pools in _regions(visible):
         if hero is None and pools:
             issues.append(LintIssue(

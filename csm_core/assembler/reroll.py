@@ -132,22 +132,28 @@ def _reroll_card_pick(
     if not isinstance(block, _Pool):
         # 主推卡：按小节的目录/筛选重建池，兄弟排除只看同一小节的 picks。
         module = spec.module or (block.source.module if block.source else "")
-        pool = vault_index.query(module=module, filters=dict(spec.filter))
+        # 走 effective_filters —— 采样期是带角度过滤的，重抽不带就会把
+        # 角度已排除的素材（比如宝妈向文案换进老年人角度的文章）换进来。
+        sec_src = NotesQuerySource(module=module, filter=dict(spec.filter))
+        pool = vault_index.query(
+            module=module, filters=effective_filters(sec_src, plan.angle),
+        )
         siblings = {
             p.note_id for i, p in enumerate(result.picks)
             if i != pick_index and p.meta.get("section_index") == sec_index
         }
-        layer1, layer2 = _variant_layers(
-            pool, current, siblings, keep_bold=True,
-        )
+        layer1, layer2 = _variant_layers(pool, current, siblings)
         chosen = _choose(layer1, rng) or _choose(layer2, rng)
         if chosen is None:
             raise NoCandidatesError(
                 f"block '{block_id}' pick {pick_index}: 小节「{spec.label}」没有其他候选"
             )
         note, vi = chosen
-        rich = split_variants(note.raw_body, keep_bold=True) or [note.raw_body]
-        text = rich[vi] if vi < len(rich) else rich[0]
+        from .sampler import _rich_variant
+        plain = note.variants[vi] if vi < len(note.variants) else note.raw_body
+        # 条数对不上就退回普通文本 —— 两种切分理论同构，但真错位时宁可
+        # 丢加粗也不能取到别的变体（variant_index 会与索引空间脱钩）。
+        text = _rich_variant(note, vi, plain)
         meta = dict(current.meta)
         meta.update({"section_index": sec_index, "section_label": spec.label})
         new_pick = PickedVariant(
@@ -195,7 +201,6 @@ def _competitor_key_of(note: ParsedNote) -> str | None:
 
 def _variant_layers(
     pool: list[ParsedNote], current: PickedVariant, sibling_note_ids: set[str],
-    *, keep_bold: bool = False,
 ) -> tuple[list[tuple[ParsedNote, int]], list[tuple[ParsedNote, int]]]:
     """(同笔记其他变体, 其他笔记全部变体) —— 与默认路径同款分层。"""
     same_note = next((n for n in pool if n.id == current.note_id), None)

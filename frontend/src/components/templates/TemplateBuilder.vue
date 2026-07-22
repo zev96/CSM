@@ -335,6 +335,10 @@ watch(
     if (id) {
       loadTemplate(id);
     } else {
+      // 从「编辑 A」切到「新建」时必须清掉 A 的模板级字段，否则 version_groups
+      // 会被带进新模板。
+      loadedRaw.value = {};
+      versionGroups.value = [];
       // Fresh-create defaults — name + product 由外部模态传入。
       tplId.value = "";
       tplName.value = props.initialName ?? "";

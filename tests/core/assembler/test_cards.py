@@ -147,7 +147,8 @@ def test_fixed_count_shortfall_hard_fails_with_checklist(tmp_path):
     with pytest.raises(CardRosterError) as e:
         _run(tmp_path, [_pool_block(pick=9)])
     msg = str(e.value)
-    assert "榜单需要 9 个竞品" in msg and "只有 3 个" in msg
+    assert "榜单需要 9 个竞品" in msg and "本池可用 3 个" in msg
+    assert "竞品" in msg
 
 
 def test_random_between_clamps_with_warning(tmp_path):
@@ -347,3 +348,169 @@ def test_reroll_preserves_bold_in_cards(tmp_path):
     old, new = _reroll(tmp_path, [_pool_block(pick=3)], "pool", 0)
     texts = [p.text for p in new.get_result("pool").picks]
     assert any("**" in t for t in texts)
+
+
+# ── 审查回归：区域语法 / 去重作用域 / 下游口径 ──────────────────────
+def test_transition_paragraph_does_not_reset_ranking(tmp_path):
+    """主推卡与竞品池之间插一句过渡段 —— 排位必须继续数，不能回到 TOP1。
+
+    渲染与 lint 早期对「区」的定义不一致：渲染在段落处断区、lint 在标题处
+    断区，结果是「插一句过渡段 → 竞品从 TOP1 重编号，而 lint 认定合法」。
+    出厂导购模板恰恰就是 hero → 段落×3 → 竞品池 的形状。
+    """
+    _three_competitors(tmp_path)
+    _hero_note(tmp_path, "主推/口碑.md", "市场口碑数据", "主推口碑")
+    _hero_note(tmp_path, "P/t.md", "过渡", "下面看看这几款竞品")
+    hero = {
+        "kind": "hero_brand", "id": "hero", "title": "DARZ D9",
+        "source": {"type": "notes_query", "module": "主推"},
+        "sections": [{"label": "口碑", "filter": {"素材类型": "市场口碑数据"}}],
+    }
+    blocks = [
+        hero,
+        {"kind": "paragraph", "id": "trans", "label": "过渡",
+         "source": {"type": "notes_query", "module": "P"}},
+        _pool_block(pick=2),
+    ]
+    _, draft = _run(tmp_path, blocks)
+    tops = [l.split("TOP")[1].split(".")[0]
+            for l in draft.splitlines() if l.startswith("###")]
+    assert tops == ["1", "2", "3"]
+    assert "下面看看这几款竞品" in draft
+
+
+def test_exclusion_resets_at_new_ranking_section(tmp_path):
+    """两个独立榜单区（heading 隔开）各自自由排 —— 第一区不该扣光第二区。"""
+    _three_competitors(tmp_path)
+    blocks = [
+        _pool_block(pick=3, block_id="p1"),
+        {"kind": "heading", "id": "h", "level": 2, "text": "按预算再推荐"},
+        _pool_block(pick=3, block_id="p2"),
+    ]
+    plan, _ = _run(tmp_path, blocks)
+    assert len(plan.get_result("p1").meta["competitor_keys"]) == 3
+    assert len(plan.get_result("p2").meta["competitor_keys"]) == 3
+
+
+def test_shortfall_message_explains_pool_exclusion(tmp_path):
+    """被前池抽光时不能报「目录里没有竞品卡」—— 目录里明明有。"""
+    _three_competitors(tmp_path)
+    with pytest.raises(CardRosterError) as e:
+        _run(tmp_path, [_pool_block(pick=3, block_id="deep"),
+                        _pool_block(pick=3, block_id="shallow")])
+    msg = str(e.value)
+    assert "名册合格 3 个" in msg and "已被本榜单前面的池选走" in msg
+    assert "没有任何符合筛选条件" not in msg
+
+
+def test_competitor_title_meta_stays_registry_shaped(tmp_path):
+    """meta['title'] 必须是干净型号（下游按它查型号笔记），展示串走 display_title。"""
+    _card(tmp_path, "竞品/竞品卡-米家3C.md", brand="米家", model="米家3C",
+          sections={"市场口碑数据": ["甲"], "品牌赛道定位": ["乙"],
+                    "分维度硬核测评": ["丙"]})
+    plan, draft = _run(tmp_path, [_pool_block(pick=1)])
+    pick = plan.results[0].picks[0]
+    assert pick.meta["title"] == "米家3C"          # registry 口径
+    assert pick.meta["brand"] == "小米"            # 别名折叠后的 canonical
+    assert pick.meta["display_title"] == "小米 米家3C"
+    assert "小米 米家3C" in draft                  # 渲染用展示串
+
+
+def test_section_matching_does_not_strip_test_prefixes(tmp_path):
+    """`## 测试数据` 不能被绑到「市场口碑数据」上。
+
+    测试框架的匹配器会先剥「测试」前缀 → 「数据」，而「数据」是「市场口碑
+    数据」的子串，一张没有口碑小节的卡就这样混过覆盖度预检。
+    """
+    _card(tmp_path, "竞品/竞品卡-诡异X.md", brand="诡异", model="诡异X1",
+          sections={"测试数据": ["CADR 实测 480"], "品牌赛道定位": ["乙"],
+                    "分维度硬核测评": ["丙"]})
+    with pytest.raises(CardRosterError) as e:
+        _run(tmp_path, [_pool_block(pick=1)])
+    assert "市场口碑数据" in str(e.value)
+
+
+def test_user_configurable_count_hard_fails_like_fixed(tmp_path):
+    """UI 上填死的数量与写死的 int 一样是承诺，抽不满必须失败而不是静默少出。"""
+    _three_competitors(tmp_path)
+    pick = {"user_configurable": True, "default": 10, "range": [1, 10]}
+    idx = scan_vault(tmp_path)
+    reg = build_brand_registry(tmp_path)
+    with pytest.raises(CardRosterError):
+        assemble_plan(
+            keyword="空气净化器", template=_tpl([_pool_block(pick=pick)]),
+            index=idx, registry=reg, seed=0, user_config={"pool": 10},
+        )
+
+
+def test_same_competitor_multiple_cards_are_alternatives(tmp_path):
+    """同一竞品的多张合格卡互为候选（不是「第一张不行才用第二张」）。"""
+    for suffix in ("A", "B"):
+        _card(tmp_path, f"竞品/竞品卡-欧瑞达X9-{suffix}.md",
+              brand="欧瑞达", model="欧瑞达X9",
+              sections={"市场口碑数据": [f"{suffix} 版口碑"],
+                        "品牌赛道定位": [f"{suffix} 版定位"],
+                        "分维度硬核测评": [f"{suffix} 版测评"]})
+    seen = set()
+    for seed in range(12):
+        plan, _ = _run(tmp_path, [_pool_block(pick=1)], seed=seed)
+        seen.add(plan.results[0].picks[0].note_id)
+    assert len(seen) == 2
+
+
+def test_section_variants_are_not_repeated(tmp_path):
+    """一个点抽 2 个候选时不该把同一段印两遍。"""
+    _card(tmp_path, "竞品/竞品卡-多候选.md", brand="多", model="多X1",
+          sections={"市场口碑数据": ["候选甲", "候选乙", "候选丙"],
+                    "品牌赛道定位": ["定位"], "分维度硬核测评": ["测评"]})
+    sections = [{"label": "市场口碑数据", "pick_variants": 2},
+                {"label": "品牌赛道定位"}, {"label": "分维度硬核测评"}]
+    plan, _ = _run(tmp_path, [_pool_block(pick=1, sections=sections)])
+    texts = [p.text for p in plan.results[0].picks
+             if p.meta["section_label"] == "市场口碑数据"]
+    assert len(texts) == 2 and len(set(texts)) == 2
+
+
+def test_near_duplicate_models_warn(tmp_path):
+    """X9 与 X-9 两张全覆盖卡都会入册、各占一个排位 —— 必须告警。"""
+    for model in ("欧瑞达X9", "欧瑞达X-9"):
+        _card(tmp_path, f"竞品/竞品卡-{model}.md", brand="欧瑞达", model=model,
+              sections={"市场口碑数据": ["甲"], "品牌赛道定位": ["乙"],
+                        "分维度硬核测评": ["丙"]})
+    plan, _ = _run(tmp_path, [_pool_block(pick=2)])
+    assert any("疑似同款重复上榜" in w for w in plan.warnings)
+
+
+def test_hero_card_capped_section_warns(tmp_path):
+    """主推卡小节素材不够也要出告警，不能静默少一段。"""
+    _hero_note(tmp_path, "主推/口碑.md", "市场口碑数据", "只有一篇")
+    hero = {
+        "kind": "hero_brand", "id": "hero", "title": "DARZ D9",
+        "source": {"type": "notes_query", "module": "主推"},
+        "sections": [{"label": "口碑", "filter": {"素材类型": "市场口碑数据"},
+                      "pick_notes": 3}],
+    }
+    plan, _ = _run(tmp_path, [hero])
+    assert any("素材不足" in w for w in plan.warnings)
+
+
+def test_legacy_hero_does_not_swallow_card_pool(tmp_path):
+    """legacy hero 收编卡片池会把 N 竞品×M 小节摊成 N×M 条编号项。"""
+    _three_competitors(tmp_path)
+    blocks = [
+        {"kind": "hero_brand", "id": "hero", "title": "DARZ D9"},
+        _pool_block(pick=2),
+    ]
+    _, draft = _run(tmp_path, blocks)
+    assert draft.count("###") == 2          # 两张卡，不是 6 条编号项
+    assert "3. " not in draft
+
+
+def test_tier_conflict_warns(tmp_path):
+    for i, tier in enumerate(("热门品牌", "性价比之选")):
+        _card(tmp_path, f"竞品/竞品卡-欧瑞达X9-{i}.md", brand="欧瑞达",
+              model="欧瑞达X9", tier=tier,
+              sections={"市场口碑数据": ["甲"], "品牌赛道定位": ["乙"],
+                        "分维度硬核测评": ["丙"]})
+    plan, _ = _run(tmp_path, [_pool_block(pick=1)])
+    assert any("层级标签不一致" in w for w in plan.warnings)
