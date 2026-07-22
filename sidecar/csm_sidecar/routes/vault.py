@@ -151,7 +151,7 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
     """
     from collections import defaultdict
 
-    from csm_core.assembler.cards import _note_sections, find_card_section
+    from csm_core.assembler.cards import find_card_section, note_sections
     from csm_core.brand_memory.identity import (
         normalize_model_key, note_identity, strip_competitor_prefix,
     )
@@ -170,6 +170,8 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="请先添加小节")
 
     cfg = config_service.load()
+    if not cfg.vault_root:
+        raise HTTPException(status_code=400, detail="还没设置资料库目录")
     try:
         index = vault_service.get(Path(cfg.vault_root))
     except Exception as e:      # 目录不存在 / 权限问题
@@ -203,7 +205,7 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
             continue
         brand, raw_model = ident
         key = f"{normalize_model_key(brand)}::{normalize_model_key(raw_model)}"
-        found = _note_sections(note)
+        found = note_sections(note)
         matched: dict[str, str | None] = {}
         for spec in specs:
             hit = find_card_section(found, spec.topic())

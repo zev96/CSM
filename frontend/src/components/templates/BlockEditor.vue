@@ -150,6 +150,20 @@ watch(
   },
 );
 
+/** 小节名与实际命中的 H2 不一致的行 —— 宽松匹配错配时的唯一线索。 */
+const mismatchedRows = computed(() => {
+  const rows = coverage.value?.rows ?? [];
+  return rows
+    .map((r: any) => ({
+      path: r.path,
+      model: r.model,
+      mismatches: Object.entries(r.matched ?? {})
+        .filter(([label, h2]) => h2 && h2 !== label)
+        .map(([label, h2]) => ({ label, h2 })),
+    }))
+    .filter((r: any) => r.mismatches.length);
+});
+
 /** 检查前的自查：目录必填、小节名必填。 */
 const coverageBlocker = computed<string | null>(() => {
   if (!block.value.source?.module) return "先给竞品池选目录";
@@ -777,6 +791,21 @@ function insertKeyword(field: "text") {
                 <span v-if="c.tiers.length > 1" class="text-ink-3">
                   层级标签不一致：{{ c.tiers.join("/") }}
                 </span>
+              </div>
+
+              <!--
+                小节 → 实际命中的 H2 对照。匹配是宽松的（H2 名与小节名互为
+                子串即算命中），错配时这是唯一的诊断线索：一张只有「## 口碑」
+                的卡会被判定覆盖了「市场口碑数据」，不摊开就只显示一个 ✓。
+              -->
+              <div v-if="mismatchedRows.length" class="mt-1.5">
+                <div class="text-ink-3">小节命中的 H2 与小节名不一致：</div>
+                <div v-for="r in mismatchedRows" :key="r.path" class="text-ink-3">
+                  {{ r.model }}：
+                  <span v-for="(m, li) in r.mismatches" :key="li">
+                    {{ m.label }} ← 「{{ m.h2 }}」{{ li < r.mismatches.length - 1 ? "，" : "" }}
+                  </span>
+                </div>
               </div>
               <div
                 v-for="r in coverage.rows.filter((x: any) => x.missing_required.length)"
