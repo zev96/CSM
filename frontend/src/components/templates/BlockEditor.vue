@@ -40,6 +40,10 @@ const props = defineProps<{
   siblings?: Array<{ id: string; label: string }>;
   /** Vault 叶子目录列表 — 喂给 CascadePicker 渲染折叠树。 */
   vaultDirs?: string[];
+  /** 模板声明的结构版本；空 = 模板没有版本概念。 */
+  versionOptions?: string[];
+  /** 本块（竞品池）在榜单里的排位起点，用于「本池从 TOP{k} 开始」提示。 */
+  startRank?: number;
 }>();
 const emit = defineEmits<{
   (e: "update:modelValue", v: any): void;
@@ -47,6 +51,93 @@ const emit = defineEmits<{
 }>();
 
 const block = computed(() => props.modelValue);
+
+// ── 所属版本 ────────────────────────────────────────────────────────
+const blockVersions = computed<string[]>(() => block.value.versions ?? []);
+
+function toggleVersion(v: string, on: boolean) {
+  const set = new Set(blockVersions.value);
+  if (on) set.add(v);
+  else set.delete(v);
+  patch({ versions: [...set] });
+}
+
+// ── 卡片小节 ────────────────────────────────────────────────────────
+const isCardMode = computed(() => (block.value.sections?.length ?? 0) > 0);
+const isPool = computed(() => block.value.kind === "competitor_pool");
+
+/** 打开卡片模式：给块补上卡片专属字段的默认值。 */
+function enableCardMode() {
+  if (isPool.value) {
+    patch({
+      sections: [{ label: "市场口碑数据", h2: "", required: true, pick_variants: 1 }],
+      heading_template: block.value.heading_template ?? "### {tier} TOP{n}. {title}",
+      tier_key: block.value.tier_key ?? "层级标签",
+      label_layout: block.value.label_layout ?? "inline",
+      card_separator: block.value.card_separator ?? "\n\n",
+    });
+  } else {
+    patch({
+      sections: [{ label: "市场口碑数据", module: null, filter: {}, pick_notes: 1, pick_variants_per_note: 1 }],
+      source: block.value.source ?? { type: "notes_query", module: "", filter: {} },
+      heading_template: block.value.heading_template ?? "### {tier} TOP{n}. {title}",
+      tier: block.value.tier ?? "",
+      label_layout: block.value.label_layout ?? "inline",
+    });
+  }
+}
+
+function disableCardMode() {
+  patch({ sections: [] });
+}
+
+function addSection() {
+  const sections = [...(block.value.sections ?? [])];
+  sections.push(
+    isPool.value
+      ? { label: "", h2: "", required: true, pick_variants: 1 }
+      : { label: "", module: null, filter: {}, pick_notes: 1, pick_variants_per_note: 1 },
+  );
+  patch({ sections });
+}
+
+function updateSection(i: number, p: Record<string, any>) {
+  const sections = [...(block.value.sections ?? [])];
+  sections[i] = { ...sections[i], ...p };
+  patch({ sections });
+}
+
+function removeSection(i: number) {
+  const sections = [...(block.value.sections ?? [])];
+  sections.splice(i, 1);
+  patch({ sections });
+}
+
+function moveSection(i: number, dir: -1 | 1) {
+  const sections = [...(block.value.sections ?? [])];
+  const j = i + dir;
+  if (j < 0 || j >= sections.length) return;
+  [sections[i], sections[j]] = [sections[j], sections[i]];
+  patch({ sections });
+}
+
+/** 小节的筛选值 —— 卡片主推小节沿用块级 filter 的单键形态。 */
+function sectionFilterValue(sec: any): string {
+  const v = Object.values(sec.filter ?? {})[0];
+  return v === undefined ? "" : String(v);
+}
+function sectionFilterKey(sec: any): string {
+  return Object.keys(sec.filter ?? {})[0] ?? "素材类型";
+}
+function setSectionFilter(i: number, key: string, value: string) {
+  updateSection(i, { filter: value ? { [key]: value } : {} });
+}
+
+const HEADING_VARS = ["{tier}", "{n}", "{title}", "{brand}", "{model}", "{title_kw}"];
+
+function insertHeadingVar(v: string) {
+  patch({ heading_template: (block.value.heading_template ?? "") + v });
+}
 
 function patch(p: Record<string, any>) {
   emit("update:modelValue", { ...props.modelValue, ...p });
@@ -473,6 +564,213 @@ function insertKeyword(field: "text") {
         @update:model-value="(v) => patch({ reason_label: String(v ?? '') })"
       />
     </FormField>
+
+    <!-- ── 所属版本（模板声明了版本组才显示）─────────────────────── -->
+    <FormField v-if="(versionOptions?.length ?? 0) > 0" label="所属版本">
+      <div class="flex flex-wrap gap-1.5">
+        <button
+          v-for="opt in versionOptions"
+          :key="opt"
+          type="button"
+          class="rounded px-2 py-1 text-[11.5px] transition"
+          :style="{
+            background: blockVersions.includes(opt) ? 'var(--primary-soft)' : 'var(--card-2)',
+            border: '1px solid var(--line)',
+          }"
+          @click="toggleVersion(opt, !blockVersions.includes(opt))"
+        >
+          {{ opt }}
+        </button>
+      </div>
+      <p class="mt-1 text-[11px] text-ink-3">
+        {{
+          blockVersions.length
+            ? "只在选中的版本里出现"
+            : "未选 = 每个版本都出现（公共块）。推荐区的块务必选上版本，漏标会让两个版本的内容混在一起。"
+        }}
+      </p>
+    </FormField>
+
+    <!-- ── 榜单卡片模式（hero_brand / competitor_pool）────────────── -->
+    <div
+      v-if="block.kind === 'hero_brand' || isPool"
+      class="mt-1"
+      style="border-top: 1px solid var(--line); padding-top: 10px"
+    >
+      <div class="flex items-center gap-2">
+        <span class="text-[12px] font-medium">榜单卡片</span>
+        <span class="text-[11px] text-ink-3">标题行 + 加粗小节，每个点独立随机</span>
+        <button
+          type="button"
+          class="ml-auto text-[11px] text-ink-3 hover:text-ink"
+          @click="isCardMode ? disableCardMode() : enableCardMode()"
+        >
+          {{ isCardMode ? "关闭卡片模式" : "启用卡片模式" }}
+        </button>
+      </div>
+
+      <template v-if="isCardMode">
+        <div
+          v-if="isPool && (startRank ?? 0) > 1"
+          class="mt-2 rounded px-2 py-1 text-[11px] text-ink-3"
+          :style="{ background: 'var(--card-2)' }"
+        >
+          本池排位从 TOP{{ startRank }} 开始（接续前面的卡）
+        </div>
+
+        <FormField label="标题行模板" class="mt-2">
+          <FormInput
+            :model-value="block.heading_template ?? '### {tier} TOP{n}. {title}'"
+            debounce="live"
+            @update:model-value="(v) => patch({ heading_template: String(v ?? '') })"
+          />
+          <div class="mt-1 flex flex-wrap gap-1">
+            <button
+              v-for="hv in HEADING_VARS"
+              :key="hv"
+              type="button"
+              class="rounded px-1.5 py-0.5 text-[10.5px] text-ink-3 hover:text-ink"
+              :style="{ background: 'var(--card-2)' }"
+              @click="insertHeadingVar(hv)"
+            >
+              {{ hv }}
+            </button>
+          </div>
+        </FormField>
+
+        <FormField v-if="block.kind === 'hero_brand'" label="层级标签" class="mt-2">
+          <FormInput
+            :model-value="block.tier ?? ''"
+            debounce="live"
+            placeholder="如：国内外知名品牌-综合性能首选"
+            @update:model-value="(v) => patch({ tier: String(v ?? '') })"
+          />
+        </FormField>
+        <FormField v-else label="层级标签字段" class="mt-2">
+          <FormInput
+            :model-value="block.tier_key ?? '层级标签'"
+            debounce="live"
+            placeholder="竞品卡 frontmatter 里的字段名"
+            @update:model-value="(v) => patch({ tier_key: String(v ?? '') })"
+          />
+        </FormField>
+
+        <FormField label="小节标签排版" class="mt-2">
+          <FormSelect
+            :model-value="block.label_layout ?? 'inline'"
+            :options="[
+              { label: '同行：**小节名** ：正文', value: 'inline' },
+              { label: '独占一行', value: 'line' },
+            ]"
+            width="100%"
+            @update:model-value="(v) => patch({ label_layout: String(v) })"
+          />
+        </FormField>
+
+        <div class="mt-3">
+          <div class="mb-1.5 flex items-center gap-2">
+            <span class="text-[12px] font-medium">小节</span>
+            <span class="text-[11px] text-ink-3">
+              {{ isPool ? "对应竞品卡里的 ## 小节" : "每节独立配目录与筛选" }}
+            </span>
+            <button
+              type="button"
+              class="ml-auto text-[11px] text-ink-3 hover:text-ink"
+              @click="addSection"
+            >
+              + 添加小节
+            </button>
+          </div>
+
+          <div
+            v-for="(sec, si) in block.sections"
+            :key="si"
+            class="mb-2 rounded p-2"
+            :style="{ background: 'var(--card-2)', border: '1px solid var(--line)' }"
+          >
+            <div class="flex items-center gap-1.5">
+              <FormInput
+                :model-value="sec.label ?? ''"
+                debounce="live"
+                :placeholder="isPool ? '小节名' : '小节名（留空 = 上一节的续段）'"
+                style="flex: 1"
+                @update:model-value="(v) => updateSection(si, { label: String(v ?? '') })"
+              />
+              <button type="button" class="px-1 text-ink-3 hover:text-ink" title="上移" @click="moveSection(si, -1)">
+                <Icon name="arrowUp" :size="11" />
+              </button>
+              <button type="button" class="px-1 text-ink-3 hover:text-ink" title="下移" @click="moveSection(si, 1)">
+                <Icon name="arrowDown" :size="11" />
+              </button>
+              <button type="button" class="hover:text-red px-1 text-ink-3" title="删除" @click="removeSection(si)">
+                <Icon name="trash" :size="11" />
+              </button>
+            </div>
+
+            <div v-if="isPool" class="mt-1.5 flex flex-wrap items-center gap-2">
+              <FormInput
+                :model-value="sec.h2 ?? ''"
+                debounce="live"
+                placeholder="卡片里的 ## 名（留空 = 用小节名匹配）"
+                style="width: 210px"
+                @update:model-value="(v) => updateSection(si, { h2: String(v ?? '') })"
+              />
+              <label class="flex items-center gap-1 text-[11.5px]">
+                <input
+                  type="checkbox"
+                  :checked="sec.required !== false"
+                  @change="updateSection(si, { required: ($event.target as HTMLInputElement).checked })"
+                />
+                必需
+              </label>
+              <label class="flex items-center gap-1 text-[11.5px]">
+                候选数
+                <FormInput
+                  :model-value="String(sec.pick_variants ?? 1)"
+                  type="number"
+                  style="width: 56px"
+                  @update:model-value="(v) => updateSection(si, { pick_variants: Math.max(1, Number(v) || 1) })"
+                />
+              </label>
+            </div>
+
+            <div v-else class="mt-1.5 space-y-1.5">
+              <CascadePicker
+                :model-value="sec.module ?? ''"
+                :dirs="vaultDirs ?? []"
+                placeholder="目录（留空 = 用块上的默认目录）"
+                @update:model-value="(v) => updateSection(si, { module: String(v ?? '') || null })"
+              />
+              <div class="flex flex-wrap items-center gap-2">
+                <FormInput
+                  :model-value="sectionFilterKey(sec)"
+                  debounce="live"
+                  placeholder="筛选字段"
+                  style="width: 110px"
+                  @update:model-value="(v) => setSectionFilter(si, String(v ?? '素材类型'), sectionFilterValue(sec))"
+                />
+                <FormInput
+                  :model-value="sectionFilterValue(sec)"
+                  debounce="live"
+                  placeholder="筛选值，如 市场口碑数据"
+                  style="width: 170px"
+                  @update:model-value="(v) => setSectionFilter(si, sectionFilterKey(sec), String(v ?? ''))"
+                />
+                <label class="flex items-center gap-1 text-[11.5px]">
+                  抽几篇
+                  <FormInput
+                    :model-value="String(typeof sec.pick_notes === 'number' ? sec.pick_notes : 1)"
+                    type="number"
+                    style="width: 56px"
+                    @update:model-value="(v) => updateSection(si, { pick_notes: Math.max(1, Number(v) || 1) })"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
 
     <!-- ── 目录（paragraph / numbered_list / competitor_pool） ──────── -->
     <FormField v-if="hasModule" label="目录">

@@ -368,6 +368,17 @@ async function takeoff() {
 const isDemoMode = computed(() => !article.lastRequest);
 const sampleIndex = ref(0);
 
+/** 本次抽中的结构版本（模板没有版本组时为空）。 */
+const versionChoices = computed(() =>
+  Object.entries(article.plan?.version_choices ?? {}).map(([group, option]) => ({
+    group,
+    option: String(option),
+  })),
+);
+
+/** 采样告警 —— 竞品缺料清单、素材不足这类「补料工作清单」。 */
+const planWarnings = computed<string[]>(() => article.plan?.warnings ?? []);
+
 async function rerun() {
   if (article.lastRequest) {
     // 真实模式：调用 store 的 rerun（会重新提交 generate 请求）
@@ -1258,6 +1269,28 @@ const tabSectionLabel = computed(() => {
                     <div class="text-[12px] mt-0.5" :style="{ color: 'var(--ink-2)' }">
                       {{ sampledCount }}/{{ assemblyRows.length }} 已采样 · 点击各段可润色或重随
                     </div>
+                    <!-- 本次抽中的结构版本 + 换版本入口 -->
+                    <div v-if="versionChoices.length" class="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span
+                        v-for="vc in versionChoices"
+                        :key="vc.group"
+                        class="rounded px-1.5 py-0.5 text-[11px]"
+                        :style="{ background: 'var(--card-2)', color: 'var(--ink-2)' }"
+                        title="本篇抽中的结构版本；「全部重采」会锁住它只换素材"
+                      >
+                        结构：{{ vc.option }}
+                      </span>
+                      <button
+                        type="button"
+                        class="text-[11px] underline"
+                        :style="{ color: 'var(--ink-3)' }"
+                        :disabled="article.isRunning"
+                        title="放开版本锁，让种子重新抽一套结构"
+                        @click="article.rerun(null)"
+                      >
+                        换个版本
+                      </button>
+                    </div>
                   </div>
                   <!--
                     "全部重采"：换一套全新组装（等价于右下角的"重新随机"，
@@ -1273,6 +1306,20 @@ const tabSectionLabel = computed(() => {
                     <Icon name="refresh" :size="11" />
                     全部重采
                   </Btn>
+                </div>
+                <div
+                  v-if="planWarnings.length"
+                  class="mb-3 flex-shrink-0 space-y-1 overflow-y-auto"
+                  :style="{ maxHeight: '92px' }"
+                >
+                  <div
+                    v-for="(w, wi) in planWarnings"
+                    :key="wi"
+                    class="rounded px-2 py-1 text-[11px]"
+                    :style="{ background: 'var(--card-2)', color: 'var(--ink-2)', borderLeft: '2px solid var(--amber)' }"
+                  >
+                    {{ w }}
+                  </div>
                 </div>
                 <div class="min-h-0 flex-1 overflow-y-auto" :style="{ paddingBottom: '20px', paddingRight: '4px' }">
                   <!--
