@@ -133,6 +133,32 @@ function setSectionFilter(i: number, key: string, value: string) {
   updateSection(i, { filter: value ? { [key]: value } : {} });
 }
 
+// ── 覆盖度检查 ──────────────────────────────────────────────────────
+const coverage = ref<any | null>(null);
+const coverageLoading = ref(false);
+
+async function runCoverage() {
+  coverageLoading.value = true;
+  coverage.value = null;
+  try {
+    const r = await sidecar.client.post("/api/vault/card_coverage", {
+      module: block.value.source?.module ?? "",
+      filter: block.value.source?.filter ?? {},
+      sections: (block.value.sections ?? []).map((x: any) => ({
+        label: x.label,
+        h2: x.h2 ?? "",
+        required: x.required !== false,
+      })),
+      tier_key: block.value.tier_key ?? "层级标签",
+    });
+    coverage.value = r.data;
+  } catch (e: any) {
+    coverage.value = { error: e?.response?.data?.detail ?? e?.message ?? String(e) };
+  } finally {
+    coverageLoading.value = false;
+  }
+}
+
 const HEADING_VARS = ["{tier}", "{n}", "{title}", "{brand}", "{model}", "{title_kw}"];
 
 function insertHeadingVar(v: string) {
@@ -666,6 +692,77 @@ function insertKeyword(field: "text") {
             @update:model-value="(v) => patch({ label_layout: String(v) })"
           />
         </FormField>
+
+        <div v-if="isPool" class="mt-2">
+          <button
+            type="button"
+            class="text-[11px] text-ink-3 hover:text-ink"
+            :disabled="coverageLoading"
+            title="看看哪些竞品能上榜、谁缺哪节、型号写歪没有"
+            @click="runCoverage"
+          >
+            {{ coverageLoading ? "检查中…" : "覆盖度检查" }}
+          </button>
+          <div
+            v-if="coverage"
+            class="mt-1.5 rounded p-2 text-[11px]"
+            :style="{ background: 'var(--card-2)', border: '1px solid var(--line)' }"
+          >
+            <template v-if="coverage.error">
+              <span class="text-red">{{ coverage.error }}</span>
+            </template>
+            <template v-else>
+              <div class="mb-1">
+                合格竞品 {{ coverage.eligible_count }} / {{ coverage.competitors.length }}
+                （目录里 {{ coverage.note_count }} 张卡）
+              </div>
+              <div
+                v-for="c in coverage.competitors"
+                :key="c.identity_key"
+                class="flex items-center gap-1.5 py-0.5"
+              >
+                <span :style="{ color: c.eligible ? 'var(--ink-2)' : 'var(--red)' }">
+                  {{ c.eligible ? "✓" : "✕" }}
+                </span>
+                <span>{{ c.title }}</span>
+                <span v-if="c.card_count > 1" class="text-ink-3">{{ c.card_count }} 张卡</span>
+                <span v-if="c.tiers.length > 1" class="text-ink-3">
+                  层级标签不一致：{{ c.tiers.join("/") }}
+                </span>
+              </div>
+              <div
+                v-for="r in coverage.rows.filter((x: any) => x.missing_required.length)"
+                :key="r.path"
+                class="mt-1 text-ink-3"
+              >
+                {{ r.model }} 缺「{{ r.missing_required.join("、") }}」——
+                该卡实有小节：{{ r.h2_present.join("、") || "（无）" }}
+              </div>
+              <div
+                v-for="(x, xi) in coverage.notes_missing_identity"
+                :key="'ni' + xi"
+                class="mt-1 text-ink-3"
+              >
+                缺品牌/型号 frontmatter：{{ x }}
+              </div>
+              <div
+                v-for="(x, xi) in coverage.stem_conflicts"
+                :key="'sc' + xi"
+                class="mt-1"
+                :style="{ color: 'var(--red)' }"
+              >
+                文件名重复「{{ x.stem }}」——重随会串到别的竞品，请改成带型号的文件名
+              </div>
+              <div
+                v-for="(x, xi) in coverage.near_duplicates"
+                :key="'nd' + xi"
+                class="mt-1 text-ink-3"
+              >
+                疑似同款各占一个排位：{{ x.join(" / ") }}
+              </div>
+            </template>
+          </div>
+        </div>
 
         <div class="mt-3">
           <div class="mb-1.5 flex items-center gap-2">
