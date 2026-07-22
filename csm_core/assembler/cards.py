@@ -72,24 +72,30 @@ class Competitor:
         return self.cards[0].title
 
 
-_SECTION_CACHE: dict[tuple[str, int], list] = {}
+_SECTIONS_ATTR = "_card_sections_cache"
 
 
-def _note_sections(note: ParsedNote) -> list:
+def note_sections(note: ParsedNote) -> list:
     """卡片笔记的 H2 小节。在 raw_body 上做 —— 变体切分会吃掉 H2 行。
 
-    按 (路径, 正文长度) 记忆化：建册要对每张卡 × 每个小节各查一次，10 竞品
-    × 7 小节就是 70 次全文解析，纯浪费。
+    结果缓存在 **ParsedNote 实例上**：建册要对每张卡 × 每个小节各查一次，
+    10 竞品 × 7 小节就是 70 次全文解析，纯浪费。
+
+    挂在实例上而不是模块级字典，是为了让缓存跟着索引一起失效 —— 笔记变了
+    索引会重新解析出**新的** ParsedNote 对象，自然没有这个属性。早期版本用
+    ``(路径, 正文长度)`` 做 key，而最典型的订正动作恰恰是等长编辑
+    （``550`` → ``660``、``口啤`` → ``口碑``），缓存撞不到变化，已经改对的
+    参数会继续被印进成稿，直到进程重启。
     """
-    key = (str(note.path), len(note.raw_body))
-    hit = _SECTION_CACHE.get(key)
-    if hit is None:
-        hit = extract_brand_sections(note.raw_body)
-        _SECTION_CACHE[key] = hit
-        if len(_SECTION_CACHE) > 4096:      # 防无界增长（跨多次生成累积）
-            _SECTION_CACHE.clear()
-            _SECTION_CACHE[key] = hit
-    return hit
+    cached = getattr(note, _SECTIONS_ATTR, None)
+    if cached is None:
+        cached = extract_brand_sections(note.raw_body)
+        try:
+            setattr(note, _SECTIONS_ATTR, cached)
+        except AttributeError:      # slots 化的笔记对象：不缓存也能跑
+            pass
+    return cached
+
 
 
 def find_card_section(sections: list, topic: str):
@@ -119,7 +125,7 @@ def find_card_section(sections: list, topic: str):
 
 def section_body(note: ParsedNote, spec: CompetitorSection) -> str | None:
     """取笔记里匹配该小节的正文；没有则 None。"""
-    found = find_card_section(_note_sections(note), spec.topic())
+    found = find_card_section(note_sections(note), spec.topic())
     if found is None or not found.body.strip():
         return None
     return found.body
@@ -186,9 +192,13 @@ def build_roster(
             )
             continue
         if len(tiers) > 1:
+            # 多张卡互为候选、每次生成随机用一张，tier 跟着选中的卡走 ——
+            # 所以这里不能说「取首个」（早期文案就是这么写的，让运营以为
+            # 是确定值而不去修数据，实际同一竞品在不同文章里标签会漂）。
             warnings.append(
-                f"竞品「{cards[0].title}」多张卡的{tier_key}不一致（{'、'.join(sorted(tiers))}），"
-                f"按路径序取用「{cards[0].tier}」"
+                f"竞品「{cards[0].title}」多张卡的{tier_key}不一致"
+                f"（{'、'.join(sorted(tiers))}）—— 每次生成会随机用其中一张卡，"
+                f"标签跟着那张卡走。要固定就把各张卡的{tier_key}改成一致。"
             )
         roster.append(Competitor(key=key, cards=cards))
     warnings.extend(_near_duplicate_warnings(roster))

@@ -17,15 +17,20 @@ import sys
 from pathlib import Path
 
 
-def _template_dir(argv: list[str]) -> Path:
+def _template_dir(argv: list[str]) -> tuple[Path, bool]:
+    """返回 (模板目录, 是否读到了真实配置)。
+
+    读不到配置时会回退扫 ./templates —— 但必须让调用者知道，否则会打印一句
+    「OK，没发现问题」，而用户真正的模板库根本没被扫过。
+    """
     if len(argv) > 1:
-        return Path(argv[1])
+        return Path(argv[1]), True
     try:
         from csm_sidecar.services import templates_service
 
-        return templates_service.resolve_dir()
+        return templates_service.resolve_dir(), True
     except Exception:
-        return Path("templates")
+        return Path("templates"), False
 
 
 def scan(directory: Path) -> list[str]:
@@ -35,6 +40,12 @@ def scan(directory: Path) -> list[str]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             problems.append(f"{path.name}: 读取失败 {e}")
+            continue
+        if not isinstance(data, dict):
+            # 顶层不是对象的 .json 直接跳过 —— 早期实现在这里 AttributeError
+            # 崩掉，字母序在它后面的模板一个都扫不到，而 loader 对同样的坏
+            # 文件是容错的。
+            problems.append(f"{path.name}: 不是模板（顶层不是 JSON 对象）")
             continue
         for block in data.get("blocks") or []:
             if not isinstance(block, dict):
@@ -54,11 +65,20 @@ def scan(directory: Path) -> list[str]:
 
 
 def main() -> int:
-    directory = _template_dir(sys.argv)
+    directory, resolved = _template_dir(sys.argv)
+    if not resolved:
+        print(
+            f"注意：没能读取应用配置（csm_sidecar 不在 import 路径上），"
+            f"回退扫描相对目录 {directory}。要扫真实模板库请把目录作为参数传进来。"
+        )
     if not directory.exists():
         print(f"模板目录不存在：{directory}")
         return 2
-    problems = scan(directory)
+    try:
+        problems = scan(directory)
+    except Exception as e:      # 扫描本身崩了要与「发现问题」区分开
+        print(f"扫描失败：{e}")
+        return 2
     if not problems:
         print(f"OK — {directory} 下没有发现空筛选的竞品池")
         return 0

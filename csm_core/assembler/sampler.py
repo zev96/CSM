@@ -108,7 +108,12 @@ def _sample_notes_source(
         )
         pool = index.query(module=source.module, filters=source.filter)
     if not pool:
-        raise EmptyPoolError(f"block '{block_id}': empty pool in module '{source.module}'")
+        # 带上筛选条件 —— 卡片小节的筛选值是手敲的（十几个新素材类型值），
+        # 只说目录的话「市场口碑数据」敲成「市场口碑」根本查不出来。
+        cond = f"，筛选 {source.filter}" if source.filter else ""
+        raise EmptyPoolError(
+            f"block '{block_id}': 目录 '{source.module}'{cond} 里没有符合条件的素材"
+        )
     requested = _resolve_pick_count(pick_notes, block_id, user_config, rng)
     if "unique_notes" in constraints:
         actual = min(requested, len(pool))

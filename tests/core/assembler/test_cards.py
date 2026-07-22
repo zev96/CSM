@@ -514,3 +514,67 @@ def test_tier_conflict_warns(tmp_path):
                         "分维度硬核测评": ["丙"]})
     plan, _ = _run(tmp_path, [_pool_block(pick=1)])
     assert any("层级标签不一致" in w for w in plan.warnings)
+
+
+# ── 审查回归：缓存失效 / 报错可诊断 ─────────────────────────────────
+def test_same_length_edit_is_picked_up(tmp_path):
+    """等长订正必须立刻生效。
+
+    ``550`` → ``660``、``口啤`` → ``口碑`` 这类改一个字的订正长度不变；
+    早期缓存用「路径 + 正文长度」做 key，撞不到变化，已经改对的参数会继续
+    被印进成稿直到进程重启。
+    """
+    _three_competitors(tmp_path)
+    path = tmp_path / "竞品" / "竞品卡-欧瑞达X9.md"
+    _, before = _run(tmp_path, [_pool_block(pick=3)])
+    assert "欧瑞达X9 测评 **550m³/h**" in before
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("550m³/h", "660m³/h"),
+        encoding="utf-8",
+    )
+    _, after = _run(tmp_path, [_pool_block(pick=3)])   # 重新 scan_vault
+    assert "欧瑞达X9 测评 **660m³/h**" in after
+    assert "欧瑞达X9 测评 **550m³/h**" not in after
+
+
+def test_section_cache_hits_within_one_build(tmp_path):
+    """同一次建册里同一张卡不重复解析（缓存仍然有效，不是简单删掉）。"""
+    from csm_core.assembler import cards
+    from csm_core.vault.scanner import scan_vault
+
+    _three_competitors(tmp_path)
+    note = scan_vault(tmp_path).notes[0]
+    first = cards.note_sections(note)
+    assert cards.note_sections(note) is first          # 同一对象直接命中
+
+    # 重新扫出来的是新对象 → 不共用缓存
+    fresh = scan_vault(tmp_path).notes[0]
+    assert cards.note_sections(fresh) is not first
+
+
+def test_empty_pool_error_names_the_filter(tmp_path):
+    """主推卡小节筛选值敲错时，报错要说清是哪个筛选没匹配上。"""
+    from csm_core.assembler.sampler import EmptyPoolError
+
+    _hero_note(tmp_path, "主推/口碑.md", "市场口碑数据", "正文")
+    hero = {
+        "kind": "hero_brand", "id": "hero", "title": "DARZ D9",
+        "source": {"type": "notes_query", "module": "主推"},
+        "sections": [{"label": "口碑", "filter": {"素材类型": "市场口碑"}}],
+    }
+    with pytest.raises(EmptyPoolError) as e:
+        _run(tmp_path, [hero])
+    assert "市场口碑" in str(e.value) and "主推" in str(e.value)
+
+
+def test_tier_conflict_warning_says_it_varies(tmp_path):
+    """多卡互为候选 → tier 每次随机，告警不能说「取首个」。"""
+    for i, tier in enumerate(("热门品牌", "性价比之选")):
+        _card(tmp_path, f"竞品/竞品卡-欧瑞达X9-{i}.md", brand="欧瑞达",
+              model="欧瑞达X9", tier=tier,
+              sections={"市场口碑数据": ["甲"], "品牌赛道定位": ["乙"],
+                        "分维度硬核测评": ["丙"]})
+    plan, _ = _run(tmp_path, [_pool_block(pick=1)])
+    warn = next(w for w in plan.warnings if "层级标签不一致" in w)
+    assert "随机" in warn and "按路径序取用" not in warn
