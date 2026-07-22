@@ -168,3 +168,39 @@ def test_competitor_pool_inherits_hero_reason_label():
     out = compose_draft(p)
     assert "HERO_LABEL" in out
     assert "POOL_LABEL" not in out
+
+
+def test_heading_index_with_builtin_separator_not_doubled():
+    """序号填「一、」时不该再补一个顿号。
+
+    模板编辑器里两种写法都很常见（出厂模板 导购·吸尘器·三品 里
+    heading_kpaz 是 "一、"、heading_pv3o 是 "三"），历史实现无条件追加
+    「、」，前者会渲染成 "## 一、、{keyword}怎么选"。
+    """
+    p = _plan(BlockResult(block_id="h", kind="heading", text="怎么选",
+                          meta={"level": 2, "index": "一、"}))
+    assert compose_draft(p) == "## 一、怎么选"
+
+
+def test_heading_index_without_separator_still_gets_one():
+    p = _plan(BlockResult(block_id="h", kind="heading", text="写在最后",
+                          meta={"level": 2, "index": "三"}))
+    assert compose_draft(p) == "## 三、写在最后"
+
+
+def test_heading_index_accepts_other_separators():
+    for idx, want in (
+        ("1.", "## 1.正文"),
+        ("（一）", "## （一）正文"),
+        ("二：", "## 二：正文"),
+        ("四 ", "## 四 正文"),      # 空格结尾也算已分隔
+    ):
+        p = _plan(BlockResult(block_id="h", kind="heading", text="正文",
+                              meta={"level": 2, "index": idx}))
+        assert compose_draft(p) == want, idx
+
+
+def test_heading_blank_index_falls_back_to_plain():
+    p = _plan(BlockResult(block_id="h", kind="heading", text="标题",
+                          meta={"level": 2, "index": "  "}))
+    assert compose_draft(p) == "## 标题"

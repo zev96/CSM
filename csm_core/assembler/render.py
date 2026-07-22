@@ -51,6 +51,22 @@ def _append_keyword(title: str, keyword: str) -> str:
     return f"{title}{keyword}"
 
 
+# 序号末尾如果已经是分隔符，就不要再补顿号。用户在模板编辑器里两种写法
+# 都很常见：填「一、」（自带顿号）或填「三」（光秃秃的数字/汉字）。历史
+# 实现无条件追加「、」，前者渲染出来就是「## 一、、标题」。
+_INDEX_SEPARATORS = "、。．.，,；;：:)）]】》>·|"
+
+
+def _join_index(idx: str, text: str) -> str:
+    """拼接标题序号与正文。序号自带分隔符（或以空白结尾）时按原样用。"""
+    trimmed = idx.rstrip()
+    if not trimmed:                      # 纯空白的序号视同没填
+        return text
+    if trimmed != idx or trimmed[-1] in _INDEX_SEPARATORS:
+        return f"{idx}{text}"
+    return f"{idx}、{text}"
+
+
 def _paragraph_text(r: BlockResult) -> str:
     """Flatten a paragraph result (including children) into a single text block."""
     parts = [p.text for p in r.picks]
@@ -142,7 +158,7 @@ def _render_standalone(r: BlockResult, variables: dict[str, str]) -> str:
         prefix = "#" * level
         idx = r.meta.get("index", "")
         text = _substitute(r.text, variables)
-        return f"{prefix} {idx}、{text}" if idx else f"{prefix} {text}"
+        return f"{prefix} {_join_index(idx, text)}" if idx else f"{prefix} {text}"
     if r.kind == "literal":
         return _substitute(r.text, variables)
     if r.kind == "paragraph":
