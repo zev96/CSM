@@ -530,11 +530,17 @@ export const useArticle = defineStore("article", {
         versionOverrides === null
           ? undefined
           : (versionOverrides ?? this.plan?.version_choices ?? undefined);
-      const next = {
+      const next: GenerateRequest = {
         ...this.lastRequest,
         seed: (this.lastRequest.seed ?? 0) + 1,
-        ...(locked && Object.keys(locked).length ? { version_overrides: locked } : {}),
       };
+      if (locked && Object.keys(locked).length) {
+        next.version_overrides = locked;
+      } else {
+        // 必须显式擦除：lastRequest 里存着上一次重随写进去的锁，只是「不再
+        // 添加」的话它会被展开带出去，「换个版本」就永远换不掉了。
+        delete next.version_overrides;
+      }
       await this.submit(next);
     },
     /** 显式换结构版本。传 null = 放开锁、让种子重新抽。 */

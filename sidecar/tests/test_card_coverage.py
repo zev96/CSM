@@ -116,3 +116,47 @@ def test_tier_conflict_visible(client: TestClient, tmp_path: Path):
               sections={"市场口碑数据": "甲", "品牌赛道定位": "乙"})
     data = _probe(client)
     assert data["competitors"][0]["tiers"] == ["性价比之选", "热门品牌"]
+
+
+# ── 入参守卫 ────────────────────────────────────────────────────────
+def test_empty_module_rejected(client: TestClient, tmp_path: Path):
+    """空 module 在 VaultIndex.query 里等于整个资料库 —— 几千篇逐篇解析
+    再全量回传，界面会卡死且结论全是噪音。"""
+    _setup(client, tmp_path)
+    r = client.post("/api/vault/card_coverage", json={
+        "module": "", "filter": {}, "sections": _SECTIONS,
+    })
+    assert r.status_code == 400
+    assert "选目录" in r.json()["detail"]
+
+
+def test_blank_section_label_rejected(client: TestClient, tmp_path: Path):
+    """「+ 添加小节」推的是空名小节，直接送检以前会 500。"""
+    _setup(client, tmp_path)
+    r = client.post("/api/vault/card_coverage", json={
+        "module": "竞品", "filter": {},
+        "sections": [{"label": "市场口碑数据"}, {"label": "  "}],
+    })
+    assert r.status_code == 400
+    assert "还没填名字" in r.json()["detail"]
+
+
+def test_no_sections_rejected(client: TestClient, tmp_path: Path):
+    _setup(client, tmp_path)
+    r = client.post("/api/vault/card_coverage", json={
+        "module": "竞品", "filter": {}, "sections": [],
+    })
+    assert r.status_code == 400
+
+
+def test_stem_conflicts_scoped_to_this_pool(client: TestClient, tmp_path: Path):
+    """全仓同名的 README 之类不该刷进竞品池的红字告警。"""
+    _setup(client, tmp_path)
+    _card(tmp_path, "竞品/竞品卡-欧瑞达X9.md", brand="欧瑞达", model="欧瑞达X9",
+          sections={"市场口碑数据": "甲", "品牌赛道定位": "乙"})
+    for sub in ("甲", "乙"):
+        p = tmp_path / "别的目录" / sub / "README.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("---\n产品: x\n---\n\n正文\n", encoding="utf-8")
+    data = _probe(client)
+    assert data["stem_conflicts"] == []

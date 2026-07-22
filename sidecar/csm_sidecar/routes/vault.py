@@ -157,6 +157,18 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
     )
     from csm_core.template.schema import CompetitorSection
 
+    if not body.module.strip():
+        # 空 module 在 VaultIndex.query 里等于「整个资料库」—— 几千篇笔记逐篇
+        # 解析 H2 再全量回传，界面直接卡死，而且结论全是噪音。
+        raise HTTPException(status_code=400, detail="请先给竞品池选目录")
+    blank = [i + 1 for i, s in enumerate(body.sections) if not s.label.strip()]
+    if blank:
+        raise HTTPException(
+            status_code=400, detail=f"第 {blank} 个小节还没填名字",
+        )
+    if not body.sections:
+        raise HTTPException(status_code=400, detail="请先添加小节")
+
     cfg = config_service.load()
     try:
         index = vault_service.get(Path(cfg.vault_root))
@@ -169,9 +181,12 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
     ]
     notes = index.query(module=body.module, filters=body.filter)
 
+    # stem 冲突按全仓统计（笔记 id 是全库唯一的寻址键），但只上报与本池命中
+    # 笔记相关的那些 —— 全仓 README.md 同名是常态，全报会刷出一片无关红字。
     stems: dict[str, list[str]] = defaultdict(list)
     for n in index.notes:
         stems[n.id].append(str(n.path))
+    scoped_stems = {n.id for n in notes}
 
     rows: list[dict[str, Any]] = []
     no_identity: list[str] = []
@@ -242,7 +257,11 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
         "rows": rows,
         "notes_missing_identity": no_identity,
         "stem_conflicts": sorted(
-            [{"stem": k, "paths": v} for k, v in stems.items() if len(v) > 1],
+            [
+                {"stem": k, "paths": v}
+                for k, v in stems.items()
+                if len(v) > 1 and k in scoped_stems
+            ],
             key=lambda d: d["stem"],
         ),
         "near_duplicates": near_duplicates,

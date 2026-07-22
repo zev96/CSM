@@ -130,14 +130,37 @@ function sectionFilterKey(sec: any): string {
   return Object.keys(sec.filter ?? {})[0] ?? "素材类型";
 }
 function setSectionFilter(i: number, key: string, value: string) {
-  updateSection(i, { filter: value ? { [key]: value } : {} });
+  // 键非空就落库（值可以暂时留空）—— 早期实现在值为空时整条丢掉，用户先填
+  // 的键就没了，界面还继续显示他敲的键，实际存的是默认值「素材类型」。
+  const k = key.trim();
+  updateSection(i, { filter: k ? { [k]: value } : {} });
 }
 
 // ── 覆盖度检查 ──────────────────────────────────────────────────────
 const coverage = ref<any | null>(null);
 const coverageLoading = ref(false);
 
+// BlockEditor 实例在块之间复用，不重置的话切到另一个竞品池还显示上一个池的
+// 体检报告 —— 运营会照着改错目录的素材。
+watch(
+  () => block.value?.id,
+  () => {
+    coverage.value = null;
+    coverageLoading.value = false;
+  },
+);
+
+/** 检查前的自查：目录必填、小节名必填。 */
+const coverageBlocker = computed<string | null>(() => {
+  if (!block.value.source?.module) return "先给竞品池选目录";
+  const secs = block.value.sections ?? [];
+  if (!secs.length) return "先添加小节";
+  if (secs.some((x: any) => !String(x.label ?? "").trim())) return "有小节还没填名字";
+  return null;
+});
+
 async function runCoverage() {
+  if (coverageBlocker.value) return;
   coverageLoading.value = true;
   coverage.value = null;
   try {
@@ -153,7 +176,15 @@ async function runCoverage() {
     });
     coverage.value = r.data;
   } catch (e: any) {
-    coverage.value = { error: e?.response?.data?.detail ?? e?.message ?? String(e) };
+    const detail = e?.response?.data?.detail;
+    coverage.value = {
+      error:
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? `${detail[0]?.loc?.join(".")}: ${detail[0]?.msg}`
+            : (e?.message ?? String(e)),
+    };
   } finally {
     coverageLoading.value = false;
   }
@@ -664,6 +695,19 @@ function insertKeyword(field: "text") {
           </div>
         </FormField>
 
+        <FormField
+          v-if="block.kind === 'hero_brand'"
+          label="默认目录"
+          class="mt-2"
+        >
+          <CascadePicker
+            :model-value="block.source?.module ?? ''"
+            :dirs="vaultDirs ?? []"
+            placeholder="小节没单独指定目录时用它"
+            @update:model-value="(v) => patchSource({ type: 'notes_query', module: String(v ?? '') })"
+          />
+        </FormField>
+
         <FormField v-if="block.kind === 'hero_brand'" label="层级标签" class="mt-2">
           <FormInput
             :model-value="block.tier ?? ''"
@@ -696,13 +740,17 @@ function insertKeyword(field: "text") {
         <div v-if="isPool" class="mt-2">
           <button
             type="button"
-            class="text-[11px] text-ink-3 hover:text-ink"
-            :disabled="coverageLoading"
-            title="看看哪些竞品能上榜、谁缺哪节、型号写歪没有"
+            class="text-[11px]"
+            :style="{ color: coverageBlocker ? 'var(--ink-3)' : 'var(--ink-2)', opacity: coverageBlocker ? 0.5 : 1 }"
+            :disabled="coverageLoading || !!coverageBlocker"
+            :title="coverageBlocker ?? '看看哪些竞品能上榜、谁缺哪节、型号写歪没有'"
             @click="runCoverage"
           >
             {{ coverageLoading ? "检查中…" : "覆盖度检查" }}
           </button>
+          <span v-if="coverageBlocker" class="ml-1.5 text-[11px] text-ink-3">
+            {{ coverageBlocker }}
+          </span>
           <div
             v-if="coverage"
             class="mt-1.5 rounded p-2 text-[11px]"

@@ -157,7 +157,16 @@ function removeVersionOption(name: string) {
     if (b.versions?.length) b.versions = b.versions.filter((v: string) => v !== name);
   }
   if (viewVersion.value === name) viewVersion.value = "";
-  if (!g.options.length) versionGroups.value = [];
+  if (!g.options.length) {
+    versionGroups.value = [];
+    // 版本组没了，块上残留的 version_group 会让保存 422，而 UI 上没有任何
+    // 入口能看到它。
+    for (const b of blocks.value) delete b.version_group;
+  } else if (!g.options.some((o: string) => !(g.disabled_options ?? []).includes(o))) {
+    // 「禁用 A + 删掉 B」会让仅存的版本处于禁用态 → schema 拒收「全部禁用」，
+    // 模板从此存不下去而界面只是半透明，没有任何提示。
+    g.disabled_options = [];
+  }
 }
 
 function toggleVersionEnabled(name: string) {
@@ -174,6 +183,16 @@ function isVersionDisabled(name: string): boolean {
   return (versionGroup.value?.disabled_options ?? []).includes(name);
 }
 
+/** 把后端错误（字符串 / pydantic 数组 / lint issues）压成一句人话。 */
+function describeError(e: any): string {
+  const detail = e?.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return `${detail[0]?.loc?.join(".")}: ${detail[0]?.msg}`;
+  if (detail?.issues?.length) return detail.issues[0].message;
+  if (detail?.message) return detail.message;
+  return e?.message ?? String(e);
+}
+
 // ── 结构检查 ────────────────────────────────────────────────────────
 const lintIssues = ref<any[]>([]);
 const linting = ref(false);
@@ -186,7 +205,8 @@ async function runLint(silent = false) {
     lintIssues.value = r.data.issues ?? [];
     if (!silent && !lintIssues.value.length) toast.success("结构检查通过");
   } catch (e: any) {
-    if (!silent) toast.error(`结构检查失败：${e?.message ?? e}`);
+    lintIssues.value = [];      // 别把上一轮的结论留在面板上
+    if (!silent) toast.error(`结构检查失败：${describeError(e)}`);
   } finally {
     linting.value = false;
   }
@@ -195,7 +215,7 @@ async function runLint(silent = false) {
 function blankBlock(kind: string): any {
   // Minimal valid skeleton per kind. Saves invariant pydantic checks
   // when the user adds and immediately saves without filling in.
-  const id = `${kind}_${Date.now().toString(36).slice(-4)}`;
+  const id = newBlockId(kind);
   switch (kind) {
     case "heading":
       return { kind, id, level: 2, index: "", text: "标题占位" };
@@ -302,8 +322,21 @@ function moveBlock(i: number, dir: -1 | 1) {
 
 function deleteBlock(i: number) {
   blocks.value.splice(i, 1);
-  if (selectedBlockIndex.value >= blocks.value.length) {
-    selectedBlockIndex.value = blocks.value.length - 1;
+  // 删的是选中项之前的块 → 选中下标要跟着前移；删的就是选中项 → 落到当前
+  // 视图里可见的第一块。否则右栏会在编辑一个列表里根本看不见的块。
+  let s = selectedBlockIndex.value;
+  if (s > i) s -= 1;
+  else if (s === i) s = -1;
+  const vis = visibleIndexes.value;
+  if (s < 0 || !vis.includes(s)) s = vis[0] ?? -1;
+  selectedBlockIndex.value = s;
+}
+
+/** 选中块被当前版本视图过滤掉时，把选中挪到可见的第一块。 */
+function syncSelectionToView() {
+  const vis = visibleIndexes.value;
+  if (!vis.includes(selectedBlockIndex.value)) {
+    selectedBlockIndex.value = vis[0] ?? -1;
   }
 }
 
@@ -321,7 +354,9 @@ function copyBlockToVersion(i: number, version: string) {
   copy.id = newBlockId(copy.kind);
   copy.versions = [version];
   blocks.value.splice(i + 1, 0, copy);
-  selectedBlockIndex.value = i + 1;
+  // 副本带的是另一个版本的标签，在当前视图里通常不可见 —— 选中它会让右栏
+  // 编辑一个列表里看不到的块。只有它确实可见时才跟着选过去。
+  if (visibleIndexes.value.includes(i + 1)) selectedBlockIndex.value = i + 1;
   toast.success(`已复制到「${version}」`);
 }
 
@@ -335,7 +370,10 @@ function addContinuationPool(i: number) {
   pool.label_layout = src.label_layout;
   pool.card_separator = src.card_separator;
   pool.tier_key = src.tier_key;
-  pool.sections = [];        // 浅结构由用户自己配
+  // 继承源池的小节：空 sections = 非卡片模式，与卡片主推同区会被 lint 判
+  // mixed_card_legacy 直接存不下去，而报错文案根本指不到「新池没配小节」。
+  // 浅结构由用户在此基础上删减。
+  pool.sections = JSON.parse(JSON.stringify(src.sections ?? []));
   pool.versions = [...(src.versions ?? [])];
   pool.version_group = src.version_group ?? null;
   blocks.value.splice(i + 1, 0, pool);
@@ -344,13 +382,25 @@ function addContinuationPool(i: number) {
 
 /** 该竞品池的排位起点 —— 主推卡占 TOP1，前面的池各占各的数量。 */
 function poolStartRank(index: number): number {
+  // 只数「与本块同版本」的前序块 —— 多版本模板里别的版本的池不会和它同时
+  // 出现在文章里，算进来提示就是错的。
+  const own: string[] = blocks.value[index]?.versions ?? [];
+  const sameVersion = (b: any) => {
+    const v: string[] = b.versions ?? [];
+    if (!v.length || !own.length) return true;      // 公共块 / 本块未标版本
+    return v.some((x) => own.includes(x));
+  };
   let n = 1;
   for (let k = 0; k < index; k++) {
     const b = blocks.value[k];
-    if (b.kind === "heading") n = 1;
-    else if (b.kind === "hero_brand") n = (b.sections?.length ? 1 : n) + 1;
+    if (b.kind === "heading") { n = 1; continue; }
+    if (!sameVersion(b)) continue;
+    if (b.kind === "hero_brand") n = (b.sections?.length ? 1 : n) + 1;
     else if (b.kind === "competitor_pool") {
-      const c = typeof b.pick_notes === "number" ? b.pick_notes : (b.pick_notes?.random_between?.[1] ?? 0);
+      const c =
+        typeof b.pick_notes === "number"
+          ? b.pick_notes
+          : (b.pick_notes?.random_between?.[0] ?? 0);
       n += c;
     }
   }
@@ -492,6 +542,8 @@ async function save() {
   }
 }
 
+watch(viewVersion, syncSelectionToView);
+
 watch(
   () => props.templateId,
   (id) => {
@@ -609,13 +661,17 @@ onMounted(() => {
             }"
           >
             <span>{{ opt }}</span>
+            <!--
+              用文字不用图标：Icon 的 inner 是 setup 期一次性求值的常量，
+              动态 :name 切换后图标不会重绘（而且没有 eyeOff 这个名字）。
+            -->
             <button
               type="button"
-              class="px-0.5 text-ink-3 hover:text-ink"
-              :title="isVersionDisabled(opt) ? '启用（进入抽签池）' : '禁用（素材没铺齐时先别抽中）'"
+              class="px-0.5 text-[10px] text-ink-3 hover:text-ink"
+              :title="isVersionDisabled(opt) ? '启用后进入抽签池' : '禁用后不会被抽中（素材没铺齐时用）'"
               @click="toggleVersionEnabled(opt)"
             >
-              <Icon :name="isVersionDisabled(opt) ? 'eyeOff' : 'eye'" :size="11" />
+              {{ isVersionDisabled(opt) ? "启用" : "停用" }}
             </button>
             <button
               type="button"
@@ -697,7 +753,7 @@ onMounted(() => {
               { label: '查看：全部版本', value: '' },
               ...versionOptions.map((o) => ({ label: '查看：' + o, value: o })),
             ]"
-            :min-width="130"
+            width="150px"
             @update:model-value="(v) => (viewVersion = String(v))"
           />
           <button
@@ -717,6 +773,12 @@ onMounted(() => {
           v-else
           class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-1"
         >
+          <li
+            v-if="!visibleIndexes.length && blocks.length"
+            class="px-2.5 py-3 text-[12px] text-ink-3"
+          >
+            「{{ viewVersion }}」下还没有块。左边加一个，会自动带上这个版本的标签。
+          </li>
           <li
             v-for="i in visibleIndexes"
             :key="blocks[i].id ?? i"

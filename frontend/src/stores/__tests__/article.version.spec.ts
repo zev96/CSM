@@ -71,4 +71,15 @@ describe("article store — 结构版本", () => {
     const body = postMock.mock.calls[0][1];
     expect(body.version_overrides).toBeUndefined();
   });
+  it("先锁版本再「换个版本」时能真正解锁（不被 lastRequest 里的旧锁带回去）", async () => {
+    // rerun() 会把锁写进 lastRequest；rerun(null) 如果只是「不再添加」，
+    // 展开 lastRequest 时旧锁会原样带出去 —— 换版本按钮就永久失效了。
+    const a = useArticle();
+    await seed(a, { rec_ver: "版本1" });
+    await a.rerun();                       // 第一次：锁上版本1
+    expect(postMock.mock.calls[0][1].version_overrides).toEqual({ rec_ver: "版本1" });
+    a.plan = { version_choices: { rec_ver: "版本1" } } as any;
+    await a.rerun(null);                   // 第二次：显式解锁
+    expect(postMock.mock.calls[1][1].version_overrides).toBeUndefined();
+  });
 });
