@@ -639,6 +639,17 @@ def _rerun_job(job_id: str, pass_index: int) -> None:
             _cancelled.discard(job_id)
 
 
+def _plan_has_cards(plan: Any) -> bool:
+    """本篇是否含榜单卡片区 —— 决定要不要给润色链上排版硬约束。"""
+    try:
+        return any(
+            getattr(r, "meta", {}).get("card")
+            for r in getattr(plan, "results", []) or []
+        )
+    except Exception:      # plan 形态异常时不该拖垮 finalize
+        return False
+
+
 def finalize_draft(
     job_id: str, *,
     chain_steps: list[chain_service.ChainStepInput],
@@ -712,8 +723,11 @@ def finalize_draft(
         provider=provider, model=model,
         checkpoint=checkpoint, on_pass=on_pass,
         contract_mode=contract_mode,
+        preserve_layout=_plan_has_cards(plan),
     )
     final_text = state.final_text
+    for note in state.layout_rejections:
+        logger.warning("job %s 卡片排版守卫：%s", job_id, note)
     passes = [p.to_dict() for p in state.passes]
 
     # 链成本：在此算一次（吃 to_dict 出的 input_tokens/output_tokens），blocked 与

@@ -144,12 +144,73 @@ class NumberedListBlock(BlockBase):
     item_separator: str = "\n\n"
 
 
+# 卡片小节标签的排版：``inline`` = "**市场口碑数据** ：正文"（与用户范文
+# 一致），``line`` = 标签独占一行、正文换行。
+LabelLayout = Literal["inline", "line"]
+
+# 卡片标题行默认模板。占位符：{tier} 层级标签、{n} 排位、{title} 品牌+型号、
+# {brand}、{model}、{title_kw}（追加产品关键词的标题）。
+DEFAULT_CARD_HEADING = "### {tier} TOP{n}. {title}"
+
+
+class HeroSection(BaseModel):
+    """主推卡的一个「点」—— 从素材池抽内容，渲染成加粗小节。
+
+    ``label`` 留空 = 只输出正文不输出小节标题，用于把一个点拆成多段
+    （版本1 的「分维度硬核测评」下面是除醛/消毒/过敏原/体验四段，只有第
+    一段带标题）。
+    """
+
+    label: str = ""
+    module: str | None = None          # 缺省继承块级 source.module
+    filter: dict[str, Any] = Field(default_factory=dict)
+    pick_notes: PickNotes = 1
+    pick_variants_per_note: int = 1
+
+
 class HeroBrandBlock(BlockBase):
     kind: Literal["hero_brand"] = "hero_brand"
     id: str
     title: str = Field(min_length=1)
     reason_label: str = "推荐理由："
     number_style: NumberStyle = "1."
+    # ── 卡片模式（sections 非空即启用）──────────────────────────────
+    # 榜单文的主推是一张自包含卡片：自定义标题行 + 若干加粗小节，不再吞并
+    # 后续段落块、不输出 reason_label。sections 为空则一切照旧（legacy）。
+    source: NotesQuerySource | None = None    # 小节的默认素材目录
+    sections: list[HeroSection] = Field(default_factory=list)
+    heading_template: str = DEFAULT_CARD_HEADING
+    tier: str = ""                            # 层级标签，人工填写
+    label_layout: LabelLayout = "inline"
+
+    @model_validator(mode="after")
+    def _check_card(self):
+        if not self.sections:
+            return self
+        for i, sec in enumerate(self.sections):
+            if not (sec.module or (self.source and self.source.module)):
+                raise ValueError(
+                    f"hero_brand '{self.id}' 小节 #{i + 1} 没有目录："
+                    f"给小节填 module，或给块设置 source.module 作为默认"
+                )
+        return self
+
+
+class CompetitorSection(BaseModel):
+    """竞品卡的一个「点」—— 对应卡片笔记里的一个 H2 小节。
+
+    素材形态是「每竞品一张卡」：frontmatter 定身份，正文 ``## 市场口碑数据``
+    这样分节，节内 ①②③ 放多份候选内容。一张覆盖了多版本点的「超集卡」可以
+    同时服务多个版本，不用每版本复制素材。
+    """
+
+    label: str = Field(min_length=1)   # 渲染成加粗小节标题
+    h2: str = ""                       # 卡片里的 H2 名；留空 = 用 label 宽松匹配
+    required: bool = True              # 缺这节的竞品不入名册；False = 缺则省略该节
+    pick_variants: int = 1             # 该节抽几个 ①②③ 候选
+
+    def topic(self) -> str:
+        return (self.h2 or self.label).strip()
 
 
 class CompetitorPoolBlock(BlockBase):
@@ -163,6 +224,41 @@ class CompetitorPoolBlock(BlockBase):
     pick_variants_per_note: int = 1
     constraints: list[str] = Field(default_factory=lambda: ["unique_notes"])
     reason_label: str = "推荐理由："
+    # ── 卡片模式（sections 非空即启用）──────────────────────────────
+    sections: list[CompetitorSection] = Field(default_factory=list)
+    heading_template: str = DEFAULT_CARD_HEADING
+    tier_key: str = "层级标签"          # 从卡片 frontmatter 取层级标签的键
+    label_layout: LabelLayout = "inline"
+    card_separator: str = "\n\n"
+
+    @model_validator(mode="after")
+    def _check_card(self):
+        if not self.sections:
+            return self
+        if not isinstance(self.source, NotesQuerySource):
+            raise ValueError(
+                f"competitor_pool '{self.id}' 卡片模式只支持 notes_query 素材源"
+            )
+        if not self.source.module:
+            raise ValueError(
+                f"competitor_pool '{self.id}' 卡片模式必须指定目录 —— "
+                f"空目录会把整个 vault 当成竞品名册"
+            )
+        if not self.source.filter:
+            raise ValueError(
+                f"competitor_pool '{self.id}' 卡片模式必须设置筛选条件"
+                f"（如 素材类型: 竞品卡）—— 否则同目录下的旧格式竞品笔记"
+                f"会混进名册，刷出一堆「缺全部小节」的假告警"
+            )
+        if not any(s.required for s in self.sections):
+            raise ValueError(
+                f"competitor_pool '{self.id}' 至少要有一个必需小节，"
+                f"否则任何笔记都能入册（含空卡）"
+            )
+        labels = [s.label for s in self.sections]
+        if len(set(labels)) != len(labels):
+            raise ValueError(f"competitor_pool '{self.id}' 小节名重复")
+        return self
 
 
 class LiteralBlock(BlockBase):

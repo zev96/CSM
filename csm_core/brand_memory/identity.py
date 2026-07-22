@@ -10,6 +10,46 @@ registry/resolver 共用的 (品牌,型号) 判定链;BRAND_ALIASES 只做别名
 """
 from __future__ import annotations
 
+import re
+
+# ``竞品`` 是品类前缀（≈ "competitor"）。vault 里习惯把竞品笔记命名/标注成
+# ``竞品-戴森V8``，分隔符五花八门（半角/全角连字符、破折号、斜杠、空格、
+# 直接连写）。剥掉它才能拿到干净的型号。
+_COMPETITOR_PREFIX_RE = re.compile(r"^竞品[\s\-‐-―－　/／_:：]*")
+
+
+def strip_competitor_prefix(raw: str) -> str:
+    """去掉型号/标题上的 ``竞品`` 品类前缀。"""
+    return _COMPETITOR_PREFIX_RE.sub("", raw).strip()
+
+
+def normalize_model_key(model: str) -> str:
+    """把型号折成用于**分组比较**的 key（不用于显示）。
+
+    同一个竞品的多篇笔记里型号写法经常不一致 —— ``竞品-戴森V8`` /
+    ``戴森V8`` / ``戴森 V8`` / ``戴森ｖ8``。不归一化就会被判成多个只覆盖
+    一半小节的幽灵竞品，双双被覆盖度预检剔除，而用户从告警里根本看不出
+    根因是型号写法不同。
+
+    折叠规则：剥 ``竞品`` 前缀 → 全角转半角 → 去所有空白 → casefold。
+    连字符**不**剥（``V8-Pro`` 与 ``V8Pro`` 可能是两款货，过度折叠比漏折叠
+    更危险）。
+    """
+    name = strip_competitor_prefix(str(model or ""))
+    out: list[str] = []
+    for ch in name:
+        code = ord(ch)
+        if 0xFF01 <= code <= 0xFF5E:          # 全角 ASCII → 半角
+            out.append(chr(code - 0xFEE0))
+        elif code == 0x3000:                   # 全角空格
+            continue
+        elif ch.isspace():
+            continue
+        else:
+            out.append(ch)
+    return "".join(out).casefold()
+
+
 # canonical 品牌 -> 所有写法（含 canonical 自身）。
 BRAND_ALIASES: dict[str, list[str]] = {
     "CEWEY": ["CEWEY", "希喂"],

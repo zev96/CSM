@@ -5,6 +5,8 @@ the Template model."""
 from __future__ import annotations
 from dataclasses import dataclass
 
+from .layout_guard import LAYOUT_CLAUSE
+
 
 @dataclass
 class PromptInputs:
@@ -19,6 +21,8 @@ class PromptInputs:
     # Phase 4+: 成文契约档。"conservative"（默认）= 今天行为字节级不变；
     # "aggressive" = 允许取舍删减（主推事实必须保留，另有完整性核对兜底）。
     contract_mode: str = "conservative"
+    # 榜单卡片区：禁止改动标题行/加粗小节/分段。False = 今天行为字节级不变。
+    preserve_layout: bool = False
 
 
 def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
@@ -70,6 +74,8 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
                 "衔接和风格一致性；不新增虚构事实，不删减关键信息。"
             )
 
+    layout = f"\n{LAYOUT_CLAUSE}" if inputs.preserve_layout else ""
+
     user = (
         f"【关键词】{inputs.keyword}\n\n"
         f"{title_block}"
@@ -78,18 +84,23 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
         f"【毛坯文】\n{inputs.draft}\n\n"
         f"{instruction}"
         f"{constraint}"
+        f"{layout}"
     )
     return system, user
 
 
-def build_refine_prompt(skill_body: str | None, prev_text: str) -> tuple[str, str]:
+def build_refine_prompt(
+    skill_body: str | None, prev_text: str, *, preserve_layout: bool = False,
+) -> tuple[str, str]:
     """链 step[1:] 的精修 prompt：按 skill 风格改写上段输出，保守约束
     （保信息点/数字/单位/认证，只改文风）。step[0] 仍用 build_prompt。"""
     system = (skill_body or "").strip()
+    layout = f"\n{LAYOUT_CLAUSE}" if preserve_layout else ""
     user = (
         f"【待改写正文】\n{prev_text}\n\n"
         "请按上面的风格指引改写这段正文：保留所有信息点、段落要点与全部"
         "数字/单位/认证名称，只改进措辞、语感与风格一致性；不新增虚构事实，"
         "不删减关键信息，不改动任何参数数字或认证。"
+        f"{layout}"
     )
     return system, user

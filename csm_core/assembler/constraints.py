@@ -253,6 +253,10 @@ def assemble_plan(
         return r
 
     top: list[BlockResult] = []
+    # 跨池竞品排除：深浅双池（TOP2-3 详细 / TOP4-10 简略）不能重复出同一款
+    # 产品。必须在**采样期**排除 —— 渲染期无 RNG 无索引，发现重复只能丢卡，
+    # 榜单就静默缩水，而且 pick 下标会与渲染项错位（reroll 寻址跟着崩）。
+    picked_competitor_keys: set[str] = set()
     for b in active_blocks:
         if isinstance(b, ParagraphBlock):
             top.append(sample_paragraph_tree(b))
@@ -268,7 +272,14 @@ def assemble_plan(
             r = sample_block(
                 b, index, registry, seed=seed, user_config=user_config,
                 angle=angle, note_weights=note_weights,
+                exclude_competitor_keys=picked_competitor_keys,
             )
+            if r.meta.get("card") and r.kind == "competitor_pool":
+                picked_competitor_keys.update(r.meta.get("competitor_keys") or [])
+                for w in r.meta.get("roster_warnings") or []:
+                    warnings.append(f"block '{b.id}': {w}")
+            if r.note:
+                warnings.append(f"block '{b.id}': {r.note}")
             results_by_id[b.id] = r
             top.append(r)
 

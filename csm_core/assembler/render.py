@@ -111,6 +111,11 @@ def compose_draft(plan: AssemblyPlan) -> str:
     i = 0
     while i < len(plan.results):
         r = plan.results[i]
+        if r.meta.get("card") and r.kind in ("hero_brand", "competitor_pool"):
+            chunk, i = _render_card_region(plan.results, i, variables)
+            if chunk:
+                parts.append(chunk)
+            continue
         if r.kind == "hero_brand":
             chunk, i = _render_hero_region(plan.results, i, variables)
             if chunk:
@@ -153,6 +158,136 @@ def _render_standalone(r: BlockResult, variables: dict[str, str]) -> str:
         # 等占位符在框架原理/方法描述里也能正常展开。
         return _substitute(r.text or "", variables)
     return ""
+
+
+# ── 榜单卡片 ──────────────────────────────────────────────────────────
+def _card_heading(
+    template: str, *, n: int, title: str, tier: str,
+    brand: str, model: str, variables: dict[str, str],
+) -> str:
+    """渲染卡片标题行。
+
+    ``{title}`` 卡片模式**不**追加产品关键词 —— 用户范文是「TOP2. 欧瑞达
+    X9」而不是「欧瑞达 X9 空气净化器」。要追加用 ``{title_kw}``。
+    多余空格收掉（tier 为空时 "### {tier} TOP1." 会留下双空格）。
+    """
+    keyword = variables.get("keyword", "")
+    text = _substitute(template, {
+        **variables,
+        "n": str(n), "title": title, "tier": tier,
+        "brand": brand, "model": model,
+        "title_kw": _append_keyword(title, keyword),
+    })
+    return re.sub(r"[ \t]{2,}", " ", text).replace(" \n", "\n").strip()
+
+
+def _render_card_sections(
+    picks: list[PickedVariant], layout: str,
+) -> str:
+    """把打平的 picks 按 section 顺序拼成加粗小节。
+
+    同一个 section 的多个 pick（``pick_variants`` > 1 或多篇笔记）合成一
+    段一段；section_label 为空表示「续段」——只出正文不出标题，用来把
+    「分维度硬核测评」这样的点拆成多段。
+    """
+    chunks: list[str] = []
+    current_index: int | None = None
+    for p in picks:
+        idx = p.meta.get("section_index")
+        label = str(p.meta.get("section_label") or "")
+        text = (p.text or "").strip()
+        if not text:
+            continue
+        new_section = idx != current_index
+        current_index = idx
+        if label and new_section:
+            if layout == "line":
+                chunks.append(f"**{label}**\n{text}")
+            else:
+                chunks.append(f"**{label}** ：{text}")
+        else:
+            chunks.append(text)
+    return "\n\n".join(chunks)
+
+
+def _render_hero_card(r: BlockResult, n: int, variables: dict[str, str]) -> str:
+    keyword = variables.get("keyword", "")
+    title = _substitute(r.text or "", variables).strip()
+    heading = _card_heading(
+        r.meta.get("heading_template", "### {tier} TOP{n}. {title}"),
+        n=n, title=title, tier=str(r.meta.get("tier") or ""),
+        brand="", model=title, variables=variables,
+    )
+    body = _render_card_sections(r.picks, r.meta.get("label_layout", "inline"))
+    return f"{heading}\n\n{body}" if body else heading
+
+
+def _render_competitor_cards(
+    r: BlockResult, start_index: int, variables: dict[str, str],
+) -> tuple[str, int]:
+    """渲染一个卡片竞品池，返回 (文本, 下一个可用排位)。"""
+    keyword = variables.get("keyword", "")
+    layout = r.meta.get("label_layout", "inline")
+    sep = r.meta.get("card_separator", "\n\n")
+    tmpl = r.meta.get("heading_template", "### {tier} TOP{n}. {title}")
+
+    grouped: list[tuple[str, list[PickedVariant]]] = []
+    for p in r.picks:
+        key = str(p.meta.get("competitor_key") or p.note_id)
+        if not grouped or grouped[-1][0] != key:
+            grouped.append((key, []))
+        grouped[-1][1].append(p)
+
+    cards: list[str] = []
+    n = start_index
+    for _, picks in grouped:
+        head = picks[0].meta
+        heading = _card_heading(
+            tmpl, n=n,
+            title=str(head.get("title") or ""),
+            tier=str(head.get("tier") or ""),
+            brand=str(head.get("brand") or ""),
+            model=str(head.get("model") or ""),
+            variables=variables,
+        )
+        body = _render_card_sections(picks, layout)
+        cards.append(f"{heading}\n\n{body}" if body else heading)
+        n += 1
+    return sep.join(cards), n
+
+
+def _render_card_region(
+    results: list[BlockResult], start: int, variables: dict[str, str],
+) -> tuple[str, int]:
+    """卡片榜单区：主推卡 = TOP1，后续卡片池连续编号。
+
+    区域语法 ``hero卡 → (literal)* → 竞品卡池+``：允许一个区里放多个池
+    （TOP2-3 深结构池 + TOP4-10 浅结构池），后池排位接着前池数。遇到别的
+    块类型（标题/段落/新的 hero）就收尾 —— 编号计数器绝不跨区泄漏。
+    跨池竞品去重已在采样期完成，这里只管排版。
+    """
+    parts: list[str] = []
+    n = 1
+    i = start
+    first = results[start]
+    if first.kind == "hero_brand":
+        parts.append(_render_hero_card(first, n, variables))
+        n += 1
+        i += 1
+    while i < len(results):
+        nxt = results[i]
+        if nxt.kind == "competitor_pool" and nxt.meta.get("card"):
+            chunk, n = _render_competitor_cards(nxt, n, variables)
+            if chunk:
+                parts.append(chunk)
+            i += 1
+            continue
+        if nxt.kind == "literal":
+            parts.append(_render_standalone(nxt, variables))
+            i += 1
+            continue
+        break
+    return "\n\n".join(p for p in parts if p), i
 
 
 def _render_hero_region(
