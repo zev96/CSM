@@ -4,6 +4,8 @@
  * shell need today; expand on demand rather than pulling a 3rd-party
  * icon lib.
  */
+import { computed } from "vue";
+
 const props = withDefaults(
   defineProps<{
     name: string;
@@ -93,6 +95,9 @@ const PATHS: Record<string, string> = {
   more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
   stack: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  // 与 eye 配对的「隐藏 / 停用」态：眼形加一道斜杠。做显示切换的地方都要它。
+  eyeOff:
+    '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
   heart: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -122,19 +127,29 @@ const PATHS: Record<string, string> = {
     '<polygon points="3 11 3 13 7 13 13 19 13 5 7 11 3 11"/><path d="M16 8a5 5 0 0 1 0 8"/>',
 };
 
-const inner = (() => {
+// Dev-only warn dedupe: computed re-evaluates whenever ``name`` changes, so a
+// component toggling between two unknown names would spam the console on every
+// flip. Warn once per name for the session instead.
+const warned = new Set<string>();
+
+// MUST be a computed, not a one-shot const: ``<Icon :name="ok ? 'check' : 'x'"/>``
+// only re-runs setup when the component is created, so a plain const froze the
+// glyph at whatever the first render picked — result badges kept showing ✓ after
+// flipping to failed.
+const inner = computed(() => {
   const hit = PATHS[props.name];
   if (hit) return hit;
   // Dev-only: surface missing icon names instead of silently falling back
   // to home. Previously ``shield`` / ``doc`` rendered as a tiny house glyph
   // for weeks and no one noticed. import.meta.env.DEV is dropped from the
   // production bundle so end-users don't see the warning.
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV && !warned.has(props.name)) {
+    warned.add(props.name);
     // eslint-disable-next-line no-console
     console.warn(`[Icon] unknown name="${props.name}" — falling back to "home". Add it to PATHS in components/ui/Icon.vue.`);
   }
   return PATHS.home;
-})();
+});
 </script>
 
 <template>
