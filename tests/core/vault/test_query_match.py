@@ -74,7 +74,40 @@ def test_query_finds_note_by_list_tag(hero_vault: Path):
 
 def test_query_finds_note_by_int_field(hero_vault: Path):
     index = scan_vault(hero_vault)
-    assert len(index.query(module="DARZD9", filters={"模板序号": "2"})) == 2
+    hits = index.query(module="DARZD9", filters={"模板序号": "2"})
+    # 断言到具体是哪几篇，别只数个数 —— 放宽过头把无关笔记也捞进来照样过
+    assert sorted(n.id for n in hits) == ["品牌实力", "核心参数"]
+
+
+def test_date_frontmatter_matches_by_str():
+    # `日期: 2026-06-26` 被 YAML 读成 date；筛选值是字符串，归一后应命中。
+    # 顺带保证 explain 反查列出的取值（也走 str）是「填了真能筛出」的。
+    from datetime import date
+    assert match_value(date(2026, 6, 26), "2026-06-26")
+    assert not match_value(date(2026, 6, 26), "2026-06-27")
+
+
+def test_broadening_only_adds_never_drops():
+    # 核心不变量：第一步 actual == wanted 与旧代码逐字节相同，旧命中的一篇
+    # 都不会丢。这里锁住「严格相等仍恒真」这条，防止将来重构把它改坏。
+    for a, w in [("x", "x"), (2, 2), (["a", "b"], ["a", "b"]), (None, None)]:
+        assert match_value(a, w)
+
+
+def test_mixed_type_key_enlarges_pool_intentional(tmp_path: Path):
+    """同键混型（标量 + 列表）会把命中集撑大 —— 这是刻意的，钉住它。
+
+    对抗性审查证伪了「放宽对任何本来能用的筛选零影响」这个过强的说法：某键
+    在同目录里既有标量又有列表写法时，标量命中之外会补进列表命中的笔记。
+    现实里被筛的字段在其目录内都是同型标量（故无触发），但语义上这是「按每
+    篇自己的类型判定」的正确结果，用测试固定成预期行为而非意外。
+    """
+    root = tmp_path / "mixed"
+    write(root, "d/scalar.md", "素材类型: 引言\n核心关键词: 吸力")
+    write(root, "d/list.md", "素材类型: 引言\n核心关键词:\n  - 吸力\n  - 防缠绕")
+    index = scan_vault(root)
+    hits = sorted(n.id for n in index.query(module="d", filters={"核心关键词": "吸力"}))
+    assert hits == ["list", "scalar"]      # 旧 strict 只会命中 scalar
 
 
 # ── 空池归因 ────────────────────────────────────────────────────────────
@@ -119,6 +152,12 @@ def test_no_hint_when_value_lives_nowhere(hero_vault: Path):
     )
     assert "「模块」的实际取值" in why
     assert "大概该填" not in why
+
+
+def test_explains_key_without_value(hero_vault: Path):
+    """编辑器里选了字段还没选值 → {字段: ""}，别报成「值填错了」。"""
+    why = explain_empty_query(scan_vault(hero_vault), "DARZD9", {"模块": ""})
+    assert "只选了字段、没填值" in why
 
 
 def test_first_failing_filter_is_the_one_explained(hero_vault: Path):

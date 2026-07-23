@@ -68,6 +68,10 @@ const isPool = computed(() => block.value.kind === "competitor_pool");
 
 /** 打开卡片模式：给块补上卡片专属字段的默认值。 */
 function enableCardMode() {
+  // 卡片模式的开关是「结构性重建」sections —— 手填态的下标会失去所指，必须
+  // 一起清（换块 watch 只在 block.id 变时清，开关卡片模式 id 不变）。否则
+  // 关掉再开、重新加节后，某个从没选过自定义的小节会被卡在手填输入框里。
+  sectionCustomKeys.value = [];
   if (isPool.value) {
     // 预填规范里约定的筛选（素材类型: 竞品卡）—— schema 强制卡片模式必须有
     // 筛选条件（否则同目录旧格式竞品笔记会混进名册），而筛选属性下拉是从
@@ -97,6 +101,7 @@ function enableCardMode() {
 }
 
 function disableCardMode() {
+  sectionCustomKeys.value = [];    // 同 enableCardMode：结构性重建，清手填态
   patch({ sections: [] });
 }
 
@@ -174,8 +179,16 @@ function sectionValueOptions(sec: any): string[] {
   const key = sectionFilterKey(sec);
   if (!key) return [];
   const meta = attrsForSection(sec).find((a) => a.key === key);
-  if (!meta || meta.value_count > VALUE_OPTIONS_THRESHOLD) return [];
-  return meta.sample_values ?? [];
+  const base =
+    meta && meta.value_count <= VALUE_OPTIONS_THRESHOLD
+      ? meta.sample_values ?? []
+      : [];
+  // 已配置的值若不在样本里（素材改了名 / 之前手填过）也得显示出来，否则
+  // 下拉退成占位符，用户看不出这条筛选其实还在，误以为没筛。只在本来就走
+  // 下拉的分支补（高基数走 FormInput，值本身可见，不掺进来逼成单选）。
+  const cur = sectionFilterValue(sec);
+  if (base.length && cur && !base.includes(cur)) return [cur, ...base];
+  return base;
 }
 
 function sectionValueHint(sec: any): string {
@@ -435,7 +448,10 @@ const CUSTOM_KEY = "__custom__";
 
 watch(
   () => block.value?.id,
-  () => { customKeyMode.value = false; },
+  () => {
+    customKeyMode.value = false;
+    sectionCustomKeys.value = [];   // 换块才清，不再每次无关编辑都重置（R1）
+  },
 );
 
 function onKeySelect(v: string) {
@@ -482,10 +498,13 @@ const VALUE_OPTIONS_THRESHOLD = 20;
 
 function valueOptionsFor(key: string): string[] {
   const meta = vaultAttrs.value.find((a) => a.key === key);
-  if (!meta) return [];
-  // 后端已经把 sample_values 截到 20；这里只是双保险确认。
-  if (meta.value_count > VALUE_OPTIONS_THRESHOLD) return [];
-  return meta.sample_values ?? [];
+  if (!meta || meta.value_count > VALUE_OPTIONS_THRESHOLD) return [];
+  const base = meta.sample_values ?? [];
+  // 见 sectionValueOptions：已配置但不在样本里的值也要显示，别让下拉退成
+  // 占位符把「其实还在筛」藏起来。
+  const cur = filterRows.value[0]?.value ?? "";
+  if (base.length && cur && !base.includes(cur)) return [cur, ...base];
+  return base;
 }
 
 async function fetchAttrsRaw(): Promise<VaultAttribute[]> {
@@ -531,7 +550,10 @@ async function loadVaultAttrs() {
 // 切换 block 或者 module 变化时重新拉一次。第一次 mount 也会触发
 // （immediate: true）。
 watch(
-  () => [block.value?.id, block.value?.source?.module] as const,
+  // 返回稳定字符串而不是 [id, module] 数组：数组字面量每次都是新引用，
+  // Object.is 判定恒为「变了」，于是改任何无关字段（标题、抽几篇……）都会
+  // 白白重拉一次属性。拼成字符串后只有 id / 目录真变了才触发。
+  () => `${block.value?.id ?? ""}\u0000${block.value?.source?.module ?? ""}`,
   () => {
     if (
       block.value &&
@@ -544,14 +566,37 @@ watch(
   { immediate: true },
 );
 
+/** 取某小节目录的属性；对齐块级 409→扫描→重试。取不到返回 null（不缓存）。 */
+async function fetchSectionAttrs(mod: string): Promise<VaultAttribute[] | null> {
+  try {
+    const r = await sidecar.client.get("/api/vault/attributes", {
+      params: { module: mod },
+    });
+    return r.data?.attributes ?? [];
+  } catch (e: any) {
+    if (e?.response?.status === 409) {
+      try {
+        await sidecar.client.post("/api/vault/scan", {});
+        const r = await sidecar.client.get("/api/vault/attributes", {
+          params: { module: mod },
+        });
+        return r.data?.attributes ?? [];
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 // 主推卡小节各自覆盖目录时，再按小节目录补拉一次（块级目录的那份已有）。
 watch(
-  () => [
-    block.value?.id,
-    (block.value?.sections ?? []).map((s: any) => s?.module ?? "").join("\u0000"),
-  ] as const,
+  () =>
+    `${block.value?.id ?? ""}\u0001` +
+    (block.value?.sections ?? [])
+      .map((s: any) => String(s?.module ?? ""))
+      .join("\u0000"),
   async () => {
-    sectionCustomKeys.value = [];
     const blockMod = block.value?.source?.module || "";
     const mods = new Set<string>(
       (block.value?.sections ?? [])
@@ -560,14 +605,10 @@ watch(
     );
     for (const mod of mods) {
       if (sectionAttrs.value[mod]) continue;
-      try {
-        const r = await sidecar.client.get("/api/vault/attributes", {
-          params: { module: mod },
-        });
-        sectionAttrs.value = { ...sectionAttrs.value, [mod]: r.data?.attributes ?? [] };
-      } catch {
-        sectionAttrs.value = { ...sectionAttrs.value, [mod]: [] };
-      }
+      const attrs = await fetchSectionAttrs(mod);
+      // 失败不写空数组：一次冷启动 409 不该把这个目录永久钉成空下拉。不缓存
+      // 就还留着重试的余地，而 __custom__ 手填出口始终在，用户不会被卡。
+      if (attrs) sectionAttrs.value = { ...sectionAttrs.value, [mod]: attrs };
     }
   },
   { immediate: true },

@@ -15,10 +15,23 @@ def match_value(actual: Any, wanted: Any) -> bool:
     * ``核心关键词: [模板二, 主推位, 品牌实力]`` 这类**列表**是标签集合，
       单值筛选的语义只可能是「含这个标签」。严格相等的话，界面上明明列出
       了「品牌实力」这个取值，选了却一篇都匹配不到。
-    * ``模板序号: 2`` 是 **int**，筛选值 ``"2"`` 严格比不等。
+    * ``模板序号: 2`` 是 **int**、``日期: 2026-06-26`` 是 ``date`` —— 都和
+      字符串筛选值严格比不等。
 
-    所以：列表按成员判定，标量按字符串判定。放宽不会改变任何「本来能用」
-    的筛选 —— 上面两类以前恒为空池（直接报错），没有模板能依赖它。
+    判定语义：**按每篇笔记自己的类型来** —— 列表看成员，其余按 ``str()``
+    归一后比对。这样「一篇笔记是否满足这条筛选」由它自身的写法决定，和
+    diagnosis 的反查（``explain_empty_query``）口径一致，反查说「你要的值在
+    字段 X 里」时，去筛 X 就真能筛出来。
+
+    ⚠️ 口径说明（不是「零影响」）：第一步 ``actual == wanted`` 与旧代码逐字
+    节相同，所以旧代码匹配到的笔记一篇都不会丢 —— 放宽只会「加」不会「减」。
+    但「加」在两种情形下会改变**本来非空**的筛选结果，而不只是「空池→有」：
+      * 同一个键在同目录里混型（有的笔记写成标量、有的写成列表），标量命中
+        之外又补进列表命中的笔记；
+      * 该键是数字/日期而筛选值字符串此前比不等。
+    经核对，现有全部模板对真实库都只筛标量字符串键（素材类型/模块/核心关键
+    词在其目录内均为标量），放宽对它们逐字节等价；但不能声称对任意库、任意
+    模板都零影响。
     """
     if actual is None:
         return wanted is None
@@ -26,9 +39,9 @@ def match_value(actual: Any, wanted: Any) -> bool:
         return True
     if isinstance(actual, list):
         return any(str(item) == str(wanted) for item in actual)
-    if isinstance(actual, (str, int, float, bool)):
-        return str(actual) == str(wanted)
-    return False
+    # dict/其它结构没有合理的单值语义，str() 后自然也匹配不到正常筛选值 ——
+    # 不特判，交给字符串比对（``str({...})`` 不会等于用户填的普通值）。
+    return str(actual) == str(wanted)
 
 
 @dataclass
@@ -126,6 +139,10 @@ def explain_empty_query(
 
     total = f"该目录下有 {len(scope)} 篇素材"
     for key, wanted in filters.items():
+        if wanted == "":
+            # 编辑器里「选了字段还没选值」会留下 {字段: ""}，直接点名它，
+            # 别去列该字段的取值让人以为是值填错了。
+            return f"{total}，但「{key}」这条筛选只选了字段、没填值。"
         if any(match_value(n.frontmatter.get(key), wanted) for n in scope):
             continue                      # 这条不是凶手，看下一条
         vals = _values_of(scope, key)
@@ -145,7 +162,7 @@ def explain_empty_query(
         if elsewhere:
             where = "、".join(f"「{k}」" for k in elsewhere[:3])
             which = "该填它" if len(elsewhere) == 1 else "该填其中之一"
-            hint = f"你要的「{wanted}」在字段 {where} 里 —— 筛选字段大概{which}。"
+            hint = f"你要的「{wanted}」在字段{where}里 —— 筛选字段大概{which}。"
         return f"{total}，「{key}」的实际取值是：{_preview(vals)}。{hint}"
 
     return f"{total}，每条筛选单独都能命中，但没有素材同时满足全部条件。"
