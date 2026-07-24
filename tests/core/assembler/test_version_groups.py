@@ -61,8 +61,29 @@ def test_draw_covers_both_options_across_seeds():
     assert seen == {"版本1", "版本2"}
 
 
+def test_draw_no_streak_across_consecutive_low_seeds():
+    """相邻整数 seed 不能系统性连出同一版本。
+
+    「重新随机」每次 seed+1；早期 key 把 seed 放开头（``{seed}::version::gid``），
+    相邻 seed 的首个 .random() 高度相关 —— 用户从 seed 0 连点一直是同一版本，
+    看着像「版本锁死」。seed 放末尾后打散。
+
+    ⚠ 必须用**生产同款 group id** ``rec_ver``：这个缺陷与 gid 强相关，旧 key 下
+    ``rec_ver`` 的 seed 0..6 恰好连出 7 个版本2（真机就是它），而随手取的
+    ``ver`` 在旧 key 下本就混合 —— 用 ``ver`` 测这条会**在带 bug 的旧 key 上照样
+    通过**，成为守不住回归的纸老虎（对抗性审查实测坐实）。这里钉「rec_ver 头 7
+    个连续 seed 两个版本都出现」，旧 key 上会真失败。
+    """
+    tpl = _tpl(
+        [{"kind": "literal", "id": "l", "text": "x", "versions": ["版本1"]}],
+        [{"id": "rec_ver", "options": ["版本1", "版本2"]}],
+    )
+    first7 = {draw_versions(tpl, seed=s)["rec_ver"] for s in range(7)}
+    assert first7 == {"版本1", "版本2"}
+
+
 def test_version_rng_namespace_cannot_collide_with_block_key():
-    """版本 RNG key 用 ``::`` 命名空间，块 key 用 ``-`` —— 名叫
+    """版本 RNG key 含 ``::`` 命名空间，块 key 用 ``-`` 连接 —— 名叫
     ``version-ver`` 的块也不会与版本抽签共享随机流。"""
     tpl = _tpl(
         [{"kind": "literal", "id": "version-ver", "text": "x"}],
@@ -70,7 +91,7 @@ def test_version_rng_namespace_cannot_collide_with_block_key():
     )
     import random
     block_key_rng = random.Random("0-version-ver")
-    version_rng = random.Random("0::version::ver")
+    version_rng = random.Random("version::ver::0")   # 与 draw_versions 现用格式一致
     assert block_key_rng.random() != version_rng.random()
 
 

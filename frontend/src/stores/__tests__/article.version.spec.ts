@@ -31,8 +31,9 @@ describe("article store — 结构版本", () => {
     getMock.mockResolvedValue({ data: {} });
   });
 
-  it("「重新随机」锁住当前版本，只换素材", async () => {
-    // 2 个版本下不锁的话，点一次重随有一半概率整篇换结构。
+  it("rerun() 无参 = 锁当前版本只换素材（「只换文字·锁结构」入口用它）", async () => {
+    // store 原语：无参锁当前版本。注意 UI 主按钮「全部重采」现在显式传 null
+    // 走自由重抽（见 article.version 的 rerun(null) 用例）；这条只钉原语本身。
     const a = useArticle();
     await seed(a, { rec_ver: "版本1·口碑权威型" });
     await a.rerun();

@@ -122,6 +122,35 @@ def list_notes(
     }
 
 
+def _vault_index():
+    """取 vault 索引，且把「共享盘掉线」与「目录名写错」分开报。
+
+    ``Path.rglob`` 对不存在的目录**静默**产出空序列，``IncrementalIndexer``
+    也不抛 —— vault_root 整个不可达时索引是空的而不是异常，于是空池归因只
+    看得见「scope 为空」，把共享盘断连报成「检查目录名是否写错」。运营会照
+    着这句话去改一个本来完全正确的目录路径，越改越错。
+
+    ``/api/vault/scan`` 本来就有 exists/is_dir 前置检查，两个 card_* 端点
+    漏继承了。
+    """
+    cfg = config_service.load()
+    if not cfg.vault_root:
+        raise HTTPException(status_code=400, detail="还没设置资料库目录")
+    root = Path(cfg.vault_root)
+    if not root.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"资料库目录不可访问：{root} —— 共享盘可能没连上，"
+                   f"先确认这个路径在资源管理器里能打开。",
+        )
+    try:
+        # 走 get() 而不是 cached()：运营刚在共享盘补完素材就点检查／识别，
+        # 读缓存会看到旧结果。
+        return vault_service.get(root)
+    except Exception as e:      # 权限问题等
+        raise HTTPException(status_code=400, detail=f"扫描资料库失败：{e}") from e
+
+
 class CardSectionSpec(BaseModel):
     label: str
     h2: str = ""
@@ -169,13 +198,7 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
     if not body.sections:
         raise HTTPException(status_code=400, detail="请先添加小节")
 
-    cfg = config_service.load()
-    if not cfg.vault_root:
-        raise HTTPException(status_code=400, detail="还没设置资料库目录")
-    try:
-        index = vault_service.get(Path(cfg.vault_root))
-    except Exception as e:      # 目录不存在 / 权限问题
-        raise HTTPException(status_code=400, detail=f"扫描资料库失败：{e}") from e
+    index = _vault_index()
 
     specs = [
         CompetitorSection(label=s.label, h2=s.h2, required=s.required)
@@ -267,6 +290,89 @@ def card_coverage(body: CardCoverageRequest) -> dict[str, Any]:
             key=lambda d: d["stem"],
         ),
         "near_duplicates": near_duplicates,
+    }
+
+
+class CardSectionsRequest(BaseModel):
+    """「从目录识别小节」入参 —— 只要目录 + 筛选，不需要已配好的小节。"""
+
+    module: str
+    filter: dict[str, Any] = Field(default_factory=dict)
+
+
+# 一个目录里出现 50 种以上不同 H2，多半是目录选错了（混进了别的素材）。
+# 全量回传只会刷出一屏噪音，截断 + 明示比装作没事强。
+_MAX_DETECTED_SECTIONS = 50
+
+
+@router.post("/api/vault/card_sections")
+def card_sections(body: CardSectionsRequest) -> dict[str, Any]:
+    """归纳该目录的竞品卡实际写了哪些 H2 小节。
+
+    ``card_coverage`` 回答的是「按我配的小节，谁能上榜」，前提是小节已经
+    配好；而「卡里到底写了哪些小节」它答不了 —— sections 为空直接 400，
+    先有鸡先有蛋。这里反过来：只给目录 + 筛选，把 H2 摊开。
+
+    篇数分两栏，**不能合并**：``note_count`` 是写了这个 H2 的篇数，
+    ``with_body`` 是 H2 底下真有正文的篇数。``section_body`` 要求正文非空，
+    空骨架笔记有 H2 也进不了名册 —— 只看 note_count 会以为素材齐了。
+
+    排序取该 H2 在各篇里位置的**中位数**，不是字母序也不是词频：识别出来
+    是直接拿去当小节顺序的，字母序导进去排版就乱了。注意这是近似 —— 同目录
+    的卡结构不一致时（一半 4 节一半 7 节），中位数可能与任何一篇的实际先后
+    相反，用户需要用上下移微调。
+    """
+    from collections import defaultdict
+    from statistics import median
+
+    from csm_core.assembler.cards import note_sections
+    from csm_core.vault.scanner import explain_empty_query
+
+    if not body.module.strip():
+        # 同 card_coverage：空 module 在 query 里等于「整个资料库」，
+        # 几千篇逐篇解析 H2，界面卡死且结论全是噪音。
+        raise HTTPException(status_code=400, detail="请先给竞品池选目录")
+
+    index = _vault_index()
+    notes = index.query(module=body.module, filters=body.filter)
+    # 一篇都没捞到时别让前端去猜「是目录错了还是筛选错了」—— 与竞品池空池
+    # 报错同一套归因（目录几篇 / 字段在不在 / 你要的值其实在哪个字段）。
+    hint = explain_empty_query(index, body.module, body.filter) if not notes else ""
+
+    positions: dict[str, list[int]] = defaultdict(list)
+    with_body: dict[str, int] = defaultdict(int)
+    for note in notes:
+        seen_here: set[str] = set()
+        for pos, sec in enumerate(note_sections(note)):
+            title = (sec.raw_title or "").strip()
+            # 同一篇里重复的 H2 只记一次，否则 note_count 会超过总篇数，
+            # 「57/57 篇有此小节」这类读数直接失去意义。
+            if not title or title in seen_here:
+                continue
+            seen_here.add(title)
+            positions[title].append(pos)
+            if sec.body.strip():
+                with_body[title] += 1
+
+    found = sorted(
+        (
+            {
+                "title": title,
+                "note_count": len(pos),
+                "with_body": with_body.get(title, 0),
+                "order": median(pos),
+            }
+            for title, pos in positions.items()
+        ),
+        key=lambda d: (d["order"], -d["note_count"], d["title"]),
+    )
+    return {
+        "module": body.module,
+        "filter": body.filter,
+        "note_count": len(notes),
+        "sections": found[:_MAX_DETECTED_SECTIONS],
+        "truncated": len(found) > _MAX_DETECTED_SECTIONS,
+        "hint": hint,
     }
 
 

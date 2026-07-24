@@ -568,6 +568,36 @@ def test_empty_pool_error_names_the_filter(tmp_path):
     assert "市场口碑" in str(e.value) and "主推" in str(e.value)
 
 
+def test_empty_pool_error_explains_wrong_field(tmp_path):
+    """字段名填错时报错要给出归因 —— 目录里明明有素材，光说「没有」没法排查。"""
+    from csm_core.assembler.sampler import EmptyPoolError
+
+    _hero_note(tmp_path, "主推/口碑.md", "产品推荐格式", "正文")
+    hero = {
+        "kind": "hero_brand", "id": "hero", "title": "DARZ D9",
+        "source": {"type": "notes_query", "module": "主推"},
+        # 值对、字段错 —— 「市场口碑数据」在别的字段里
+        "sections": [{"label": "口碑", "filter": {"素材类型": "市场口碑数据"}}],
+    }
+    with pytest.raises(EmptyPoolError) as e:
+        _run(tmp_path, [hero])
+    msg = str(e.value)
+    assert "1 篇" in msg                      # 目录不空，说清有几篇
+    assert "产品推荐格式" in msg               # 该字段的真实取值
+
+
+def test_card_roster_error_explains_empty_query(tmp_path):
+    """竞品池同理：一张卡都没捞到时，要分清是目录错了还是筛选错了。"""
+    _card(tmp_path, "竞品/竞品卡-欧瑞达X9.md", brand="欧瑞达", model="欧瑞达X9",
+          sections={h["label"]: ["甲"] for h in _SECTIONS})
+    block = _pool_block(pick=1)
+    block["source"]["filter"] = {"素材类型": "竞品卡片"}     # 多了个「片」
+    with pytest.raises(CardRosterError) as e:
+        _run(tmp_path, [block])
+    assert "「素材类型」的实际取值" in str(e.value)
+    assert "竞品卡" in str(e.value)
+
+
 def test_tier_conflict_warning_says_it_varies(tmp_path):
     """多卡互为候选 → tier 每次随机，告警不能说「取首个」。"""
     for i, tier in enumerate(("热门品牌", "性价比之选")):

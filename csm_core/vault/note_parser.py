@@ -33,21 +33,38 @@ _HR_LINE_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 # ATX heading markers (``### Foo``): drop the ``#``s but keep the text so the
 # sentence survives as plain prose instead of an unwanted subheading.
 _HEADING_PREFIX_RE = re.compile(r"^\s*#{1,6}\s+")
-# Any of these on a line marks the start of the vault's navigation/backlink
-# tail. Supported styles:
+# Any of these on a line marks the start of the vault's navigation / editorial
+# tail —— 「说明块」。Everything from the first match to EOF is authoring chrome
+# and must never leak into a draft. Two families:
+#
+#  导航回链（nav backlinks）:
 #   ← 返回: [[索引]]                          (arrow style)
 #   **返回上层**: [[引言模块总索引|…]]         (bold label)
 #   **返回主页**: 关联数据库                    (bold label)
 #   返回上层: …   /   返回主页: …               (naked label)
-#   相关笔记                                     (section header)
-#   相关笔记: [[xxx|xxx]] | [[yyy|yyy]]         (inline label w/ wiki links)
-#   **相关笔记**: [[xxx|xxx]]                    (bold inline label)
+#   相关笔记 / 相关笔记: [[..]] / **相关笔记**  (section header / inline)
+#
+#  编辑批注（editorial annotations）—— 素材作者写给自己的规格与红线:
+#   **取材**: [[型号-产品参数]] | [[..]]        (数据出处)
+#   **红线**: - 气态CCM为F3…                    (合规约束)
+#   **短板槽**（需收短板的模块：…）             (竞品短板位)
+#   **说明**: …                                 (通用说明)
+#
+# ⚠ 主推位笔记把「取材/红线」排在「返回上层」**之上**（竞品位则相反）。
+# 只认「返回」时，排在它上面的取材/红线会躲过切割、被 split_variants 当成
+# 最后一个 ①②③ 变体的尾巴一起录进正文 —— 真机生成里「取材:[[..]] 红线:」
+# 整块渗进成稿就是这么来的。所以按**最先出现的任意 tail 标记**切，与顺序无关。
 _BACKLINK_LINE_RE = re.compile(
     r"(?:←\s*返回"
     r"|\*\*返回(?:上层|主页)\*\*\s*[:：]"
     r"|^\s*返回(?:上层|主页)\s*[:：]"
-    r"|^\s*(?:\*\*)?相关笔记(?:\*\*)?(?:\s*[:：].*)?\s*$)"
+    r"|^\s*(?:\*\*)?相关笔记(?:\*\*)?(?:\s*[:：].*)?\s*$"
+    r"|^\s*\*\*(?:取材|红线|短板槽|说明)\*\*)"
 )
+# 说明块前常有一条独立的 ``---`` 分隔线。按标记切断后它会留在正文末尾；
+# 下游 _clean_chrome / extract_brand_sections 都会剥 HR，但 raw_body 本身也
+# 被多处直接消费，索性在切断时把尾部的 HR 行一并 rstrip 掉，正文更干净。
+_TRAILING_HR_RE = re.compile(r"(?:^\s*(?:-{3,}|\*{3,}|_{3,})\s*$\n?)+\Z", re.MULTILINE)
 
 
 @dataclass
@@ -70,7 +87,9 @@ def _strip_backlinks(body: str) -> str:
     lines = body.splitlines()
     for i, line in enumerate(lines):
         if _BACKLINK_LINE_RE.search(line):
-            return "\n".join(lines[:i]).rstrip()
+            head = "\n".join(lines[:i]).rstrip()
+            # 尾部若剩一条分隔说明块的 ``---``，一并去掉（见 _TRAILING_HR_RE）。
+            return _TRAILING_HR_RE.sub("", head).rstrip()
     return body
 
 
