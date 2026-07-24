@@ -99,11 +99,53 @@ function Stop-Existing {
     Remove-Item $PidsFile -ErrorAction SilentlyContinue
 }
 
+# ─── Python 解释器解析 ─────────────────────────────────────────────
+# ⚠ 绝不能用裸 `python` —— 它在不同 shell 里解析到不同解释器。管理员 shell
+# 缺 user PATH 时它常指向系统 Python 或 Store stub，那里没装 fastapi，于是
+# handshake 等待中途炸「ModuleNotFoundError: No module named 'fastapi'」。
+# 这跟"哪个 checkout"无关，纯粹是解释器选错。显式定位仓库的 .venv：
+#   1) 本 checkout 的 .venv（主仓直接命中）
+#   2) worktree 共享主仓 .venv —— git-common-dir 的父目录就是主仓根
+#   3) 从 RepoRoot 逐级向上找（.claude/worktrees/* 布局下必然回到主仓）
+function Resolve-VenvPython {
+    $cands = @()
+    $cands += Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    try {
+        $common = & git -C $RepoRoot rev-parse --path-format=absolute --git-common-dir 2>$null
+        if ($LASTEXITCODE -eq 0 -and $common) {
+            $cands += Join-Path (Split-Path -Parent $common) ".venv\Scripts\python.exe"
+        }
+    } catch { }
+    $dir = $RepoRoot
+    for ($i = 0; $i -lt 6; $i++) {
+        $cands += Join-Path $dir ".venv\Scripts\python.exe"
+        $parent = Split-Path -Parent $dir
+        if (-not $parent -or $parent -eq $dir) { break }
+        $dir = $parent
+    }
+    foreach ($c in $cands) {
+        if (Test-Path $c) { return $c }
+    }
+    return $null
+}
+
 # ─── Sidecar 启动 ──────────────────────────────────────────────────
 function Start-Sidecar {
     Write-Step "Starting Python sidecar"
     if (Test-Path $SidecarLog) { Remove-Item $SidecarLog -Force }
     if (Test-Path $SidecarErr) { Remove-Item $SidecarErr -Force }
+
+    $PythonExe = Resolve-VenvPython
+    if (-not $PythonExe) {
+        throw "找不到仓库 .venv 的 python（期望 <主仓>\.venv\Scripts\python.exe）。先建虚拟环境并装依赖。"
+    }
+    # 预检：这个解释器能 import fastapi 吗？不能就当场说清，别等 handshake
+    # 等待到一半才炸一句看不懂的 ModuleNotFoundError。
+    & $PythonExe -c "import fastapi" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "$PythonExe 里没装依赖（import fastapi 失败）。在该环境 pip install -e sidecar。"
+    }
+    Write-Ok "python: $PythonExe"
 
     # ⚠ 关闭 parent watchdog —— 默认行为是 sidecar 检测父进程消失就自杀
     # （Tauri 模式下父进程是 csm-tauri.exe，关闭窗口时连带退出 sidecar）。
@@ -114,9 +156,21 @@ function Start-Sidecar {
     # $env，子进程继承；调完恢复。
     $prevWatchdog = $env:CSM_SIDECAR_PARENT_WATCHDOG
     $env:CSM_SIDECAR_PARENT_WATCHDOG = "0"
+
+    # ⚠ 必须钉 PYTHONPATH 到本 checkout 的 sidecar/ —— 否则 worktree 里跑这
+    # 个脚本会起**主仓**的 sidecar。原因：csm_sidecar 是 editable 装的，
+    # site-packages 里的 .pth 指向 D:/CSM/sidecar；而 `python -m` 只把 cwd
+    # (= $RepoRoot) 放进 sys.path，`csm_sidecar` 在 $RepoRoot/sidecar/ 下面
+    # 一层，cwd 命中不了，于是回落到 editable 装的主仓副本。
+    # 症状极具迷惑性：前端是本 checkout 的（vite 从这里起），csm_core 也是
+    # （它就在 $RepoRoot/ 下，cwd 命中），唯独 sidecar 是别的分支的 —— 新加
+    # 的接口一律 404「Not Found」，看上去像前端 bug。
+    $prevPyPath = $env:PYTHONPATH
+    $env:PYTHONPATH = "$RepoRoot\sidecar;$RepoRoot" +
+        $(if ($prevPyPath) { ";$prevPyPath" } else { "" })
     try {
         # python -u 关 stdout 缓冲，第一行 handshake JSON 才能即时拿到。
-        $proc = Start-Process -FilePath "python" `
+        $proc = Start-Process -FilePath $PythonExe `
             -ArgumentList @("-u", "-m", "csm_sidecar.main") `
             -WorkingDirectory $RepoRoot `
             -RedirectStandardOutput $SidecarLog `
@@ -128,6 +182,11 @@ function Start-Sidecar {
             Remove-Item Env:CSM_SIDECAR_PARENT_WATCHDOG -ErrorAction SilentlyContinue
         } else {
             $env:CSM_SIDECAR_PARENT_WATCHDOG = $prevWatchdog
+        }
+        if ($null -eq $prevPyPath) {
+            Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+        } else {
+            $env:PYTHONPATH = $prevPyPath
         }
     }
 
@@ -273,6 +332,9 @@ Write-Host ""
 Write-Host "==================== DEV ENV READY ====================" -ForegroundColor Green
 if ($sidecarPid) {
     Write-Host ("  Sidecar  PID {0,-6}  port {1,-5}  log: {2}" -f $sidecarPid, $sidecarPort, $SidecarLog)
+    # 把代码来源印出来 —— 「新接口 404」最常见的根因就是这里指到了别的
+    # checkout（editable 装的主仓副本），而症状看着完全像前端 bug。
+    Write-Host ("           code:  {0}\sidecar" -f $RepoRoot) -ForegroundColor DarkGray
 }
 if ($vitePid)    {
     Write-Host ("  Vite     PID {0,-6}  http://localhost:5173    log: {1}" -f $vitePid, $ViteLog)
