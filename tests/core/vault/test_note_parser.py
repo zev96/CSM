@@ -75,6 +75,52 @@ def test_strip_backlinks_removes_bold_related_notes():
     assert out.strip() == "① 正文。"
 
 
+def test_strip_backlinks_removes_editorial_block_above_return():
+    # 主推位笔记的真实版式：说明块（取材/红线）排在「返回上层」**之上**。
+    # 只认「返回」会让取材/红线躲过切割、被 split_variants 当成最后一个 ①②③
+    # 变体的尾巴录进正文 —— 真机成稿里「取材:[[..]] 红线:」整块渗漏就是这样。
+    body = (
+        "① D9颗粒物CADR 512m³/h，甲醛CADR 308m³/h。\n"
+        "\n"
+        "---\n"
+        "**取材**: [[DARZD9-产品参数]] | [[空气净化器-DARZ核心技术-七重精滤净化技术]]\n"
+        "\n"
+        "**红线**:\n"
+        "- 气态CCM为**F3**（非F4），HEPA为**H12**，禁写H13\n"
+        "\n"
+        "**返回上层**: [[空气净化器产品推荐格式索引]] | **返回主页**: [[关联数据库]]\n"
+    )
+    out = _strip_backlinks(body)
+    assert "取材" not in out
+    assert "红线" not in out
+    assert "F3" not in out and "H12" not in out     # 红线正文也不能漏
+    assert "DARZD9-产品参数" not in out
+    assert "返回上层" not in out
+    assert not out.rstrip().endswith("---")          # 分隔线也一并去掉
+    assert "颗粒物CADR 512" in out
+
+
+def test_strip_backlinks_removes_short_slot_editorial():
+    # 竞品位说明块的「短板槽」标签（全角括号，非冒号）
+    body = (
+        "① 竞品正文。\n"
+        "\n"
+        "**短板槽**（需收短板的模块：成本与维护）\n"
+        "**取材**: [[某型号-产品参数]]\n"
+    )
+    out = _strip_backlinks(body)
+    assert "短板槽" not in out
+    assert "取材" not in out
+    assert out.strip() == "① 竞品正文。"
+
+
+def test_strip_backlinks_keeps_ordinary_bold_in_body():
+    # 正文里的普通加粗（**F3** 这类关键数据）不能被误当说明块标记切掉 ——
+    # 只有行首恰好是 **取材/红线/短板槽/说明** 才算标记。
+    body = "① 气态CCM为**F3**级，颗粒物CCM达**P4**级。\n② 又一条变体。"
+    assert _strip_backlinks(body) == body
+
+
 def test_strip_backlinks_noop_when_absent():
     body = "纯正文，无返链块。\n① 一些变体。"
     assert _strip_backlinks(body) == body
