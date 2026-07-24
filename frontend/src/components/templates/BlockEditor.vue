@@ -289,18 +289,341 @@ async function runCoverage() {
     });
     coverage.value = r.data;
   } catch (e: any) {
-    const detail = e?.response?.data?.detail;
-    coverage.value = {
-      error:
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? `${detail[0]?.loc?.join(".")}: ${detail[0]?.msg}`
-            : (e?.message ?? String(e)),
-    };
+    coverage.value = { error: apiError(e) };
   } finally {
     coverageLoading.value = false;
   }
+}
+
+/** sidecar 报错转人话：FastAPI 的 detail 可能是字符串，也可能是校验数组。 */
+function apiError(e: any): string {
+  const detail = e?.response?.data?.detail;
+  // FastAPI 对**不存在的路由**回 404 + detail 恰好是字面量 "Not Found"，
+  // 界面上就只剩这两个词，完全无法行动。而这个 404 有个很具体的根因：跑着的
+  // sidecar 比界面旧（dev 下最典型 —— csm_sidecar 是 editable 装的，起 dev
+  // 时没钉 PYTHONPATH 就会加载另一个 checkout 的 sidecar）。真路由自己抛的
+  // 404 带的是具体 detail（如「vault root not found: ...」），不会被误伤。
+  if (e?.response?.status === 404 && detail === "Not Found") {
+    return "后端没有这个接口 —— 正在运行的 sidecar 比界面旧，重启一下应用"
+      + "（开发环境重跑 scripts\\dev.ps1）。";
+  }
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return `${detail[0]?.loc?.join(".")}: ${detail[0]?.msg}`;
+  // 资料库在共享盘上时全量巡走最容易撞 axios 超时，而它原样吐的
+  // "timeout of 60000ms exceeded" 既看不懂、也判断不出该重试还是该改配置。
+  if (e?.code === "ECONNABORTED" || /timeout/i.test(String(e?.message ?? ""))) {
+    return "扫描超时 —— 资料库在共享盘上时首次扫描较慢，稍后重试。";
+  }
+  return e?.message ?? String(e);
+}
+
+// ── 从目录识别小节（竞品池卡片模式）─────────────────────────────────
+// 小节名原来纯手敲，得先去 Obsidian 里翻一遍卡片的 ## 标题再逐个抄进来，
+// 抄错一个字这节就永远匹配不上（find_card_section 只做包含匹配，不做纠错）。
+// 这里反查目录：卡里实际写了什么小节、每节多少篇有内容，一次列清。
+interface DetectedSection {
+  title: string;
+  note_count: number;
+  with_body: number;
+}
+const detectLoading = ref(false);
+const detected = ref<DetectedSection[] | null>(null);
+const detectError = ref<string | null>(null);
+const detectNoteCount = ref(0);
+const detectPicked = ref<string[]>([]);
+const detectTruncated = ref(false);
+/** 一篇都没捞到时的归因（后端 explain_empty_query）—— 目录错还是筛选错。 */
+const detectHint = ref("");
+/** 导入时做过的让步（跳过了谁、翻了谁的必需）—— 一律显式说，不静默。 */
+const importNotice = ref<string[]>([]);
+
+const detectBlocker = computed<string | null>(
+  () => (block.value.source?.module ? null : "先给竞品池选目录"),
+);
+
+// 与上面 coverage 那条同理，但这里更要命：体检报告只是读，识别面板上的
+// 「按目录替换」是**写**。残留下来切到别的块再点，就把 A 目录的小节写进
+// B 块；切到 hero_brand 卡片块还会写成竞品卡形状（h2/required/pick_variants），
+// 而 HeroSection 是 extra=ignore —— 那些键被静默丢弃、module/filter 被重置
+// 成空，schema 照样放行、模板照样存下去，要到成稿才看得出来。
+// 失效键必须含**目录与筛选**，不能只有 block.id：目录选择器在卡片模式之外、
+// 随时可改，改它不动 id。而截断告警本身就在劝用户「目录选宽了，收窄一点」——
+// 照做回来直接点替换，写进去的还是旧目录的小节，面板上的篇数也全是旧的。
+// 返回**字符串**而不是数组/对象字面量：后者每次求值都是新引用，Object.is
+// 恒判「变了」，任何无关编辑都会清掉面板。
+const detectScopeKey = computed(() => [
+  block.value?.id ?? "",
+  block.value?.source?.module ?? "",
+  JSON.stringify(block.value?.source?.filter ?? {}),
+].join(" "));
+
+watch(detectScopeKey, () => {
+  dismissDetected();
+  detectLoading.value = false;
+  importNotice.value = [];
+});
+
+async function detectSections() {
+  if (detectBlocker.value || detectLoading.value) return;
+  const owner = detectScopeKey.value;   // 响应回来时块/目录可能都换了
+  detectLoading.value = true;
+  detected.value = null;
+  detectError.value = null;
+  importNotice.value = [];
+  try {
+    const r = await sidecar.client.post("/api/vault/card_sections", {
+      module: block.value.source?.module ?? "",
+      filter: block.value.source?.filter ?? {},
+    });
+    if (detectScopeKey.value !== owner) return;   // 迟到的响应不许落到别处
+    const list: DetectedSection[] = r.data?.sections ?? [];
+    detectNoteCount.value = r.data?.note_count ?? 0;
+    detectHint.value = r.data?.hint ?? "";
+    detectTruncated.value = !!r.data?.truncated;
+    detected.value = list;
+    // 默认勾「这个目录的卡都写了的小节」= 结构齐全。至于设不设**必需**是
+    // 另一回事，那要看正文（contentComplete）—— 两个口径混用就会造出一份
+    // 必然清空名册的配置。
+    const full = list.filter(structureCovered).map((s) => s.title);
+    detectPicked.value = full.length ? full : list.map((s) => s.title);
+  } catch (e: any) {
+    if (detectScopeKey.value !== owner) return;
+    detectError.value = apiError(e);
+  } finally {
+    // 迟到的响应别去解锁**新**作用域正在跑的那次请求。
+    if (detectScopeKey.value === owner) detectLoading.value = false;
+  }
+}
+
+/** 这个目录的卡是不是都写了这个 ## 标题（结构齐全）。 */
+function structureCovered(s: DetectedSection): boolean {
+  return detectNoteCount.value > 0 && s.note_count >= detectNoteCount.value;
+}
+
+/**
+ * 是不是每张卡的这一节都**有正文**。
+ *
+ * 「必需」只能按这个判，绝不能按 structureCovered：build_roster 的门槛是
+ * section_body 非空，光有 ## 标题没正文的卡照样被整张剔出名册。而竞品卡
+ * 几乎都是从骨架复制出来的 —— H2 早就齐了、正文才刚开始填，按结构判就会
+ * 默认导出一份让名册直接清空、生成当场中止的配置。
+ */
+function contentComplete(s: DetectedSection): boolean {
+  return detectNoteCount.value > 0 && s.with_body >= detectNoteCount.value;
+}
+
+const detectPicks = computed(
+  () => (detected.value ?? []).filter((s) => detectPicked.value.includes(s.title)),
+);
+
+/**
+ * 互为子串的标题。引擎 find_card_section 的第 2/3 档是包含匹配，所以「核心
+ * 参数」这一节可能绑上 `## 核心参数对比` 的正文 —— 两节各印一遍同样的字。
+ * 这里是全仓唯一同时拿到全部标题的地方，不报就没人报。
+ *
+ * 但**全覆盖的标题不报**：精确匹配是第一档，只要每张卡都写了 `## a`，它永远
+ * 精确命中自己，不会去蹭别人的正文。只有确实有卡缺这个标题时宽松匹配才接管。
+ */
+const overlappingTitles = computed<Record<string, string[]>>(() => {
+  const list = detected.value ?? [];
+  const out: Record<string, string[]> = {};
+  for (const a of list) {
+    if (structureCovered(a)) continue;
+    const hits = list
+      .filter((b) => b.title !== a.title
+        && (a.title.includes(b.title) || b.title.includes(a.title)))
+      .map((b) => b.title);
+    if (hits.length) out[a.title] = hits;
+  }
+  return out;
+});
+
+/** 落库小节 + 它对应的检出项（认亲带走的老小节也带着）。 */
+type PlannedPair = [sec: any, from: DetectedSection | null];
+interface SectionPlan {
+  pairs: PlannedPair[];
+  notes: string[];
+}
+
+/**
+ * 算出「点这个按钮会落库成什么」。
+ *
+ * **面板上的数字和真正写进去的东西必须出自同一次计算。** 上一版是两套口径：
+ * 上界按「勾选项 + contentComplete」算，而 replace 认亲带走的老小节是原样
+ * `{...old}`、保留它自己的 required。卡片模式一启用就播下
+ * `{市场口碑数据, required:true}`，而那正是规范里的约定 H2 名、必被认亲带走
+ * —— 于是面板显示「最多 9」，落库却是两个必需节、真实上界 3。append 更狠：
+ * 已有的必需老节压根不进上界计算，显示「最多 8」实际名册 0、生成直接中止。
+ */
+function planSections(mode: "replace" | "append"): SectionPlan {
+  const picks = detectPicks.value;
+  const list = detected.value ?? [];
+  const cur: any[] = block.value.sections ?? [];
+  const notes: string[] = [];
+  if (!picks.length) return { pairs: [], notes };
+
+  // 一对一认亲：认走一个就从池子里拿掉，否则「核心参数」和「核心参数对比」
+  // 会抢同一节，落库出来两条指向同一处配置。
+  const unclaimed = [...cur];
+  const claimedBy = new Map<any, DetectedSection>();
+  const claim = (s: DetectedSection) => {
+    const hit = claimSection(unclaimed, s.title);
+    if (hit) {
+      unclaimed.splice(unclaimed.indexOf(hit), 1);
+      claimedBy.set(hit, s);
+    }
+    return hit;
+  };
+  const fresh = (s: DetectedSection) => ({
+    label: s.title,
+    h2: "",
+    required: contentComplete(s),
+    pick_variants: 1,
+  });
+
+  let pairs: PlannedPair[];
+  if (mode === "replace") {
+    pairs = picks.map((s): PlannedPair => {
+      const old = claim(s);
+      return [old ? { ...old, label: old.label || s.title } : fresh(s), s];
+    });
+  } else {
+    const added = picks.filter((s) => !claim(s));
+    pairs = [
+      // 已有小节留在原位，但要带上它对应的检出项 —— 找不到对应项说明目录里
+      // 压根没有这个 ## ，它若是必需的，名册注定是 0。
+      ...cur.map((s): PlannedPair => [
+        s, claimedBy.get(s) ?? list.find((d) => d.title === topicOf(s)) ?? null,
+      ]),
+      ...added.map((s): PlannedPair => [fresh(s), s]),
+    ];
+  }
+
+  // schema 的唯一性键是 label，而认亲键是 topic（h2 || label）—— 两者不是一
+  // 回事，`{label:"甲", h2:"乙"}` 配上目录里同时有 `## 甲` 和 `## 乙` 就会产
+  // 出两条 label「甲」，整个模板存不下去。比较用**原串**，与 schema 同口径
+  // （trim 后再比会把「参数」和「参数 」这两条合法小节误判成重名）。
+  const kept = new Map<string, any>();
+  pairs = pairs.filter(([s]) => {
+    const key = String(s.label ?? "");
+    const survivor = kept.get(key);
+    if (survivor !== undefined) {
+      // 说清「谁没进来、幸存的那条绑的是哪个 ##」—— 只说「已跳过」会让人以为
+      // 是无害去重，实际是勾选的一节没导入、绑定关系也变了。
+      notes.push(
+        `目录里的「${key}」没有导入：已有小节「${key}」对应的是 ## ${topicOf(survivor)}，`
+        + `两者重名。想两个都用，先给其中一个改名。`,
+      );
+      return false;
+    }
+    kept.set(key, s);
+    return true;
+  });
+  if (!pairs.length) return { pairs, notes };
+
+  // schema 要求至少一个必需小节（否则空卡也能入册）。挑**正文最全**的那个，
+  // 不是文档序第一个 —— 后者可能是个只有 1 篇有正文的节，名册直接塌到 1。
+  if (!pairs.some(([s]) => s.required !== false)) {
+    let bi = 0;
+    pairs.forEach(([, d], i) => {
+      if ((d?.with_body ?? -1) > (pairs[bi][1]?.with_body ?? -1)) bi = i;
+    });
+    const best = pairs[bi][1];
+    pairs[bi] = [{ ...pairs[bi][0], required: true }, best];
+    notes.push(
+      `至少要有一个必需小节，已把「${pairs[bi][0].label}」设为必需`
+      + (best && best.with_body === 0
+        ? "；但它一篇正文都没有，名册会是空的，生成会中止" : ""),
+    );
+  }
+
+  // 认亲带走的老小节保留用户设过的 required，不替他下调（那是他的显式选择），
+  // 但正文不全时后果必须说出来。
+  for (const [s, d] of pairs) {
+    if (s.required !== false && d && !contentComplete(d)) {
+      notes.push(
+        `「${s.label}」是必需小节，但目录里只有 ${d.with_body}/${detectNoteCount.value} `
+        + `篇有正文 —— 其余卡会被剔出名册。`,
+      );
+    }
+  }
+  return { pairs, notes };
+}
+
+const planReplace = computed(() => planSections("replace"));
+const planAppend = computed(() => planSections("append"));
+
+/**
+ * 这份方案落库后最多几张竞品卡能入册 = 各必需小节 with_body 的最小值。
+ *
+ * 单位是**卡**不是竞品：with_body 数的是笔记，而 build_roster 按「品牌::型号」
+ * 归并、还会丢掉缺 品牌/型号 frontmatter 的笔记，所以真实竞品数只会更少。
+ */
+function ceilingOf(plan: SectionPlan): number | null {
+  const req = plan.pairs.filter(([s]) => s.required !== false);
+  if (!req.length) return null;
+  return Math.min(...req.map(([, d]) => d?.with_body ?? 0));
+}
+
+/** 有互为子串的标题时宽松匹配会额外救回一些卡，上界就只是个估计。 */
+const ceilingIsExact = computed(() => !Object.keys(overlappingTitles.value).length);
+
+function ceilingText(plan: SectionPlan): string {
+  const n = ceilingOf(plan);
+  if (n === null) return "";
+  if (n === 0) return "一张卡都入不了册";
+  return `${ceilingIsExact.value ? "最多" : "约"} ${n} 张卡入册`;
+}
+
+function toggleDetected(title: string) {
+  detectPicked.value = detectPicked.value.includes(title)
+    ? detectPicked.value.filter((x) => x !== title)
+    : [...detectPicked.value, title];
+}
+
+function dismissDetected() {
+  detected.value = null;
+  detectError.value = null;
+  detectHint.value = "";
+  detectTruncated.value = false;
+  detectPicked.value = [];
+}
+
+/** 小节的匹配主题 —— 与引擎 CompetitorSection.topic() 同口径。 */
+function topicOf(sec: any): string {
+  return String(sec.h2 || sec.label || "").trim();
+}
+
+/**
+ * 给识别到的标题找已配好的小节，**与引擎 find_card_section 同优先级**：
+ * 精确 → topic ⊂ H2 → H2 ⊂ topic。
+ *
+ * 只做精确认亲会两头错：`{label:"口碑"}` 这种简写在生成时明明绑得上
+ * `## 市场口碑数据`，替换时却认不出来 —— 用户调过的候选数被清掉；追加时
+ * 还会再补一条绑同一段正文的小节，成稿里同一段印两遍。
+ */
+function claimSection(pool: any[], title: string): any | undefined {
+  return pool.find((s) => topicOf(s) === title)
+    ?? pool.find((s) => { const t = topicOf(s); return !!t && title.includes(t); })
+    ?? pool.find((s) => { const t = topicOf(s); return !!t && t.includes(title); });
+}
+
+/**
+ * 把识别结果写进 sections —— 落库用的就是面板上算过的那份方案，不再另算。
+ *
+ * `replace` = 以目录为准重排小节；`append` = 只补当前没配的。两种模式都
+ * 认亲：已配过的小节对上号后原样带走，用户调过的 必需 / 候选数不清回默认
+ * —— 替换的是「有哪些节、什么顺序」，不是把配置推倒重来。
+ */
+function applyDetected(mode: "replace" | "append") {
+  const plan = mode === "replace" ? planReplace.value : planAppend.value;
+  if (!plan.pairs.length) return;
+  const notes = [...plan.notes];
+  sectionCustomKeys.value = [];    // 结构性重建，手填态的下标会失所指
+  coverage.value = null;           // 旧报告按旧 label 算的，留着就是误导
+  patch({ sections: plan.pairs.map(([s]) => s) });
+  dismissDetected();
+  importNotice.value = notes;
 }
 
 const HEADING_VARS = ["{tier}", "{n}", "{title}", "{brand}", "{model}", "{title_kw}"];
@@ -648,8 +971,14 @@ function toggleRange(on: boolean) {
 // 语义。schema 上 numbered_list / competitor_pool 默认 constraints=
 // ["unique_notes"] + pick_variants_per_note=1，与历史 sampler 里的硬编码
 // 行为一致；UI 上把这两个开关暴露出来允许调整。
+//
+// **卡片模式除外**：sample_competitor_cards 只读 pick_notes 和每节的
+// pick_variants，pick_variants_per_note / constraints 一个都不碰；竞品又是
+// 恒不重复抽的（榜单里 TOP2 与 TOP3 同款毫无意义，sample_roster 明确不看
+// unique_notes 开关）。摆着能调却不生效，跟「幽灵默认字段」是同一类坑。
 const supportsSubMaterial = computed(() =>
-  ["paragraph", "numbered_list", "competitor_pool"].includes(block.value.kind),
+  !isCardMode.value
+  && ["paragraph", "numbered_list", "competitor_pool"].includes(block.value.kind),
 );
 const uniqueNotes = computed(() =>
   (block.value.constraints ?? []).includes("unique_notes"),
@@ -1050,12 +1379,168 @@ function insertKeyword(field: "text") {
             <span class="text-[11px] text-ink-3">
               {{ isPool ? "对应竞品卡里的 ## 小节" : "每节独立配目录与筛选" }}
             </span>
-            <button
-              type="button"
-              class="ml-auto text-[11px] text-ink-3 hover:text-ink"
-              @click="addSection"
-            >
-              + 添加小节
+            <span class="ml-auto flex items-center gap-3">
+              <button
+                v-if="isPool"
+                type="button"
+                class="text-[11px]"
+                :style="{
+                  color: detectBlocker ? 'var(--ink-3)' : 'var(--ink-2)',
+                  opacity: detectBlocker ? 0.5 : 1,
+                }"
+                :disabled="detectLoading || !!detectBlocker"
+                :title="detectBlocker ?? '扫这个目录里的竞品卡，列出它们实际写了哪些 ## 小节'"
+                @click="detectSections"
+              >
+                {{ detectLoading ? "识别中…" : "从目录识别" }}
+              </button>
+              <button
+                type="button"
+                class="text-[11px] text-ink-3 hover:text-ink"
+                @click="addSection"
+              >
+                + 添加小节
+              </button>
+            </span>
+          </div>
+
+          <!--
+            识别结果面板。刻意做成「先看再导」而不是识别完直接落库：小节的
+            必需/候选数是用户逐个调过的，静默覆盖等于把他的配置吃掉；而且
+            目录选错时（识别出一堆不相干的 H2）也得有机会退出来。
+          -->
+          <div
+            v-if="isPool && (detectError || detected)"
+            class="mb-2 rounded p-2 text-[11px]"
+            :style="{ background: 'var(--card-2)', border: '1px solid var(--line)' }"
+          >
+            <div v-if="detectError" :style="{ color: 'var(--red)' }">
+              {{ detectError }}
+            </div>
+            <!--
+              「一篇都没捞到」和「捞到了但没写 ## 」是两回事，提示必须分开：
+              目录/筛选写错时说「这些笔记里没有 ## 小节」会把人引去改素材，
+              而素材根本没毛病。空池归因由后端 explain_empty_query 给。
+            -->
+            <div v-else-if="detected && !detectNoteCount" class="text-ink-3">
+              这个目录 + 筛选没匹配到任何笔记。{{ detectHint }}
+            </div>
+            <div v-else-if="detected && !detected.length" class="text-ink-3">
+              这个目录的 {{ detectNoteCount }} 篇笔记里没有任何 ## 小节 ——
+              竞品卡要写成「## 小节名」加节内 ①②③，只有 frontmatter 的笔记识别不出东西。
+            </div>
+            <template v-else-if="detected">
+              <div class="mb-1.5 text-ink-3">
+                共 {{ detectNoteCount }} 篇卡。「有内容」= 该小节底下真写了正文；
+                只有标题没内容的，这张卡照样进不了名册。
+              </div>
+              <div v-if="detectTruncated" class="mb-1.5" :style="{ color: 'var(--amber)' }">
+                这个目录有超过 50 种不同的 ## 标题，只列出了前 50 个 ——
+                多半是目录选宽了或混进了别的素材，「按目录替换」会删掉没列出来的小节。
+              </div>
+              <label
+                v-for="s in detected"
+                :key="s.title"
+                class="flex flex-wrap items-center gap-1.5 py-0.5"
+              >
+                <input
+                  type="checkbox"
+                  :checked="detectPicked.includes(s.title)"
+                  @change="toggleDetected(s.title)"
+                />
+                <span class="font-medium">{{ s.title }}</span>
+                <span class="text-ink-3">
+                  {{ s.note_count }}/{{ detectNoteCount }} 篇有此小节 ·
+                  {{ s.with_body }} 篇有内容
+                </span>
+                <!--
+                  三条告警对应三种不同的后果，不能合并成一句「非全覆盖」：
+                  正文全空 = 设必需就名册清零；正文不全 = 必需会剔掉那几张卡；
+                  结构不全 = 有些卡压根没这一节。
+                -->
+                <span v-if="!s.with_body" :style="{ color: 'var(--red)' }">
+                  一篇正文都没有，设为必需会让名册清空
+                </span>
+                <span v-else-if="!contentComplete(s)" :style="{ color: 'var(--amber)' }">
+                  {{ s.note_count - s.with_body }} 篇只有标题没正文
+                </span>
+                <span v-else-if="!structureCovered(s)" :style="{ color: 'var(--amber)' }">
+                  {{ detectNoteCount - s.note_count }} 篇没有这一节
+                </span>
+                <span
+                  v-if="overlappingTitles[s.title]"
+                  :style="{ color: 'var(--amber)' }"
+                >
+                  与「{{ overlappingTitles[s.title].join("」「") }}」互为子串，
+                  会绑到同一段正文各印一遍
+                </span>
+              </label>
+              <!--
+                名册上界挂在**各自的按钮**上，而不是笼统写一个数：两种模式落
+                库出来的必需集合不同，上界也就不同。数字由 planSections 出，
+                与真正写进去的小节同源 —— 上一版两套口径，面板说 9 实际 3。
+              -->
+              <div class="mt-2 flex flex-col gap-1.5">
+                <div class="flex flex-wrap items-baseline gap-2">
+                  <button
+                    type="button"
+                    class="underline disabled:opacity-40"
+                    :style="{ color: 'var(--ink-2)' }"
+                    :disabled="!detectPicked.length"
+                    @click="applyDetected('replace')"
+                  >
+                    按目录替换（现有 {{ (block.sections ?? []).length }} 节）
+                  </button>
+                  <span
+                    v-if="ceilingText(planReplace)"
+                    :style="{ color: ceilingOf(planReplace) ? 'var(--ink-3)' : 'var(--red)' }"
+                  >
+                    → {{ ceilingText(planReplace) }}
+                  </span>
+                </div>
+                <div class="flex flex-wrap items-baseline gap-2">
+                  <button
+                    type="button"
+                    class="underline disabled:opacity-40"
+                    :style="{ color: 'var(--ink-2)' }"
+                    :disabled="!detectPicked.length"
+                    @click="applyDetected('append')"
+                  >
+                    只补未配置的
+                  </button>
+                  <span
+                    v-if="ceilingText(planAppend)"
+                    :style="{ color: ceilingOf(planAppend) ? 'var(--ink-3)' : 'var(--red)' }"
+                  >
+                    → {{ ceilingText(planAppend) }}
+                  </span>
+                </div>
+              </div>
+            </template>
+
+            <!--
+              「取消」必须在所有分支之外：报错分支和空结果分支原来都没有出口，
+              面板一挂上就只能靠切块或刷新才清得掉。
+            -->
+            <div class="mt-2 flex">
+              <button type="button" class="ml-auto text-ink-3" @click="dismissDetected">
+                取消
+              </button>
+            </div>
+          </div>
+
+          <!-- 导入时做过的让步 —— 跳过重名、强制翻必需，一条都不许静默。 -->
+          <div
+            v-if="importNotice.length"
+            class="mb-2 flex gap-2 rounded px-2 py-1.5 text-[11px]"
+            :style="{ background: 'var(--card-2)', borderLeft: '2px solid var(--amber)' }"
+          >
+            <div class="flex-1">
+              <div v-for="(n, ni) in importNotice" :key="ni">{{ n }}</div>
+            </div>
+            <!-- 用户按提示改完小节后这段就过期了，得能自己收掉。 -->
+            <button type="button" class="text-ink-3" @click="importNotice = []">
+              知道了
             </button>
           </div>
 
