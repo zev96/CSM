@@ -381,8 +381,9 @@ const planWarnings = computed<string[]>(() => article.plan?.warnings ?? []);
 
 async function rerun() {
   if (article.lastRequest) {
-    // 真实模式：调用 store 的 rerun（会重新提交 generate 请求）
-    await article.rerun();
+    // 真实模式：重新提交 generate 请求。传 null = 放开版本锁，在各结构版本间
+    // 自由重抽（用户要「版本1、2 自由随机」）。锁结构走小按钮「只换文字」。
+    await article.rerun(null);
     return;
   }
   // 演示模式：循环切到下一套示例文本
@@ -925,7 +926,7 @@ onMounted(async () => {
       retryable: Boolean(article.lastRequest),
     });
     if (choice === "retry" && article.lastRequest) {
-      article.rerun();
+      article.rerun(null);   // 自由重抽：坏版本失败时能翻到另一个版本
     } else {
       article.$reset();
       router.push({ name: "home" });
@@ -967,7 +968,7 @@ watch(
       // 用户点重试：留在创作区，重新发起一次生成。
       // 关闭：回首页，清掉错误状态避免下次进创作区还显示 error。
       if (choice === "retry" && article.lastRequest) {
-        article.rerun();
+        article.rerun(null);   // 自由重抽：坏版本失败时能翻到另一个版本
       } else {
         article.$reset();
         router.push({ name: "home" });
@@ -1269,39 +1270,43 @@ const tabSectionLabel = computed(() => {
                     <div class="text-[12px] mt-0.5" :style="{ color: 'var(--ink-2)' }">
                       {{ sampledCount }}/{{ assemblyRows.length }} 已采样 · 点击各段可润色或重随
                     </div>
-                    <!-- 本次抽中的结构版本 + 换版本入口 -->
+                    <!-- 本次抽中的结构版本 + 锁结构入口 -->
                     <div v-if="versionChoices.length" class="mt-1 flex flex-wrap items-center gap-1.5">
                       <span
                         v-for="vc in versionChoices"
                         :key="vc.group"
                         class="rounded px-1.5 py-0.5 text-[11px]"
                         :style="{ background: 'var(--card-2)', color: 'var(--ink-2)' }"
-                        title="本篇抽中的结构版本；「全部重采」会锁住它只换素材"
+                        title="本篇抽中的结构版本；「全部重采」会在各版本间自由重抽"
                       >
                         结构：{{ vc.option }}
                       </span>
+                      <!--
+                        「全部重采」现在会自由换版本（用户要的）。这个链接反过来
+                        给「想保留当前结构、只换文字」的场景：把当前版本回传当锁。
+                      -->
                       <button
                         type="button"
                         class="text-[11px] underline"
                         :style="{ color: 'var(--ink-3)' }"
                         :disabled="article.isRunning"
-                        title="放开版本锁，让种子重新抽一套结构"
-                        @click="article.rerun(null)"
+                        title="锁住当前结构版本，只重抽文字素材"
+                        @click="article.rerun(article.plan?.version_choices ?? undefined)"
                       >
-                        换个版本
+                        只换文字·锁结构
                       </button>
                     </div>
                   </div>
                   <!--
-                    "全部重采"：换一套全新组装（等价于右下角的"重新随机"，
-                    走 article.rerun → seed+1 重新走 /api/generate）。运行中
+                    "全部重采"：换一套全新组装，seed+1 重走 /api/generate，并在
+                    各结构版本间**自由重抽**（rerun(null) 显式放开版本锁）。运行中
                     或正在 reroll 单个 slot 时禁用，避免并发覆盖 plan。
                   -->
                   <Btn
                     variant="ghost"
                     small
                     :disabled="article.isRunning || rerollingSlot !== null"
-                    @click="article.rerun()"
+                    @click="article.rerun(null)"
                   >
                     <Icon name="refresh" :size="11" />
                     全部重采

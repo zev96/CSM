@@ -168,8 +168,10 @@ def draw_versions(
 ) -> dict[str, str]:
     """每个版本组抽一次签，返回 {group_id: option}。
 
-    - 命名空间 ``{seed}::version::{gid}`` 与块 RNG key ``{seed}-{block.id}``
-      不可能撞串（后者不含 ``::``），所以版本抽签不会与任何块的随机流相关。
+    - key 为 ``version::{gid}::{seed}``（seed 在末尾，原因见下方抽签处注释）。
+      它必然以 ``version::`` 开头（首字符 ``v``），而块 RNG key ``{seed}-{block.id}``
+      / ``{seed}-{block.id}-pc`` 必然以 ``str(seed)`` 开头（数字或负号 ``-``）——
+      首字符不相交，故两个命名空间不可能撞串（与 block.id 里含不含 ``::`` 无关）。
     - ``overrides`` 优先（生成表单指定版本 / 「重新随机」锁版本时传入）；
       非法值直接忽略，退回抽签，不让脏输入把生成打挂。
     - 被禁用的 option 不进抽签池（素材没铺齐的版本先别抽中）。
@@ -184,7 +186,15 @@ def draw_versions(
             choices[group.id] = forced
             continue
         pool = group.enabled_options()
-        rng = random.Random(f"{seed}::version::{group.id}")
+        # ⚠ seed 放在 key **末尾**，不能放开头。放开头（``{seed}::version::gid``）
+        # 时相邻整数 seed 的首个 .random() 高度相关 —— 生产 gid ``rec_ver`` 实测
+        # seed 0..6 连出 7 个版本2。而「重新随机」每次 seed+1，用户从 seed 0 连点
+        # 就一直是同一版本，看着像「版本锁死、永远不换」。seed 放末尾把这种
+        # **系统性**连号打散（rec_ver 头 7 seed 变 1212112），同时保持「同 seed →
+        # 同版本」确定性不变。注意这是去相关、不是消除连号：任意 gid 下相邻 seed
+        # 都是独立同分布的抛硬币，~1/64 会巧合连 7 个同版本（真随机本该如此），
+        # 无法也不该强行消除 —— 病灶是旧 key 的系统性相关，不是偶发连号。
+        rng = random.Random(f"version::{group.id}::{seed}")
         choices[group.id] = rng.choice(pool)
     return choices
 
