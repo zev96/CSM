@@ -129,11 +129,147 @@ class TestFindUserDataDir:
         chrome_data = fake_local / "Google" / "Chrome" / "User Data"
         chrome_data.mkdir(parents=True)
         monkeypatch.setenv("LOCALAPPDATA", str(fake_local))
+        # 隔离：跑测试的机器本身可能设了 Chrome UserDataDir 组策略
+        monkeypatch.setattr(chrome_detect, "_read_registry_user_data_dir", lambda: None)
         assert chrome_detect.find_user_data_dir() == str(chrome_data)
 
     def test_returns_none_when_dir_missing(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))  # 不创建 Google/Chrome
+        monkeypatch.setattr(chrome_detect, "_read_registry_user_data_dir", lambda: None)
         assert chrome_detect.find_user_data_dir() is None
+
+
+# ── find_user_data_dir 的兜底路径（非默认渠道 / 策略目录 / 空目录）────────
+class TestFindUserDataDirFallbacks:
+    """默认位置不是唯一真相：Chrome 装了没启动过（目录空）、只装了 Beta/Canary、
+    公司电脑用组策略把数据目录改到别处 —— 这些机器上原来的单点探测会返回一个
+    没有 profile 的目录，导入必然失败。"""
+
+    @pytest.fixture(autouse=True)
+    def _no_policy(self, monkeypatch):
+        monkeypatch.setattr(chrome_detect, "_read_registry_user_data_dir", lambda: None)
+
+    def test_prefers_dir_that_actually_has_profiles(self, monkeypatch, tmp_path):
+        """稳定版目录存在但空 → 退到真的有 profile 的 Beta 目录。"""
+        local = tmp_path / "Local"
+        stable = local / "Google" / "Chrome" / "User Data"
+        stable.mkdir(parents=True)  # 空目录：装了但从没启动过
+        beta = local / "Google" / "Chrome Beta" / "User Data"
+        (beta / "Profile 1").mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local))
+        assert chrome_detect.find_user_data_dir() == str(beta)
+
+    def test_stable_channel_wins_when_both_have_profiles(self, monkeypatch, tmp_path):
+        local = tmp_path / "Local"
+        stable = local / "Google" / "Chrome" / "User Data"
+        (stable / "Default").mkdir(parents=True)
+        beta = local / "Google" / "Chrome Beta" / "User Data"
+        (beta / "Default").mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local))
+        assert chrome_detect.find_user_data_dir() == str(stable)
+
+    def test_falls_back_to_first_existing_dir_when_none_has_profiles(
+        self, monkeypatch, tmp_path
+    ):
+        """全都没 profile → 仍返回默认目录（让上层报错能指名道姓，而不是
+        变成"没检测到 Chrome"这种误导性提示）。"""
+        local = tmp_path / "Local"
+        stable = local / "Google" / "Chrome" / "User Data"
+        stable.mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local))
+        assert chrome_detect.find_user_data_dir() == str(stable)
+
+    def test_policy_dir_wins_over_default_location(self, monkeypatch, tmp_path):
+        """组策略 UserDataDir 指定的目录（有 profile）优先于默认位置。"""
+        local = tmp_path / "Local"
+        stable = local / "Google" / "Chrome" / "User Data"
+        (stable / "Default").mkdir(parents=True)
+        policy = tmp_path / "D" / "ChromeData"
+        (policy / "Default").mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local))
+        monkeypatch.setattr(
+            chrome_detect, "_read_registry_user_data_dir", lambda: str(policy)
+        )
+        assert chrome_detect.find_user_data_dir() == str(policy)
+
+
+# ── _expand_policy_vars （Chrome 策略路径变量）────────────────────
+class TestExpandPolicyVars:
+    def test_expands_local_app_data(self, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\bob\AppData\Local")
+        out = chrome_detect._expand_policy_vars(r"${local_app_data}\Chrome\Data")
+        assert out == r"C:\Users\bob\AppData\Local\Chrome\Data"
+
+    def test_returns_none_when_var_unresolvable(self, monkeypatch):
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        assert chrome_detect._expand_policy_vars(r"${local_app_data}\X") is None
+
+    def test_passes_through_plain_path(self):
+        assert chrome_detect._expand_policy_vars(r"D:\ChromeData") == r"D:\ChromeData"
+
+    def test_blank_returns_none(self):
+        assert chrome_detect._expand_policy_vars("   ") is None
+
+
+# ── resolve_profile_name ─────────────────────────────────────────
+class TestResolveProfileName:
+    """写死 "Default" 是这次 bug 的根因 —— 挑 profile 必须看目录里真有什么。"""
+
+    def _local_state(self, user_data: "object", payload: str) -> None:
+        (user_data / "Local State").write_text(payload, encoding="utf-8")
+
+    def test_prefers_existing_preferred(self, tmp_path):
+        for n in ("Default", "Profile 1"):
+            (tmp_path / n).mkdir()
+        assert chrome_detect.resolve_profile_name(
+            str(tmp_path), preferred="Profile 1"
+        ) == "Profile 1"
+
+    def test_ignores_preferred_that_does_not_exist(self, tmp_path):
+        (tmp_path / "Default").mkdir()
+        assert chrome_detect.resolve_profile_name(
+            str(tmp_path), preferred="Profile 7"
+        ) == "Default"
+
+    def test_falls_back_to_default(self, tmp_path):
+        for n in ("Default", "Profile 1"):
+            (tmp_path / n).mkdir()
+        assert chrome_detect.resolve_profile_name(str(tmp_path)) == "Default"
+
+    def test_uses_last_used_from_local_state_when_no_default(self, tmp_path):
+        """没有 Default（用户删过默认 profile）→ 用 Local State 记的 last_used。"""
+        for n in ("Profile 1", "Profile 3"):
+            (tmp_path / n).mkdir()
+        self._local_state(tmp_path, '{"profile":{"last_used":"Profile 3"}}')
+        assert chrome_detect.resolve_profile_name(str(tmp_path)) == "Profile 3"
+
+    def test_uses_single_profile_when_no_default(self, tmp_path):
+        (tmp_path / "Profile 1").mkdir()
+        assert chrome_detect.resolve_profile_name(str(tmp_path)) == "Profile 1"
+
+    def test_uses_most_recently_active_when_no_signal(self, tmp_path):
+        for n in ("Profile 1", "Profile 2"):
+            (tmp_path / n).mkdir()
+        self._local_state(
+            tmp_path,
+            '{"profile":{"info_cache":{"Profile 1":{"active_time":10},'
+            '"Profile 2":{"active_time":99}}}}',
+        )
+        assert chrome_detect.resolve_profile_name(str(tmp_path)) == "Profile 2"
+
+    def test_returns_none_when_no_profiles(self, tmp_path):
+        (tmp_path / "Crashpad").mkdir()
+        assert chrome_detect.resolve_profile_name(str(tmp_path)) is None
+
+    def test_returns_none_when_dir_missing(self, tmp_path):
+        assert chrome_detect.resolve_profile_name(str(tmp_path / "nope")) is None
+
+    def test_tolerates_corrupt_local_state(self, tmp_path):
+        for n in ("Profile 1", "Profile 2"):
+            (tmp_path / n).mkdir()
+        self._local_state(tmp_path, "{not json")
+        # 不抛，退化成确定性的第一个
+        assert chrome_detect.resolve_profile_name(str(tmp_path)) == "Profile 1"
 
 
 # ── list_profiles ────────────────────────────────────────────────
@@ -161,6 +297,19 @@ class TestListProfiles:
 
     def test_returns_empty_when_dir_missing(self):
         assert chrome_detect.list_profiles("/nonexistent/path") == []
+
+    def test_reads_display_name_from_preferences(self, tmp_path):
+        """用户在 Chrome 里给 profile 起的名字（"工作"/"个人"）—— 下拉里
+        只显示 "Profile 1" 用户根本认不出该选哪个。"""
+        p = tmp_path / "Profile 1"
+        p.mkdir()
+        (p / "Preferences").write_text(
+            '{"profile":{"name":"\\u5de5\\u4f5c"}}', encoding="utf-8"
+        )
+        (tmp_path / "Profile 2").mkdir()  # 无 Preferences → display_name=None
+        by_name = {x["name"]: x for x in chrome_detect.list_profiles(str(tmp_path))}
+        assert by_name["Profile 1"]["display_name"] == "工作"
+        assert by_name["Profile 2"]["display_name"] is None
 
     def test_ignores_non_profile_directories(self, tmp_path):
         """User Data 下有 Crashpad、ShaderCache 等非 profile 目录，要跳过。"""
@@ -196,6 +345,169 @@ class TestListProfiles:
         )
         result = chrome_detect.list_profiles(str(tmp_path))
         assert result[0]["account_email"] is None
+
+
+# ── 探测链路的健壮性（不能因为一个目录读不动就整条挂掉）────────────
+class TestProbesNeverRaise:
+    """模块契约：探测都是 best-effort，失败返回空/None，绝不往上抛。
+
+    回归 bug：find_user_data_dir 改成"看目录里有没有 profile"后会 iterdir()，
+    而 Path.is_dir() 对"能 stat 但不让列目录"的目录返回 True（公司机 ACL /
+    网络重定向 AppData 常见）→ PermissionError 直冒到 HTTP 500。
+    """
+
+    def test_list_profiles_survives_permission_error(self, tmp_path, monkeypatch):
+        def boom(self):
+            raise PermissionError(13, "Access is denied")
+        monkeypatch.setattr(chrome_detect.Path, "iterdir", boom)
+        assert chrome_detect.list_profiles(str(tmp_path)) == []
+
+    def test_find_user_data_dir_survives_permission_error(self, monkeypatch, tmp_path):
+        local = tmp_path / "Local"
+        stable = local / "Google" / "Chrome" / "User Data"
+        stable.mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local))
+        monkeypatch.setattr(chrome_detect, "_read_registry_user_data_dir", lambda: None)
+
+        def boom(self):
+            raise PermissionError(13, "Access is denied")
+        monkeypatch.setattr(chrome_detect.Path, "iterdir", boom)
+        # 列不动就当没 profile，仍返回该目录（让后续报错能指名道姓），不抛
+        assert chrome_detect.find_user_data_dir() == str(stable)
+
+    def test_resolve_profile_name_survives_permission_error(self, monkeypatch, tmp_path):
+        def boom(self):
+            raise PermissionError(13, "Access is denied")
+        monkeypatch.setattr(chrome_detect.Path, "iterdir", boom)
+        assert chrome_detect.resolve_profile_name(str(tmp_path)) is None
+
+
+# ── 用户手填路径的规整 ────────────────────────────────────────────
+class TestNormalizeUserPath:
+    """资源管理器「复制文件地址」给的是带引号的路径，帮助文案里又常写 %VAR%。
+    不规整就会得到「目录不存在」，把人引去查 Chrome 装没装。"""
+
+    def test_strips_quotes_and_whitespace(self):
+        assert chrome_detect.normalize_user_path('  "D:\\Chrome\\User Data" ') == r"D:\Chrome\User Data"
+
+    def test_expands_env_vars(self, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\bob\AppData\Local")
+        out = chrome_detect.normalize_user_path(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+        assert out == r"C:\Users\bob\AppData\Local\Google\Chrome\User Data"
+
+    def test_blank_stays_blank(self):
+        assert chrome_detect.normalize_user_path('  ""  ') == ""
+
+    def test_keeps_literal_double_percent(self):
+        """没有 %VAR% 形态时别碰 % —— expandvars 会把 %% 吃成 %。"""
+        assert chrome_detect.normalize_user_path(r"D:\a\b%%c") == r"D:\a\b%%c"
+
+
+# ── 「没有 profile」 vs 「读不动」要分清 ──────────────────────────
+class TestUnreadableDirDiagnosis:
+    def test_can_list_profiles_false_when_unreadable(self, monkeypatch, tmp_path):
+        def boom(self):
+            raise PermissionError(13, "Access is denied")
+        monkeypatch.setattr(chrome_detect.Path, "iterdir", boom)
+        assert chrome_detect.can_list_profiles(str(tmp_path)) is False
+
+    def test_can_list_profiles_true_for_empty_readable_dir(self, tmp_path):
+        assert chrome_detect.can_list_profiles(str(tmp_path)) is True
+
+    def test_can_list_profiles_false_when_missing(self, tmp_path):
+        assert chrome_detect.can_list_profiles(str(tmp_path / "nope")) is False
+
+    def test_error_says_permission_not_never_launched(self, monkeypatch, tmp_path):
+        """目录读不动时报「没有任何 profile，请先启动一次 Chrome」是错的诊断 ——
+        人家 Chrome 天天在用，问题是权限。"""
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+
+        def boom(self):
+            raise PermissionError(13, "Access is denied")
+        monkeypatch.setattr(chrome_detect.Path, "iterdir", boom)
+        with pytest.raises(FileNotFoundError) as exc:
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(user_data),
+                source_profile_name="Default",
+                target_path=str(tmp_path / "dest"),
+            )
+        msg = str(exc.value)
+        assert "权限" in msg
+        assert "从没启动过" not in msg
+
+
+# ── exe 与数据目录的渠道是否配套 ──────────────────────────────────
+class TestExecutableMatchesUserDataDir:
+    def test_mismatch_when_stable_exe_with_beta_data_dir(self):
+        assert chrome_detect.executable_matches_user_data_dir(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\U\AppData\Local\Google\Chrome Beta\User Data",
+        ) is False
+
+    def test_match_when_same_channel(self):
+        assert chrome_detect.executable_matches_user_data_dir(
+            r"C:\Program Files\Google\Chrome Beta\Application\chrome.exe",
+            r"C:\U\AppData\Local\Google\Chrome Beta\User Data",
+        ) is True
+
+    def test_stable_pair_matches(self):
+        assert chrome_detect.executable_matches_user_data_dir(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\U\AppData\Local\Google\Chrome\User Data",
+        ) is True
+
+    def test_unknown_layout_is_treated_as_match(self):
+        """组策略自定义目录判断不了渠道 —— 一律当配套，别乱改用户的设置。"""
+        assert chrome_detect.executable_matches_user_data_dir(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"D:\CorpChromeData",
+        ) is True
+
+    def test_missing_exe_is_treated_as_match(self):
+        assert chrome_detect.executable_matches_user_data_dir(
+            "", r"C:\U\Google\Chrome Beta\User Data"
+        ) is True
+
+
+# ── 渠道配对：数据目录是 Beta 就别去开稳定版 chrome.exe ──────────────
+class TestChannelPairedExecutable:
+    def test_picks_beta_exe_for_beta_user_data_dir(self, monkeypatch, tmp_path):
+        """用 Beta 的 profile 副本去开稳定版 Chrome 会被拒（配置来自更新版本）。"""
+        pf = tmp_path / "Program Files"
+        beta_exe = pf / "Google" / "Chrome Beta" / "Application" / "chrome.exe"
+        beta_exe.parent.mkdir(parents=True)
+        beta_exe.touch()
+        monkeypatch.setenv("ProgramFiles", str(pf))
+        monkeypatch.setattr(
+            chrome_detect, "_read_registry_chrome_path", lambda: r"C:\stable\chrome.exe"
+        )
+        got = chrome_detect.find_chrome_executable(
+            user_data_dir=r"C:\X\AppData\Local\Google\Chrome Beta\User Data"
+        )
+        assert got == str(beta_exe)
+
+    def test_falls_back_to_generic_probe_when_channel_exe_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            chrome_detect, "_read_registry_chrome_path", lambda: r"C:\stable\chrome.exe"
+        )
+        monkeypatch.setattr(chrome_detect, "_find_channel_install_path", lambda _d: None)
+        got = chrome_detect.find_chrome_executable(
+            user_data_dir=r"C:\X\Google\Chrome SxS\User Data"
+        )
+        assert got == r"C:\stable\chrome.exe"
+
+    def test_stable_user_data_dir_uses_normal_probe(self, monkeypatch):
+        monkeypatch.setattr(
+            chrome_detect, "_read_registry_chrome_path", lambda: r"C:\stable\chrome.exe"
+        )
+        monkeypatch.setattr(
+            chrome_detect, "_find_channel_install_path",
+            lambda _d: pytest.fail("稳定版不该走渠道分支"),
+        )
+        assert chrome_detect.find_chrome_executable(
+            user_data_dir=r"C:\X\Google\Chrome\User Data"
+        ) == r"C:\stable\chrome.exe"
 
 
 # ── copy_profile_to ───────────────────────────────────────────────
@@ -311,12 +623,126 @@ class TestCopyProfileTo:
         user_data = tmp_path / "User Data"
         user_data.mkdir()
         # No profile dir created
-        with pytest.raises(FileNotFoundError, match="source profile not found"):
+        with pytest.raises(FileNotFoundError):
             chrome_detect.copy_profile_to(
                 source_user_data_dir=str(user_data),
                 source_profile_name="NonExistent",
                 target_path=str(tmp_path / "dest"),
             )
+
+    def test_missing_profile_error_lists_available_profiles(self, tmp_path):
+        """要复制的 profile 不存在、但目录里有别的 profile → 报错里列出可选项。
+
+        回归 bug：同事的 Chrome 没有 Default（只有 Profile 1），前端写死复制
+        "Default" 撞英文 "source profile not found: ...\\Default"，用户完全
+        不知道该怎么办。错误必须说明「有哪些可选」。
+        """
+        user_data = tmp_path / "User Data"
+        (user_data / "Profile 1").mkdir(parents=True)
+        (user_data / "Profile 2").mkdir()
+        with pytest.raises(FileNotFoundError) as exc:
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(user_data),
+                source_profile_name="Default",
+                target_path=str(tmp_path / "dest"),
+            )
+        msg = str(exc.value)
+        assert "Default" in msg
+        assert "Profile 1" in msg and "Profile 2" in msg
+
+    def test_missing_profile_error_when_dir_has_no_profiles(self, tmp_path):
+        """User Data 存在但一个 profile 都没有（Chrome 装了没启动过）→
+        提示「先启动一次 Chrome」而不是干巴巴的 not found。"""
+        user_data = tmp_path / "User Data"
+        (user_data / "Crashpad").mkdir(parents=True)  # 非 profile 目录
+        with pytest.raises(FileNotFoundError) as exc:
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(user_data),
+                source_profile_name="Default",
+                target_path=str(tmp_path / "dest"),
+            )
+        assert "启动" in str(exc.value)
+
+    def test_refuses_to_copy_when_target_is_inside_source(self, tmp_path):
+        """副本目录 = 源目录（或互相嵌套）时必须先拦下 —— copy_profile_to 上来就
+        rmtree(target)，一旦源就是副本本身，用户 14GB 的副本和副本里的百度登录态
+        会被直接抹掉。手填数据目录后这条路径变得可达（副本内层目录也叫 Default，
+        连 profile 检查都能通过）。"""
+        copy_dir = tmp_path / "baidu_chrome_profile_copy"
+        (copy_dir / "Default").mkdir(parents=True)
+        (copy_dir / "Default" / "Cookies").write_bytes(b"login")
+        with pytest.raises(ValueError) as exc:
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(copy_dir),
+                source_profile_name="Default",
+                target_path=str(copy_dir),
+            )
+        assert "副本" in str(exc.value)
+        # 关键：什么都没删
+        assert (copy_dir / "Default" / "Cookies").is_file()
+
+    def test_refuses_when_source_is_inside_target(self, tmp_path):
+        target = tmp_path / "copy"
+        source = target / "nested" / "User Data"
+        (source / "Default").mkdir(parents=True)
+        (source / "Default" / "Cookies").write_bytes(b"login")
+        with pytest.raises(ValueError):
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(source),
+                source_profile_name="Default",
+                target_path=str(target),
+            )
+        assert (source / "Default" / "Cookies").is_file()
+
+    def test_rejects_profile_name_that_is_not_a_chrome_profile(self, tmp_path):
+        """profile 名只接受 Default / Profile N —— 顺带挡住 "../x" 被当 profile 复制。"""
+        user_data = tmp_path / "User Data"
+        (user_data / "Default").mkdir(parents=True)
+        (tmp_path / "secret").mkdir()
+        (tmp_path / "secret" / "f.txt").write_text("x")
+        with pytest.raises(FileNotFoundError):
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(user_data),
+                source_profile_name="../secret",
+                target_path=str(tmp_path / "dest"),
+            )
+        assert not (tmp_path / "dest").exists()
+
+    def test_rejects_empty_profile_name(self, tmp_path):
+        """空名字下 Path(dir) / "" == Path(dir)，会把整个 User Data 当 profile 复制。"""
+        user_data = tmp_path / "User Data"
+        (user_data / "Default").mkdir(parents=True)
+        with pytest.raises(FileNotFoundError):
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(user_data),
+                source_profile_name="",
+                target_path=str(tmp_path / "dest"),
+            )
+
+    def test_hints_when_user_pointed_one_level_too_deep(self, tmp_path):
+        """用户把报错里的 ...\\User Data\\Default 原样粘回来（多填一层）→
+        提示"多填了一层"，而不是"请先启动一次 Chrome"（他刚启动过）。"""
+        deep = tmp_path / "User Data" / "Default"
+        deep.mkdir(parents=True)
+        (deep / "Preferences").write_text("{}", encoding="utf-8")
+        with pytest.raises(FileNotFoundError) as exc:
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(deep),
+                source_profile_name="Default",
+                target_path=str(tmp_path / "dest"),
+            )
+        assert "多填了一层" in str(exc.value)
+
+    def test_missing_user_data_dir_error_is_distinct(self, tmp_path):
+        """User Data 目录本身不存在 → 提示手动填目录，跟「没有 profile」区分开。"""
+        missing = tmp_path / "nope" / "User Data"
+        with pytest.raises(FileNotFoundError) as exc:
+            chrome_detect.copy_profile_to(
+                source_user_data_dir=str(missing),
+                source_profile_name="Default",
+                target_path=str(tmp_path / "dest"),
+            )
+        assert "不存在" in str(exc.value)
 
     def test_works_without_local_state(self, tmp_path):
         """没有 Local State 文件时不抛，只复制 profile。"""

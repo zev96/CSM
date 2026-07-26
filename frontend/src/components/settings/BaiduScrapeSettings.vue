@@ -9,21 +9,24 @@
  *          chrome_profile_copy_imported_at }
  *   POST /api/monitor/baidu/native-config   Body = 同结构（省略 copy_path 字段）
  *   POST /api/monitor/baidu/detect-chrome
- *     → { executable_path, user_data_dir }
+ *     → { executable_path, user_data_dir, profiles, resolved_profile_name }
+ *   POST /api/monitor/baidu/list-profiles
+ *     Body = { user_data_dir } → { profiles, resolved_profile_name }
  *   POST /api/monitor/baidu/copy-profile
- *     Body = { source_user_data_dir, source_profile_name }
- *     → { ok, copy_path?, imported_at?, size_mb?, elapsed_s?, error? }
+ *     Body = { source_user_data_dir, source_profile_name | null }
+ *     → { ok, copy_path?, profile_name?, imported_at?, size_mb?, elapsed_s?, error? }
  *   POST /api/monitor/baidu/test-native
  *     Body = { chrome_executable_path, chrome_profile_copy_path }
  *     → { ok, error? }
  */
-import { ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 
 import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import FormToggle from "@/components/forms/FormToggle.vue";
 import FormInput from "@/components/forms/FormInput.vue";
+import FormSelect from "@/components/forms/FormSelect.vue";
 import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
 
@@ -50,6 +53,12 @@ const config = ref<NativeConfig>({
   chrome_profile_copy_last_logged_in_at: null,
 });
 
+interface ChromeProfile {
+  name: string;                     // 目录名："Default" / "Profile 1"
+  account_email: string | null;
+  display_name: string | null;      // 用户在 Chrome 里起的名字："工作" / "个人"
+}
+
 const testResult = ref<{ ok: boolean; error?: string } | null>(null);
 const loading = ref(false);
 const detectLoading = ref(false);
@@ -57,9 +66,18 @@ const testLoading = ref(false);
 const saveLoading = ref(false);
 const importing = ref(false);
 const launching = ref(false);
+// 探测到的 profile 列表 + 当前选中的（"" = 交给后端挑）。
+// 早期版本这里写死复制 "Default" —— 用户 Chrome 里删过默认 profile、只剩
+// "Profile 1" 时导入必然失败，而且 UI 里没有任何地方能改选。
+const profiles = ref<ChromeProfile[]>([]);
+const selectedProfile = ref<string>("");
+const profilesLoading = ref(false);
+// 「Chrome 数据目录」被手动改过还没落库 —— 落库（保存 / 导入成功）后清掉
+const dirEdited = ref(false);
 const importResult = ref<{
   ok: boolean;
   copy_path?: string;
+  profile_name?: string;
   imported_at?: string;
   size_mb?: number;
   elapsed_s?: number;
@@ -78,11 +96,22 @@ function formatTimestamp(iso: string | null | undefined): string {
   }
 }
 
-async function loadConfig() {
+async function loadConfig(refreshProfiles = true) {
   loading.value = true;
+  // 用户手输还没保存的数据目录不能被覆盖 —— loadConfig 也会被「副本登录完成」
+  // 事件触发，正在输路径时窗口一关，输了一半的内容就没了。
+  // 留旧对象的引用而不是快照值：请求飞在路上时用户还在打字，改的是旧对象。
+  const prev = config.value;
   try {
     const resp = await sidecar.client.get<NativeConfig>("/api/monitor/baidu/native-config");
     config.value = resp.data;
+    if (dirEdited.value) config.value.chrome_user_data_dir = prev.chrome_user_data_dir;
+    // 只在还没选过时用配置里的值兜底 —— loadConfig 也会被「副本登录完成」事件
+    // 触发，那时不能把用户刚在下拉里改的选择冲掉。
+    if (!selectedProfile.value && config.value.chrome_profile_name) {
+      selectedProfile.value = config.value.chrome_profile_name;
+    }
+    if (refreshProfiles && config.value.use_native_chrome) void refreshChromeInfo();
   } catch (e: any) {
     const detail = e?.response?.data?.detail ?? e?.message ?? "未知错误";
     toast.error(`读取配置失败：${detail}`);
@@ -91,14 +120,110 @@ async function loadConfig() {
   }
 }
 
+const profileOptions = computed(() =>
+  profiles.value.map((p) => {
+    const named = p.display_name && p.display_name !== p.name
+      ? `${p.display_name}（${p.name}）`
+      : p.name;
+    return { value: p.name, label: p.account_email ? `${named} · ${p.account_email}` : named };
+  }),
+);
+
+// 上次拉 profile 列表用的目录 + 请求序号。目录变了要重选（不同 Chrome 安装
+// 下同名的 "Profile 2" 可能是完全不同的账号）；序号用于丢弃过期响应。
+const profilesDir = ref<string | null>(null);
+let refreshSeq = 0;
+
+function applyProfiles(
+  dir: string | null,
+  d: { profiles?: ChromeProfile[]; resolved_profile_name?: string | null },
+) {
+  if (dir !== profilesDir.value) {
+    profilesDir.value = dir;
+    selectedProfile.value = "";  // 换目录 = 重新选
+  }
+  profiles.value = d.profiles ?? [];
+  const names = profiles.value.map((p) => p.name);
+  // 选中项失效（用户在 Chrome 里删了这个 profile）才改，
+  // 否则保留用户的选择不被后台推荐值覆盖。
+  if (!selectedProfile.value || !names.includes(selectedProfile.value)) {
+    selectedProfile.value = d.resolved_profile_name ?? "";
+  }
+}
+
+/**
+ * 刷新 profile 列表，返回本次用的 Chrome 数据目录（拿不到 → null）。
+ *
+ * 手填的数据目录优先于自动探测（公司统一部署 / 非默认渠道的机器上自动探测
+ * 走不通，必须留人工出口），但**它里面没有 profile 时要退回自动探测**：
+ * 这个字段每次导入成功都会被后端写上当时的源目录，于是一旦那个路径失效
+ * （换机器、改 Windows 用户名、Chrome 搬家），把它当死命令就等于永久关掉
+ * 自动探测，用户在界面上看不出该去清空它。
+ */
+async function refreshChromeInfo(): Promise<string | null> {
+  const seq = ++refreshSeq;
+  const manual = config.value.chrome_user_data_dir?.trim();
+  profilesLoading.value = true;
+  try {
+    if (manual) {
+      const resp = await sidecar.client.post<{
+        profiles: ChromeProfile[];
+        resolved_profile_name: string | null;
+        unreadable: boolean;
+      }>("/api/monitor/baidu/list-profiles", { user_data_dir: manual });
+      // unreadable = 目录在、只是读不动（权限 / 网络盘断了）。这种情况**不能**
+      // 当成"路径失效"改用别的目录 —— 那会闷声复制成另一个账号的登录态。
+      // 让它照常走下去，由 copy-profile 报出真正的权限错误。
+      if (resp.data.profiles?.length || resp.data.unreadable) {
+        if (seq === refreshSeq) applyProfiles(manual, resp.data);
+        return manual;
+      }
+    }
+    const resp = await sidecar.client.post<{
+      executable_path: string | null;
+      user_data_dir: string | null;
+      profiles: ChromeProfile[];
+      resolved_profile_name: string | null;
+    }>("/api/monitor/baidu/detect-chrome");
+    const detected = resp.data.user_data_dir;
+    if (seq === refreshSeq) applyProfiles(detected, resp.data);
+    if (manual && detected && detected !== manual) {
+      // 提示也归到最新一次请求，否则连点会弹重复 toast
+      if (seq === refreshSeq) {
+        toast.warn(`「${manual}」里没有 Chrome profile，已改用自动探测到的 ${detected}`);
+      }
+      return detected;
+    }
+    // 自动探测也没结果时返回手填值，让报错针对用户填的那个路径
+    return detected ?? (manual || null);
+  } catch (e: any) {
+    if (seq === refreshSeq) profiles.value = [];
+    const detail = e?.response?.data?.detail ?? e?.message ?? String(e);
+    toast.error(`检测 Chrome profile 失败：${detail}`);
+    return null;
+  } finally {
+    if (seq === refreshSeq) profilesLoading.value = false;
+  }
+}
+
 async function detectChrome() {
   detectLoading.value = true;
+  // 跟 refreshChromeInfo 共用序号：两边都会写 profiles/selectedProfile，
+  // 不排队的话慢的那次响应会把新的覆盖回去。
+  const seq = ++refreshSeq;
   try {
-    const resp = await sidecar.client.post<{ executable_path: string | null; user_data_dir: string | null }>(
-      "/api/monitor/baidu/detect-chrome",
-    );
+    const resp = await sidecar.client.post<{
+      executable_path: string | null;
+      user_data_dir: string | null;
+      profiles: ChromeProfile[];
+      resolved_profile_name: string | null;
+    }>("/api/monitor/baidu/detect-chrome");
     const data = resp.data;
     config.value.chrome_executable_path = data.executable_path;
+    // 同一个响应里已经带了 profile 列表，顺手填上，省一次往返
+    if (seq === refreshSeq && !config.value.chrome_user_data_dir?.trim()) {
+      applyProfiles(data.user_data_dir, data);
+    }
     if (!data.executable_path) {
       toast.warn("未检测到 Chrome 安装，请手动填写路径或先安装 Chrome");
     } else {
@@ -116,34 +241,42 @@ async function importProfile() {
   importing.value = true;
   importResult.value = null;
   try {
-    // 用 detect-chrome 拿到 user_data_dir
-    const detectResp = await sidecar.client.post<{ executable_path: string | null; user_data_dir: string | null }>(
-      "/api/monitor/baidu/detect-chrome",
-    );
-    const detected = detectResp.data;
-    if (!detected.user_data_dir) {
-      importResult.value = { ok: false, error: "未检测到 Chrome User Data 目录，请确认 Chrome 已安装" };
+    // 手填目录优先，否则自动探测；顺带刷新 profile 列表让下拉有值
+    const userDataDir = await refreshChromeInfo();
+    if (!userDataDir) {
+      importResult.value = {
+        ok: false,
+        error:
+          "没找到 Chrome 数据目录。请确认 Chrome 已安装并至少正常启动过一次；" +
+          "如果你的 Chrome 数据不在默认位置（公司统一部署 / 装的是 Beta 版 / 换过盘），" +
+          "请在上面的「Chrome 数据目录」里手动填到 User Data 这一层。",
+      };
       return;
     }
-    // 复制 Default profile
+    // profile 名传 null = 让后端挑（Default 不存在时兜底到实际存在的那个）
     const copyResp = await sidecar.client.post<{
       ok: boolean;
       copy_path?: string;
+      profile_name?: string;
       imported_at?: string;
       size_mb?: number;
       elapsed_s?: number;
       error?: string;
       warning?: string;
     }>("/api/monitor/baidu/copy-profile", {
-      source_user_data_dir: detected.user_data_dir,
-      source_profile_name: "Default",
+      source_user_data_dir: userDataDir,
+      source_profile_name: selectedProfile.value || null,
     }, {
       timeout: 600_000,  // 10 分钟 ── 用户可能有大 profile (14.6GB 实测过)，默认 60s 不够
     });
     importResult.value = copyResp.data;
     if (copyResp.data.ok) {
-      // reload config 看新 copy_path + imported_at
-      await loadConfig();
+      // 后端可能兜底换了 profile —— 同步回下拉，别让 UI 显示的和实际复制的不一致
+      if (copyResp.data.profile_name) selectedProfile.value = copyResp.data.profile_name;
+      // 已落库：让 loadConfig 用服务端存的（规整过的）路径覆盖输入框
+      dirEdited.value = false;
+      // reload config 看新 copy_path + imported_at；profile 列表刚刷过，别再来一次
+      await loadConfig(false);
     }
   } catch (e) {
     importResult.value = { ok: false, error: String(e) };
@@ -205,9 +338,13 @@ async function saveConfig() {
     await sidecar.client.post("/api/monitor/baidu/native-config", {
       use_native_chrome: config.value.use_native_chrome,
       chrome_executable_path: config.value.chrome_executable_path,
-      chrome_user_data_dir: config.value.chrome_user_data_dir,
+      chrome_user_data_dir: config.value.chrome_user_data_dir?.trim() || null,
+      // 注意：不把下拉的选择写进 chrome_profile_name —— 这个字段记的是「当前
+      // 副本是从哪个 profile 复制来的」（界面上原样展示）。只保存不导入就改写
+      // 它，会让界面谎报副本来源。真正的选择在导入时随 copy-profile 提交。
       chrome_profile_name: config.value.chrome_profile_name,
     });
+    dirEdited.value = false;
     toast.success("百度抓取配置已保存");
   } catch (e: any) {
     const detail = e?.response?.data?.detail ?? e?.message ?? "未知错误";
@@ -274,7 +411,7 @@ onUnmounted(() => {
         <div class="flex flex-shrink-0 items-center gap-2">
           <FormToggle
             :model-value="config.use_native_chrome"
-            @update:model-value="(v) => { config.use_native_chrome = v; testResult = null; saveConfig(); }"
+            @update:model-value="(v) => { config.use_native_chrome = v; testResult = null; saveConfig(); if (v) void refreshChromeInfo(); }"
           />
         </div>
       </div>
@@ -316,6 +453,68 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- Chrome 数据目录（User Data）—— 非默认位置的机器必须能手填 -->
+        <div
+          class="flex items-center gap-4 py-3.5"
+          :style="{ borderBottom: '1px solid var(--line)' }"
+        >
+          <div class="min-w-0 flex-1">
+            <div class="text-[13px] font-semibold">Chrome 数据目录</div>
+            <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              留空＝自动探测；导入成功后这里会记下当时用的目录。
+              公司统一部署 / 装的是 Beta 版 / 换过盘时，可手动填到
+              <code>User Data</code> 这一层（填错或失效时会自动退回探测结果）。
+            </div>
+          </div>
+          <div class="flex flex-shrink-0 items-center gap-2">
+            <FormInput
+              :model-value="config.chrome_user_data_dir ?? ''"
+              placeholder="C:\Users\你的用户名\AppData\Local\Google\Chrome\User Data"
+              :width="340"
+              debounce="live"
+              @update:model-value="(v) => { config.chrome_user_data_dir = v ? String(v) : null; dirEdited = true }"
+            />
+            <Btn variant="ghost" small :disabled="profilesLoading" @click="refreshChromeInfo">
+              <Spinner v-if="profilesLoading" :size="12" />
+              <Icon v-else name="refresh" :size="13" />
+              <span>{{ profilesLoading ? "检测中…" : "检测 profile" }}</span>
+            </Btn>
+          </div>
+        </div>
+
+        <!-- 要复制哪个 profile —— 没有 Default 的机器（删过默认 profile）靠它自救 -->
+        <div
+          class="flex items-center gap-4 py-3.5"
+          :style="{ borderBottom: '1px solid var(--line)' }"
+        >
+          <div class="min-w-0 flex-1">
+            <div class="text-[13px] font-semibold">要复制的 Chrome profile</div>
+            <div class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              <template v-if="profiles.length">
+                选你平时登录百度的那个（多账号 Chrome 别选错），
+                选完点右上的「复制 Chrome profile / 重新导入」才生效。
+              </template>
+              <template v-else>
+                没检测到 profile。请确认 Chrome 至少正常启动过一次；
+                或在上面手动填数据目录后点「检测 profile」。
+              </template>
+            </div>
+          </div>
+          <div class="flex flex-shrink-0 items-center gap-2">
+            <FormSelect
+              v-if="profiles.length"
+              :model-value="selectedProfile"
+              :options="profileOptions"
+              :width="340"
+              placeholder="自动选择"
+              @update:model-value="(v) => (selectedProfile = String(v))"
+            />
+            <span v-else class="text-[12px]" :style="{ color: 'var(--ink-3)', width: '340px' }">
+              --
+            </span>
+          </div>
+        </div>
+
         <!-- Chrome profile 副本 -->
         <div
           class="flex items-center gap-4 py-3.5"
@@ -325,6 +524,7 @@ onUnmounted(() => {
             <div class="text-[13px] font-semibold">Chrome profile 副本</div>
             <div v-if="config.chrome_profile_copy_path" class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
               <div>副本路径：<code>{{ config.chrome_profile_copy_path }}</code></div>
+              <div>来源 profile：<code>{{ config.chrome_profile_name }}</code></div>
               <div>导入时间：{{ formatTimestamp(config.chrome_profile_copy_imported_at) }}</div>
               <div v-if="config.chrome_profile_copy_last_logged_in_at">
                 上次登录：{{ formatTimestamp(config.chrome_profile_copy_last_logged_in_at) }}
@@ -334,7 +534,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div v-else class="mt-0.5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
-              还未导入。点右侧按钮一键复制你的 Chrome Default profile（约 30-60 秒）。
+              还未导入。点右侧按钮把上面选中的 profile 复制一份（约 30-60 秒）。
             </div>
           </div>
           <div class="flex flex-shrink-0 items-center gap-2">
@@ -395,7 +595,7 @@ onUnmounted(() => {
         <!-- 导入结果 -->
         <div
           v-if="importResult !== null"
-          class="flex items-center gap-3 rounded-[10px] px-4 py-3 text-[12.5px]"
+          class="flex items-start gap-3 rounded-[10px] px-4 py-3 text-[12.5px] leading-[1.6]"
           :style="{
             background: importResult.ok ? 'color-mix(in srgb, var(--success, #4caf50) 12%, transparent)' : 'color-mix(in srgb, var(--danger, #ef4444) 12%, transparent)',
             color: importResult.ok ? 'var(--success, #2e7d32)' : 'var(--danger, #c62828)',
@@ -403,11 +603,13 @@ onUnmounted(() => {
             marginTop: '0.5rem',
           }"
         >
-          <Icon :name="importResult.ok ? 'check' : 'x'" :size="14" />
+          <Icon :name="importResult.ok ? 'check' : 'x'" :size="14" class="mt-0.5 shrink-0" />
           <span v-if="importResult.ok">
-            复制成功（{{ importResult.size_mb }} MB / {{ importResult.elapsed_s }}s）
+            复制成功（profile
+            {{ importResult.profile_name ?? config.chrome_profile_name }}，{{ importResult.size_mb }}
+            MB / {{ importResult.elapsed_s }}s）
           </span>
-          <span v-else class="flex-1 truncate" :title="importResult.error">
+          <span v-else class="flex-1" :title="importResult.error">
             复制失败：{{ importResult.error }}
           </span>
         </div>
