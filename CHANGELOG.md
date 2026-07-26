@@ -2,6 +2,12 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **百度抓取导入 Chrome profile 报「未找到 …\\User Data\\Default」**：导入流程此前写死复制名为 `Default` 的 profile，而 Chrome 里删过默认账号、只剩 `Profile 1`/`Profile 2` 的机器上根本没有这个目录，于是导入必然失败，报错还是一句没有下文的英文路径，界面上也没有任何地方能改选。现在：① 复制哪个 profile 由实际存在的目录决定（上次选过的 → `Default` → Chrome 上次用的 → 唯一的那个 → 最近活跃的）；② 设置页新增「要复制的 Chrome profile」下拉，列出机器上真实的 profile（带 Chrome 里的备注名和登录邮箱），多账号用户可自己选，导入结果也会写明实际复制的是哪个；③ Chrome 数据目录不再只认默认位置，会一并查组策略指定的目录和 Beta / Dev / Canary / Chromium，且优先选**里面真的有 profile** 的那个（Chrome 装了从没启动过时默认目录是空的）；④ 设置页新增「Chrome 数据目录」输入框，公司统一部署、换过盘等探测不到的情况可以手填（带引号或写 `%LOCALAPPDATA%` 的路径都能识别；填的目录里没有 profile 时会自动退回探测结果并说明换用了哪个目录，不会一填错就卡死）；⑤ 失败提示改成中文并说清下一步——是目录不存在、还是没有读取权限（公司统管的电脑常见）、还是目录里没有任何 profile（提示先启动一次 Chrome）、还是多填了一层（填到了某个 profile 目录里）、还是选的 profile 不存在（直接列出可选的有哪些）。另外：自动填入的 Chrome 程序路径现在会跟数据目录的版本对应（用 Beta 的 profile 就配 Beta 的 Chrome，避免副本因「配置文件来自更新版本」打不开）；把 CSM 自己的副本目录误填进「Chrome 数据目录」会被拦下，不会把已导入的副本连同副本里的百度登录态一起清空。
+
 ## [0.7.7] - 2026-07-23
 
 ### Added

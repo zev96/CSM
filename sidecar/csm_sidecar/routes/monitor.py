@@ -523,7 +523,8 @@ class ListProfilesBody(BaseModel):
 
 class CopyProfileBody(BaseModel):
     source_user_data_dir: str = Field(min_length=1)
-    source_profile_name: str = Field(default="Default")
+    # None = 交给后端挑（写死 "Default" 在没有 Default 的机器上必然失败）。
+    source_profile_name: str | None = None
 
 
 class TestNativeBody(BaseModel):
@@ -540,17 +541,51 @@ class NativeConfigBody(BaseModel):
 
 @router.post("/api/monitor/baidu/detect-chrome")
 def baidu_detect_chrome() -> dict[str, Any]:
-    """探测 Chrome 安装路径 + User Data 默认位置。"""
+    """探测 Chrome 安装路径 + User Data 位置 + 该目录下的 profile 列表。
+
+    profiles / resolved_profile_name 供前端画「要复制哪个 profile」选择器：
+    用户 Chrome 里没有 Default（删过默认 profile、只剩 Profile 1）时，
+    写死复制 "Default" 会直接失败且 UI 里无处改选。
+    """
+    user_data_dir = chrome_detect.find_user_data_dir()
+    preferred = _cfg_svc.load().monitor.baidu_keyword.chrome_profile_name
+    profiles = chrome_detect.list_profiles(user_data_dir) if user_data_dir else []
     return {
-        "executable_path": chrome_detect.find_chrome_executable(),
-        "user_data_dir": chrome_detect.find_user_data_dir(),
+        # exe 跟着数据目录的渠道走：数据目录探测覆盖了 Beta/Canary/Chromium，
+        # 拿它们的 profile 去开稳定版 Chrome 会被"配置来自更新版本"拒绝。
+        "executable_path": chrome_detect.find_chrome_executable(user_data_dir),
+        "user_data_dir": user_data_dir,
+        "profiles": profiles,
+        "resolved_profile_name": (
+            chrome_detect.resolve_profile_name(
+                user_data_dir, preferred=preferred, profiles=profiles
+            )
+            if user_data_dir
+            else None
+        ),
     }
 
 
 @router.post("/api/monitor/baidu/list-profiles")
 def baidu_list_profiles(body: ListProfilesBody) -> dict[str, Any]:
-    """枚举给定 user_data_dir 下所有 profile + 账号 email。"""
-    return {"profiles": chrome_detect.list_profiles(body.user_data_dir)}
+    """枚举给定 user_data_dir 下所有 profile + 账号信息 + 推荐选哪个。"""
+    preferred = _cfg_svc.load().monitor.baidu_keyword.chrome_profile_name
+    # 用户手填的路径可能带引号（资源管理器「复制文件地址」）或 %VAR%
+    user_data_dir = chrome_detect.normalize_user_path(body.user_data_dir)
+    profiles = chrome_detect.list_profiles(user_data_dir)
+    return {
+        "profiles": profiles,
+        "resolved_profile_name": chrome_detect.resolve_profile_name(
+            user_data_dir, preferred=preferred, profiles=profiles
+        ),
+        # 目录在但读不动 ≠ 目录里没 profile：前者不能被前端当"路径失效"
+        # 而悄悄改用自动探测到的另一个目录去复制（那会复制成别的账号）。
+        "unreadable": (
+            _Path(user_data_dir).is_dir() and not chrome_detect.can_list_profiles(user_data_dir)
+            if user_data_dir
+            else False
+        ),
+    }
 
 
 @router.post("/api/monitor/baidu/copy-profile")
@@ -571,13 +606,33 @@ def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
         )
 
     target = _core_config.default_config_dir() / "baidu_chrome_profile_copy"
+    source_dir = chrome_detect.normalize_user_path(body.source_user_data_dir)
+
+    # 挑要复制的 profile。两种语义要分开：
+    #   前端显式传了（用户在下拉里选的）→ 原样用，它不存在就让 copy_profile_to
+    #     报「可用的有哪些」，绝不闷声换一个复制（换了＝复制了别的账号的登录态）。
+    #   没传 → 按 上次存的 → Default → last_used → 唯一 → 最近活跃 兜底；
+    #     全都落空时仍照常调 copy_profile_to，让它抛统一的中文诊断（文案单点维护）。
+    # resolve 也要在 try 里：它会枚举目录，公司机 ACL 下会抛 OSError，
+    # 漏在外面就是一个 500 + 前端一句 "Request failed with status code 500"。
     try:
+        if body.source_profile_name:
+            profile_name = body.source_profile_name
+        else:
+            stored = _cfg_svc.load().monitor.baidu_keyword.chrome_profile_name
+            profile_name = (
+                chrome_detect.resolve_profile_name(source_dir, preferred=stored)
+                or stored
+                or "Default"
+            )
         meta = chrome_detect.copy_profile_to(
-            source_user_data_dir=body.source_user_data_dir,
-            source_profile_name=body.source_profile_name,
+            source_user_data_dir=source_dir,
+            source_profile_name=profile_name,
             target_path=str(target),
         )
     except FileNotFoundError as e:
+        return {"ok": False, "error": str(e)}
+    except ValueError as e:  # 源/副本目录重叠等参数问题，文案已是给用户看的中文
         return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": f"复制失败: {e}"}
@@ -587,14 +642,18 @@ def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
     bk = cfg.monitor.baidu_keyword
     bk.chrome_profile_copy_path = str(target)
     bk.chrome_profile_copy_imported_at = meta["imported_at"]
-    # 源信息记下来给 re-import 用
-    bk.chrome_user_data_dir = body.source_user_data_dir
-    bk.chrome_profile_name = body.source_profile_name
+    # 源信息记下来给 re-import 用（存规整后的路径，不存用户粘进来的引号）
+    bk.chrome_user_data_dir = source_dir
+    bk.chrome_profile_name = profile_name
     # 顺手探测并持久化 chrome.exe 路径 —— 否则它一直为空（默认 None），用户走完
     # 复制流程后点"登录副本"/正式跑监控会直接撞"缺 Chrome 可执行文件路径"。
-    # 仅在尚未设置时探测，不覆盖用户手填的路径。
-    if not bk.chrome_executable_path:
-        detected_exe = chrome_detect.find_chrome_executable()
+    # 除了"还没设置"，"已设置但和本次数据目录不是同一渠道"也要重配：拿稳定版
+    # Chrome 去开 Beta/Canary 的 profile 副本，Chrome 会以「配置文件来自更新
+    # 版本」拒绝启动，而且要到「测试启动 / 跑监控」才暴露，离导入很远。
+    if not bk.chrome_executable_path or not chrome_detect.executable_matches_user_data_dir(
+        bk.chrome_executable_path, source_dir
+    ):
+        detected_exe = chrome_detect.find_chrome_executable(source_dir)
         if detected_exe:
             bk.chrome_executable_path = detected_exe
     _cfg_svc.save(cfg)
@@ -602,6 +661,9 @@ def baidu_copy_profile(body: CopyProfileBody) -> dict[str, Any]:
     return {
         "ok": True,
         "copy_path": str(target),
+        # 实际复制的是哪个 profile —— 后端可能兜底换了一个，必须告诉用户，
+        # 别让它变成"静默选了别的"。
+        "profile_name": profile_name,
         "imported_at": meta["imported_at"],
         "size_mb": meta["size_mb"],
         "elapsed_s": meta["elapsed_s"],
@@ -663,7 +725,12 @@ def baidu_set_native_config(body: NativeConfigBody) -> dict[str, Any]:
     bk = cfg.monitor.baidu_keyword
     bk.use_native_chrome = body.use_native_chrome
     bk.chrome_executable_path = body.chrome_executable_path
-    bk.chrome_user_data_dir = body.chrome_user_data_dir
+    # 跟 copy-profile 一样存规整后的路径，别把用户粘进来的引号 / %VAR% 存进配置
+    bk.chrome_user_data_dir = (
+        chrome_detect.normalize_user_path(body.chrome_user_data_dir) or None
+        if body.chrome_user_data_dir
+        else None
+    )
     bk.chrome_profile_name = body.chrome_profile_name
     _cfg_svc.save(cfg)
     return {"ok": True}

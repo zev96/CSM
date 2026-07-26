@@ -51,8 +51,13 @@ class BaiduKeywordConfig(BaseModel):
     use_native_chrome: bool = False
     # 自动探测时为 None，UI 启用 native mode 时调 /api/monitor/baidu/detect-chrome
     chrome_executable_path: str | None = None
+    # 上次导入用的源 User Data 目录，同时作为下次导入的首选。它可能失效（换
+    # 机器 / 改 Windows 用户名 / Chrome 搬家），所以只是"首选"不是"死命令"：
+    # 目录里没有 profile 时 UI 会退回自动探测，不会把用户永久卡住。
     chrome_user_data_dir: str | None = None
-    # 多 profile 用户选哪个（"Default" / "Profile 1" / "Profile 2"...）
+    # 当前副本是从哪个 profile 复制来的（"Default" / "Profile 1"...），
+    # 同时作为下次导入的首选。**只由导入成功时写入** —— 光在设置页里改选
+    # 而没导入就改写它，界面上展示的"副本来源"就会说谎。
     chrome_profile_name: str = "Default"
     # B' 一键复制副本路径：CSM 把用户日常 Chrome profile 复制到这里（非
     # Chrome 默认目录，绕过 Chrome 91+ DevTools 安全限制）。

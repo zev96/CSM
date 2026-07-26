@@ -259,7 +259,7 @@ class TestBaiduNativeModeRoutes:
     def test_detect_chrome_returns_paths_when_present(self, client, monkeypatch):
         monkeypatch.setattr(
             "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
-            lambda: "C:/Chrome/chrome.exe",
+            lambda user_data_dir=None: "C:/Chrome/chrome.exe",
         )
         monkeypatch.setattr(
             "csm_core.monitor.drivers.chrome_detect.find_user_data_dir",
@@ -274,7 +274,7 @@ class TestBaiduNativeModeRoutes:
     def test_detect_chrome_returns_none_when_missing(self, client, monkeypatch):
         monkeypatch.setattr(
             "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
-            lambda: None,
+            lambda user_data_dir=None: None,
         )
         monkeypatch.setattr(
             "csm_core.monitor.drivers.chrome_detect.find_user_data_dir",
@@ -380,9 +380,9 @@ class TestBaiduNativeModeRoutes:
         assert data["elapsed_s"] == 12.3
 
     def test_copy_profile_failure_source_not_found(self, client, monkeypatch):
-        """source profile 不存在 → 返回 ok=False + error，不抛 500。"""
+        """source profile 不存在 → 返回 ok=False + error 原样透传，不抛 500。"""
         def _raise(**kw):
-            raise FileNotFoundError("source profile not found: C:/User Data/Default")
+            raise FileNotFoundError("Chrome 数据目录不存在：C:/User Data")
         monkeypatch.setattr(
             "csm_core.monitor.drivers.chrome_detect.copy_profile_to",
             _raise,
@@ -397,7 +397,305 @@ class TestBaiduNativeModeRoutes:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is False
-        assert "source profile not found" in data["error"]
+        assert "Chrome 数据目录不存在" in data["error"]
+
+    def test_copy_profile_uses_explicit_profile_verbatim(self, client, monkeypatch, tmp_path):
+        """用户在下拉里明确选了某个 profile → 原样用它，不被兜底逻辑换掉。
+
+        向后兼容不变量：老配置 / 老前端显式传 "Default" 且它存在时，复制的
+        必须还是 Default。
+        """
+        seen: dict = {}
+        def _fake(**kw):
+            seen.update(kw)
+            return {"imported_at": "t", "size_mb": 1.0, "elapsed_s": 1.0}
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.copy_profile_to", _fake
+        )
+        user_data = tmp_path / "User Data"
+        for n in ("Default", "Profile 1"):
+            (user_data / n).mkdir(parents=True)
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={
+                "source_user_data_dir": str(user_data),
+                "source_profile_name": "Profile 1",
+            },
+        )
+        assert resp.json()["profile_name"] == "Profile 1"
+        assert seen["source_profile_name"] == "Profile 1"
+
+    def test_copy_profile_explicit_missing_profile_errors_instead_of_swapping(
+        self, client, monkeypatch, tmp_path
+    ):
+        """显式选的 profile 不存在 → 报「可用的有哪些」，而不是闷声换一个复制。"""
+        monkeypatch.setattr(
+            "csm_core.config.default_config_dir", lambda: tmp_path / "cfgdir"
+        )
+        user_data = tmp_path / "User Data"
+        (user_data / "Default").mkdir(parents=True)
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={
+                "source_user_data_dir": str(user_data),
+                "source_profile_name": "Profile 9",
+            },
+        )
+        data = resp.json()
+        assert data["ok"] is False
+        assert "Profile 9" in data["error"] and "Default" in data["error"]
+
+    def test_copy_profile_normalizes_quoted_path(self, client, monkeypatch, tmp_path):
+        """资源管理器「复制文件地址」带引号 —— 不规整就误报「目录不存在」。"""
+        monkeypatch.setattr(
+            "csm_core.config.default_config_dir", lambda: tmp_path / "cfgdir"
+        )
+        user_data = tmp_path / "User Data"
+        (user_data / "Default").mkdir(parents=True)
+        (user_data / "Default" / "Cookies").write_bytes(b"c")
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": f'"{user_data}"'},
+        )
+        data = resp.json()
+        assert data["ok"] is True, data
+        cfg = client.get("/api/monitor/baidu/native-config").json()
+        assert cfg["chrome_user_data_dir"] == str(user_data)  # 存的是规整后的
+
+    def test_list_profiles_normalizes_quoted_path(self, client, tmp_path):
+        user_data = tmp_path / "User Data"
+        (user_data / "Default").mkdir(parents=True)
+        resp = client.post(
+            "/api/monitor/baidu/list-profiles",
+            json={"user_data_dir": f'  "{user_data}"  '},
+        )
+        assert [p["name"] for p in resp.json()["profiles"]] == ["Default"]
+
+    def test_copy_profile_unreadable_dir_returns_error_not_500(
+        self, client, monkeypatch, tmp_path
+    ):
+        """目录能 stat 但列不动（公司机 ACL）→ ok=False，不是 500。"""
+        monkeypatch.setattr(
+            "csm_core.config.default_config_dir", lambda: tmp_path / "cfgdir"
+        )
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+
+        from pathlib import Path as _P
+        def boom(self):
+            raise PermissionError(13, "Access is denied")
+        monkeypatch.setattr(_P, "iterdir", boom)
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": str(user_data)},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is False
+
+    def test_copy_profile_refuses_when_source_is_the_copy_dir(
+        self, client, monkeypatch, tmp_path
+    ):
+        """把 CSM 副本目录填成「Chrome 数据目录」→ ok=False，副本原封不动
+        （copy_profile_to 会先 rmtree 目标，不拦就是把副本和登录态删光）。"""
+        cfg_dir = tmp_path / "cfgdir"
+        copy_dir = cfg_dir / "baidu_chrome_profile_copy"
+        (copy_dir / "Default").mkdir(parents=True)
+        (copy_dir / "Default" / "Cookies").write_bytes(b"login")
+        monkeypatch.setattr("csm_core.config.default_config_dir", lambda: cfg_dir)
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": str(copy_dir)},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is False
+        assert (copy_dir / "Default" / "Cookies").is_file()
+
+    def test_list_profiles_flags_unreadable_dir(self, client, monkeypatch, tmp_path):
+        """「读不动」要和「空目录」区分开，否则前端会把它当失效路径悄悄改用别的目录。"""
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+        from pathlib import Path as _P
+        def boom(self):
+            raise PermissionError(13, "Access is denied")
+        monkeypatch.setattr(_P, "iterdir", boom)
+        data = client.post(
+            "/api/monitor/baidu/list-profiles",
+            json={"user_data_dir": str(user_data)},
+        ).json()
+        assert data["profiles"] == []
+        assert data["unreadable"] is True
+
+    def test_list_profiles_empty_dir_is_not_unreadable(self, client, tmp_path):
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+        data = client.post(
+            "/api/monitor/baidu/list-profiles",
+            json={"user_data_dir": str(user_data)},
+        ).json()
+        assert data["profiles"] == [] and data["unreadable"] is False
+
+    def test_copy_profile_repairs_executable_on_channel_switch(
+        self, client, monkeypatch, tmp_path
+    ):
+        """已存的 exe 跟本次数据目录不同渠道 → 换成配套的那个。
+
+        只在"exe 为空"时探测的话，老用户（早就存了稳定版 exe）改用 Beta 数据
+        目录后会拿稳定版 Chrome 去开 Beta 的 profile，被「配置文件来自更新版本」
+        拒绝，而且要到「测试启动」才暴露。
+        """
+        client.post(
+            "/api/monitor/baidu/native-config",
+            json={
+                "use_native_chrome": True,
+                "chrome_executable_path": "C:/PF/Google/Chrome/Application/chrome.exe",
+                "chrome_user_data_dir": None,
+                "chrome_profile_name": "Default",
+            },
+        )
+        monkeypatch.setattr(
+            "csm_core.config.default_config_dir", lambda: tmp_path / "cfgdir"
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
+            lambda user_data_dir=None: "C:/PF/Google/Chrome Beta/Application/chrome.exe",
+        )
+        beta = tmp_path / "Google" / "Chrome Beta" / "User Data"
+        (beta / "Default").mkdir(parents=True)
+        (beta / "Default" / "Cookies").write_bytes(b"c")
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": str(beta)},
+        )
+        assert resp.json()["ok"] is True
+        cfg = client.get("/api/monitor/baidu/native-config").json()
+        assert cfg["chrome_executable_path"] == "C:/PF/Google/Chrome Beta/Application/chrome.exe"
+
+    def test_copy_profile_keeps_matching_executable(self, client, monkeypatch, tmp_path):
+        """渠道配套时不动用户已设的 exe。"""
+        client.post(
+            "/api/monitor/baidu/native-config",
+            json={
+                "use_native_chrome": True,
+                "chrome_executable_path": "D:/MyChrome/chrome.exe",
+                "chrome_user_data_dir": None,
+                "chrome_profile_name": "Default",
+            },
+        )
+        monkeypatch.setattr(
+            "csm_core.config.default_config_dir", lambda: tmp_path / "cfgdir"
+        )
+        stable = tmp_path / "Google" / "Chrome" / "User Data"
+        (stable / "Default").mkdir(parents=True)
+        (stable / "Default" / "Cookies").write_bytes(b"c")
+        client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": str(stable)},
+        )
+        cfg = client.get("/api/monitor/baidu/native-config").json()
+        assert cfg["chrome_executable_path"] == "D:/MyChrome/chrome.exe"
+
+    def test_native_config_normalizes_user_data_dir(self, client):
+        resp = client.post(
+            "/api/monitor/baidu/native-config",
+            json={
+                "use_native_chrome": True,
+                "chrome_executable_path": None,
+                "chrome_user_data_dir": '  "D:\\Chrome\\User Data"  ',
+                "chrome_profile_name": "Default",
+            },
+        )
+        assert resp.status_code == 200
+        cfg = client.get("/api/monitor/baidu/native-config").json()
+        assert cfg["chrome_user_data_dir"] == "D:\\Chrome\\User Data"
+
+    def test_detect_chrome_pairs_executable_with_channel(
+        self, client, monkeypatch, tmp_path
+    ):
+        """探测到的数据目录是哪个渠道，chrome.exe 就该配哪个渠道。"""
+        seen: dict = {}
+        def _fake_exe(user_data_dir=None):
+            seen["user_data_dir"] = user_data_dir
+            return "C:/Chrome Beta/chrome.exe"
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_chrome_executable", _fake_exe
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_user_data_dir",
+            lambda: str(tmp_path / "Chrome Beta" / "User Data"),
+        )
+        data = client.post("/api/monitor/baidu/detect-chrome").json()
+        assert seen["user_data_dir"] == str(tmp_path / "Chrome Beta" / "User Data")
+        assert data["executable_path"] == "C:/Chrome Beta/chrome.exe"
+
+    def test_detect_chrome_includes_profiles_and_resolved_name(
+        self, client, monkeypatch, tmp_path
+    ):
+        """detect-chrome 要一并回 profile 列表 + 推荐项 —— 前端才画得出选择器。
+
+        回归 bug：前端写死复制 "Default"，用户机器上没有 Default 时整条导入
+        路径死掉，且 UI 里没有任何地方能改选。
+        """
+        user_data = tmp_path / "User Data"
+        (user_data / "Profile 1").mkdir(parents=True)
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
+            lambda user_data_dir=None: "C:/Chrome/chrome.exe",
+        )
+        monkeypatch.setattr(
+            "csm_core.monitor.drivers.chrome_detect.find_user_data_dir",
+            lambda: str(user_data),
+        )
+        data = client.post("/api/monitor/baidu/detect-chrome").json()
+        assert [p["name"] for p in data["profiles"]] == ["Profile 1"]
+        assert data["resolved_profile_name"] == "Profile 1"
+
+    def test_list_profiles_includes_resolved_name(self, client, tmp_path):
+        user_data = tmp_path / "User Data"
+        (user_data / "Profile 2").mkdir(parents=True)
+        resp = client.post(
+            "/api/monitor/baidu/list-profiles",
+            json={"user_data_dir": str(user_data)},
+        )
+        assert resp.json()["resolved_profile_name"] == "Profile 2"
+
+    def test_copy_profile_auto_resolves_when_default_missing(
+        self, client, monkeypatch, tmp_path
+    ):
+        """不传 source_profile_name（或传的那个不存在）→ 后端挑真实存在的 profile。"""
+        user_data = tmp_path / "User Data"
+        (user_data / "Profile 1").mkdir(parents=True)
+        (user_data / "Profile 1" / "Cookies").write_bytes(b"c")
+        monkeypatch.setattr(
+            "csm_core.config.default_config_dir", lambda: tmp_path / "cfgdir"
+        )
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": str(user_data)},
+        )
+        data = resp.json()
+        assert data["ok"] is True, data
+        assert data["profile_name"] == "Profile 1"
+        # 选中的 profile 持久化，重新导入时复用
+        cfg = client.get("/api/monitor/baidu/native-config").json()
+        assert cfg["chrome_profile_name"] == "Profile 1"
+        assert (tmp_path / "cfgdir" / "baidu_chrome_profile_copy" / "Default").is_dir()
+
+    def test_copy_profile_error_is_actionable_when_no_profiles(
+        self, client, monkeypatch, tmp_path
+    ):
+        """目录里一个 profile 都没有 → ok=False + 说得清下一步的中文提示。"""
+        user_data = tmp_path / "User Data"
+        user_data.mkdir()
+        monkeypatch.setattr(
+            "csm_core.config.default_config_dir", lambda: tmp_path / "cfgdir"
+        )
+        resp = client.post(
+            "/api/monitor/baidu/copy-profile",
+            json={"source_user_data_dir": str(user_data)},
+        )
+        data = resp.json()
+        assert data["ok"] is False
+        assert "启动" in data["error"]
 
     def test_copy_profile_empty_source_422(self, client):
         """source_user_data_dir 为空 → Pydantic 验证失败 422。"""
@@ -416,7 +714,7 @@ class TestBaiduNativeModeRoutes:
         )
         monkeypatch.setattr(
             "csm_core.monitor.drivers.chrome_detect.find_chrome_executable",
-            lambda: "C:/Detected/chrome.exe",
+            lambda user_data_dir=None: "C:/Detected/chrome.exe",
         )
         resp = client.post(
             "/api/monitor/baidu/copy-profile",

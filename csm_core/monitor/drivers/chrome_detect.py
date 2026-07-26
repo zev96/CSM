@@ -82,15 +82,116 @@ def _copy_ignore_caches(dir_path: str, names: list[str]) -> list[str]:
 
 
 # ── Chrome executable ────────────────────────────────────────────
-def find_chrome_executable() -> str | None:
+# User Data 所在渠道目录 → 该渠道的安装子目录。用于把 exe 和数据目录配对。
+_CHANNEL_APP_DIRS: dict[str, tuple[str, ...]] = {
+    "Chrome": ("Google", "Chrome"),
+    "Chrome Beta": ("Google", "Chrome Beta"),
+    "Chrome Dev": ("Google", "Chrome Dev"),
+    "Chrome SxS": ("Google", "Chrome SxS"),
+    "Chromium": ("Chromium",),
+}
+
+
+def find_chrome_executable(user_data_dir: str | None = None) -> str | None:
     """探测 chrome.exe 绝对路径。失败返回 None。
 
-    顺序：注册表 → 默认安装路径（HKLM Program Files / Program Files (x86)）
+    顺序：同渠道安装目录（给定 user_data_dir 且非稳定版时）→ 注册表
+    → 默认安装路径（Program Files / Program Files (x86) / %LOCALAPPDATA%）。
+
+    为什么要配对渠道：数据目录探测覆盖了 Beta / Dev / Canary / Chromium，
+    而注册表 App Paths\\chrome.exe 只认稳定版。拿 Beta 的 profile 副本去开
+    稳定版 Chrome，Chrome 会以"配置文件来自更新版本"拒绝启动 —— 而且这个
+    错误要等到「测试启动 / 登录副本」才冒出来，离导入很远，很难联想。
     """
+    channel = _channel_app_dir_of(user_data_dir)
+    if channel and channel != _CHANNEL_APP_DIRS["Chrome"]:
+        paired = _find_channel_install_path(channel)
+        if paired:
+            return paired
+        # 同渠道 exe 找不到就退回通用探测：有个能跑的总比没有强，
+        # 而且设置页里可以手填。
     p = _read_registry_chrome_path()
     if p:
         return p
     return _find_default_install_path()
+
+
+def _channel_app_dir_of(user_data_dir: str | None) -> tuple[str, ...] | None:
+    """从 User Data 路径反推渠道安装子目录；不是标准布局（如组策略自定义目录）→ None。"""
+    if not user_data_dir:
+        return None
+    p = Path(user_data_dir)
+    if p.name != "User Data":
+        return None
+    return _CHANNEL_APP_DIRS.get(p.parent.name)
+
+
+def _find_channel_install_path(app_dir: tuple[str, ...]) -> str | None:
+    """在 Program Files / (x86) / %LOCALAPPDATA% 下找该渠道的 chrome.exe。"""
+    roots = (
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+        os.environ.get("LOCALAPPDATA"),
+    )
+    for root in roots:
+        if not root:
+            continue
+        cand = Path(root).joinpath(*app_dir, "Application", "chrome.exe")
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def normalize_user_path(raw: str) -> str:
+    """规整用户手填 / 粘贴的路径：去首尾空白与引号、展开 %VAR% 和 ~。
+
+    资源管理器的「复制文件地址」给的是带引号的路径，帮助文案里又常写
+    %LOCALAPPDATA%\\… —— 不规整就会 is_dir() 失败，把人引到"Chrome 是不是
+    没装"上去，而真正的问题只是两个引号。
+    """
+    p = raw.strip().strip('"').strip("'").strip()
+    if not p:
+        return ""
+    # 只在真出现 %VAR% 形态时才展开 —— expandvars 会把路径里的字面 %% 吃成 %
+    if re.search(r"%[^%]+%", p):
+        p = os.path.expandvars(p)
+    return os.path.expanduser(p)
+
+
+def can_list_profiles(user_data_dir: str) -> bool:
+    """目录是否存在且能枚举。
+
+    用来把「目录里没有 profile」和「目录读不动」分开 —— 后者在公司机
+    （ACL / 重定向到网络盘 / 杀软占用）上会发生，报"请先启动一次 Chrome"
+    是错的诊断，而且上层若把它当"路径失效"就会悄悄改用别的目录去复制。
+    """
+    base = Path(user_data_dir) if user_data_dir else None
+    if base is None or not base.is_dir():
+        return False
+    try:
+        next(iter(base.iterdir()), None)
+    except OSError as e:
+        logger.info("can_list_profiles: 无法枚举 %s（%s）", base, e)
+        return False
+    return True
+
+
+def executable_matches_user_data_dir(exe_path: str | None, user_data_dir: str | None) -> bool:
+    """已配置的 chrome.exe 与数据目录是否同一渠道。判断不了时返回 True。
+
+    判断不了（组策略自定义目录、非常规安装路径）就当配套 —— 宁可不管，
+    也不要拿一个猜的结论去覆盖用户手填的路径。
+    """
+    channel = _channel_app_dir_of(user_data_dir)
+    if not channel or not exe_path:
+        return True
+    wanted = channel[-1].lower()
+    parts = [p.lower() for p in Path(exe_path).parts]
+    if wanted in parts:
+        return True
+    # exe 落在别的已知渠道目录下 → 明确不配套；都不认识 → 不下结论
+    known = {d[-1].lower() for d in _CHANNEL_APP_DIRS.values()}
+    return not known.intersection(parts)
 
 
 def _read_registry_chrome_path() -> str | None:
@@ -139,41 +240,271 @@ def _find_default_install_path() -> str | None:
 
 
 # ── User Data directory ──────────────────────────────────────────
-def find_user_data_dir() -> str | None:
-    """探测 Chrome User Data 目录绝对路径。默认 %LOCALAPPDATA%\\Google\\Chrome\\User Data。"""
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if not local_appdata:
+# 各渠道 User Data 的默认位置（相对 %LOCALAPPDATA%），顺序即优先级。
+_USER_DATA_REL_CANDIDATES: tuple[tuple[str, ...], ...] = (
+    ("Google", "Chrome", "User Data"),
+    ("Google", "Chrome Beta", "User Data"),
+    ("Google", "Chrome Dev", "User Data"),
+    ("Google", "Chrome SxS", "User Data"),  # Canary
+    ("Chromium", "User Data"),
+)
+
+# Chrome 组策略路径变量 → 环境变量。公司统一部署的 Chrome 常用
+# UserDataDir 策略把数据目录挪到别处（甚至网络盘）。
+_POLICY_VAR_ENV: dict[str, str] = {
+    "${local_app_data}": "LOCALAPPDATA",
+    "${roaming_app_data}": "APPDATA",
+    "${profile}": "USERPROFILE",
+    "${user_name}": "USERNAME",
+    "${program_files}": "ProgramFiles",
+    "${windows}": "SystemRoot",
+}
+
+_CHROME_POLICY_KEY = r"SOFTWARE\Policies\Google\Chrome"
+
+
+def _expand_policy_vars(raw: str) -> str | None:
+    """展开策略值里的 ${...} 变量和 %VAR%。展不开（变量为空）→ None（不瞎猜）。"""
+    out = raw.strip().strip('"')
+    if not out:
         return None
-    p = Path(local_appdata) / "Google" / "Chrome" / "User Data"
-    if p.is_dir():
-        return str(p)
+    if "${documents}" in out:
+        home = os.environ.get("USERPROFILE")
+        if not home:
+            return None
+        out = out.replace("${documents}", str(Path(home) / "Documents"))
+    for var, env_name in _POLICY_VAR_ENV.items():
+        if var in out:
+            val = os.environ.get(env_name)
+            if not val:
+                return None
+            out = out.replace(var, val)
+    return os.path.expandvars(out)
+
+
+def _read_registry_user_data_dir() -> str | None:
+    """读组策略 UserDataDir（HKLM 优先，再 HKCU）。非 Windows / 无策略 → None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import winreg  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, _CHROME_POLICY_KEY) as key:
+                value, _ = winreg.QueryValueEx(key, "UserDataDir")
+        except (OSError, FileNotFoundError) as e:
+            logger.debug("policy UserDataDir lookup failed (hive=%r): %s", hive, e)
+            continue
+        if not isinstance(value, str):
+            continue
+        expanded = _expand_policy_vars(value)
+        if expanded and os.path.isdir(expanded):
+            return expanded
     return None
+
+
+def find_user_data_dir() -> str | None:
+    """探测 Chrome User Data 目录绝对路径。找不到任何候选 → None。
+
+    优先级：组策略 UserDataDir → %LOCALAPPDATA% 下各渠道默认位置
+    （稳定版 → Beta → Dev → Canary → Chromium）。
+
+    **同一批候选里「真的有 profile 的目录」赢**：Chrome 装了从没启动过、
+    或者用户日常用的是 Beta/Canary 时，默认位置的 User Data 会存在但空无
+    一物；直接返回它会让后续复制撞「找不到 Default」而无从下手。全都没
+    profile 时才退回第一个存在的目录 —— 这样报错信息仍能指名道姓。
+    """
+    candidates: list[Path] = []
+    policy_dir = _read_registry_user_data_dir()
+    if policy_dir:
+        candidates.append(Path(policy_dir))
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        base = Path(local_appdata)
+        candidates.extend(base.joinpath(*rel) for rel in _USER_DATA_REL_CANDIDATES)
+
+    existing = [p for p in candidates if p.is_dir()]
+    for p in existing:
+        if list_profiles(str(p)):
+            return str(p)
+    return str(existing[0]) if existing else None
 
 
 # ── Profile 列表 ──────────────────────────────────────────────────
 def list_profiles(user_data_dir: str) -> list[dict[str, Any]]:
-    """扫 user_data_dir 下所有 profile 子目录，读各自 Preferences JSON 拿账号 email。
+    """扫 user_data_dir 下所有 profile 子目录，读各自 Preferences JSON 拿账号信息。
 
     Returns:
-        list of {"name": str, "account_email": str | None}
-        无 Preferences 或 JSON 无 account_info → email=None。
+        list of {"name": str, "account_email": str | None, "display_name": str | None}
+        name = 目录名（"Default" / "Profile 1"）；display_name = 用户在 Chrome
+        里给这个 profile 起的名字（"工作" / "个人"）—— 选 profile 时只看
+        "Profile 1" 用户根本认不出是哪个。
+        无 Preferences 或字段缺失 → 对应值为 None。
         非 profile 目录（Crashpad / ShaderCache / etc）会被过滤。
     """
     base = Path(user_data_dir)
     if not base.is_dir():
         return []
+    try:
+        entries = sorted(base.iterdir())
+    except OSError as e:
+        # 目录能 stat 但列不动（公司机 ACL / 网络重定向的 AppData / AV 占用）。
+        # 探测一律 best-effort：当成没有 profile，绝不把异常抛给 HTTP 层。
+        logger.info("list_profiles: 无法枚举 %s（%s）", base, e)
+        return []
     out: list[dict[str, Any]] = []
-    for entry in sorted(base.iterdir()):
+    for entry in entries:
         if not entry.is_dir():
             continue
         if not _PROFILE_DIR_RE.match(entry.name):
             continue
-        email = _read_account_email(entry / "Preferences")
-        out.append({"name": entry.name, "account_email": email})
+        prefs = _read_preferences(entry / "Preferences")
+        out.append({
+            "name": entry.name,
+            "account_email": _account_email_from(prefs),
+            "display_name": _display_name_from(prefs),
+        })
     return out
 
 
+def resolve_profile_name(
+    user_data_dir: str,
+    preferred: str | None = None,
+    profiles: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """挑一个**目录里真实存在**的 profile 名。一个都没有 → None。
+
+    写死 "Default" 是导入失败的根因：Chrome 用户在设置里删掉默认 profile 后
+    只剩 "Profile 1"/"Profile 2"，`<User Data>\\Default` 根本不存在。
+
+    顺序：
+      1. preferred（用户在设置里选过的）—— 仅当它真的存在
+      2. "Default" —— 绝大多数机器的日常 profile，保持老行为不变
+      3. Local State 里的 profile.last_used —— Chrome 上次活跃的那个
+      4. 只有一个 profile → 就它
+      5. info_cache.active_time 最新的那个（并列时取排序后的第一个，保证确定性）
+
+    profiles 传入已经扫好的 list_profiles 结果可省一次目录扫描（每个 profile
+    的 Preferences 动辄几 MB，调用方往往刚扫过）。
+    """
+    names = [p["name"] for p in (profiles if profiles is not None else list_profiles(user_data_dir))]
+    if not names:
+        return None
+    if preferred and preferred in names:
+        return preferred
+    if "Default" in names:
+        return "Default"
+    state = _read_local_state(user_data_dir)
+    last_used = state.get("last_used")
+    if isinstance(last_used, str) and last_used in names:
+        return last_used
+    if len(names) == 1:
+        return names[0]
+    active = state.get("active_times") or {}
+    return max(names, key=lambda n: _as_float(active.get(n)))
+
+
+def _as_float(v: Any) -> float:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+
+
+def _read_local_state(user_data_dir: str) -> dict[str, Any]:
+    """从 Local State 读 profile.last_used 和各 profile 的 active_time。
+
+    读不到 / 坏 JSON → 空 dict（调用方退化到确定性兜底，不抛）。
+    """
+    path = Path(user_data_dir) / "Local State"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.debug("read Local State failed (%s): %s", path, e)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    profile = data.get("profile")
+    if not isinstance(profile, dict):
+        return {}
+    info_cache = profile.get("info_cache")
+    active_times: dict[str, Any] = {}
+    if isinstance(info_cache, dict):
+        for name, info in info_cache.items():
+            if isinstance(info, dict):
+                active_times[name] = info.get("active_time")
+    return {"last_used": profile.get("last_used"), "active_times": active_times}
+
+
 # ── B' profile copy ──────────────────────────────────────────────
+def _profile_missing_error(source_root: Path, name: str) -> FileNotFoundError:
+    """按「到底缺什么」生成给用户看的中文错误。
+
+    这条错误会原样显示在设置页上 —— 必须说清是哪种情况、下一步做什么。
+    老版本只抛英文 "source profile not found: …\\Default"，删过默认 profile
+    的机器（只剩 Profile 1）看到它完全无从下手。
+    """
+    if not source_root.is_dir():
+        return FileNotFoundError(
+            f"Chrome 数据目录不存在：{source_root}。"
+            "请确认 Chrome 已安装并至少正常启动过一次；"
+            "如果你的 Chrome 数据不在默认位置（公司统一部署 / 换过盘），"
+            "请在设置里手动填写「Chrome 数据目录」"
+            "（形如 C:\\Users\\<用户名>\\AppData\\Local\\Google\\Chrome\\User Data）。"
+        )
+    if not can_list_profiles(str(source_root)):
+        # 目录在、但列不动（权限 / 网络盘断了 / 杀软占用）。跟"空目录"必须分开说，
+        # 否则会让天天在用 Chrome 的人去"先启动一次 Chrome"。
+        return FileNotFoundError(
+            f"没有权限读取 Chrome 数据目录：{source_root}。"
+            "请确认当前 Windows 账号对该目录有读取权限（公司统一管理的电脑、"
+            "或数据目录被重定向到网络盘时常见），或改用另一个数据目录。"
+        )
+    available = [p["name"] for p in list_profiles(str(source_root))]
+    if available:
+        return FileNotFoundError(
+            f"Chrome 数据目录 {source_root} 里没有名为「{name}」的 profile。"
+            f"该目录下可用的 profile：{'、'.join(available)}。"
+            "请在设置里的「要复制的 Chrome profile」中改选一个后重新导入。"
+        )
+    # 常见误填：把报错里的 …\\User Data\\Default 原样粘回来，多填了一层。
+    # 此时提示"先启动一次 Chrome"是错的（人家刚启动过）。
+    if _PROFILE_DIR_RE.match(source_root.name) or (source_root / "Preferences").exists():
+        return FileNotFoundError(
+            f"{source_root} 看着像某个 profile 目录本身，你可能多填了一层。"
+            f"「Chrome 数据目录」要填到 User Data 这一层，也就是它的上一级："
+            f"{source_root.parent}。"
+        )
+    return FileNotFoundError(
+        f"Chrome 数据目录 {source_root} 里没有任何 Chrome profile"
+        "（Default / Profile 1 … 都不存在）。"
+        "常见原因：Chrome 装了但从没启动过、日常用的是别的浏览器、"
+        "或当前 Windows 账号不是你平时用 Chrome 的那个账号。"
+        "请先正常启动一次 Chrome 并登录百度，再回来重新导入；"
+        "数据目录不在默认位置的话，可在设置里手动填写「Chrome 数据目录」。"
+    )
+
+
+def _guard_not_self_copy(source_root: Path, target: Path) -> None:
+    """源和副本目录重叠时直接拒绝 —— copy_profile_to 上来就 rmtree(target)。
+
+    设置页把副本路径显示在「Chrome 数据目录」输入框附近，用户完全可能把它
+    粘进去；而副本的内层目录恰好也叫 Default，profile 检查还会通过。真跑下去
+    就是把自己十几 GB 的副本连同副本里的百度登录态一起删掉。
+    """
+    try:
+        src = source_root.resolve()
+        tgt = target.resolve()
+    except OSError as e:  # 路径解析不了就不拦（后面自然会报目录不存在）
+        logger.debug("self-copy guard: resolve failed: %s", e)
+        return
+    if src == tgt or src.is_relative_to(tgt) or tgt.is_relative_to(src):
+        raise ValueError(
+            f"「Chrome 数据目录」({source_root}) 和 CSM 的副本目录 ({target}) 是同一个"
+            "（或互相嵌套），这样会把副本本身删掉。请把它改回你日常 Chrome 的 "
+            "User Data 目录，或留空让程序自动探测。"
+        )
+
+
 def copy_profile_to(
     source_user_data_dir: str,
     source_profile_name: str,
@@ -202,11 +533,24 @@ def copy_profile_to(
           skipped_locked: list[str] —— 因被锁跳过的文件名（Chrome 开着时常见）
           warning: str | None —— 登录态文件被锁时的用户提示，否则 None
     """
-    source_profile = Path(source_user_data_dir) / source_profile_name
-    if not source_profile.is_dir():
-        raise FileNotFoundError(f"source profile not found: {source_profile}")
+    # 空路径要单独挡：Path("") 是当前工作目录，is_dir() 为 True，会让下面的
+    # 诊断走进"目录里没有 profile"这条错误分支，报出一个 "." 让人莫名其妙。
+    if not (source_user_data_dir or "").strip():
+        raise FileNotFoundError(
+            "没有指定 Chrome 数据目录。请在设置页点「检测 profile」重新探测，"
+            "或手动填写 Chrome 的 User Data 目录。"
+        )
+
+    source_root = Path(source_user_data_dir)
+    source_profile = source_root / source_profile_name
+    # profile 名只接受 Chrome 真实的目录名（Default / Profile N）：一来兜底
+    # 逻辑之外的脏值（""、"../x"）不该被当 profile 复制，二来空名会让
+    # Path(dir) / "" == Path(dir)，把整个 User Data 当成一个 profile。
+    if not _PROFILE_DIR_RE.match(source_profile_name or "") or not source_profile.is_dir():
+        raise _profile_missing_error(source_root, source_profile_name)
 
     target = Path(target_path)
+    _guard_not_self_copy(source_root, target)
     # 清旧 ── ignore_errors=True 之前用过会让 leveldb 文件锁残留 + mkdir
     # 撞 WinError 183。改成 raise 让 caller 看到清晰错误（"请关 Chrome
     # 进程再重试"），mkdir 加 exist_ok=True 容忍轻微残留。
@@ -362,17 +706,31 @@ def prune_profile_caches(profile_copy_path: str) -> dict[str, Any]:
     return {"freed_mb": round(freed / 1024 / 1024, 1), "elapsed_s": round(elapsed, 1)}
 
 
-def _read_account_email(preferences_path: Path) -> str | None:
-    """从 Preferences JSON 读第一个 account_info[0].email。失败返回 None。"""
+def _read_preferences(preferences_path: Path) -> dict[str, Any]:
+    """读 profile 的 Preferences JSON。文件缺失 / 坏 JSON / root 非 dict → {}。"""
     try:
-        raw = preferences_path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        accounts = data.get("account_info") or []
-        if accounts and isinstance(accounts, list):
-            email = accounts[0].get("email")
-            if email and isinstance(email, str):
-                return email
-    except (OSError, json.JSONDecodeError, AttributeError, TypeError) as e:
-        logger.debug("read account_email failed: %s", e)
-        return None
+        data = json.loads(preferences_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.debug("read Preferences failed (%s): %s", preferences_path, e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _account_email_from(prefs: dict[str, Any]) -> str | None:
+    """Preferences → account_info[0].email。缺失 / 脏数据 → None。"""
+    accounts = prefs.get("account_info")
+    if isinstance(accounts, list) and accounts and isinstance(accounts[0], dict):
+        email = accounts[0].get("email")
+        if isinstance(email, str) and email:
+            return email
+    return None
+
+
+def _display_name_from(prefs: dict[str, Any]) -> str | None:
+    """Preferences → profile.name（用户给 profile 起的显示名）。缺失 → None。"""
+    profile = prefs.get("profile")
+    if isinstance(profile, dict):
+        name = profile.get("name")
+        if isinstance(name, str) and name.strip():
+            return name
     return None
