@@ -57,4 +57,24 @@ describe("article store — 导出", () => {
 
     expect(postMock.mock.calls[0][1].title).toBeNull();
   });
+
+  it("事实核对放行导出带上现取的标题 —— 后端缓存里的是起飞时那个", async () => {
+    // 用户被拦下之后点「换标题」：编辑器立刻显示新标题，而后端 _Pending 里
+    // 还是起飞时缓存的旧标题。不透传的话导出的文件首行是旧标题 —— 用户报的
+    // 「导出的文章标题也不一样」在这条路上原样复发。
+    const a = useArticle();
+    postMock.mockResolvedValueOnce({ data: { job_id: "j7" } });
+    await a.submit({ keyword: "空气净化器", template_id: "t" });
+    a.lastJobId = "j7";
+    a.title = "换过的新标题";
+    postMock.mockReset();
+    postMock.mockResolvedValue({ data: { ok: true, document: "d.md", format: "markdown" } });
+
+    await a.resolveFactcheck("## 一、品牌分析\n\n正文", [], []);
+
+    expect(postMock).toHaveBeenCalledWith(
+      "/api/generate/j7/export",
+      expect.objectContaining({ title: "换过的新标题" }),
+    );
+  });
 });

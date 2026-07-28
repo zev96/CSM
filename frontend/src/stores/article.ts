@@ -329,7 +329,10 @@ export const useArticle = defineStore("article", {
       this.finalText = "";
       this.draftText = "";
       this.documentPath = null;
-      this.title = req.keyword;
+      // 用户在首页起飞条选定的标题（Phase 2a 标题领衔）才是文章标题，
+      // keyword 只是搜索词。原来无条件 `= req.keyword`，于是编辑器 H1 和
+      // 导出文档的标题都退化成关键词 —— 首页选的标题在稿子里根本看不见。
+      this.title = (req.title ?? "").trim() || req.keyword;
       this.plan = null;
       this.template = null;
       this.factcheck = null;
@@ -384,7 +387,8 @@ export const useArticle = defineStore("article", {
       this.finalText = "";
       this.draftText = "";
       this.documentPath = null;
-      this.title = req.keyword ?? "型号对比";
+      // 与 submit 同口径：给了标题就用标题，没给才退回 keyword。
+      this.title = (req.title ?? "").trim() || req.keyword || "型号对比";
       this.plan = null;
       this.template = null;
       this.factcheck = null;
@@ -439,7 +443,7 @@ export const useArticle = defineStore("article", {
           this.draftText = d.draft ?? "";
         },
         // Phase 2b skill 链 —— 每跑完一个 pass 后端推一条，逐个 push 让
-        // 成稿区可以增量显示链进度。done 会带完整 passes 再覆盖一次。
+        // 「润色过程」模态可以增量显示链进度。done 会带完整 passes 再覆盖一次。
         pass: (d: any) => {
           this.passes.push(d as ChainPass);
         },
@@ -783,6 +787,9 @@ export const useArticle = defineStore("article", {
           final_text: finalText,
           released_numbers: releasedNumbers,
           released_certs: releasedCerts,
+          // 标题必须现取，不能让后端用起飞时缓存的那个：用户在被拦之后点
+          // 「换标题」改过的话，编辑器显示新标题、导出的文件却是旧标题。
+          title: this.title || null,
         });
         if (resp.data.ok) {
           this.finalText = finalText;
@@ -809,6 +816,11 @@ export const useArticle = defineStore("article", {
       try {
         const resp = await sidecar.client.post("/api/chain/rerun", {
           job_id: this.lastJobId, pass_index: index,
+          // 链状态是起飞时缓存的；用户之后点过「换标题」的话后端还是旧标题，
+          // 标题守卫会拿它把重跑出来的新标题「纠正」回旧的 —— 界面显示新标题、
+          // 导出却是旧标题。用「用户真的选过的标题」口径（和 finalize 一致），
+          // 没选过就不传，让链照常按关键词自己拟。
+          title: this.lastRequest?.title ?? null,
         });
         jobId = resp.data.job_id;
       } catch {

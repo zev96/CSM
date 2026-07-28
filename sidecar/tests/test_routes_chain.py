@@ -50,6 +50,28 @@ def test_rerun_202_accepts_and_submits(client: TestClient, monkeypatch):
     assert captured == {"job_id": "j-ok", "idx": 1}
 
 
+def test_rerun_updates_cached_title(client: TestClient, monkeypatch):
+    """用户点过「换标题」→ 重跑必须带上新标题。
+
+    链状态是起飞时缓存的（title=None / 旧标题），而标题守卫拿它去「纠正」
+    重跑出来的标题 —— 不透传的话新标题会被钉回旧的，界面显示新的、导出是
+    旧的。这是守卫上线后新出现的坑。
+    """
+    _seed_chain("j-title")
+    monkeypatch.setattr(generate_service, "submit_rerun", lambda job_id, idx: job_id)
+
+    resp = client.post("/api/chain/rerun",
+                       json={"job_id": "j-title", "pass_index": 0, "title": "换过的新标题"})
+    assert resp.status_code == 202
+    assert chain_service.get_state("j-title").title == "换过的新标题"
+
+    # 空白 / 不传 = 没改过，保留缓存值（老客户端零回归）
+    for body in ({"job_id": "j-title", "pass_index": 0, "title": "   "},
+                 {"job_id": "j-title", "pass_index": 0}):
+        assert client.post("/api/chain/rerun", json=body).status_code == 202
+        assert chain_service.get_state("j-title").title == "换过的新标题"
+
+
 def test_rerun_404_unknown_job(client: TestClient):
     chain_service.reset_for_test()
     resp = client.post("/api/chain/rerun", json={"job_id": "nope", "pass_index": 0})

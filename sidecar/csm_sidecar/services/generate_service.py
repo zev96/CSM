@@ -733,6 +733,8 @@ def finalize_draft(
     final_text = state.final_text
     for note in state.layout_rejections:
         logger.warning("job %s 卡片排版守卫：%s", job_id, note)
+    for note in state.title_corrections:
+        logger.warning("job %s 标题守卫：%s", job_id, note)
     passes = [p.to_dict() for p in state.passes]
 
     # 链成本：在此算一次（吃 to_dict 出的 input_tokens/output_tokens），blocked 与

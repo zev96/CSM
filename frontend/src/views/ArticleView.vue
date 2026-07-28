@@ -26,6 +26,7 @@ import { useRoute, useRouter } from "vue-router";
 
 import Btn from "@/components/ui/Btn.vue";
 import Card from "@/components/ui/Card.vue";
+import Dialog from "@/components/ui/Dialog.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import ProgressBar from "@/components/ui/ProgressBar.vue";
@@ -41,8 +42,9 @@ import { useConfig } from "@/stores/config";
 import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
+import { confirmDialog } from "@/composables/useConfirm";
 import { failureAlert } from "@/composables/useFailureAlert";
-import { ensureTitle, mdToHtml, replaceLeadingTitle } from "@/utils/markdown";
+import { ensureTitle, leadingTitle, mdToHtml, replaceLeadingTitle } from "@/utils/markdown";
 
 const route = useRoute();
 const router = useRouter();
@@ -106,6 +108,15 @@ const chainChipText = computed<string | null>(() => {
   if (!ps || ps.length === 0) return null;
   return ps.map((p) => p.skill_name || p.role).join(" → ");
 });
+
+// 逐 pass 预览模态。这块是「这一轮改成了什么」的诊断视图 —— 一条 pass 就是
+// 整篇正文（5000+ 字），常驻在编辑器上方会把 `flex:1 1 0` 的成稿编辑器挤成
+// 0 高（外层编辑卡 overflow-hidden，连滚动条都没有），也让成稿区长得和初稿
+// 区不一样。成稿必须和初稿是同一个编辑器，所以放模态里按需打开。
+const showPasses = ref(false);
+// 起新一轮（起飞 / 重新随机 / 整篇润色）会清空 passes —— 此时模态里没内容可
+// 看，且新 pass 会流式灌进来，自动关掉避免弹窗突然变空又跳内容。
+watch(() => article.passes.length, (n) => { if (n === 0) showPasses.value = false; });
 
 // 链角色中文名 —— pass 卡上的角色标签。
 const ROLE_LABELS: Record<string, string> = {
@@ -402,6 +413,9 @@ function clearAll() {
 
 // ── 整篇润色（含 demo 模式弹窗）───────────────────────────────
 const polishing = ref(false);
+// 「成稿会被覆盖」确认框挂起中。单独一个标志：polishing 还驱动着 demo 的全屏
+// 假进度模态，借用它会在用户还没做决定时先罩满屏。只进重入守卫和按钮禁用。
+const confirming = ref(false);
 const polishProgress = ref(0); // 0–100 给 demo 模态用
 const polishStage = ref<string>("");
 const POLISH_STAGES = [
@@ -413,12 +427,34 @@ const POLISH_STAGES = [
 ];
 
 async function polishAll() {
-  // 真实 finalize 进行中（isRunning）或 demo 动画中（polishing）都防重入。
-  if (article.isRunning || polishing.value) return;
+  // 真实 finalize 进行中（isRunning）/ demo 动画中（polishing）/ 确认框挂起中
+  // （confirming）都防重入。
+  if (article.isRunning || polishing.value || confirming.value) return;
 
   if (article.lastRequest && article.draftText.trim()) {
+    // 整篇润色是从**毛坯文**重跑整条链，成稿会被整段替换（finalize 里
+    // `finalText = ""`）。以前成稿编辑器被 pass 条带挤成 0 高、根本改不了，
+    // 所以没人撞得到；现在编辑器能用了，用户在里面改完再点润色，改动会
+    // 无声消失。有成稿内容时先问一句。
+    if (article.finalText.trim()) {
+      // 单独一个 confirming 标志，**不能借 polishing** —— polishing 还驱动着
+      // demo 的全屏假进度模态（「AI 处理中…0%」），借它会让用户在还没点确认
+      // 时先被那块遮罩罩满屏。这里只要一把重入锁：等确认那会儿 isRunning 和
+      // polishing 都还是 false，按钮的 disabled 也只看这两个，焦点还停在
+      //「整篇润色」上，敲一下回车就能二次进来，两次都确认就并发两条 finalize。
+      confirming.value = true;
+      try {
+        const ok = await confirmDialog(
+          "「整篇润色」会从毛坯文重新生成成稿，当前成稿里的修改会被覆盖。要继续吗？",
+          { title: "重新润色", okLabel: "继续润色", kind: "danger" },
+        );
+        if (!ok) return;
+      } finally {
+        confirming.value = false;
+      }
+    }
     // 真实模式：整篇润色 = finalize（SSE 流式，注入+角度+链）。
-    // 进度由 overallProgress(isFinalizing) + 成稿区逐 pass 卡呈现；
+    // 进度由 overallProgress(isFinalizing) 呈现（逐 pass 输出在「润色过程」模态里）；
     // 切成稿 tab + 成功/失败提示由 watch(article.status) 统一处理
     // （finalize 流式早返回，这里不能同步判 status）。
     await article.finalize();
@@ -544,6 +580,11 @@ function pickTitle(t: string) {
   // 换出来的新标题在编辑器和导出里都看不见 —— 选了等于没选。
   article.finalText = replaceLeadingTitle(article.finalText, t);
   article.draftText = replaceLeadingTitle(article.draftText, t);
+  // lastRequest 是 finalize / rerun 的入参来源：整篇润色把它的 title 喂给链
+  // prompt，重新随机拿它整包重提交（submit 会据此重设 article.title）。不同步
+  // 的话，换完标题再润色/重随，链还是围着旧标题写、界面上的新标题也被打回去。
+  //（rerunPass 不走这里 —— 它只发 job_id+pass_index，后端回放自己缓存的链状态。）
+  if (article.lastRequest) article.lastRequest.title = t;
   panelMode.value = "checks";
   toast.success("标题已替换");
 }
@@ -646,9 +687,23 @@ function clientDownload(filename: string, content: string, mime: string) {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function safeFilenameStem(): string {
+/**
+ * 这篇文章的标题 —— **正文里内嵌的 H1 优先**，其次才是 article.title。
+ *
+ * 后端就是这个口径：`ensure_title` 在正文已有 H1 时原样返回，返回的
+ * `title` 取自 `extract_title(body)`。前端不跟上的话，用户在编辑器里直接
+ * 改首行标题（这次修复才让成稿编辑器真的能用，所以这条路第一次可达）后，
+ * 导出的**文件名**用的是 article.title、**文件内容**的标题却是正文 H1 ——
+ * 一次导出两个标题，正是用户报的「导出的文章标题也不一样」。
+ */
+function effectiveTitle(body: string): string {
   const variant = SAMPLE_VARIATIONS[sampleIndex.value];
-  const title = (article.title || variant.title || "article")
+  return leadingTitle(body) || article.title || variant.title;
+}
+
+function safeFilenameStem(): string {
+  const body = article.finalText || SAMPLE_VARIATIONS[sampleIndex.value].final;
+  const title = (effectiveTitle(body) || "article")
     .replace(/[\\/:*?"<>|]/g, "")
     .slice(0, 60);
   return title || "article";
@@ -657,8 +712,8 @@ function safeFilenameStem(): string {
 async function doExport() {
   const fmt = exportFormat.value;
   const variant = SAMPLE_VARIATIONS[sampleIndex.value];
-  const title = article.title || variant.title;
   const body = article.finalText || variant.final;
+  const title = effectiveTitle(body);
   const stem = safeFilenameStem();
   const useClient = fmt === "txt" || !article.lastRequest || !article.finalText.trim();
 
@@ -1448,7 +1503,7 @@ const tabSectionLabel = computed(() => {
           </div>
 
           <!-- ── 初稿编辑 ─────────────────────────────────────── -->
-          <div v-else-if="activeTab === 'draft'" class="flex min-h-0 flex-1 flex-col">
+          <div v-else-if="activeTab === 'draft'" data-tab-pane="draft" class="flex min-h-0 flex-1 flex-col">
             <div :style="{ padding: '18px 24px 14px' }">
               <div class="flex items-center gap-2 mb-2">
                 <span
@@ -1512,7 +1567,7 @@ const tabSectionLabel = computed(() => {
           </div>
 
           <!-- ── 成稿编辑 ─────────────────────────────────────── -->
-          <div v-else class="flex min-h-0 flex-1 flex-col">
+          <div v-else data-tab-pane="final" class="flex min-h-0 flex-1 flex-col">
             <div :style="{ padding: '18px 24px 14px' }">
               <div class="flex items-center gap-2 mb-2">
                 <span
@@ -1547,100 +1602,55 @@ const tabSectionLabel = computed(() => {
                 >换标题…</button>
               </div>
               <!-- 成稿 tab 只显示"成稿 X 字"（用户反馈：初稿字数 + 阅读时间这里冗余） -->
-              <div class="flex items-center gap-3 text-[11px]" :style="{ color: 'var(--ink-3)' }">
+              <!-- 成稿这行要塞 3 组内容（字数 + 链成本 + 润色过程入口）——
+                   窄窗不换行会溢出，初稿那行只有一项所以不需要。 -->
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]" :style="{ color: 'var(--ink-3)' }">
                 <span>成稿 {{ (article.finalText || SAMPLE_VARIATIONS[sampleIndex].final).length }} 字</span>
                 <!-- 链成本 —— 有 passes 时显示「调用 N 次 · ≈X tokens · ≈¥Y」；
                      未知 model 无价（cost.cost==null）回退只显 token。 -->
                 <span v-if="article.passes.length" data-chain-cost>
                   调用 {{ article.callCount }} 次 · ≈{{ article.tokenTotal }} tokens<template v-if="article.cost && article.cost.cost != null"> · ≈¥{{ article.cost.cost.toFixed(4) }}</template>
                 </span>
+                <!--
+                  ── skill 链逐 pass 预览入口 ──
+                  逐 pass 的输出（+「重跑此 pass」）搬进模态，不再作为常驻条带
+                  压在编辑器上方：一条 pass 就是整篇正文，摊在这里会把编辑器挤没，
+                  而且会让成稿区和初稿区长得不一样。成稿必须和初稿是同一个编辑器。
+                -->
+                <button
+                  v-if="article.passes.length"
+                  type="button"
+                  data-passes-open
+                  class="inline-flex items-center gap-1 underline-offset-2 hover:underline"
+                  :style="{
+                    color: article.rerunningIndex !== null ? 'var(--primary-deep)' : 'var(--ink-3)',
+                  }"
+                  :title="article.rerunningIndex !== null
+                    ? '正在重跑，点开可取消'
+                    : '查看每轮润色的输出，可单独重跑'"
+                  @click="showPasses = true"
+                >
+                  <!--
+                    重跑态必须在这里露出来：Spinner + 「取消」按钮只活在模态里，
+                    而 rerunPass 不动 article.status（右栏进度卡、全局取消都不亮）。
+                    关掉模态后界面看着完全空闲，用户会以为没事继续编辑成稿，
+                    而重跑 done 会把 finalText 整段覆盖掉 —— 编辑就这么没了。
+                  -->
+                  <Spinner v-if="article.rerunningIndex !== null" :size="11" />
+                  <Icon v-else name="wand" :size="11" />
+                  <span>{{ article.rerunningIndex !== null
+                    ? `第 ${article.rerunningIndex + 1} 轮重跑中…`
+                    : `润色过程 ${article.passes.length} 轮` }}</span>
+                </button>
               </div>
               <div class="mt-3" :style="{ height: '1px', background: 'var(--line)' }" />
             </div>
 
             <!--
-              ── skill 链逐 pass 预览 ──
-              起飞带了链（passes 非空）时，成稿区上方先展示每个 pass 的输出
-              折叠卡（角色标签 + skill 名 + 输出 + 「重跑此 pass」按钮）。
-              重跑会级联其后所有 pass（后端 chain_service.rerun）。
-              无 passes（单 skill 旧路径）→ 整块不渲染，成稿编辑器行为不变。
+              编辑卡从这里往下与初稿分支**结构相同**（只差三处绑定：取值 computed、
+              placeholder、写回字段）—— 成稿就是同一个编辑器，上面不再夹任何东西。
+              改动其一必须同步改另一个；结构不变量由 ArticleView.finalPane.spec.ts 守。
             -->
-            <div
-              v-if="article.passes.length"
-              class="flex flex-col gap-2.5"
-              :style="{ padding: '0 24px 14px' }"
-            >
-              <div
-                v-for="p in article.passes"
-                :key="p.index"
-                class="flex flex-col"
-                :style="{
-                  padding: '12px 14px',
-                  borderRadius: '12px',
-                  background: 'var(--card-warm)',
-                  border: '1px solid var(--line)',
-                }"
-              >
-                <div class="flex items-center gap-2 mb-1.5">
-                  <span
-                    class="inline-flex items-center text-[10px] uppercase font-medium"
-                    :style="{
-                      background: 'var(--primary-soft)',
-                      color: 'var(--primary-deep)',
-                      border: '1px solid rgba(238,106,42,0.2)',
-                      padding: '3px 7px',
-                      borderRadius: '6px',
-                      letterSpacing: '1px',
-                    }"
-                  >{{ roleLabel(p.role) }}</span>
-                  <span class="text-[11.5px] font-semibold">{{ p.skill_name }}</span>
-                  <span class="text-[10px] font-mono tabular-nums" :style="{ color: 'var(--ink-3)' }">
-                    {{ p.output_chars }} 字
-                  </span>
-                  <span class="flex-1" />
-                  <!-- 流式重跑按钮：正在跑的这个 pass 上变「取消」（点 cancelRerun），
-                       其它情况是「重跑此 pass」（点 article.rerunPass）。别的 pass 在
-                       跑时禁用本按钮（互斥），但正在跑的这个要可点取消。
-                       data-rerun-pass 保留在重跑态供测试 / E2E 定位。 -->
-                  <button
-                    type="button"
-                    :data-rerun-pass="article.rerunningIndex === p.index ? undefined : ''"
-                    :data-cancel-pass="article.rerunningIndex === p.index ? '' : undefined"
-                    :title="article.rerunningIndex === p.index
-                      ? '取消重跑'
-                      : '重跑此 pass（级联其后）'"
-                    :disabled="article.rerunningIndex !== null && article.rerunningIndex !== p.index"
-                    class="inline-flex items-center gap-1 text-[11px] transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
-                    :style="{
-                      height: '26px',
-                      padding: '0 9px',
-                      borderRadius: '7px',
-                      background: article.rerunningIndex === p.index ? 'var(--red-soft)' : 'var(--card-white)',
-                      color: article.rerunningIndex === p.index ? 'var(--red-deep)' : 'var(--ink-2)',
-                      border: article.rerunningIndex === p.index
-                        ? '1px solid var(--red-deep)'
-                        : '1px solid var(--line)',
-                    }"
-                    @click="article.rerunningIndex === p.index ? article.cancelRerun() : article.rerunPass(p.index)"
-                  >
-                    <Spinner v-if="article.rerunningIndex === p.index" :size="11" />
-                    <Icon v-else name="refresh" :size="11" />
-                    <span>{{ article.rerunningIndex === p.index ? "取消" : "重跑此 pass" }}</span>
-                  </button>
-                </div>
-                <!--
-                  按 markdown 渲染，不是 pre-wrap 纯文本。这块预览和下面的
-                  成稿编辑器显示的是同一段正文，一个排好版、一个满屏 ## 和
-                  ** —— 用户看到的就是「润色把排版弄没了、变成 md 代码」。
-                  mdToHtml 先转义再拼标签，产出只有 p/br/h1-6/strong。
-                -->
-                <div
-                  class="font-serif-cn pass-md"
-                  :style="{ fontSize: '12.5px', lineHeight: 1.75, color: 'var(--ink-2)' }"
-                  v-html="mdToHtml(p.output)"
-                />
-              </div>
-            </div>
             <div class="flex min-h-0 flex-1 flex-col" :style="{ padding: '0 24px 20px' }">
               <div
                 class="flex min-h-0 flex-1 flex-col overflow-y-auto"
@@ -2232,7 +2242,7 @@ const tabSectionLabel = computed(() => {
                   color: '#fff',
                   border: '1px solid var(--primary)',
                 }"
-                :disabled="!article.draftText.trim() || polishing || article.isRunning"
+                :disabled="!article.draftText.trim() || polishing || confirming || article.isRunning"
                 @click="polishAll"
               >
                 <Spinner v-if="polishing || article.isRunning" :size="13" />
@@ -2337,6 +2347,100 @@ const tabSectionLabel = computed(() => {
       （PR#148 教训：只约束带 proceed 的门禁面板）。
     -->
     <CompletenessPanel v-model:open="showCompleteness" />
+
+    <!--
+      ── skill 链逐 pass 预览（模态）──
+      每个 pass 的输出 + 「重跑此 pass」（重跑会级联其后所有 pass，后端
+      chain_service.rerun）。以前这些卡是常驻在成稿编辑器上方的条带 —— 一条
+      pass 就是整篇正文（5000+ 字），把 `flex:1 1 0` 的编辑器挤成 0 高，而编辑
+      卡是 overflow-hidden，连滚动条都没有：用户看到的「成稿」其实是这块只读
+      预览。搬进模态后成稿区和初稿区结构一致。无 passes（单 skill 旧路径）→
+      入口按钮不渲染。
+
+      走 Dialog 而不是手搓 Teleport —— Dialog.vue 的 docstring 明写「新 modal
+      直接 slot 进来」，白拿 Esc 关闭 / body 滚动锁 / role=dialog+aria-modal /
+      面板自身的滚动容器。同页的 FactCheckPanel / LintPanel 也走它，关闭手势一致。
+    -->
+    <Dialog
+      v-model:open="showPasses"
+      :title="`润色过程 · ${article.passes.length} 轮${chainChipText ? '（' + chainChipText + '）' : ''}`"
+      size="xl"
+      show-close
+    >
+      <div class="flex flex-col gap-2.5">
+        <div
+          v-for="p in article.passes"
+          :key="p.index"
+          data-pass-card
+          class="flex flex-shrink-0 flex-col"
+          :style="{
+            padding: '12px 14px',
+            borderRadius: '12px',
+            background: 'var(--card-warm)',
+            border: '1px solid var(--line)',
+          }"
+        >
+          <div class="flex items-center gap-2 mb-1.5">
+            <span
+              class="inline-flex items-center text-[10px] uppercase font-medium"
+              :style="{
+                background: 'var(--primary-soft)',
+                color: 'var(--primary-deep)',
+                border: '1px solid rgba(238,106,42,0.2)',
+                padding: '3px 7px',
+                borderRadius: '6px',
+                letterSpacing: '1px',
+              }"
+            >{{ roleLabel(p.role) }}</span>
+            <span class="text-[11.5px] font-semibold">{{ p.skill_name }}</span>
+            <span class="text-[10px] font-mono tabular-nums" :style="{ color: 'var(--ink-3)' }">
+              {{ p.output_chars }} 字
+            </span>
+            <span class="flex-1" />
+            <!-- 流式重跑按钮：正在跑的这个 pass 上变「取消」（点 cancelRerun），
+                 其它情况是「重跑此 pass」（点 article.rerunPass）。别的 pass 在
+                 跑时禁用本按钮（互斥），但正在跑的这个要可点取消。
+                 data-rerun-pass 保留在重跑态供测试 / E2E 定位。 -->
+            <button
+              type="button"
+              :data-rerun-pass="article.rerunningIndex === p.index ? undefined : ''"
+              :data-cancel-pass="article.rerunningIndex === p.index ? '' : undefined"
+              :title="article.rerunningIndex === p.index
+                ? '取消重跑'
+                : '重跑此 pass（级联其后）'"
+              :disabled="article.rerunningIndex !== null && article.rerunningIndex !== p.index"
+              class="inline-flex items-center gap-1 text-[11px] transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
+              :style="{
+                height: '26px',
+                padding: '0 9px',
+                borderRadius: '7px',
+                background: article.rerunningIndex === p.index ? 'var(--red-soft)' : 'var(--card-white)',
+                color: article.rerunningIndex === p.index ? 'var(--red-deep)' : 'var(--ink-2)',
+                border: article.rerunningIndex === p.index
+                  ? '1px solid var(--red-deep)'
+                  : '1px solid var(--line)',
+              }"
+              @click="article.rerunningIndex === p.index ? article.cancelRerun() : article.rerunPass(p.index)"
+            >
+              <Spinner v-if="article.rerunningIndex === p.index" :size="11" />
+              <Icon v-else name="refresh" :size="11" />
+              <span>{{ article.rerunningIndex === p.index ? "取消" : "重跑此 pass" }}</span>
+            </button>
+          </div>
+          <!--
+            按 markdown 渲染，不是 pre-wrap 纯文本。这块预览和成稿编辑器
+            显示的是同一段正文，一个排好版、一个满屏 ## 和 ** —— 用户看到
+            的就是「润色把排版弄没了、变成 md 代码」。
+            mdToHtml 先转义再拼标签，产出只有 p/br/h1-6/strong。
+          -->
+          <div
+            class="font-serif-cn pass-md"
+            :style="{ fontSize: '12.5px', lineHeight: 1.75, color: 'var(--ink-2)' }"
+            v-html="mdToHtml(p.output)"
+          />
+        </div>
+      </div>
+    </Dialog>
 
     <!--
       导出弹窗 —— 严格按 V1 设计稿（精简版）：标签 + 大标题 + 关闭 X，

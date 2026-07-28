@@ -116,6 +116,8 @@ class ResolveFactcheckBody(BaseModel):
     final_text: str = Field(min_length=1)
     released_numbers: list[float] = Field(default_factory=list)
     released_certs: list[str] = Field(default_factory=list)
+    # 前端现取的文章标题。不传 → 用起飞时缓存的那个（老客户端零回归）。
+    title: str | None = None
 
 
 @router.post("/api/generate/{job_id}/export")
@@ -131,6 +133,7 @@ def resolve_factcheck(job_id: str, body: ResolveFactcheckBody) -> dict:
             final_text=body.final_text,
             released_numbers=body.released_numbers,
             released_certs=body.released_certs,
+            title=body.title,
         )
     except KeyError:
         raise HTTPException(

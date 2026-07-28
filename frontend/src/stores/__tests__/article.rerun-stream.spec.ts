@@ -31,7 +31,16 @@ describe("article store — 流式重跑", () => {
     a.passes = [mkPass(0, "A"), mkPass(1, "B")];
     postMock.mockResolvedValueOnce({ data: { job_id: "j1", stream_url: "/api/events/j1" } });
     await a.rerunPass(0);
-    expect(postMock).toHaveBeenCalledWith("/api/chain/rerun", { job_id: "j1", pass_index: 0 });
+    expect(postMock).toHaveBeenCalledWith(
+      "/api/chain/rerun", { job_id: "j1", pass_index: 0, title: null });
+    // 换过标题（pickTitle 会同步 lastRequest.title）→ 重跑必须带上，否则后端
+    // 标题守卫拿起飞时缓存的旧标题把新标题钉回去：界面新的、导出旧的。
+    a.lastRequest = { ...(a.lastRequest as any), title: "换过的新标题" } as any;
+    postMock.mockResolvedValueOnce({ data: { job_id: "j1" } });
+    await a.rerunPass(0);
+    expect(postMock).toHaveBeenLastCalledWith(
+      "/api/chain/rerun",
+      expect.objectContaining({ title: "换过的新标题" }));
     expect(a.rerunningIndex).toBe(0);
     sseHandlers.pass(mkPass(0, "A2"));
     expect(a.passes[0].output).toBe("A2");

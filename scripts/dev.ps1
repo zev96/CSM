@@ -259,11 +259,22 @@ function Start-Vite {
         $combined = ""
         if (Test-Path $ViteLog) { $combined += (Get-Content $ViteLog -Raw -ErrorAction SilentlyContinue) }
         if (Test-Path $ViteErr) { $combined += (Get-Content $ViteErr -Raw -ErrorAction SilentlyContinue) }
+        # ⚠ 先判失败再判就绪。端口被占时 vite 打的是
+        #   "Port 5173 is already in use"
+        # 而 "al<ready in> use" 里正好含 "ready in" —— 只匹配就绪串的话，
+        # **启动失败会被判成启动成功**：脚本报 "vite ready"、写 PID、退出，
+        # 而 5173 上跑的其实是别处遗留的老 vite（可能是另一个 worktree 的，
+        # 连着另一个 sidecar）。症状是前端看着好好的，新接口却全不生效。
+        if ($combined -match "is already in use|error when starting dev server") {
+            $detail = ($combined -split "`n" | Where-Object { $_ -match "\S" } | Select-Object -Last 5) -join "`n"
+            throw "vite 启动失败（端口被占用或启动错误）。5173 多半被别的 dev server 占着，" +
+                  "先 `netstat -ano | findstr :5173` 找到 PID 再 taskkill /T /F /PID <pid>。`n$detail"
+        }
         # vite 5 用 ANSI 颜色码包装输出，"VITE v5.x ready in NNN ms" 一行
         # 实际是 "\e[32m\e[1mVITE\e[22m v5.4.21\e[39m \e[2mready in \e[0m\e[1m379\e[22m..."
-        # 在 "ready in" 和数字之间塞了 ANSI 序列，\s+\d+ 不匹配。直接匹
-        # 配 "ready in" 字面就够 —— 出现这字符串=vite 已就绪。
-        if ($combined -match "ready in") {
+        # 在 "ready in" 和数字之间塞了 ANSI 序列，\s+\d+ 不匹配。"Local:" 是
+        # vite 打就绪横幅时才有的字面量，且不会出现在任何报错里。
+        if ($combined -match "Local:") {
             $ready = $true
             break
         }

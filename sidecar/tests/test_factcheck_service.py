@@ -72,3 +72,30 @@ def test_resolve_export_carries_article_title(tmp_path: Path):
     assert res["title"] == "2026年无线吸尘器十大排名"
     head = Path(res["document"]).read_text(encoding="utf-8").splitlines()[0]
     assert head == "# 2026年无线吸尘器十大排名"
+
+
+def test_resolve_export_prefers_caller_title(tmp_path: Path):
+    """调用方现取的标题优先于起飞时缓存的那个。
+
+    用户被事实核对拦下后点「换标题」——编辑器立刻显示新标题，而缓存里还是
+    起飞时那个。不透传的话导出的文件首行是旧标题，正是用户报的「导出的文章
+    标题也不一样」。空白 / 不传 → 退回缓存值（老客户端零回归）。
+    """
+    factcheck_service.reset_for_test()
+    for job_id, override, expected in (
+        ("t1", "换过的新标题", "换过的新标题"),
+        ("t2", "   ", "起飞时的旧标题"),
+        ("t3", None, "起飞时的旧标题"),
+    ):
+        factcheck_service.cache_pending(
+            job_id, plan=_plan(), out_dir=tmp_path, keyword="无线吸尘器",
+            fmt="markdown", allowed_numbers={220.0}, allowed_certs={"CE"},
+            title="起飞时的旧标题",
+        )
+        res = factcheck_service.resolve_and_export(
+            job_id, final_text="## 一、品牌分析\n\n吸力220AW，CE认证。",
+            released_numbers=[], released_certs=[], title=override)
+        assert res["ok"] is True
+        assert res["title"] == expected, f"{job_id}: {res['title']}"
+        head = Path(res["document"]).read_text(encoding="utf-8").splitlines()[0]
+        assert head == f"# {expected}"
