@@ -24,17 +24,19 @@ class ProgrammableLLM:
         return reaction
 
 
-def _setup_vault_and_template(tmp_path: Path) -> tuple[Path, Path]:
+def _setup_vault_and_template(mini_vault_root: Path) -> tuple[Path, Path]:
+    """(模板, 资料库根)。资料库根走 conftest 的 ``mini_vault_root`` fixture ——
+    是 ``mini_vault`` 本身而不是它下面的 ``营销资料库``（root 指进去会让模板里
+    带 ``营销资料库/`` 前缀的块永远匹配不到，理由见 fixture docstring）。"""
     repo_root = Path(__file__).parent.parent.parent
     template_path = repo_root / "templates" / "daogou-changjing-renqun.json"
-    vault_root = repo_root / "tests" / "fixtures" / "mini_vault" / "营销资料库"
     assert template_path.exists(), "fixture template missing"
-    assert vault_root.exists(), "fixture vault missing"
-    return template_path, vault_root
+    assert mini_vault_root.exists(), "fixture vault missing"
+    return template_path, mini_vault_root
 
 
-def test_run_batch_dedup_and_empty_skip(tmp_path):
-    template_path, vault_root = _setup_vault_and_template(tmp_path)
+def test_run_batch_dedup_and_empty_skip(tmp_path, mini_vault_root):
+    template_path, vault_root = _setup_vault_and_template(mini_vault_root)
     batch_dir = tmp_path / "batch-test"
     batch_dir.mkdir()
     client = ProgrammableLLM({})
@@ -51,8 +53,8 @@ def test_run_batch_dedup_and_empty_skip(tmp_path):
     assert keywords == ["kw1", "kw2"]
 
 
-def test_run_batch_per_item_failure_isolation(tmp_path):
-    template_path, vault_root = _setup_vault_and_template(tmp_path)
+def test_run_batch_per_item_failure_isolation(tmp_path, mini_vault_root):
+    template_path, vault_root = _setup_vault_and_template(mini_vault_root)
     batch_dir = tmp_path / "batch-test"
     batch_dir.mkdir()
     client = ProgrammableLLM({"kw2": RuntimeError("llm down")})
@@ -71,12 +73,12 @@ def test_run_batch_per_item_failure_isolation(tmp_path):
     assert "llm down" in report.items[1].error_message
 
 
-def test_run_batch_callback_ordering(tmp_path):
-    template_path, vault_root = _setup_vault_and_template(tmp_path)
+def test_run_batch_callback_ordering(tmp_path, mini_vault_root):
+    template_path, vault_root = _setup_vault_and_template(mini_vault_root)
     batch_dir = tmp_path / "batch-test"
     batch_dir.mkdir()
     events = []
-    run_batch(
+    report = run_batch(
         keywords=["kw1", "kw2"],
         template_path=template_path,
         vault_root=vault_root,
@@ -90,10 +92,14 @@ def test_run_batch_callback_ordering(tmp_path):
         ("start", 1, "kw1"), ("finish", 1, "kw1"),
         ("start", 2, "kw2"), ("finish", 2, "kw2"),
     ]
+    # ⚠ 必须连 status 一起断言。这个文件里 7 条测试有 5 条只数条数和顺序，
+    # 整条管线炸掉（每个 item 都 failed）照样全绿 —— runner 读废弃的
+    # paths["markdown"] 抛 KeyError 就是这么活了几个月的。
+    assert all(i.status == "success" for i in report.items),         [(i.status, i.error_type, i.error_message) for i in report.items]
 
 
-def test_run_batch_should_cancel_stops_early(tmp_path):
-    template_path, vault_root = _setup_vault_and_template(tmp_path)
+def test_run_batch_should_cancel_stops_early(tmp_path, mini_vault_root):
+    template_path, vault_root = _setup_vault_and_template(mini_vault_root)
     batch_dir = tmp_path / "batch-test"
     batch_dir.mkdir()
     cancel_after = {"done": 0}
@@ -115,8 +121,8 @@ def test_run_batch_should_cancel_stops_early(tmp_path):
     assert report.finished_at is not None
 
 
-def test_run_batch_writes_incremental_report(tmp_path):
-    template_path, vault_root = _setup_vault_and_template(tmp_path)
+def test_run_batch_writes_incremental_report(tmp_path, mini_vault_root):
+    template_path, vault_root = _setup_vault_and_template(mini_vault_root)
     batch_dir = tmp_path / "batch-test"
     batch_dir.mkdir()
     snapshots = []
@@ -135,7 +141,7 @@ def test_run_batch_writes_incremental_report(tmp_path):
     assert snapshots == [1, 2]
 
 
-def test_runner_loads_default_skill_from_template(tmp_path, monkeypatch):
+def test_runner_loads_default_skill_from_template(tmp_path, monkeypatch, mini_vault_root):
     """When template.default_skill_id is set and skill_dir contains <id>.md,
     the runner reads it and passes its content as system prompt."""
     skill_dir = tmp_path / "skills"
@@ -149,7 +155,7 @@ def test_runner_loads_default_skill_from_template(tmp_path, monkeypatch):
             captured["system"] = system
             return "final"
 
-    template_path, vault_root = _setup_vault_and_template(tmp_path)
+    template_path, vault_root = _setup_vault_and_template(mini_vault_root)
     batch_dir = tmp_path / "batch-skill"
     batch_dir.mkdir()
 
@@ -166,9 +172,11 @@ def test_runner_loads_default_skill_from_template(tmp_path, monkeypatch):
     # Stub out assembler/render/export so the test is not coupled to vault contents
     monkeypatch.setattr(runner_mod, "assemble_plan", lambda **kw: object())
     monkeypatch.setattr(runner_mod, "compose_draft", lambda plan: "DRAFT")
+    # 桩要按**现行契约**返回（document/format/title）。返回早已废弃的
+    # markdown/assembly_json 只会让桩掩盖住真实的 KeyError。
     monkeypatch.setattr(
         runner_mod, "export_article",
-        lambda **kw: {"markdown": "x.md", "assembly_json": "x.json"},
+        lambda **kw: {"document": "x.md", "format": "markdown", "title": "T"},
     )
 
     run_batch(
@@ -184,8 +192,8 @@ def test_runner_loads_default_skill_from_template(tmp_path, monkeypatch):
     assert captured.get("system") == "SKILL BODY"
 
 
-def test_run_batch_vault_scanned_once(tmp_path, monkeypatch):
-    template_path, vault_root = _setup_vault_and_template(tmp_path)
+def test_run_batch_vault_scanned_once(tmp_path, monkeypatch, mini_vault_root):
+    template_path, vault_root = _setup_vault_and_template(mini_vault_root)
     batch_dir = tmp_path / "batch-test"
     batch_dir.mkdir()
     calls = {"scan": 0, "registry": 0}

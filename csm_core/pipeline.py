@@ -35,8 +35,9 @@ class GenerateRequest:
 
 @dataclass
 class GenerateResult:
+    # ⚠ 这里恒是 .md：``generate`` 不传 fmt，``GenerateRequest`` 也没有格式字段。
+    # 哪天把格式接进来，这个名字就成了谎，要一起改。
     markdown_path: str
-    assembly_json_path: str
     plan: AssemblyPlan
     final_text: str
 
@@ -68,10 +69,7 @@ def generate(
     draft = compose_draft(plan)
 
     if req.draft_only:
-        return GenerateResult(
-            markdown_path="", assembly_json_path="",
-            plan=plan, final_text="",
-        )
+        return GenerateResult(markdown_path="", plan=plan, final_text="")
 
     system, user = build_prompt(PromptInputs(
         user_skill_prompt=req.user_skill_prompt,
@@ -90,8 +88,10 @@ def generate(
             "provider": type(req.llm_client).__name__,
         },
     )
+    # ⚠ 键是 document / format / title。早期版本还写一份 ``{stem}.assembly.json``
+    # 快照、返回 {"markdown":…, "assembly_json":…}；那个 sidecar 删掉后这里就一直
+    # KeyError —— 当时 sidecar 是另写一套绕开而没回来修源头，于是
+    # `python -m csm_core` 这条 CLI 一直是坏的（本次实测复现并修好）。
     return GenerateResult(
-        markdown_path=paths["markdown"],
-        assembly_json_path=paths["assembly_json"],
-        plan=plan, final_text=final_text,
+        markdown_path=paths["document"], plan=plan, final_text=final_text,
     )

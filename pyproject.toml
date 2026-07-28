@@ -64,9 +64,13 @@ include = ["csm_core*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --tb=short"
+# ⚠ `-m "not integration"` 必须在这里。marker 自己声明「默认不跑」，但过去
+# addopts 没排除它，于是默认的 `pytest tests/` 会真的去读 D:\家电组共享\DATA
+# 这块共享盘（6 条 integration 测试写死了该路径）—— 测试结果取决于网盘挂没挂，
+# 那不叫回归保护。要跑它们显式加 `-m integration`。
+addopts = '-v --tb=short -m "not integration"'
 markers = [
-    "integration: 真实外部 API 调用测试（默认不跑）",
+    "integration: 真实外部 API 调用 / 真实共享盘测试（默认不跑，用 -m integration 显式跑）",
 ]
 
 [tool.setuptools.dynamic]

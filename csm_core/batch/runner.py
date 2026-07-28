@@ -97,8 +97,9 @@ def run_batch(
             )
             item = BatchItem(
                 index=i, keyword=keyword, status="success",
-                markdown_path=paths["markdown"],
-                assembly_json_path=paths["assembly_json"],
+                # 同 pipeline：现行契约是 document，assembly.json 快照已删除。
+                markdown_path=paths["document"],
+                assembly_json_path=None,
                 duration_seconds=round(time.monotonic() - started, 3),
             )
         except Exception as exc:  # noqa: BLE001 — per-item boundary

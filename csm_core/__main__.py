@@ -46,7 +46,6 @@ def cli(keyword, template_path, vault_root, out_dir, provider, api_key, model,
         seed=seed,
     ))
     click.echo(f"Generated: {result.markdown_path}")
-    click.echo(f"Snapshot : {result.assembly_json_path}")
 
 
 if __name__ == "__main__":

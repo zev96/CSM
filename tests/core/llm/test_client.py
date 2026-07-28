@@ -104,25 +104,51 @@ def test_make_client_doubao_overrides():
 
 
 def test_deepseek_client_calls_http(monkeypatch):
-    class FakeResponse:
-        status_code = 200
-        def json(self):
-            return {"choices": [{"message": {"content": "DS says hi"}}]}
-        def raise_for_status(self): pass
+    """DeepSeek 的默认值真的被拼进请求，且流式内容拼得回来。
 
-    class FakeClient:
+    ⚠ 打桩点在 ``openai_compat``，不是 ``deepseek``。DeepSeekClient 已经重构
+    成继承 ``OpenAICompatClient``，自己不再 import httpx、也不再走非流式
+    ``client.post()`` —— 旧测试打 ``deepseek.httpx`` 直接 AttributeError，
+    等于这条链长期没有回归保护。这里改打真正的接缝（``httpx.Client.stream``
+    的 SSE 形状），顺便把「base_url / model 有没有真的进请求」也钉住。
+    """
+    import httpx as real_httpx
+    import csm_core.llm.providers.openai_compat as mod
+
+    seen: dict = {}
+
+    class _FakeStream:
+        status_code = 200
+        request = real_httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b""
+        def iter_lines(self):
+            return iter([
+                'data: {"choices":[{"delta":{"content":"DS says"}}]}',
+                'data: {"choices":[{"delta":{"content":" hi"}}]}',
+                "data: [DONE]",
+            ])
+
+    class _FakeClient:
         def __init__(self, *a, **kw): pass
         def __enter__(self): return self
-        def __exit__(self, *a): pass
-        def post(self, url, **kw):
-            self.last_kwargs = kw
-            return FakeResponse()
+        def __exit__(self, *a): return False
+        def stream(self, method, url, *, headers=None, json=None):
+            seen.update(method=method, url=url, headers=headers, body=dict(json))
+            return _FakeStream()
 
-    import csm_core.llm.providers.deepseek as mod
-    monkeypatch.setattr(mod.httpx, "Client", FakeClient)
+    monkeypatch.setattr(mod.httpx, "Client", _FakeClient)
     client = DeepSeekClient(api_key="sk-y", model="deepseek-chat")
     result = client.complete(system="S", user="U")
+
     assert result == "DS says hi"
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://api.deepseek.com/v1/chat/completions"
+    assert seen["body"]["model"] == "deepseek-chat"
+    assert seen["body"]["stream"] is True
+    assert seen["headers"]["Authorization"] == "Bearer sk-y"
 
 
 def test_openai_compat_retries_without_temperature_on_400(monkeypatch):

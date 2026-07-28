@@ -13,6 +13,10 @@ class BatchItem:
     keyword: str
     status: Literal["success", "failed"]
     markdown_path: str | None = None
+    # ``{stem}.assembly.json`` 快照 sidecar 早已删除（见 csm_core.export.markdown
+    # 模块 docstring），新报告这一项恒为 None。字段保留是因为它进过
+    # batch-report.json 的 schema —— 去掉就读不了历史报告（``read_report`` 直接
+    # ``BatchItem(**item)``）。
     assembly_json_path: str | None = None
     error_type: str | None = None
     error_message: str | None = None
