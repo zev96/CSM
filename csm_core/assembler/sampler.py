@@ -30,7 +30,9 @@ from ..template.schema import (
 )
 from csm_core.angle.model import Angle
 from csm_core.angle.filters import effective_filters
-from .cards import build_roster, pick_section_variants, sample_roster
+from .cards import (
+    build_roster, frozen_section_warnings, pick_section_variants, sample_roster,
+)
 from .plan import BlockResult, PickedVariant
 
 
@@ -366,7 +368,12 @@ def sample_competitor_cards(
             "label_layout": block.label_layout,
             "card_separator": block.card_separator,
             "competitor_keys": [c.key for c in chosen],
-            "roster_warnings": roster_warnings,
+            # ⚠ 变体不足的提示在 sample_roster **之后**才并进来 —— roster_warnings
+            # 会被名册不足报错当「缺料清单」原样印出，混进去会让用户去补一个
+            # 根本不缺的小节（见 frozen_section_warnings 的说明）。
+            "roster_warnings": roster_warnings + frozen_section_warnings(
+                roster, block.sections,
+            ),
         },
     )
     if cap_note:

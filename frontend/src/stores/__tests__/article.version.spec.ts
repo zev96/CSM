@@ -40,10 +40,12 @@ describe("article store — 结构版本", () => {
     expect(postMock).toHaveBeenCalledWith(
       "/api/generate",
       expect.objectContaining({
-        seed: 4,
         version_overrides: { rec_ver: "版本1·口碑权威型" },
       }),
     );
+    // 重随不带 seed —— 后端滚新随机种子（素材随机组合），
+    // 不再从上一次的 seed +1 确定性轮播。
+    expect(postMock.mock.calls[0][1].seed).toBeUndefined();
   });
 
   it("显式换版本时传新版本", async () => {
@@ -62,7 +64,8 @@ describe("article store — 结构版本", () => {
     await a.rerun(null);
     const body = postMock.mock.calls[0][1];
     expect(body.version_overrides).toBeUndefined();
-    expect(body.seed).toBe(4);
+    // 显式 seed 也被擦掉 —— 「重新随机」必须真随机，不能复用旧种子。
+    expect(body.seed).toBeUndefined();
   });
 
   it("没有版本组的模板不带 version_overrides（零回归）", async () => {

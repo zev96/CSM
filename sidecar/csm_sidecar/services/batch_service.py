@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from csm_core.assembler.constraints import assemble_plan
+from csm_core.assembler.constraints import assemble_plan, roll_seed
 from csm_core.assembler.render import compose_draft
 from csm_core.brand_memory.inject import build_whitelist, render_brand_facts, resolve_scopes
 from csm_core.export.markdown import export_article
@@ -113,7 +113,8 @@ class BatchRequest:
     keywords: list[str]
     template_id: str
     skill_id: str | None = None
-    seed: int = 0
+    # None = submit 时随机滚批次基准种子；显式传值 = 整批可复现。
+    seed: int | None = None
     provider: str | None = None
     model: str | None = None
     skill_chain: list[str] | None = None
@@ -167,7 +168,8 @@ def submit(req: BatchRequest) -> str:
         skill_id=req.skill_id,
         provider=req.provider,
         model=req.model,
-        seed=req.seed,
+        # 不带 seed 的批次滚随机基准 —— 后续每个关键词在它上面派生独立种子。
+        seed=req.seed if req.seed is not None else roll_seed(),
         started_at=datetime.now().isoformat(timespec="seconds"),
         items=[BatchItemState(index=i, keyword=kw) for i, kw in enumerate(keywords, start=1)],
         skill_chain=req.skill_chain,
@@ -311,6 +313,10 @@ def _run_job(job_id: str) -> None:
                 job_id, "item_started",
                 index=item.index, keyword=item.keyword,
             )
+            # 批内每个关键词独立派生素材种子 —— 过去整批共用 state.seed，
+            # 素材抽样只认 (seed, block.id)，于是不同关键词的文章素材逐字节
+            # 相同。间隔 1_000_000 >> 候选间隔 1000，两级偏移互不相撞。
+            item_seed = state.seed + (item.index - 1) * 1_000_000
             t0 = time.monotonic()
             try:
                 best: dict | None = None       # {final_text, plan, score_report, fc_n, k}
@@ -328,12 +334,13 @@ def _run_job(job_id: str) -> None:
                         plan = assemble_plan(
                             keyword=item.keyword, template=template,
                             index=index, registry=registry,
-                            seed=state.seed + (k - 1) * 1000, user_config={},
+                            seed=item_seed + (k - 1) * 1000, user_config={},
                             # 候选素材各随机（seed 间隔 1000），但结构版本统一
-                            # 走批次基准 seed：评分是绝对次数扣分制、不按篇幅
+                            # 走本词基准 seed：评分是绝对次数扣分制、不按篇幅
                             # 归一，候选落在不同结构上会让长版本被系统性打低分，
-                            # best-of-K 就退化成「总选最短的版本」。
-                            version_seed=state.seed,
+                            # best-of-K 就退化成「总选最短的版本」。（评分只在
+                            # 同词候选间比较，不同词各自抽版本不影响公平性。）
+                            version_seed=item_seed,
                         )
                         draft = compose_draft(plan)
                         # 注入（与 finalize_draft 同条件：inject 或 factcheck 开才解析 scopes）

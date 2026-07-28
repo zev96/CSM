@@ -55,7 +55,7 @@ describe("article store — angle / title", () => {
     expect(a.lastRequest?.angle).toEqual(angle);
   });
 
-  it("rerun keeps angle + title (seed bumped)", async () => {
+  it("rerun keeps angle + title (seed dropped → 后端随机重滚)", async () => {
     postMock.mockResolvedValueOnce({ data: { job_id: "j3" } });
     const a = useArticle();
     const angle: Angle = { audience: "老年人", sellpoints: [], tone: "专业" };
@@ -64,7 +64,8 @@ describe("article store — angle / title", () => {
     await a.rerun();
     const lastCall = postMock.mock.calls[postMock.mock.calls.length - 1];
     expect(lastCall[0]).toBe("/api/generate");
-    expect(lastCall[1]).toMatchObject({ title: "标题Y", angle, seed: 3 });
+    expect(lastCall[1]).toMatchObject({ title: "标题Y", angle });
+    expect(lastCall[1].seed).toBeUndefined();
   });
 
   it("article.title 用 req.title —— 首页选的标题不能被 keyword 顶掉", async () => {

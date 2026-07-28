@@ -34,6 +34,10 @@ def run_batch(
     vault_root: Path,
     out_dir: Path,
     llm_client: LLMClient,
+    # ⚠ 整批所有关键词共用这一个 seed —— 素材抽样只认 (seed, block.id)，
+    # 所以每个关键词采出的素材逐字节相同。这在 dev/测试里是可复现特性，
+    # 但绝不能原样搬到产品路径：sidecar 的 batch_service 按关键词派生
+    # 独立种子（+index*1_000_000），复用本函数前先对齐那套派生。
     seed: int,
     on_item_started: Callable[[int, str], None] = lambda i, kw: None,
     on_item_finished: Callable[[BatchItem], None] = lambda item: None,
