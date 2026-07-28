@@ -27,7 +27,8 @@ class GenerateBody(BaseModel):
     keyword: str = Field(min_length=1)
     template_id: str = Field(min_length=1)
     skill_id: str | None = None
-    seed: int = 0
+    # None = 服务端每次随机滚种子（素材随机组合）；显式传值 = 同种子复现。
+    seed: int | None = None
     draft_only: bool = False
     core_keyword: str | None = None
     provider: str | None = None

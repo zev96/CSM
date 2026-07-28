@@ -233,6 +233,47 @@ def _near_duplicate_warnings(roster: list[Competitor]) -> list[str]:
     return out
 
 
+def frozen_section_warnings(
+    roster: list[Competitor], sections: list[CompetitorSection],
+) -> list[str]:
+    """挑出「永远变不了」的小节 —— 名册里每张卡都只写了 1 条变体。
+
+    竞品卡的随机性有两层：抽哪几个竞品、每个竞品的每节抽哪条变体。第二层
+    的上限完全由素材决定：某节全池都只有一条 ①，它在任何一篇文章里都是同
+    一段话。用户看到的现象是「竞品内容不随机」，但既不报错也不缺料，没人
+    知道该去补哪一节 —— 实测真实资料库的「综合总分」「安全认证」两节 56 张
+    卡全是 1 条，正好对上用户反馈。
+
+    ⚠ 这**不是缺料**，所以不进 ``build_roster`` 的告警（那份是名册不足报错里
+    的「缺料清单」，掺进来会让人去补一个根本不缺的小节）。
+
+    只报「全员 1 条」这一种：任意一张卡有 2 条，这节就会变，报出来纯属噪音
+    （真实模板一节动辄 56 张卡，逐卡报会把告警区淹掉）。
+    """
+    out: list[str] = []
+    for spec in sections:
+        total = 0
+        frozen = True
+        for comp in roster:
+            for card in comp.cards:
+                body = card.sections.get(spec.label)
+                if body is None:
+                    continue
+                total += 1
+                if len(split_variants(body, keep_bold=True) or [body]) > 1:
+                    frozen = False       # 有一张能变就够了，别再数下去
+                    break
+            if not frozen:
+                break
+        if frozen and total:
+            out.append(
+                f"小节「{spec.label}」的 {total} 张竞品卡都只写了 1 条变体，"
+                f"每次生成这一节都是同一段话 —— 想让它换着说，"
+                f"在竞品卡该小节下面补 ②③ 变体"
+            )
+    return out
+
+
 def pick_section_variants(
     body: str, count: int, rng: random.Random,
 ) -> list[tuple[int, str]]:

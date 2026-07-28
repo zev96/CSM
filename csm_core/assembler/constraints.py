@@ -162,6 +162,16 @@ def _resolve_aligned_models(
     return models
 
 
+def roll_seed() -> int:
+    """随机滚一个素材采样种子（31-bit 非负整数）。
+
+    「请求不带 seed → 每次生成随机组合素材」的单一实现点：sidecar 单篇与
+    批量共用。素材抽样完全由 (seed, block.id) 决定，调用方把种子写死会让
+    所有文章素材逐字节相同；显式传 seed 的调用方绕过这里，保住同种子复现。
+    """
+    return random.randint(0, 2**31 - 1)
+
+
 def draw_versions(
     template: Template, *, seed: int,
     overrides: dict[str, str] | None = None,

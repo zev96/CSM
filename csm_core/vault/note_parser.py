@@ -65,6 +65,45 @@ _BACKLINK_LINE_RE = re.compile(
 # 下游 _clean_chrome / extract_brand_sections 都会剥 HR，但 raw_body 本身也
 # 被多处直接消费，索性在切断时把尾部的 HR 行一并 rstrip 掉，正文更干净。
 _TRAILING_HR_RE = re.compile(r"(?:^\s*(?:-{3,}|\*{3,}|_{3,})\s*$\n?)+\Z", re.MULTILINE)
+# 上面那张标签名白名单永远追不上资料库 —— 作者随时会造新标签（实测漏了
+# ``**关联素材**``、``**相关技术笔记**``、``**返回首页**``，19 篇引言笔记因此
+# 把「关联素材: [[..]] | [[..]]」整行录进了成稿）。所以再加一条**按结构**认的
+# 规则：一行的值除了 wiki 链接、加粗和分隔符什么都没有 —— 也就是「这行只是
+# 指向别的笔记」—— 那它是导航/引用，不是文章正文（``[[..]]`` 是 Obsidian
+# 语法，出现在成稿里永远是错的）。标签可有可无：``**关联素材**: [[a]] | [[b]]``
+# 与裸的 ``[[a]] | [[b]]`` 同样算。
+#
+# ⚠ 值里必须**至少有一个** wiki 链接（lookahead），否则 ``解决方案:`` 这种
+# 空值标签行会被误判；链接后面还跟着说明文字的（``- **选购指南**: [[电机性能选购]]
+# - 电机类型对比``）也不匹配 —— 那是索引笔记的正文。
+# ⚠ 三处写法是为了线性时间，别「顺手简化」回去（改动前先跑 ReDoS 计时）：
+#   1. 先决 lookahead 放**最前**且用 ``[^\n]*`` —— 没有 wiki 链接的普通正文行
+#      （绝大多数）一次扫描即否决，不会带着各种标签切分反复试。
+#   2. 冒号后**不留** ``\s*`` —— 空白交给下面循环里的 ``\s`` 吃。两处都能吃
+#      同一段空白时，N 个空格就有 N 个切分点，每点再扫一遍 = O(N²)（实测
+#      2 万空格的行要 1.2 秒）。
+#   3. 循环用占有量词 ``++`` —— 后面只跟 ``$``，吐字符永远换不来匹配成功，
+#      所以禁止回溯与原语义逐字节等价，纯赚。需 Python ≥3.11（本项目下限）。
+_LINK_ONLY_LINE_RE = re.compile(
+    r"^(?=[^\n]*\[\[)"                                   # 先决条件：这行有 wiki 链接
+    r"\s*(?:[-*+>]\s*)*"                                 # 可选项目符号 / 引用符
+    # 可选「标签:」。{1,16} 只约束**裸标签**；``**加粗标签**`` 无论多长都会走
+    # 下面循环里的 ``\*\*…\*\*`` 分支（冒号也在分隔符类里），所以长加粗标签
+    # 照样认得出 —— 这是好事，别照着这行注释以为有 16 字硬上限。
+    r"(?:(?:\*\*)?[^:：\n\[\]]{1,16}(?:\*\*)?\s*[:：])?"
+    r"(?:\[\[[^\]\n]+\]\]|\*\*[^*\n]+\*\*|[|｜、,，;；:：/·—\s>→-])++$"
+)
+
+
+def _is_tail_chrome(line: str) -> bool:
+    """这一行能否算「尾部说明块」的一部分（空行 / 分隔线 / 已知标记 / 纯链接行）。"""
+    if not line.strip():
+        return True
+    if _HR_LINE_RE.match(line):
+        return True
+    if _BACKLINK_LINE_RE.search(line):
+        return True
+    return bool(_LINK_ONLY_LINE_RE.match(line))
 
 
 @dataclass
@@ -79,14 +118,58 @@ class ParsedNote:
 def _strip_backlinks(body: str) -> str:
     """Drop the Obsidian navigation / backlink tail from ``body``.
 
-    Returns ``body`` up to (but excluding) the first line that matches any of
-    the styles listed in ``_BACKLINK_LINE_RE``. See that regex for the exact
-    markers. Everything from that line onward is considered navigation chrome
-    and must not leak into generated drafts.
+    切到**不动点**：一趟切割会让原本被挡住的说明块行暴露成新的尾行，所以要
+    反复切到不再变化为止。单趟是**顺序敏感**的，而说明块内部顺序并不固定
+    （主推位把取材/红线排在返回之上，竞品位反过来）—— 比如 ``**关联素材**``
+    排在散文型的 ``**红线**`` 之上时，单趟只会切到红线那行，关联素材原样留在
+    正文里，正是本次要修的那个 bug 换个版式复发。逐趟收敛后与顺序无关，
+    和 ``_BACKLINK_LINE_RE`` 当年扩成「按最先出现的任意标记切」是同一个不变量。
+    """
+    seen = body
+    # 每趟严格变短，故必然收敛；上界只是防病态输入下的死循环。
+    for _ in range(len(body.splitlines()) + 1):
+        nxt = _strip_backlinks_once(seen)
+        if nxt == seen:
+            break
+        seen = nxt
+    return seen
+
+
+def _strip_backlinks_once(body: str) -> str:
+    """单趟切割 —— 见 :func:`_strip_backlinks` 的不动点循环。
+
+    两条判据，取**最先命中**的那一行作为切点，该行起到 EOF 全部丢弃：
+
+    1. 已知标记（``_BACKLINK_LINE_RE``）—— 无条件切。这些标签的值本身常是
+       散文（``**红线**: - 气态CCM为F3…``），不能要求后面全是说明块。
+    2. 纯链接行（``_LINK_ONLY_LINE_RE``）—— **只在尾部**才切：从末尾往回数，
+       必须一路都是说明块/空行/分隔线才算数。
+
+    第 2 条的尾部限定不是保守，是必须：索引类笔记（``用户人群总索引``、
+    ``吸尘器科普内容索引``）和拆解分析文档正文**中间**也有 ``**痛点文件**:
+    [[..]]`` / ``> 配套文档：[[..]]`` 这种行，后面还跟着整篇正文 —— 在那里
+    一刀切到 EOF 会把笔记清空。
+
+    ⚠ 边界要说准，别把它当万能：本规则只认「值全是 wiki 链接和分隔符」这一种
+    形态。**散文型**说明块（``**使用注意**：…``、开头整段的 ``⚠️ 取用前必读
+    [[..]]``）仍只能靠第 1 条的标签名单，名单外的写法照漏，而且它们常排在正文
+    **开头**，结构上也不该按尾部规则切。
+
+    实测全库仍有 25 篇正文带 ``[[..]]``，其中 **3 篇是带 ``素材类型`` 的真素材**
+    （``整机推荐文案`` 2 篇 + ``标题模块总索引``），别误以为剩下的全是索引文档 ——
+    现装模板的可达集碰不到它们，但新建一个指向 ``整机推荐文案`` 目录的块就会把
+    开头那段告示写进成稿。治本在资料库侧（把告示移出正文或改成 frontmatter），
+    不是继续加解析规则。
     """
     lines = body.splitlines()
+    # 尾部说明块的起点：从最后一行往回吃，直到遇上真正的正文行。
+    tail_start = len(lines)
+    while tail_start > 0 and _is_tail_chrome(lines[tail_start - 1]):
+        tail_start -= 1
     for i, line in enumerate(lines):
-        if _BACKLINK_LINE_RE.search(line):
+        if _BACKLINK_LINE_RE.search(line) or (
+            i >= tail_start and _LINK_ONLY_LINE_RE.match(line)
+        ):
             head = "\n".join(lines[:i]).rstrip()
             # 尾部若剩一条分隔说明块的 ``---``，一并去掉（见 _TRAILING_HR_RE）。
             return _TRAILING_HR_RE.sub("", head).rstrip()

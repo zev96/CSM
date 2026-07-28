@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from csm_core.angle import Angle, effective_sellpoints, render_angle_directive
-from csm_core.assembler.constraints import assemble_plan
+from csm_core.assembler.constraints import assemble_plan, roll_seed
 from csm_core.assembler.plan import AssemblyPlan
 from csm_core.assembler.render import compose_draft
 from csm_core.export.markdown import export_article
@@ -70,7 +70,8 @@ class GenerateRequest:
     keyword: str
     template_id: str
     skill_id: str | None = None
-    seed: int = 0
+    # None = 每次滚随机种子（素材随机组合）；显式传值 = 同种子复现。
+    seed: int | None = None
     draft_only: bool = False
     core_keyword: str | None = None
     provider: str | None = None
@@ -268,12 +269,16 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
         _checkpoint(job_id)
         bus.publish(job_id, "stage", stage="采样 blocks", index=2, total=6)
+        # 不带 seed 的请求每次滚新种子 —— 「素材随机组合」的产品语义在服务端
+        # 兜底（老 PyQt6 栈的随机滚种子在 Tauri 重写时丢过，前端写死 0 会让
+        # 所有关键词的素材逐字节相同）。实际种子随 plan.seed 回传前端。
+        seed = req.seed if req.seed is not None else roll_seed()
         plan = assemble_plan(
             keyword=req.keyword,
             template=template,
             index=index,
             registry=registry,
-            seed=req.seed,
+            seed=seed,
             user_config=req.user_config or {},
             core_keyword=req.core_keyword,
             angle=req.angle,
@@ -284,7 +289,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         # Stash the plan so subsequent /api/assembler/reroll calls can
         # operate on it without re-scanning the vault.
         assembler_service.cache_plan(
-            job_id, plan, template_id=req.template_id, seed=req.seed,
+            job_id, plan, template_id=req.template_id, seed=seed,
         )
 
         _checkpoint(job_id)

@@ -528,16 +528,16 @@ export const useArticle = defineStore("article", {
      * 换版本走 rerunWithVersion()。 */
     async rerun(versionOverrides?: Record<string, string> | null): Promise<void> {
       if (!this.lastRequest) return;
-      // Bump seed by 1 so the assembler re-samples instead of giving the
-      // exact same draft back.
       const locked =
         versionOverrides === null
           ? undefined
           : (versionOverrides ?? this.plan?.version_choices ?? undefined);
       const next: GenerateRequest = {
         ...this.lastRequest,
-        seed: (this.lastRequest.seed ?? 0) + 1,
       };
+      // 不带 seed —— 后端每次滚新随机种子重采（素材随机组合）。早期这里
+      // seed+1 递增：起点恒 0 且序列固定，「重新随机」实际是确定性轮播。
+      delete next.seed;
       if (locked && Object.keys(locked).length) {
         next.version_overrides = locked;
       } else {

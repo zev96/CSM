@@ -16,7 +16,8 @@ class BatchBody(BaseModel):
     keywords: list[str] = Field(min_length=1)
     template_id: str = Field(min_length=1)
     skill_id: str | None = None
-    seed: int = 0
+    # None = 服务端随机滚批次基准种子；批内每个关键词再各自派生（素材随机组合）。
+    seed: int | None = None
     provider: str | None = None
     model: str | None = None
     skill_chain: list[str] | None = None

@@ -114,6 +114,134 @@ def test_strip_backlinks_removes_short_slot_editorial():
     assert out.strip() == "① 竞品正文。"
 
 
+def test_strip_backlinks_removes_unknown_link_only_label():
+    """引言笔记真实版式：`**关联素材**: [[..]] | [[..]]` 排在「返回上层」之上。
+
+    这个标签名不在白名单里 —— 切割点落到下一行的「返回上层」，中间这行连同
+    ``---`` 被 split_variants 当成最后一个变体的尾巴录进正文（真机成稿里
+    「关联素材: [[空气净化器-长期使用成本选购]] | [[..]]」整行渗漏就是这么来的）。
+    白名单永远追不上资料库新造的标签，所以要按**结构**认：标签行的值只由
+    wiki 链接和分隔符组成 = 说明块。
+    """
+    body = (
+        "① 养猫以后，我才开始认真区分地面清洁和空气净化。\n"
+        "\n"
+        "② 我家有宠物，选净化器时走过的弯路，是只看“除味”两个字。\n"
+        "\n"
+        "---\n"
+        "**关联素材**: [[痛点-空气净化器-养宠异味]] | [[空气净化器-长期使用成本选购]]\n"
+        "\n"
+        "**返回上层**: [[引言模块总索引|引言模块总索引]] | **返回主页**: [[关联数据库]]\n"
+    )
+    out = _strip_backlinks(body)
+    assert "关联素材" not in out
+    assert "[[" not in out                     # 任何 wiki 链接都不该留在正文
+    assert not out.rstrip().endswith("---")
+    assert "养猫以后" in out and "除味" in out
+
+
+def test_strip_backlinks_removes_unknown_nav_label_variants():
+    """白名单只认「返回上层/返回主页」，资料库里还有「返回首页」等写法。"""
+    body = (
+        "① 正文一句。\n"
+        "\n"
+        "**返回首页**: [[关联数据库]]\n"
+    )
+    out = _strip_backlinks(body)
+    assert "返回首页" not in out
+    assert out.strip() == "① 正文一句。"
+
+
+def test_strip_backlinks_link_line_above_prose_marker():
+    """说明块内部顺序不固定：`关联素材` 排在**散文型**的 `**红线**` 之上。
+
+    红线的值本身是散文，永远不满足「尾部全是说明块」，单趟切割只会切到红线
+    那一行，把关联素材原样留在正文里 —— 同一个 bug 换个版式复发。所以要切到
+    不动点：切掉红线后关联素材成了新的尾行，下一趟再切。
+    """
+    body = (
+        "① D9颗粒物CADR 512m³/h。\n"
+        "\n"
+        "**关联素材**: [[DARZD9-产品参数]] | [[空气净化器-DARZ核心技术]]\n"
+        "\n"
+        "**红线**:\n"
+        "- 气态CCM为F3（非F4），HEPA为H12，禁写H13\n"
+        "\n"
+        "**返回上层**: [[空气净化器产品推荐格式索引]]\n"
+    )
+    out = _strip_backlinks(body)
+    assert "关联素材" not in out
+    assert "红线" not in out and "H12" not in out
+    assert "[[" not in out
+    assert out.strip() == "① D9颗粒物CADR 512m³/h。"
+
+
+def test_strip_backlinks_tolerates_other_link_separators():
+    """链接之间的分隔符资料库里有 `|`、`/`、`·`、`、`、`—` 多种写法。
+
+    末行分隔符不认识 → 该行不算说明块 → 尾部校验整条失效 → 上面的说明块
+    全部漏进正文（全有全无的失效方式，症状与原 bug 一模一样）。
+    """
+    for sep in (" | ", " / ", " · ", "、", " — "):
+        body = (
+            "① 正文一句。\n"
+            "\n"
+            "**关联素材**: [[a]] | [[b]]\n"
+            "\n"
+            f"**返回首页**: [[索引]]{sep}[[关联数据库]]\n"
+        )
+        out = _strip_backlinks(body)
+        assert out.strip() == "① 正文一句。", f"分隔符 {sep!r} 没被识别：{out!r}"
+
+
+def test_strip_backlinks_handles_trailing_line_after_chrome():
+    """说明块后面还多一行收尾语时，尾部校验不能整条失效。
+
+    `（本篇完）` 不是说明块 → 单趟的尾部校验从它就停住 → 结构规则完全不生效。
+    但它排在已知标记「返回上层」之下，第一趟按已知标记切掉后，关联素材就
+    暴露成尾行，第二趟收掉。
+    """
+    body = (
+        "① 正文一句。\n"
+        "\n"
+        "**关联素材**: [[a]] | [[b]]\n"
+        "\n"
+        "**返回上层**: [[索引]]\n"
+        "（本篇完）\n"
+    )
+    out = _strip_backlinks(body)
+    assert out.strip() == "① 正文一句。"
+
+
+def test_strip_backlinks_keeps_link_line_followed_by_body():
+    """⚠ 结构规则只在**尾部**成立：索引类笔记正文中间也有「标签: [[链接]]」行，
+    在那里一刀切到 EOF 会把整篇笔记毁掉（实测全库有 8 篇这种形态）。
+    只有当某行之后全是说明块/空行时，它才是尾巴的起点。"""
+    body = (
+        "**痛点文件**: [[吸尘器-铲屎官-痛点分析]]\n"
+        "\n"
+        "**主要痛点**: 宠物毛发缠绕、清洁不彻底、异味\n"
+        "**解决方案**: 大吸力 + 防缠绕刷头\n"
+    )
+    out = _strip_backlinks(body)
+    assert "痛点文件" in out                    # 不是尾巴 → 不切
+    assert "宠物毛发缠绕" in out
+    assert "解决方案" in out
+
+
+def test_strip_backlinks_keeps_intro_link_line_of_reference_doc():
+    """拆解分析文档开头就是 `> 配套文档：[[引言]] | [[总结]]`，后面才是全文。"""
+    body = (
+        "> 配套文档：[[引言]] | [[总结]] | [[产品推荐]]\n"
+        "\n"
+        "## 一、引言的通用逻辑推进链\n"
+        "绝大多数文章的引言都遵循同一条四步推进链。\n"
+    )
+    out = _strip_backlinks(body)
+    assert "配套文档" in out
+    assert "四步推进链" in out
+
+
 def test_strip_backlinks_keeps_ordinary_bold_in_body():
     # 正文里的普通加粗（**F3** 这类关键数据）不能被误当说明块标记切掉 ——
     # 只有行首恰好是 **取材/红线/短板槽/说明** 才算标记。

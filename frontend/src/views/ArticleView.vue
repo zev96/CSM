@@ -57,7 +57,6 @@ const { whenReady } = useSidecarReady();
 const keyword = ref("");
 const templateId = ref<string>("");
 const skillId = ref<string>("");
-const seed = ref(0);
 
 // Phase 2a 角度 + 标题 —— 从 home 起飞条扁平进 query，这里重建成 Angle
 // 对象提交。空 facet → null / []；全空 → angle=null（= 今天行为）。
@@ -356,11 +355,12 @@ async function takeoff() {
   // 起飞 = 只做"随机组装出初稿"。AI 整篇润色由用户在初稿 tab 手动点
   // "整篇润色"触发，避免一把梭直接出成稿、绕过用户检查环节。
   // angle/title 从 query 重建（home 起飞条带过来）；空 → 不传 = 今天行为。
+  // 不传 seed —— 后端每次滚随机种子，同一关键词反复起飞素材各不相同
+  // （早年这里写死 seed 0，所有文章素材固定成同一套）。
   await article.submit({
     keyword: keyword.value.trim(),
     template_id: templateId.value,
     skill_id: skillId.value || undefined,
-    seed: seed.value,
     draft_only: true,
     ...(angle.value ? { angle: angle.value } : {}),
     ...(title.value.trim() ? { title: title.value.trim() } : {}),
@@ -1361,9 +1361,10 @@ const tabSectionLabel = computed(() => {
                     </div>
                   </div>
                   <!--
-                    "全部重采"：换一套全新组装，seed+1 重走 /api/generate，并在
-                    各结构版本间**自由重抽**（rerun(null) 显式放开版本锁）。运行中
-                    或正在 reroll 单个 slot 时禁用，避免并发覆盖 plan。
+                    "全部重采"：换一套全新组装，不带 seed 重走 /api/generate（后端
+                    滚新随机种子），并在各结构版本间**自由重抽**（rerun(null) 显式
+                    放开版本锁）。运行中或正在 reroll 单个 slot 时禁用，避免并发
+                    覆盖 plan。
                   -->
                   <Btn
                     variant="ghost"

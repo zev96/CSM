@@ -516,6 +516,47 @@ def test_tier_conflict_warns(tmp_path):
     assert any("层级标签不一致" in w for w in plan.warnings)
 
 
+def test_single_variant_section_warns(tmp_path):
+    """全池只有 1 条变体的小节 → 每次生成都是同一段话，要报出来。
+
+    竞品的随机性有两层：抽哪几个竞品、每个竞品的每节抽哪条变体。第二层的
+    上限由素材决定 —— 真实资料库里「综合总分」「安全认证」两节 56 张卡全是
+    1 条，用户看到的现象就是「竞品内容不随机」，但没人告诉他该去补哪一节。
+    """
+    _three_competitors(tmp_path)          # 品牌赛道定位 = 全员 1 条变体
+    plan, _ = _run(tmp_path, [_pool_block(pick=2)])
+    hit = [w for w in plan.warnings if "品牌赛道定位" in w and "1 条变体" in w]
+    assert hit, plan.warnings
+    assert "3 张" in hit[0]                # 报清楚涉及几张卡
+    # 有多条变体的小节不该被连坐
+    assert not any("市场口碑数据" in w and "1 条变体" in w for w in plan.warnings)
+
+
+def test_single_variant_warning_counts_only_cards_having_the_section(tmp_path):
+    """只要有**任意一张**卡写了 2 条，这一节就不算冻结（它会变）。"""
+    _card(tmp_path, "竞品/竞品卡-A.md", brand="甲", model="甲1",
+          sections={"市场口碑数据": ["甲口碑"], "品牌赛道定位": ["甲定位"],
+                    "分维度硬核测评": ["甲测评"]})
+    _card(tmp_path, "竞品/竞品卡-B.md", brand="乙", model="乙1",
+          sections={"市场口碑数据": ["乙口碑一", "乙口碑二"],
+                    "品牌赛道定位": ["乙定位"], "分维度硬核测评": ["乙测评"]})
+    plan, _ = _run(tmp_path, [_pool_block(pick=2)])
+    assert not any("市场口碑数据" in w and "1 条变体" in w for w in plan.warnings)
+    assert any("品牌赛道定位" in w and "1 条变体" in w for w in plan.warnings)
+
+
+def test_single_variant_warning_not_mixed_into_shortfall_error(tmp_path):
+    """变体不足**不是**缺料 —— 不能混进名册不足报错的「缺料清单」。
+
+    那份清单是「哪张卡缺哪个必需小节」的工作清单，掺进变体提示会让用户
+    照着去补一个根本不缺的小节。
+    """
+    _three_competitors(tmp_path)
+    with pytest.raises(CardRosterError) as e:
+        _run(tmp_path, [_pool_block(pick=9)])       # 名册只有 3 个
+    assert "1 条变体" not in str(e.value)
+
+
 # ── 审查回归：缓存失效 / 报错可诊断 ─────────────────────────────────
 def test_same_length_edit_is_picked_up(tmp_path):
     """等长订正必须立刻生效。
