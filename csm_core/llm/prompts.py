@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .layout_guard import LAYOUT_CLAUSE
+from .title_guard import TITLE_CLAUSE, keyword_title_clause
 
 
 @dataclass
@@ -75,6 +76,18 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
             )
 
     layout = f"\n{LAYOUT_CLAUSE}" if inputs.preserve_layout else ""
+    # 标题两种情形都要下约束，正文首行的 H1 就是全链路认定的文章标题：
+    #   · 用户定了标题 → 一个字都不许动（上面 title_block 把标题当写作指引
+    #     给了 LLM「围绕标题开篇点题」，不拦着它就会顺手改写成自己的版本）；
+    #   · 用户没定标题（默认流程只填关键词）→ 链可以自己拟，但关键词必须
+    #     一字不差留着，否则用户的 SEO 词就被润色改没了。
+    # title_guard.enforce 是确定性兜底，这两条是正向要求。
+    if title_block:
+        title_rule = f"\n{TITLE_CLAUSE}"
+    elif inputs.keyword:
+        title_rule = f"\n{keyword_title_clause(inputs.keyword)}"
+    else:
+        title_rule = ""
 
     user = (
         f"【关键词】{inputs.keyword}\n\n"
@@ -85,22 +98,31 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
         f"{instruction}"
         f"{constraint}"
         f"{layout}"
+        f"{title_rule}"
     )
     return system, user
 
 
 def build_refine_prompt(
-    skill_body: str | None, prev_text: str, *, preserve_layout: bool = False,
+    skill_body: str | None, prev_text: str, *,
+    preserve_layout: bool = False, title_rule: str = "",
 ) -> tuple[str, str]:
     """链 step[1:] 的精修 prompt：按 skill 风格改写上段输出，保守约束
-    （保信息点/数字/单位/认证，只改文风）。step[0] 仍用 build_prompt。"""
+    （保信息点/数字/单位/认证，只改文风）。step[0] 仍用 build_prompt。
+
+    ``title_rule`` 由调用方按上段输出的形态选：带标题行就下 TITLE_CLAUSE，
+    否则下 keyword_title_clause —— 链越往后越容易被「改进措辞」顺手把标题
+    改掉，或者临时起意加一个自己的标题。空串 = 不加（无标题也无关键词时）。
+    """
     system = (skill_body or "").strip()
     layout = f"\n{LAYOUT_CLAUSE}" if preserve_layout else ""
+    title_rule = f"\n{title_rule}" if title_rule else ""
     user = (
         f"【待改写正文】\n{prev_text}\n\n"
         "请按上面的风格指引改写这段正文：保留所有信息点、段落要点与全部"
         "数字/单位/认证名称，只改进措辞、语感与风格一致性；不新增虚构事实，"
         "不删减关键信息，不改动任何参数数字或认证。"
         f"{layout}"
+        f"{title_rule}"
     )
     return system, user

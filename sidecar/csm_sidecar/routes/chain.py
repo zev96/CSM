@@ -15,6 +15,10 @@ router = APIRouter(tags=["chain"], dependencies=[RequireToken])
 class ChainRerunBody(BaseModel):
     job_id: str = Field(min_length=1)
     pass_index: int = Field(ge=0)
+    # 前端现取的文章标题。链状态是起飞时缓存的，用户之后点过「换标题」的话
+    # 缓存里还是旧标题 —— 标题守卫会拿它把重跑出来的新标题「纠正」回旧的。
+    # 不传（老客户端）→ 沿用缓存值，行为不变。
+    title: str | None = None
 
 
 @router.post("/api/chain/rerun", status_code=202)
@@ -31,5 +35,8 @@ def chain_rerun(body: ChainRerunBody) -> dict[str, Any]:
         raise HTTPException(
             status_code=400,
             detail=f"pass_index {body.pass_index} out of range (0..{len(state.passes)-1})")
+    # 标题跟着请求走 —— 空白/不传视为「没改过」，保留缓存值。
+    if (body.title or "").strip():
+        state.title = body.title.strip()
     generate_service.submit_rerun(body.job_id, body.pass_index)
     return {"job_id": body.job_id, "stream_url": f"/api/events/{body.job_id}"}

@@ -22,8 +22,9 @@ const h = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   failureAlertMock: vi.fn(),
+  confirmMock: vi.fn(),
 }));
-const { postMock, getMock, toastSuccess, toastError, failureAlertMock } = h;
+const { postMock, getMock, toastSuccess, toastError, failureAlertMock, confirmMock } = h;
 
 vi.mock("vue-router", () => ({
   useRoute: () => ({ query: h.routeQuery.value }),
@@ -43,6 +44,7 @@ vi.mock("@/composables/useToast", () => ({
   useToast: () => ({ success: h.toastSuccess, error: h.toastError, warn: vi.fn(), info: vi.fn() }),
 }));
 vi.mock("@/composables/useFailureAlert", () => ({ failureAlert: h.failureAlertMock }));
+vi.mock("@/composables/useConfirm", () => ({ confirmDialog: h.confirmMock }));
 vi.mock("@/stores/config", () => ({ useConfig: () => ({ data: { user_name: "测试" }, load: vi.fn() }) }));
 vi.mock("@/components/article/TiptapEditor.vue", () => ({ default: { name: "TiptapEditor", template: "<div />" } }));
 vi.mock("@/components/article/FactCheckPanel.vue", () => ({ default: { name: "FactCheckPanel", template: "<div />" } }));
@@ -70,6 +72,8 @@ describe("ArticleView — 整篇润色接 finalize（真实 SSE 时序）", () =
     toastError.mockReset();
     failureAlertMock.mockReset();
     failureAlertMock.mockResolvedValue("close");
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
     h.sseHandlers.value = {};
     h.routeQuery.value = {};
   });
@@ -148,5 +152,53 @@ describe("ArticleView — 整篇润色接 finalize（真实 SSE 时序）", () =
     await vi.runAllTimersAsync();
     await p;
     vi.useRealTimers();
+  });
+
+  // 整篇润色是从毛坯文重跑整条链，成稿被整段替换。成稿编辑器修好之前它被
+  // pass 条带挤成 0 高、根本改不了，所以没人撞得到；现在能改了，得先问一句。
+  it("成稿已有内容 → 先确认；点取消不发 finalize、成稿原样保留", async () => {
+    h.routeQuery.value = { keyword: "k", template_id: "tpl-a" };
+    const w = mount(ArticleView, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    const a = useArticle();
+    seedTakeoff(a);
+    a.finalText = "我在成稿里改过的正文";
+    confirmMock.mockResolvedValue(false);
+
+    await (w.vm as any).polishAll();
+
+    expect(confirmMock).toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/finalize"), expect.anything());
+    expect(a.finalText).toBe("我在成稿里改过的正文");
+  });
+
+  it("确认后照常润色", async () => {
+    h.routeQuery.value = { keyword: "k", template_id: "tpl-a" };
+    const w = mount(ArticleView, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    const a = useArticle();
+    seedTakeoff(a);
+    a.finalText = "我在成稿里改过的正文";
+    confirmMock.mockResolvedValue(true);
+
+    await (w.vm as any).polishAll();
+
+    expect(postMock).toHaveBeenCalledWith(
+      "/api/generate/job-A/finalize", expect.objectContaining({ draft: "用户初稿正文" }));
+  });
+
+  it("成稿为空 → 不打扰，直接润色（零回归）", async () => {
+    h.routeQuery.value = { keyword: "k", template_id: "tpl-a" };
+    const w = mount(ArticleView, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    const a = useArticle();
+    seedTakeoff(a);   // finalText = ""
+
+    await (w.vm as any).polishAll();
+
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledWith(
+      "/api/generate/job-A/finalize", expect.anything());
   });
 });

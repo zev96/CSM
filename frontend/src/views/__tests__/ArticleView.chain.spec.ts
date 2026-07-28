@@ -98,7 +98,9 @@ describe("ArticleView — skill 链", () => {
     expect(body.skill_chain == null).toBe(true);
   });
 
-  it("有 passes 时成稿区渲染每 pass（role + skill 名 + 输出）", async () => {
+  // 逐 pass 预览住在模态里（成稿区必须和初稿区一样只有编辑器），所以这两条
+  // 都要先点开「润色过程 N 轮」入口。版面不变量在 ArticleView.finalPane.spec.ts。
+  it("有 passes 时模态里渲染每 pass（role + skill 名 + 输出）", async () => {
     routeQuery = { keyword: "k", template_id: "tpl-a" };
     const w = mount(ArticleView, { global: { stubs: { teleport: true } } });
     await flushPromises();
@@ -110,6 +112,7 @@ describe("ArticleView — skill 链", () => {
     // 切到成稿 tab
     (w.vm as any).activeTab = "final";
     await flushPromises();
+    await w.find("[data-passes-open]").trigger("click");
     const txt = w.text();
     expect(txt).toContain("家电人设");
     expect(txt).toContain("去AI味技");
@@ -126,6 +129,7 @@ describe("ArticleView — skill 链", () => {
     a.passes = [mkPass({ index: 0, output: "A" }), mkPass({ index: 1, output: "B" })];
     (w.vm as any).activeTab = "final";
     await flushPromises();
+    await w.find("[data-passes-open]").trigger("click");
 
     const btns = w.findAll("[data-rerun-pass]");
     expect(btns.length).toBe(2);

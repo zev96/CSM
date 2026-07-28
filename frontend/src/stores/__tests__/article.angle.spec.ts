@@ -67,6 +67,30 @@ describe("article store — angle / title", () => {
     expect(lastCall[1]).toMatchObject({ title: "标题Y", angle, seed: 3 });
   });
 
+  it("article.title 用 req.title —— 首页选的标题不能被 keyword 顶掉", async () => {
+    postMock.mockResolvedValueOnce({ data: { job_id: "j6" } });
+    const a = useArticle();
+    await a.submit({
+      keyword: "空气净化器推荐",
+      template_id: "t",
+      title: "养宠家庭空气净化器推荐哪款好？实测后分享三款除毛神器",
+    });
+    // 编辑器 H1 和导出标题都读 article.title —— 退化成 keyword 的话，
+    // 用户在首页填的标题在稿子里和导出的文档里都看不见。
+    expect(a.title).toBe("养宠家庭空气净化器推荐哪款好？实测后分享三款除毛神器");
+  });
+
+  it("article.title 在无 req.title / 空白 title 时回退 keyword", async () => {
+    postMock.mockResolvedValueOnce({ data: { job_id: "j7" } });
+    const a = useArticle();
+    await a.submit({ keyword: "关键词", template_id: "t" });
+    expect(a.title).toBe("关键词");
+
+    postMock.mockResolvedValueOnce({ data: { job_id: "j8" } });
+    await a.submit({ keyword: "关键词2", template_id: "t", title: "   " });
+    expect(a.title).toBe("关键词2");
+  });
+
   it("omits title/angle when not provided (today's behaviour)", async () => {
     postMock.mockResolvedValueOnce({ data: { job_id: "j5" } });
     const a = useArticle();

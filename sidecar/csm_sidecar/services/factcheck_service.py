@@ -64,8 +64,13 @@ def get_pending(job_id: str) -> _Pending | None:
 def resolve_and_export(
     job_id: str, *, final_text: str,
     released_numbers: list[float], released_certs: list[str],
+    title: str | None = None,
 ) -> dict[str, Any]:
     """带放行项重核（成稿可能已被编辑）；干净则导出。
+
+    ``title`` 是前端现取的标题，优先于起飞时缓存的 ``e.title`` —— 用户在被拦
+    之后点「换标题」改过的话，缓存里还是旧标题，导出的文件标题会和编辑器里
+    显示的对不上。不传（老客户端）→ 退回缓存值，行为不变。
 
     返回 {"ok": True, "document", "format", "title"} 或
     {"ok": False, "violations": [...]}。未知 job_id（过期 / 从未被拦）→ KeyError。
@@ -84,7 +89,7 @@ def resolve_and_export(
     e.out_dir.mkdir(parents=True, exist_ok=True)
     paths = export_article(
         out_dir=e.out_dir, keyword=e.keyword, final_text=final_text,
-        plan=e.plan, fmt=e.fmt, title=e.title,
+        plan=e.plan, fmt=e.fmt, title=(title or "").strip() or e.title,
     )
     with _lock:
         _cache.pop(job_id, None)

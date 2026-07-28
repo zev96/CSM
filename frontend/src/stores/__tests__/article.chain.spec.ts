@@ -122,6 +122,9 @@ describe("article store — skill 链 passes", () => {
     expect(postMock).toHaveBeenLastCalledWith("/api/chain/rerun", {
       job_id: "j7",
       pass_index: 1,
+      // 后端链状态里的标题是起飞时缓存的；换过标题就得带上现值，否则标题
+      // 守卫会拿旧标题把重跑出来的新标题「纠正」回去。没选过标题 → null。
+      title: null,
     });
     const updated = [
       mkPass({ index: 0, output: "A" }),

@@ -12,7 +12,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from csm_core.llm import layout_guard, pricing
+from csm_core.llm import layout_guard, pricing, title_guard
 from csm_core.llm.prompts import PromptInputs, build_prompt, build_refine_prompt
 
 from . import llm_factory
@@ -64,8 +64,11 @@ class ChainState:
     # 榜单卡片区的结构特征（标题/小节名）。非空 = prompt 加排版硬约束 +
     # 逐 pass 卡片区指纹校验。空 = 今天行为。
     card_signature: Any = None
-    # 被结构校验拦下并回退的 pass 说明（透给前端/日志，别静默）。
+    # 被结构校验拦下并回退的 pass 说明（进 generate_service 的 warning 日志，
+    # 别静默；目前不透前端）。
     layout_rejections: list[str] = field(default_factory=list)
+    # 被标题守卫纠正的 pass 说明（同上）。
+    title_corrections: list[str] = field(default_factory=list)
 
     @property
     def final_text(self) -> str:
@@ -110,8 +113,19 @@ def _prompt_for(state: ChainState, idx: int, prev_output: str) -> tuple[str, str
             preserve_layout=bool(state.card_signature),
         ))
         return system, user, state.draft
+    # 与 step0 同口径：判据是「用户有没有定标题」，不是「上段输出里有没有
+    # 标题行」。毛坯文不产 H1，所以「用户有标题 + 上段无 H1」恰恰是主路径 ——
+    # 只看上段的话这里会下成 keyword_title_clause，反过来邀请 LLM 加个标题，
+    # 而链输出本不该带标题（硬塞 H1 会让字数/查重/事实核对的输入全变样）。
+    if (state.title or "").strip() or title_guard.leading_h1(prev_output) is not None:
+        title_rule = title_guard.TITLE_CLAUSE
+    elif state.keyword:
+        title_rule = title_guard.keyword_title_clause(state.keyword)
+    else:
+        title_rule = ""
     system, user = build_refine_prompt(
         step.body, prev_output, preserve_layout=bool(state.card_signature),
+        title_rule=title_rule,
     )
     return system, user, prev_output
 
@@ -134,6 +148,25 @@ def _guard_layout(state: ChainState, idx: int, before: str, after: str) -> str:
         state.job_id, idx, violation,
     )
     return before
+
+
+def _guard_title(state: ChainState, idx: int, before: str, after: str) -> str:
+    """标题守卫 —— 润色不得新增/改写/删除文章标题，只纠正标题那一行。
+
+    prompt 里已经下了标题硬约束，但 LLM 不保证遵守。正文首行的 H1 就是全链路
+    认定的文章标题（ensure_title/extract_title/前端 effectiveTitle 同口径），
+    被 LLM 换掉的话，用户选的标题（以及标题里那个必须原样保留的关键词）就
+    悄悄没了。和排版守卫的整轮回退不同，这里只动标题行 —— 正文的润色成果
+    照常保留。
+    """
+    fixed, note = title_guard.enforce(
+        before, after, title=state.title, keyword=state.keyword,
+    )
+    if note is None:
+        return after
+    state.title_corrections.append(f"pass {idx}: {note}")
+    logger.warning("chain job %s pass %s 标题守卫：%s", state.job_id, idx, note)
+    return fixed
 
 
 def run_chain(
@@ -162,6 +195,7 @@ def run_chain(
         system, user, input_text = _prompt_for(state, idx, prev)
         out = client.complete(system=system, user=user)
         out = _guard_layout(state, idx, input_text, out)
+        out = _guard_title(state, idx, input_text, out)
         p = ChainPass(index=idx, skill_id=step.skill_id, role=step.role,
                       skill_name=step.name, input=input_text, output=out)
         state.passes.append(p)
@@ -194,8 +228,10 @@ def rerun(
         checkpoint()
         system, user, input_text = _prompt_for(state, idx, prev)
         out = client.complete(system=system, user=user)
-        # 「重跑这一段」同样要过排版守卫 —— 它恰恰是最容易把卡片揉平的入口。
+        # 「重跑这一段」同样要过排版 / 标题守卫 —— 它恰恰是最容易把卡片揉平、
+        # 把标题改掉的入口。
         out = _guard_layout(state, idx, input_text, out)
+        out = _guard_title(state, idx, input_text, out)
         old = state.passes[idx]
         p = ChainPass(
             index=idx, skill_id=old.skill_id, role=old.role,

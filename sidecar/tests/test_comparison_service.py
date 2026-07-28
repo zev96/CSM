@@ -50,6 +50,7 @@ def test_finalize_draft_scopes_bypass_skips_resolve(monkeypatch):
         final_text = "X"
         passes = []
         layout_rejections = []      # 卡片排版守卫回退说明；真 ChainState 恒有
+        title_corrections = []      # 标题守卫纠正说明；同上
     def fake_run_chain(job_id, steps, **kw):
         called["chain_directive"] = kw.get("angle_directive")
         return _State()
