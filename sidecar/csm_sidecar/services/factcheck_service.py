@@ -29,6 +29,7 @@ class _Pending:
     fmt: ExportFormat
     allowed_numbers: set[float]
     allowed_certs: set[str]
+    title: str | None = None
 
 
 _cache: "OrderedDict[str, _Pending]" = OrderedDict()
@@ -39,11 +40,13 @@ MAX_CACHE = 50
 def cache_pending(
     job_id: str, *, plan: AssemblyPlan, out_dir: Path, keyword: str,
     fmt: ExportFormat, allowed_numbers: set[float], allowed_certs: set[str],
+    title: str | None = None,
 ) -> None:
     with _lock:
         _cache[job_id] = _Pending(
             plan=plan, out_dir=Path(out_dir), keyword=keyword, fmt=fmt,
             allowed_numbers=set(allowed_numbers), allowed_certs=set(allowed_certs),
+            title=title,
         )
         _cache.move_to_end(job_id)
         while len(_cache) > MAX_CACHE:
@@ -81,7 +84,7 @@ def resolve_and_export(
     e.out_dir.mkdir(parents=True, exist_ok=True)
     paths = export_article(
         out_dir=e.out_dir, keyword=e.keyword, final_text=final_text,
-        plan=e.plan, fmt=e.fmt,
+        plan=e.plan, fmt=e.fmt, title=e.title,
     )
     with _lock:
         _cache.pop(job_id, None)

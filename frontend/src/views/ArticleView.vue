@@ -42,6 +42,7 @@ import { useSidecar } from "@/stores/sidecar";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { failureAlert } from "@/composables/useFailureAlert";
+import { ensureTitle, mdToHtml, replaceLeadingTitle } from "@/utils/markdown";
 
 const route = useRoute();
 const router = useRouter();
@@ -538,6 +539,11 @@ async function openTitleCandidates() {
 }
 function pickTitle(t: string) {
   article.title = t;
+  // 成稿编辑器会把显示用的 `# 标题` 连同正文一起写回 finalText（编辑过一次
+  // 就会）。只改 article.title 的话，withTitle 看到正文已有 H1 就原样返回，
+  // 换出来的新标题在编辑器和导出里都看不见 —— 选了等于没选。
+  article.finalText = replaceLeadingTitle(article.finalText, t);
+  article.draftText = replaceLeadingTitle(article.draftText, t);
   panelMode.value = "checks";
   toast.success("标题已替换");
 }
@@ -658,20 +664,23 @@ async function doExport() {
 
   try {
     if (useClient) {
+      // 三个分支统一先 ensureTitle。txt 原来是无条件 `${title}\n\n${body}` 拼，
+      // 而正文里常常已经内嵌了标题（成稿编辑器编辑过一次就会写回），导出来是
+      // 两个标题；改过标题文字的话还是**两个不同**的标题。txt 永远走客户端
+      // 分支（后端不支持），这条一直没人管。
+      const titled = withTitle(body, title);
       if (fmt === "markdown") {
-        const md = body.startsWith("# ") ? body : `# ${title}\n\n${body}`;
-        clientDownload(`${stem}.md`, md, "text/markdown;charset=utf-8");
+        clientDownload(`${stem}.md`, titled, "text/markdown;charset=utf-8");
       } else if (fmt === "txt") {
         // 剥掉 markdown 标记符号
-        const plain = body
+        const plain = titled
           .replace(/^#{1,6}\s+/gm, "")
           .replace(/\*\*([^*]+)\*\*/g, "$1")
           .replace(/\*([^*]+)\*/g, "$1");
-        clientDownload(`${stem}.txt`, `${title}\n\n${plain}`, "text/plain;charset=utf-8");
+        clientDownload(`${stem}.txt`, plain, "text/plain;charset=utf-8");
       } else {
         // demo 模式不支持本地生成 docx —— 退回 markdown
-        const md = body.startsWith("# ") ? body : `# ${title}\n\n${body}`;
-        clientDownload(`${stem}.md`, md, "text/markdown;charset=utf-8");
+        clientDownload(`${stem}.md`, titled, "text/markdown;charset=utf-8");
         toast.info("演示模式下 Word 导出降级为 Markdown");
       }
       toast.success("已导出");
@@ -698,10 +707,9 @@ async function doExport() {
 // 编辑器内显示的正文 —— 拼上 H1 标题首行；如果 finalText/draftText
 // 已经含 # 开头的标题，就不重复 prepend。用户编辑后保存回 store 时
 // 直接整段（含标题）写入 article.finalText，标题留在 markdown 里。
-function withTitle(body: string, title: string): string {
-  if (body.startsWith("# ")) return body;
-  return `# ${title}\n\n${body}`;
-}
+// 与后端 ensure_title 同口径（跳前导空行、H2 不算文章标题、标题压成单行），
+// 三种导出格式和编辑器显示才不会各判各的。
+const withTitle = ensureTitle;
 const draftEditorValue = computed(() => {
   const variant = SAMPLE_VARIATIONS[sampleIndex.value];
   const title = article.title || variant.title;
@@ -1620,10 +1628,17 @@ const tabSectionLabel = computed(() => {
                     <span>{{ article.rerunningIndex === p.index ? "取消" : "重跑此 pass" }}</span>
                   </button>
                 </div>
+                <!--
+                  按 markdown 渲染，不是 pre-wrap 纯文本。这块预览和下面的
+                  成稿编辑器显示的是同一段正文，一个排好版、一个满屏 ## 和
+                  ** —— 用户看到的就是「润色把排版弄没了、变成 md 代码」。
+                  mdToHtml 先转义再拼标签，产出只有 p/br/h1-6/strong。
+                -->
                 <div
-                  class="font-serif-cn"
-                  :style="{ fontSize: '12.5px', lineHeight: 1.75, color: 'var(--ink-2)', whiteSpace: 'pre-wrap' }"
-                >{{ p.output }}</div>
+                  class="font-serif-cn pass-md"
+                  :style="{ fontSize: '12.5px', lineHeight: 1.75, color: 'var(--ink-2)' }"
+                  v-html="mdToHtml(p.output)"
+                />
               </div>
             </div>
             <div class="flex min-h-0 flex-1 flex-col" :style="{ padding: '0 24px 20px' }">
@@ -2774,5 +2789,45 @@ const tabSectionLabel = computed(() => {
 /* selected 状态下 hover 不再额外 translate，避免重复浮起抖动 */
 .assembly-block.selected:hover {
   transform: none;
+}
+
+/*
+  润色 pass 输出预览的 markdown 排版。v-html 出来的节点没有 scoped 属性，
+  必须走 :deep()。层级刻意比成稿编辑器小一号 —— 这里是「这一轮改成了什么」
+  的诊断视图，不该抢正文的视觉重量。
+*/
+.pass-md :deep(p) {
+  margin: 0 0 0.8em 0;
+}
+.pass-md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.pass-md :deep(h1),
+.pass-md :deep(h2),
+.pass-md :deep(h3),
+.pass-md :deep(h4),
+.pass-md :deep(h5),
+.pass-md :deep(h6) {
+  font-family: "Plus Jakarta Sans", "Noto Sans SC", sans-serif;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin: 1.1em 0 0.45em 0;
+}
+.pass-md :deep(h1) {
+  font-size: 16px;
+}
+.pass-md :deep(h2) {
+  font-size: 14.5px;
+}
+.pass-md :deep(h3),
+.pass-md :deep(h4),
+.pass-md :deep(h5),
+.pass-md :deep(h6) {
+  font-size: 13px;
+}
+.pass-md :deep(strong) {
+  color: var(--primary-deep);
 }
 </style>

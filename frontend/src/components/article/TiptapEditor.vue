@@ -23,6 +23,7 @@ import { Editor, EditorContent } from "@tiptap/vue-3";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import CharacterCount from "@tiptap/extension-character-count";
+import { mdToHtml } from "@/utils/markdown";
 
 const props = withDefaults(
   defineProps<{
@@ -43,43 +44,6 @@ const editor = shallowRef<Editor | null>(null);
 // True while we're applying an external value change — prevents the
 // Tiptap onUpdate handler from echoing it back as a model update.
 let suppressEcho = false;
-
-function mdToHtml(md: string): string {
-  if (!md) return "";
-  const lines = md.replace(/\r\n/g, "\n").split("\n");
-  const out: string[] = [];
-  let para: string[] = [];
-  const flushPara = () => {
-    if (para.length) {
-      out.push(`<p>${para.join("<br/>")}</p>`);
-      para = [];
-    }
-  };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    if (line === "") {
-      flushPara();
-      continue;
-    }
-    const h = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (h) {
-      flushPara();
-      const level = h[1].length;
-      out.push(`<h${level}>${escapeHtml(h[2])}</h${level}>`);
-      continue;
-    }
-    para.push(escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>"));
-  }
-  flushPara();
-  return out.join("\n");
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
 
 function htmlToMd(html: string): string {
   if (!html) return "";

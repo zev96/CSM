@@ -43,6 +43,30 @@ def _strip_bold_markers(text: str) -> str:
     return _BOLD_RE.sub(r"\1", text)
 
 
+def ensure_title(text: str, title: str) -> str:
+    """保证正文以 ``# 标题`` 开头 —— 已经有 H1 就原样返回。
+
+    成稿正文（``article.finalText`` / 润色链输出）里**没有**标题：标题是
+    单独一个字段，编辑器显示时才临时拼上去。导出却直接写正文，于是导出的
+    文档、历史镜像、Word 里通通没有标题 —— 用户看到的就是「润色把我的标题
+    去掉了」。拼接必须发生在写盘这一层，前端拼只能修好那一个调用点。
+    """
+    # 标题压成单行：H1 是单行结构，多行标题拼进去第二行就成了正文。
+    title = " ".join((title or "").split())
+    if not title:
+        return text
+    for raw in (text or "").splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        # 只认真正的 H1。``## 一、品牌分析`` 是章节标题，不是文章标题。
+        # 判据与 ``_heading_level`` 同款（``#`` 后任意空白，含制表符）——
+        # 两边不一致的话 ``#\t标题`` 会被判成没有标题、又补一个。
+        h = _heading_level(stripped)
+        return text if h is not None and h[0] == 1 else f"# {title}\n\n{text}"
+    return f"# {title}\n\n{text}"
+
+
 def extract_title(text: str) -> str:
     """Pull the first H1 / H2 line from a markdown document.
 
@@ -215,10 +239,36 @@ def _write_docx(path: Path, text: str) -> None:
     if current:
         blocks.append(current)
 
+    def flush(lines: list[str]) -> None:
+        """Emit accumulated prose lines as one Word paragraph.
+
+        Line breaks inside a block are preserved as soft returns so the
+        user sees the original layout but the text flows as one paragraph.
+        """
+        if not lines:
+            return
+        p = doc.add_paragraph()
+        p.paragraph_format.line_spacing = _LINE_SPACING
+        for i, line in enumerate(lines):
+            if i > 0:
+                br_run = p.add_run()
+                br_run.add_break()
+                _set_run_font(br_run, color=_HEADING_COLOR)
+            _add_inline_runs(p, line)
+        lines.clear()
+
+    # 标题**逐行**判定，不是「整块只有一行时才算标题」。润色链返回的正文
+    # 经常是 ``## 一、品牌分析\n正文第一句…`` —— 标题和正文之间没有空行，
+    # 按块判就整块变成普通段落，Word 里能看到字面的 ``##``。用户报的
+    # 「排版没了、变成 md 代码格式」就是这个。
     for block in blocks:
-        first = block[0]
-        heading = _heading_level(first)
-        if heading is not None and len(block) == 1:
+        pending: list[str] = []
+        for line in block:
+            heading = _heading_level(line)
+            if heading is None:
+                pending.append(line)
+                continue
+            flush(pending)
             level, body = heading
             # Word heading 样式自带粗体，去掉 ``**...**`` 包裹只保留文字
             # 否则会看到字面星号。
@@ -227,19 +277,7 @@ def _write_docx(path: Path, text: str) -> None:
             p.paragraph_format.line_spacing = _LINE_SPACING
             run = p.add_run(body)
             _set_run_font(run, color=_HEADING_COLOR)
-            continue
-        # Treat block as a single paragraph. Line breaks inside a block
-        # are preserved as soft returns so the user can see the original
-        # layout but the text still flows as one paragraph.
-        p = doc.add_paragraph()
-        p.paragraph_format.line_spacing = _LINE_SPACING
-        for i, line in enumerate(block):
-            if i > 0:
-                # Soft line break inside the same paragraph.
-                br_run = p.add_run()
-                br_run.add_break()
-                _set_run_font(br_run, color=_HEADING_COLOR)
-            _add_inline_runs(p, line)
+        flush(pending)
 
     doc.save(str(path))
 
@@ -252,19 +290,26 @@ def export_article(
     plan: AssemblyPlan | None = None,            # kept for call-site compat
     prompt_snapshot: dict[str, Any] | None = None,  # unused now
     fmt: ExportFormat = "markdown",
+    title: str | None = None,
 ) -> dict[str, str]:
+    """写盘。``title`` 缺省用 ``keyword`` —— 导出的文档必须带标题。
+
+    正文本身不含标题（见 ``ensure_title``），所以这里补。补完再
+    ``extract_title`` 取回，返回的 title 才是文章标题而不是第一个章节名。
+    """
     out_dir = Path(out_dir)
     if not out_dir.exists():
         raise FileNotFoundError(f"output directory does not exist: {out_dir}")
 
     stem = _next_filename_stem(out_dir, fmt)
-    title = extract_title(final_text) or keyword
+    body = ensure_title(final_text, (title or "").strip() or keyword)
+    doc_title = extract_title(body) or keyword
 
     if fmt == "docx":
         path = out_dir / f"{stem}.docx"
-        _write_docx(path, final_text)
-        return {"document": str(path), "format": "docx", "title": title}
+        _write_docx(path, body)
+        return {"document": str(path), "format": "docx", "title": doc_title}
 
     path = out_dir / f"{stem}.md"
-    path.write_text(final_text, encoding="utf-8")
-    return {"document": str(path), "format": "markdown", "title": title}
+    path.write_text(body, encoding="utf-8")
+    return {"document": str(path), "format": "markdown", "title": doc_title}
