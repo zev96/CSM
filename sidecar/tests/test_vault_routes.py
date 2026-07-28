@@ -184,3 +184,157 @@ def test_card_endpoints_400_when_vault_root_unreachable(client: TestClient, tmp_
     })
     assert r2.status_code == 400
     assert "不可访问" in r2.json()["detail"]
+
+
+# ── /api/vault/note_sections（主推卡「从目录识别」）────────────────────────
+# 主推卡是「一篇笔记 = 一个小节」，靠 frontmatter 字段区分，正文里没有 H2 ——
+# 拿 card_sections 那套去扫只会得到 0 个小节，而用户明明看得见目录里躺着 11 篇。
+def _hero(p: Path, *, module: str, order: int | None = None,
+          body: str = "① 正文", brand: str = "DARZ") -> None:
+    fm: dict = {"素材类型": "产品推荐格式", "模块": module, "品牌": brand}
+    if order is not None:
+        fm["模块序号"] = order
+    _write_note(p, frontmatter=fm, body=body)
+
+
+def test_note_sections_400_without_module(client: TestClient, tmp_path):
+    client.patch("/api/config", json={"vault_root": str(tmp_path / "v")})
+    assert client.post("/api/vault/note_sections", json={"module": " "}).status_code == 400
+
+
+def test_note_sections_groups_by_inferred_field_in_order(client: TestClient, tmp_path):
+    """推断出 `模块` 当分组字段、`模块序号` 当排序 —— 顺序直接是小节顺序。
+
+    并列的候选里刻意选**取值不是纯数字**的那个：`模块` 和 `模块序号` 都能
+    一篇一值，拿序号当小节名等于给用户一排「0/1/2」。
+    """
+    vault = tmp_path / "vault"
+    d = vault / "主推位"
+    _hero(d / "c.md", module="核心参数", order=3)
+    _hero(d / "a.md", module="品牌实力", order=1)
+    _hero(d / "b.md", module="核心技术", order=2)
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={"module": "主推位"}).json()
+    assert data["field"] == "模块"
+    assert data["note_count"] == 3
+    assert [v["value"] for v in data["values"]] == ["品牌实力", "核心技术", "核心参数"]
+    assert all(v["note_count"] == 1 and v["with_body"] == 1 for v in data["values"])
+    assert "模块序号" in data["field_candidates"]
+
+
+def test_note_sections_respects_explicit_field(client: TestClient, tmp_path):
+    """前端把当前小节用的字段回传，识别就跟着用户已有的口径走。"""
+    vault = tmp_path / "vault"
+    _hero(vault / "主推位" / "a.md", module="品牌实力", order=1)
+    _hero(vault / "主推位" / "b.md", module="核心技术", order=2)
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={
+        "module": "主推位", "field": "模块序号",
+    }).json()
+    assert data["field"] == "模块序号"
+    assert [v["value"] for v in data["values"]] == ["1", "2"]
+
+
+def test_note_sections_flags_empty_body(client: TestClient, tmp_path):
+    """空骨架笔记筛得到，但抽出来是空段 —— 面板要能标出来。"""
+    vault = tmp_path / "vault"
+    _hero(vault / "主推位" / "a.md", module="品牌实力", order=1)
+    _hero(vault / "主推位" / "b.md", module="核心技术", order=2, body="")
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={"module": "主推位"}).json()
+    by_val = {v["value"]: v for v in data["values"]}
+    assert by_val["品牌实力"]["with_body"] == 1
+    assert by_val["核心技术"]["with_body"] == 0
+
+
+def test_note_sections_empty_pool_carries_attribution(client: TestClient, tmp_path):
+    """一篇都没捞到时给归因，与竞品池空池报错同一套口径。"""
+    vault = tmp_path / "vault"
+    _hero(vault / "主推位" / "a.md", module="品牌实力", order=1)
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={
+        "module": "主推位", "filter": {"推荐位": "主推"},
+    }).json()
+    assert data["note_count"] == 0
+    assert data["values"] == []
+    assert "推荐位" in data["hint"]
+
+
+def test_note_sections_no_discriminating_field(client: TestClient, tmp_path):
+    """全同字段分不开笔记 —— 返回空 values 而不是瞎选一个字段。"""
+    vault = tmp_path / "vault"
+    for name in ("a", "b"):
+        _write_note(vault / "主推位" / f"{name}.md",
+                    frontmatter={"品牌": "DARZ", "产品": "空气净化器"}, body="正文")
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={"module": "主推位"}).json()
+    assert data["note_count"] == 2
+    assert data["field"] == ""
+    assert data["values"] == []
+
+
+def test_note_sections_400_when_vault_root_unreachable(client: TestClient, tmp_path):
+    client.patch("/api/config", json={"vault_root": str(tmp_path / "断连的共享盘")})
+    r = client.post("/api/vault/note_sections", json={"module": "主推位"})
+    assert r.status_code == 400
+    assert "不可访问" in r.json()["detail"]
+
+
+def test_note_sections_rejects_field_that_cannot_split(client: TestClient, tmp_path):
+    """前端回传的字段分不开笔记时必须回落，不能照它拆。
+
+    `field` 取的是「小节 filter 里出现最多的键」，用户只要有一节的筛选字段
+    选错（下拉里 素材类型/品牌/产品 全在列），坏字段就会被回传。照它拆只有
+    1 个组 → 「按目录替换」把整张卡塌成一节，且那一节命中整个目录随机抽 ——
+    正是这次要修的病，由修复按钮本人制造，而且 lint 和 sampler 两道告警都
+    拦不住（filter 非空）。
+    """
+    vault = tmp_path / "vault"
+    for i, m in enumerate(["品牌实力", "核心技术", "核心参数"], start=1):
+        _hero(vault / "主推位" / f"{i}.md", module=m, order=i)
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={
+        "module": "主推位", "field": "素材类型",     # 三篇全是「产品推荐格式」
+    }).json()
+    assert data["field_rejected"] == "素材类型"
+    assert data["field"] == "模块"
+    assert [v["value"] for v in data["values"]] == ["品牌实力", "核心技术", "核心参数"]
+
+
+def test_note_sections_rejects_list_valued_field(client: TestClient, tmp_path):
+    """列表字段一篇会落进多个组，当不了「一篇 = 一节」的分组键。"""
+    vault = tmp_path / "vault"
+    for i, m in enumerate(["品牌实力", "核心技术"], start=1):
+        p = vault / "主推位" / f"{i}.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            f"---\n模块: {m}\n模块序号: {i}\n核心关键词:\n  - 模板二\n  - {m}\n---\n① 正文\n",
+            encoding="utf-8")
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={
+        "module": "主推位", "field": "核心关键词",
+    }).json()
+    assert data["field_rejected"] == "核心关键词"
+    assert data["field"] == "模块"
+    assert len(data["values"]) == 2
+
+
+def test_note_sections_keeps_valid_explicit_field(client: TestClient, tmp_path):
+    """能分开就照用户的字段拆，不自作主张（零回归）。"""
+    vault = tmp_path / "vault"
+    _hero(vault / "主推位" / "a.md", module="甲", order=1)
+    _hero(vault / "主推位" / "b.md", module="乙", order=2)
+    client.patch("/api/config", json={"vault_root": str(vault)})
+
+    data = client.post("/api/vault/note_sections", json={
+        "module": "主推位", "field": "模块序号",
+    }).json()
+    assert data["field_rejected"] == ""
+    assert data["field"] == "模块序号"

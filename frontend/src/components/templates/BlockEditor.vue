@@ -321,6 +321,15 @@ function apiError(e: any): string {
 // 小节名原来纯手敲，得先去 Obsidian 里翻一遍卡片的 ## 标题再逐个抄进来，
 // 抄错一个字这节就永远匹配不上（find_card_section 只做包含匹配，不做纠错）。
 // 这里反查目录：卡里实际写了什么小节、每节多少篇有内容，一次列清。
+//
+// 主推卡走**另一套**：一个小节 = 一整篇笔记，靠 frontmatter 字段区分
+// （`模块: 参考价格`），正文里根本没有 H2。所以后端换 /note_sections，
+// 归一成同一个 {title,...} 形状后共用这块面板；识别到的字段存 detectField，
+// 落库时写成 filter={字段: 取值}。
+//
+// 这个缺口的代价不是「少个便利功能」：小节名手敲、筛选值另配，两者对不上
+// 时第一节直接空池报错，而**没填筛选的小节（filter={}）会静默命中整个目录
+// 随机抽一篇** —— 模板三/四/五就是这么坏的，报错只报出第一节。
 interface DetectedSection {
   title: string;
   note_count: number;
@@ -336,9 +345,24 @@ const detectTruncated = ref(false);
 const detectHint = ref("");
 /** 导入时做过的让步（跳过了谁、翻了谁的必需）—— 一律显式说，不静默。 */
 const importNotice = ref<string[]>([]);
+/** 主推卡：识别用的分组字段（`模块`），落库写成 filter={字段: 取值}。 */
+const detectField = ref("");
+/** 同一批笔记还能按哪些字段拆 —— 推断不一定合用户的意，得让他看得见别的选项。 */
+const detectFieldCandidates = ref<string[]>([]);
+/** 后端拒绝了前端回传的字段（它分不开这批笔记），换成了 detectField。 */
+const detectFieldRejected = ref("");
+const detectFieldAlternatives = computed(
+  () => detectFieldCandidates.value.filter((f) => f !== detectField.value).slice(0, 3),
+);
+/** 主推卡默认没勾上的取值数 —— 默认口径不能是隐形的，得当场说清有几个没进来。 */
+const detectUnpicked = computed(() => (
+  isPool.value ? 0 : (detected.value?.length ?? 0) - detectPicked.value.length
+));
 
 const detectBlocker = computed<string | null>(
-  () => (block.value.source?.module ? null : "先给竞品池选目录"),
+  () => (block.value.source?.module
+    ? null
+    : `先给${isPool.value ? "竞品池" : "主推卡"}选目录`),
 );
 
 // 与上面 coverage 那条同理，但这里更要命：体检报告只是读，识别面板上的
@@ -351,11 +375,14 @@ const detectBlocker = computed<string | null>(
 // 照做回来直接点替换，写进去的还是旧目录的小节，面板上的篇数也全是旧的。
 // 返回**字符串**而不是数组/对象字面量：后者每次求值都是新引用，Object.is
 // 恒判「变了」，任何无关编辑都会清掉面板。
+// kind 也进键：竞品卡与主推卡走两个端点、两种小节形状，把一边的结果落到
+// 另一边，写出来就是一份 schema 放行、语义全错的配置。
 const detectScopeKey = computed(() => [
   block.value?.id ?? "",
+  block.value?.kind ?? "",
   block.value?.source?.module ?? "",
   JSON.stringify(block.value?.source?.filter ?? {}),
-].join(" "));
+].join("\u0000"));
 
 watch(detectScopeKey, () => {
   dismissDetected();
@@ -363,29 +390,104 @@ watch(detectScopeKey, () => {
   importNotice.value = [];
 });
 
+/**
+ * 主推卡当前小节用的筛选字段 —— 出现最多的那个键。
+ *
+ * 回传给后端当 `field`，识别就跟着用户已有的口径走。不传的话后端自己推断，
+ * 同一个目录里 `模块` 和 `模块序号` 都能一篇一值，推断换个字段用户就看不懂了。
+ */
+const currentHeroField = computed(() => {
+  const tally = new Map<string, number>();
+  for (const s of (block.value.sections ?? []) as any[]) {
+    for (const k of Object.keys(s?.filter ?? {})) {
+      if (k) tally.set(k, (tally.get(k) ?? 0) + 1);
+    }
+  }
+  let best = "";
+  let n = 0;
+  // 并列时取字典序小的 —— 遍历顺序不该影响结果。
+  for (const [k, c] of [...tally].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (c > n) { best = k; n = c; }
+  }
+  return best;
+});
+
+/**
+ * 主推卡默认勾哪些取值。
+ *
+ * **已经配过小节的块，默认只勾「对得上现有小节」的那些** —— 不然在一个
+ * 本来跑得好好的版本上点一下识别，就会把目录里所有取值都加进去（用户的
+ * 5 个目录里每个都躺着一篇 `模块: 标题行`，加进去成文里会多出
+ * `**标题行** ：… TOP1. DARZ D9` 这种垃圾段），等于**用修复按钮把能跑的
+ * 版本改坏**。而坏掉的那几个版本，小节名本来就是对的、错的是筛选值，所以
+ * 按名字对齐正好把它们全勾上、filter 由 adopt 纠正。
+ *
+ * 没配过（刚开卡片模式，只有一条默认小节）就全勾有正文的，让用户有东西可用。
+ * 没勾上的取值仍然逐条列在面板上，勾一下就能加 —— 不隐藏任何东西。
+ */
+function defaultHeroPicks(list: DetectedSection[]): string[] {
+  const cur: any[] = block.value.sections ?? [];
+  const field = detectField.value;
+  const configured = cur.length >= 2
+    || cur.some((s) => Object.keys(s?.filter ?? {}).length > 0);
+  if (configured) {
+    const known = new Set<string>();
+    for (const s of cur) {
+      if (s?.label) known.add(String(s.label));
+      const v = field ? s?.filter?.[field] : undefined;
+      if (v !== undefined && v !== "") known.add(String(v));
+    }
+    const matched = list.filter((s) => known.has(s.title)).map((s) => s.title);
+    if (matched.length) return matched;
+  }
+  const withBody = list.filter((s) => s.with_body > 0).map((s) => s.title);
+  return withBody.length ? withBody : list.map((s) => s.title);
+}
+
 async function detectSections() {
   if (detectBlocker.value || detectLoading.value) return;
   const owner = detectScopeKey.value;   // 响应回来时块/目录可能都换了
+  const pool = isPool.value;            // 走哪个端点；块换了 owner 键就变，见上
   detectLoading.value = true;
   detected.value = null;
   detectError.value = null;
   importNotice.value = [];
   try {
-    const r = await sidecar.client.post("/api/vault/card_sections", {
-      module: block.value.source?.module ?? "",
-      filter: block.value.source?.filter ?? {},
-    });
-    if (detectScopeKey.value !== owner) return;   // 迟到的响应不许落到别处
-    const list: DetectedSection[] = r.data?.sections ?? [];
+    const r = pool
+      ? await sidecar.client.post("/api/vault/card_sections", {
+        module: block.value.source?.module ?? "",
+        filter: block.value.source?.filter ?? {},
+      })
+      : await sidecar.client.post("/api/vault/note_sections", {
+        module: block.value.source?.module ?? "",
+        filter: block.value.source?.filter ?? {},
+        field: currentHeroField.value || null,
+      });
+    if (detectScopeKey.value !== owner) return;   // 迟到的响应不许落到别处（kind 已在键里）
+    // 主推卡的取值归一成 {title,...}，下面整块面板与勾选逻辑两边共用。
+    const list: DetectedSection[] = pool
+      ? (r.data?.sections ?? [])
+      : (r.data?.values ?? []).map((v: any) => ({
+        title: String(v.value ?? ""),
+        note_count: v.note_count ?? 0,
+        with_body: v.with_body ?? 0,
+      }));
+    detectField.value = pool ? "" : String(r.data?.field ?? "");
+    detectFieldCandidates.value = pool ? [] : (r.data?.field_candidates ?? []);
+    detectFieldRejected.value = pool ? "" : String(r.data?.field_rejected ?? "");
     detectNoteCount.value = r.data?.note_count ?? 0;
     detectHint.value = r.data?.hint ?? "";
     detectTruncated.value = !!r.data?.truncated;
     detected.value = list;
-    // 默认勾「这个目录的卡都写了的小节」= 结构齐全。至于设不设**必需**是
-    // 另一回事，那要看正文（contentComplete）—— 两个口径混用就会造出一份
-    // 必然清空名册的配置。
-    const full = list.filter(structureCovered).map((s) => s.title);
-    detectPicked.value = full.length ? full : list.map((s) => s.title);
+    if (pool) {
+      // 默认勾「这个目录的卡都写了的小节」= 结构齐全。至于设不设**必需**是
+      // 另一回事，那要看正文（contentComplete）—— 两个口径混用就会造出一份
+      // 必然清空名册的配置。
+      const full = list.filter(structureCovered).map((s) => s.title);
+      detectPicked.value = full.length ? full : list.map((s) => s.title);
+    } else {
+      detectPicked.value = defaultHeroPicks(list);
+    }
   } catch (e: any) {
     if (detectScopeKey.value !== owner) return;
     detectError.value = apiError(e);
@@ -425,7 +527,8 @@ const detectPicks = computed(
  * 精确命中自己，不会去蹭别人的正文。只有确实有卡缺这个标题时宽松匹配才接管。
  */
 const overlappingTitles = computed<Record<string, string[]>>(() => {
-  const list = detected.value ?? [];
+  // 主推卡按 frontmatter 取值精确筛，没有包含匹配这一档，也就没有互蹭。
+  const list = isPool.value ? (detected.value ?? []) : [];
   const out: Record<string, string[]> = {};
   for (const a of list) {
     if (structureCovered(a)) continue;
@@ -455,7 +558,146 @@ interface SectionPlan {
  * —— 于是面板显示「最多 9」，落库却是两个必需节、真实上界 3。append 更狠：
  * 已有的必需老节压根不进上界计算，显示「最多 8」实际名册 0、生成直接中止。
  */
+/**
+ * 主推卡版：一个小节 = 一个 frontmatter 取值。
+ *
+ * 与竞品卡的关键差别是**认亲后必须改写 filter**。这次要修的病就是「小节名
+ * 是对的、筛选值是从别的模板复制来的旧值」（模板四 `label=参考价格` 配
+ * `filter={模块:品牌实力}`）—— 认亲时原样带走 filter 等于把病一起带走，
+ * 识别按钮点了也白点。所以 filter 一律以识别结果为准，其余（目录覆盖、
+ * 抽几篇、每篇几条）是用户调过的，照原样保留。
+ */
+function planHeroSections(mode: "replace" | "append"): SectionPlan {
+  const picks = detectPicks.value;
+  const cur: any[] = block.value.sections ?? [];
+  const field = detectField.value;
+  const notes: string[] = [];
+  if (!picks.length || !field) return { pairs: [], notes };
+
+  // 认亲**两趟**：先让所有取值按小节名认一遍，剩下的再按筛选值认。
+  //
+  // 「按名字优先」必须是全局的，不能写成每个取值内部「先试名字再试筛选」——
+  // 那样先轮到的取值会用筛选值抢走一节，而那一节本来该被后面某个取值按名字
+  // 认走。真实坏法：`{label:"选购建议", filter:{模块:"参考价格"}}`（名字对、
+  // 筛选是从别处复制来的）会被取值「参考价格」按 filter 抢走并固化，真正的
+  // 「选购建议」再生成一条同名小节 —— 成稿里这一节印的是参考价格的正文，
+  // 选购建议永远抽不到。两趟之后：「选购建议」按名字认走它、filter 被
+  // adopt 纠正，「参考价格」自己新建一节。
+  const unclaimed = [...cur];
+  const claimedBy = new Map<any, DetectedSection>();
+  const claims = new Map<DetectedSection, any>();
+  const take = (s: DetectedSection, hit: any) => {
+    unclaimed.splice(unclaimed.indexOf(hit), 1);
+    claimedBy.set(hit, s);
+    claims.set(s, hit);
+  };
+  for (const s of picks) {
+    const hit = unclaimed.find((x) => String(x?.label ?? "") === s.title);
+    if (hit) take(s, hit);
+  }
+  for (const s of picks) {
+    if (claims.has(s)) continue;
+    // 兜底：label 是自定义简称（「价格」配 filter 参考价格）时靠筛选值认。
+    const hit = unclaimed.find((x) => String(x?.filter?.[field] ?? "") === s.title);
+    if (hit) take(s, hit);
+  }
+  const claim = (s: DetectedSection) => claims.get(s);
+  const fresh = (s: DetectedSection) => ({
+    label: s.title,
+    module: null,                       // 留空 = 跟块上的默认目录，换目录不用逐节改
+    filter: { [field]: s.title },
+    pick_notes: 1,
+    pick_variants_per_note: 1,
+  });
+  // 认亲带走的小节：filter **和 module 都以识别结果为准**。
+  // 取值是在「识别的那个目录」里查出来的，把它绑到另一个目录毫无依据 ——
+  // 老小节留着自己的 module 时（用户模板里首节普遍写了显式目录），引擎
+  // `sec.module or block.source.module` 会去 B 目录查 A 目录的取值，必然空池。
+  // module 归零 = 跟随块的默认目录，与 fresh 一致。改动会在 notes 里说明。
+  // filter 是**合并**不是整体替换：只改分组字段那一项。用户可能在这一节
+  // 额外加过约束（`推荐位: 主推` 之类），整体替换会无声抹掉、把池放宽。
+  const adopt = (old: any, s: DetectedSection) => ({
+    ...old,
+    label: old.label || s.title,
+    module: null,
+    filter: { ...(old?.filter ?? {}), [field]: s.title },
+  });
+  const noteAdopt = (old: any, s: DetectedSection) => {
+    const oldVal = String(old?.filter?.[field] ?? "");
+    if (oldVal && oldVal !== s.title) {
+      notes.push(`「${old.label || s.title}」原来筛的是「${field}=${oldVal}」，已按目录改成「${s.title}」。`);
+    }
+    if (old?.module && old.module !== (block.value.source?.module ?? "")) {
+      notes.push(`「${old.label || s.title}」原来单独指定了目录「${old.module}」，已改为跟随本块目录 —— 取值是在本块目录里识别出来的。`);
+    }
+  };
+
+  let pairs: PlannedPair[];
+  if (mode === "replace") {
+    pairs = picks.map((s): PlannedPair => {
+      const old = claim(s);
+      if (old) noteAdopt(old, s);
+      return [old ? adopt(old, s) : fresh(s), s];
+    });
+  } else {
+    // 追加模式也要改写认亲到的小节：「只补未配置的」保的是「有哪些节、什么
+    // 顺序」，不是保一份被证伪的筛选值。绑错目录/取值不改，等于点了识别却
+    // 留着原来那个必然报空池的配置。
+    const added = picks.filter((s) => !claim(s));
+    pairs = [
+      ...cur.map((s): PlannedPair => {
+        const d = claimedBy.get(s);
+        if (!d) return [s, null];
+        noteAdopt(s, d);
+        return [adopt(s, d), d];
+      }),
+      ...added.map((s): PlannedPair => [fresh(s), s]),
+    ];
+  }
+
+  // ⚠ 主推卡**不做按 label 去重**（竞品卡那边做）。两处依据完全不同：
+  // schema 的 label 唯一性校验只加在 competitor_pool 上，而 HeroSection 的
+  // 空 label 是**文档明确支持的写法**——「留空 = 只输出正文不输出小节标题，
+  // 用于把一个点拆成多段」。照搬竞品那套会把一张卡里所有续段小节合并成一条，
+  // 「只补未配置的」这个更安全的按钮反而在删用户数据，提示还是看不懂的
+  // 「目录里的「」没有导入」。真正该防的是「两节抽同一个池」，那不删只报。
+  const seen = new Map<string, string>();
+  for (const [s] of pairs) {
+    const key = JSON.stringify([
+      s?.module ?? "",
+      Object.entries(s?.filter ?? {}).map(([k, v]) => [k, String(v)]).sort(),
+    ]);
+    const name = String(s?.label || "（无小节名）");
+    const prev = seen.get(key);
+    if (prev !== undefined) {
+      notes.push(`「${name}」与「${prev}」的目录和筛选完全相同，会从同一个池各抽一次、内容可能重复。`);
+    } else {
+      seen.set(key, name);
+    }
+  }
+
+  for (const [s, d] of pairs) {
+    const name = String(s?.label || "（无小节名）");
+    if (d && d.with_body === 0) {
+      notes.push(`「${name}」对应的笔记正文是空的 —— 这一节抽出来会是空段。`);
+    } else if (d && d.note_count > 1) {
+      notes.push(`「${name}」在目录里有 ${d.note_count} 篇，每次生成会在它们之间随机抽。`);
+    }
+    // 追加模式下留在原位、却对不上任何取值的老小节 = 这次报错的元凶形态。
+    if (!d) {
+      const v = String(s?.filter?.[field] ?? "");
+      notes.push(
+        v
+          ? `已有小节「${name}」筛的是「${field}=${v}」，这个目录里没有这个取值 —— 生成会报空池。`
+          : `已有小节「${name}」没配筛选，会命中整个目录随机抽一篇 —— 建议改用「按目录替换」。`,
+      );
+    }
+  }
+  return { pairs, notes };
+}
+
 function planSections(mode: "replace" | "append"): SectionPlan {
+  if (!isPool.value) return planHeroSections(mode);
   const picks = detectPicks.value;
   const list = detected.value ?? [];
   const cur: any[] = block.value.sections ?? [];
@@ -565,10 +807,29 @@ function ceilingOf(plan: SectionPlan): number | null {
   return Math.min(...req.map(([, d]) => d?.with_body ?? 0));
 }
 
+/**
+ * 这份方案该不该标红。两种卡的「出事」定义不是一回事，别靠 ceilingOf 的
+ * 数值巧合共用：竞品卡是「名册会空」，主推卡是「某节抽出来是空段 / 某节
+ * 对不上任何取值」。
+ */
+function planHasRisk(plan: SectionPlan): boolean {
+  if (!plan.pairs.length) return false;
+  if (!isPool.value) return plan.pairs.some(([, d]) => !d || d.with_body === 0);
+  return !ceilingOf(plan);
+}
+
 /** 有互为子串的标题时宽松匹配会额外救回一些卡，上界就只是个估计。 */
 const ceilingIsExact = computed(() => !Object.keys(overlappingTitles.value).length);
 
 function ceilingText(plan: SectionPlan): string {
+  if (!isPool.value) {
+    // 主推卡只有一张卡，「几张能入册」无从谈起 —— 它的风险是**空段**：
+    // 某一节对应的笔记没正文。required/with_body 那套口径照搬过来会算出
+    // 「最多 1 张卡入册」这种既没错也没用的话。
+    if (!plan.pairs.length) return "";
+    const empty = plan.pairs.filter(([, d]) => d && d.with_body === 0).length;
+    return `${plan.pairs.length} 节` + (empty ? ` · ${empty} 节没正文` : "");
+  }
   const n = ceilingOf(plan);
   if (n === null) return "";
   if (n === 0) return "一张卡都入不了册";
@@ -587,6 +848,9 @@ function dismissDetected() {
   detectHint.value = "";
   detectTruncated.value = false;
   detectPicked.value = [];
+  detectField.value = "";
+  detectFieldCandidates.value = [];
+  detectFieldRejected.value = "";
 }
 
 /** 小节的匹配主题 —— 与引擎 CompetitorSection.topic() 同口径。 */
@@ -1381,7 +1645,6 @@ function insertKeyword(field: "text") {
             </span>
             <span class="ml-auto flex items-center gap-3">
               <button
-                v-if="isPool"
                 type="button"
                 class="text-[11px]"
                 :style="{
@@ -1389,7 +1652,9 @@ function insertKeyword(field: "text") {
                   opacity: detectBlocker ? 0.5 : 1,
                 }"
                 :disabled="detectLoading || !!detectBlocker"
-                :title="detectBlocker ?? '扫这个目录里的竞品卡，列出它们实际写了哪些 ## 小节'"
+                :title="detectBlocker ?? (isPool
+                  ? '扫这个目录里的竞品卡，列出它们实际写了哪些 ## 小节'
+                  : '扫这个目录里的笔记，按 frontmatter 字段列出能拆出哪些小节')"
                 @click="detectSections"
               >
                 {{ detectLoading ? "识别中…" : "从目录识别" }}
@@ -1410,7 +1675,7 @@ function insertKeyword(field: "text") {
             目录选错时（识别出一堆不相干的 H2）也得有机会退出来。
           -->
           <div
-            v-if="isPool && (detectError || detected)"
+            v-if="detectError || detected"
             class="mb-2 rounded p-2 text-[11px]"
             :style="{ background: 'var(--card-2)', border: '1px solid var(--line)' }"
           >
@@ -1426,16 +1691,49 @@ function insertKeyword(field: "text") {
               这个目录 + 筛选没匹配到任何笔记。{{ detectHint }}
             </div>
             <div v-else-if="detected && !detected.length" class="text-ink-3">
-              这个目录的 {{ detectNoteCount }} 篇笔记里没有任何 ## 小节 ——
-              竞品卡要写成「## 小节名」加节内 ①②③，只有 frontmatter 的笔记识别不出东西。
+              <template v-if="isPool">
+                这个目录的 {{ detectNoteCount }} 篇笔记里没有任何 ## 小节 ——
+                竞品卡要写成「## 小节名」加节内 ①②③，只有 frontmatter 的笔记识别不出东西。
+              </template>
+              <template v-else-if="detectFieldCandidates.length">
+                按「{{ detectField }}」拆不出小节。这个目录能用的分组字段是
+                {{ detectFieldCandidates.join("、") }} —— 改一节的筛选字段后重新识别。
+              </template>
+              <template v-else>
+                这个目录的 {{ detectNoteCount }} 篇笔记里，没有哪个 frontmatter 字段能把它们分开 ——
+                主推卡是「一篇笔记 = 一个小节」，需要一个逐篇取值不同的字段（比如 `模块`）。
+                只有一篇笔记时不用拆，小节留空筛选即可。
+              </template>
             </div>
             <template v-else-if="detected">
-              <div class="mb-1.5 text-ink-3">
+              <div v-if="isPool" class="mb-1.5 text-ink-3">
                 共 {{ detectNoteCount }} 篇卡。「有内容」= 该小节底下真写了正文；
                 只有标题没内容的，这张卡照样进不了名册。
               </div>
+              <div v-else class="mb-1.5 text-ink-3">
+                共 {{ detectNoteCount }} 篇笔记，按「{{ detectField }}」拆成小节
+                （一篇笔记 = 一个小节）。导入后每节的筛选就是「{{ detectField }}=小节名」。
+                <span v-if="detectFieldAlternatives.length">
+                  也可以按 {{ detectFieldAlternatives.join("、") }} 拆 ——
+                  改任意一节的筛选字段后重新识别即可。
+                </span>
+              </div>
+              <div v-if="detectFieldRejected" class="mb-1.5" :style="{ color: 'var(--amber)' }">
+                你现在小节里用的「{{ detectFieldRejected }}」在这个目录里分不开笔记
+                （取值全一样或是标签列表），已改用「{{ detectField }}」——
+                照原字段拆会把整张卡塌成一节、且那一节命中整个目录随机抽。
+              </div>
+              <div v-if="detectUnpicked" class="mb-1.5 text-ink-3">
+                默认按现有小节勾选；另有 {{ detectUnpicked }} 个取值没勾（目录里常混着不当正文的笔记，
+                比如「标题行」）。要用就自己勾上。
+              </div>
               <div v-if="detectTruncated" class="mb-1.5" :style="{ color: 'var(--amber)' }">
-                这个目录有超过 50 种不同的 ## 标题，只列出了前 50 个 ——
+                <template v-if="isPool">
+                  这个目录有超过 50 种不同的 ## 标题，只列出了前 50 个 ——
+                </template>
+                <template v-else>
+                  这个字段有超过 50 种取值，只列出了前 50 个 ——
+                </template>
                 多半是目录选宽了或混进了别的素材，「按目录替换」会删掉没列出来的小节。
               </div>
               <label
@@ -1449,24 +1747,35 @@ function insertKeyword(field: "text") {
                   @change="toggleDetected(s.title)"
                 />
                 <span class="font-medium">{{ s.title }}</span>
-                <span class="text-ink-3">
-                  {{ s.note_count }}/{{ detectNoteCount }} 篇有此小节 ·
-                  {{ s.with_body }} 篇有内容
-                </span>
-                <!--
-                  三条告警对应三种不同的后果，不能合并成一句「非全覆盖」：
-                  正文全空 = 设必需就名册清零；正文不全 = 必需会剔掉那几张卡；
-                  结构不全 = 有些卡压根没这一节。
-                -->
-                <span v-if="!s.with_body" :style="{ color: 'var(--red)' }">
-                  一篇正文都没有，设为必需会让名册清空
-                </span>
-                <span v-else-if="!contentComplete(s)" :style="{ color: 'var(--amber)' }">
-                  {{ s.note_count - s.with_body }} 篇只有标题没正文
-                </span>
-                <span v-else-if="!structureCovered(s)" :style="{ color: 'var(--amber)' }">
-                  {{ detectNoteCount - s.note_count }} 篇没有这一节
-                </span>
+                <template v-if="isPool">
+                  <span class="text-ink-3">
+                    {{ s.note_count }}/{{ detectNoteCount }} 篇有此小节 ·
+                    {{ s.with_body }} 篇有内容
+                  </span>
+                  <!--
+                    三条告警对应三种不同的后果，不能合并成一句「非全覆盖」：
+                    正文全空 = 设必需就名册清零；正文不全 = 必需会剔掉那几张卡；
+                    结构不全 = 有些卡压根没这一节。
+                  -->
+                  <span v-if="!s.with_body" :style="{ color: 'var(--red)' }">
+                    一篇正文都没有，设为必需会让名册清空
+                  </span>
+                  <span v-else-if="!contentComplete(s)" :style="{ color: 'var(--amber)' }">
+                    {{ s.note_count - s.with_body }} 篇只有标题没正文
+                  </span>
+                  <span v-else-if="!structureCovered(s)" :style="{ color: 'var(--amber)' }">
+                    {{ detectNoteCount - s.note_count }} 篇没有这一节
+                  </span>
+                </template>
+                <template v-else>
+                  <!-- 主推卡：一个取值正常就一篇，所以只有两种值得说的情况。 -->
+                  <span v-if="!s.with_body" :style="{ color: 'var(--red)' }">
+                    笔记正文是空的，这一节会抽出空段
+                  </span>
+                  <span v-else-if="s.note_count > 1" :style="{ color: 'var(--amber)' }">
+                    {{ s.note_count }} 篇同取值，每次生成随机抽一篇
+                  </span>
+                </template>
                 <span
                   v-if="overlappingTitles[s.title]"
                   :style="{ color: 'var(--amber)' }"
@@ -1493,7 +1802,7 @@ function insertKeyword(field: "text") {
                   </button>
                   <span
                     v-if="ceilingText(planReplace)"
-                    :style="{ color: ceilingOf(planReplace) ? 'var(--ink-3)' : 'var(--red)' }"
+                    :style="{ color: planHasRisk(planReplace) ? 'var(--red)' : 'var(--ink-3)' }"
                   >
                     → {{ ceilingText(planReplace) }}
                   </span>
@@ -1510,7 +1819,7 @@ function insertKeyword(field: "text") {
                   </button>
                   <span
                     v-if="ceilingText(planAppend)"
-                    :style="{ color: ceilingOf(planAppend) ? 'var(--ink-3)' : 'var(--red)' }"
+                    :style="{ color: planHasRisk(planAppend) ? 'var(--red)' : 'var(--ink-3)' }"
                   >
                     → {{ ceilingText(planAppend) }}
                   </span>

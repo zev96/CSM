@@ -100,6 +100,11 @@ def test_fully_tagged_region_is_clean():
         {"kind": "competitor_pool", "id": "pool", "source": _src(),
          "versions": ["版本1"]},
         {"kind": "hero_brand", "id": "hero2", "title": "B", "versions": ["版本2"]},
+        # hero2 也要有可吞的段落块。旧模式主推块本来就靠吞并后面的段落产出
+        # 正文，没有就只印一行块名 + 「推荐理由：」—— 这条 fixture 原来漏了，
+        # empty_legacy_hero 上线后被抓出来（本意是测版本标签，不是测这个）。
+        {"kind": "paragraph", "id": "p2", "label": "点", "source": _src(),
+         "versions": ["版本2"]},
         {"kind": "competitor_pool", "id": "pool2", "source": _src(),
          "versions": ["版本2"]},
     ], _GROUP)
@@ -249,3 +254,91 @@ def test_child_paragraph_version_tag_rejected():
             "children": [{"kind": "paragraph", "id": "c", "label": "子",
                           "source": _src(), "versions": ["版本2"]}],
         }], _GROUP)
+
+
+# ── 主推卡小节：没配筛选 / 配得一模一样 ────────────────────────────────
+def _hero_card(sections, module="主推位"):
+    return _tpl([{
+        "kind": "hero_brand", "id": "h", "title": "D9",
+        "source": {"type": "notes_query", "module": module},
+        "sections": sections,
+    }])
+
+
+def test_hero_section_without_filter_warns():
+    """空筛选命中整个目录随机抽 —— 不报错、内容却是乱的，最难查的一种坏法。"""
+    tpl = _hero_card([
+        {"label": "品牌实力", "filter": {"模块": "品牌实力"}},
+        {"label": "核心技术", "filter": {}},
+    ])
+    issues = [i for i in lint_template(tpl) if i.code == "hero_section_no_filter"]
+    assert len(issues) == 1
+    assert "核心技术" in issues[0].message
+
+
+def test_hero_section_no_filter_is_warning_not_error():
+    """lint 看不见资料库：目录里只躺一篇时空筛选完全合法，不能拿 error 拦保存。"""
+    tpl = _hero_card([{"label": "唯一一节", "filter": {}}])
+    assert not has_errors(lint_template(tpl))
+
+
+def test_hero_sections_with_identical_query_warn():
+    """两节目录+筛选完全相同 = 同一个池抽两次，成文里会重复。"""
+    tpl = _hero_card([
+        {"label": "甲", "filter": {"模块": "品牌实力"}},
+        {"label": "乙", "filter": {"模块": "品牌实力"}},
+    ])
+    codes = _codes(tpl)
+    assert "hero_section_duplicate" in codes
+
+
+def test_hero_sections_filter_key_order_does_not_matter():
+    """筛选键顺序不同但内容相同，仍然算重复。"""
+    tpl = _hero_card([
+        {"label": "甲", "filter": {"模块": "x", "品牌": "y"}},
+        {"label": "乙", "filter": {"品牌": "y", "模块": "x"}},
+    ])
+    assert "hero_section_duplicate" in _codes(tpl)
+
+
+def test_hero_sections_distinct_by_own_module_not_duplicate():
+    """筛选相同但各自配了不同目录 —— 是两个不同的池，不该报重复。"""
+    tpl = _hero_card([
+        {"label": "甲", "module": "目录A", "filter": {"模块": "x"}},
+        {"label": "乙", "module": "目录B", "filter": {"模块": "x"}},
+    ])
+    assert "hero_section_duplicate" not in _codes(tpl)
+
+
+def test_legacy_hero_without_sections_not_checked():
+    """没有小节的旧主推块不参与这两条检查（零回归）。"""
+    tpl = _tpl([{"kind": "hero_brand", "id": "h", "title": "D9"}])
+    assert not {c for c in _codes(tpl) if c.startswith("hero_section")}
+
+
+# ── 空壳旧主推块 ────────────────────────────────────────────────────────
+def test_empty_legacy_hero_warns():
+    """卡片化改造后忘删的旧主推块，每篇只印一行块名 + 推荐理由。"""
+    tpl = _tpl([
+        {"kind": "hero_brand", "id": "orphan", "title": "DARZ D9空气净化器"},
+        {"kind": "hero_brand", "id": "card", "title": "模板一-D9",
+         "source": _src("主推位"),
+         "sections": [{"label": "口碑", "filter": {"模块": "口碑"}}]},
+    ])
+    issues = [i for i in lint_template(tpl) if i.code == "empty_legacy_hero"]
+    assert len(issues) == 1
+    assert issues[0].block_id == "orphan"
+
+
+def test_legacy_hero_with_body_blocks_is_fine():
+    """旧模式主推块靠吞并后面的段落块产出正文 —— 有得吞就不是空壳（零回归）。"""
+    tpl = _tpl([
+        {"kind": "hero_brand", "id": "h", "title": "D9"},
+        {"kind": "paragraph", "id": "p", "label": "理由", "source": _src("M")},
+    ])
+    assert "empty_legacy_hero" not in _codes(tpl)
+
+
+def test_card_hero_never_flagged_as_empty_legacy():
+    tpl = _hero_card([{"label": "口碑", "filter": {"模块": "口碑"}}])
+    assert "empty_legacy_hero" not in _codes(tpl)
