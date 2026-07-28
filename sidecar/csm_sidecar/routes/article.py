@@ -58,6 +58,8 @@ class ExportBody(BaseModel):
     out_dir: str | None = None
     include_dedup_report: bool = False
     template_name: str | None = None
+    # 成稿正文不含标题（标题是单独字段），不带过来导出的文档就没有标题。
+    title: str | None = None
     # 反馈采集（§6）—— 关联 job + 质检卡已算的分数/未决禁区；后端不回传、纯落库。
     job_id: str | None = None
     score: float | None = None
@@ -77,7 +79,7 @@ def export_article_route(fmt: str, body: ExportBody) -> dict[str, Any]:
         result = export_service.export(
             fmt=fmt, keyword=body.keyword, final_text=body.final_text,
             out_dir=body.out_dir, include_dedup_report=body.include_dedup_report,
-            template_name=body.template_name,
+            template_name=body.template_name, title=body.title,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -608,3 +608,48 @@ def test_tier_conflict_warning_says_it_varies(tmp_path):
     plan, _ = _run(tmp_path, [_pool_block(pick=1)])
     warn = next(w for w in plan.warnings if "层级标签不一致" in w)
     assert "随机" in warn and "按路径序取用" not in warn
+
+
+# ── 主推卡：没配筛选的小节 ─────────────────────────────────────────────
+def _hero_card_block(sections, module="主推"):
+    return {
+        "kind": "hero_brand", "id": "hero", "title": "DARZ D9",
+        "source": {"type": "notes_query", "module": module},
+        "sections": sections,
+    }
+
+
+def test_hero_section_without_filter_warns_when_pool_has_many(tmp_path):
+    """空筛选命中整个目录随机抽一篇 —— 不空池、不报错，内容却全凭运气。
+
+    模板三/四/五就是这么坏的：小节名改了、筛选没配，第一节报空池中止，
+    剩下几节其实早就在乱抽了。lint 看不见资料库，判据只能落在这里。
+    """
+    _hero_note(tmp_path, "主推/口碑.md", "市场口碑数据", "口碑正文")
+    _hero_note(tmp_path, "主推/定位.md", "品牌赛道定位", "定位正文")
+    plan, _ = _run(tmp_path, [_hero_card_block([
+        {"label": "口碑", "filter": {}},
+    ])])
+    note = plan.results[0].note
+    assert "没配筛选" in note
+    assert "2 篇里随机" in note
+
+
+def test_hero_section_without_filter_silent_when_pool_has_one(tmp_path):
+    """目录里只躺一篇时空筛选是合法写法 —— 不该拿告警去骚扰用户。"""
+    _hero_note(tmp_path, "主推/口碑.md", "市场口碑数据", "口碑正文")
+    plan, _ = _run(tmp_path, [_hero_card_block([
+        {"label": "口碑", "filter": {}},
+    ])])
+    assert plan.results[0].note == ""
+
+
+def test_hero_section_with_filter_has_no_note(tmp_path):
+    """零回归：配好筛选的主推卡不带任何告警。"""
+    _hero_note(tmp_path, "主推/口碑.md", "市场口碑数据", "口碑正文")
+    _hero_note(tmp_path, "主推/定位.md", "品牌赛道定位", "定位正文")
+    plan, _ = _run(tmp_path, [_hero_card_block([
+        {"label": "口碑", "filter": {"素材类型": "市场口碑数据"}},
+        {"label": "定位", "filter": {"素材类型": "品牌赛道定位"}},
+    ])])
+    assert plan.results[0].note == ""

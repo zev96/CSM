@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import frontmatter
 
-from csm_core.export.markdown import export_article, extract_title
+from csm_core.export.markdown import ensure_title, export_article, extract_title
 
 from . import config_service
 
@@ -29,6 +29,7 @@ def export(
     out_dir: str | None = None,
     include_dedup_report: bool = False,
     template_name: str | None = None,
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Write the article to disk and return the export descriptor.
 
@@ -70,12 +71,15 @@ def export(
         keyword=keyword,
         final_text=body_for_export,
         fmt=fmt,
+        title=title,
     )
 
     mirror = _mirror_to_history(
         history_dir=cfg.dedup_history_dir,
         keyword=keyword,
-        final_text=final_text,            # without dedup appendix
+        # 镜像同样要带标题：首页「最近文档」的标题列读的是它的 frontmatter，
+        # 不补的话拿到的是第一个章节名（「一、品牌分析」）。
+        final_text=ensure_title(final_text, (title or "").strip() or keyword),
         fmt=fmt,
         template_name=template_name,
         primary_path=paths["document"],

@@ -750,6 +750,9 @@ export const useArticle = defineStore("article", {
       const resp = await sidecar.client.post(`/api/export/${opts.format}`, {
         keyword: this.lastRequest.keyword,
         final_text: this.finalText,
+        // 成稿正文里没有标题（编辑器显示时才临时拼上 `# 标题`），不带过来
+        // 导出的文档就没有标题、历史索引的标题列还会显示成第一个章节名。
+        title: this.title || null,
         include_dedup_report: opts.include_dedup_report ?? false,
         // 历史索引镜像的 frontmatter 需要"哪个模板"——直接透传当前模板 id，
         // 后端 aggregation_service 读 `template` 字段渲染首页"最近文档"

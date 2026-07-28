@@ -178,6 +178,7 @@ hiddenimports: list[str] = [
     "csm_core.vault.scanner",
     "csm_core.vault.note_parser",
     "csm_core.vault.brand_registry",
+    "csm_core.vault.note_groups",
     # Updater client
     "csm_core.updater_client",
     "csm_core.updater_client.checker",

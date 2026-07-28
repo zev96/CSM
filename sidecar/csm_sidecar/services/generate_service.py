@@ -1,11 +1,17 @@
 """Article generation orchestration.
 
-We **don't** call :func:`csm_core.pipeline.generate` because its tail end
-references ``paths["assembly_json"]`` which no longer exists in the
-current ``export_article`` (the snapshot sidecar was dropped — see
-``csm_core/export/markdown.py``). Rather than touch csm_core to fix that
-unrelated issue, we compose csm_core's individual stage functions here:
-identical orchestration, no broken hand-off.
+We **don't** call :func:`csm_core.pipeline.generate`: it is one blocking
+call with no per-stage hooks, no cancellation and no way to interleave
+the sidecar-only stages (品牌事实注入 / skill 链多-pass / 事实核对门禁).
+So we compose csm_core's individual stage functions here instead.
+
+⚠ The original reason recorded here was different — that ``pipeline.generate``
+was *broken*, reading ``paths["assembly_json"]`` after the snapshot sidecar
+was dropped from ``export_article``. That was true and it was never fixed at
+the source, so this note quietly became the only justification for ~600 lines
+of duplicated orchestration. The KeyError is fixed now (``python -m csm_core``
+works again); the remaining reason to keep this code is the SSE/cancellation
+one above, which stands on its own.
 
 Stages are emitted to the EventBus so the SSE endpoint can stream them.
 The job is queued onto a ThreadPoolExecutor — pipeline functions are
@@ -330,6 +336,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             final_text=final_text,
             plan=plan,
             fmt=cfg.export_format,
+            title=req.title,
         )
 
         bus.finish(
@@ -481,7 +488,7 @@ def _run_comparison_finalize(
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = export_article(out_dir=out_dir, keyword=keyword,
                            final_text=outcome.final_text, plan=synthetic,
-                           fmt=cfg.export_format)
+                           fmt=cfg.export_format, title=title)
     bus.finish(job_id, document=paths["document"], format=paths["format"],
                title=paths["title"], plan=None, draft=draft,
                final_text=outcome.final_text, passes=outcome.passes,
@@ -814,6 +821,7 @@ def _maybe_block_for_factcheck(
     factcheck_service.cache_pending(
         job_id, plan=plan, out_dir=out_dir, keyword=plan.keyword,
         fmt=cfg.export_format, allowed_numbers=wl.numbers, allowed_certs=wl.certs,
+        title=title,
     )
     bus.finish(
         job_id, document=None, plan=_plan_to_dict(plan), draft=draft,

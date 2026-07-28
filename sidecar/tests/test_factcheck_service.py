@@ -50,3 +50,25 @@ def test_resolve_unknown_job_raises(tmp_path: Path):
     with pytest.raises(KeyError):
         factcheck_service.resolve_and_export(
             "nope", final_text="x", released_numbers=[], released_certs=[])
+
+
+def test_resolve_export_carries_article_title(tmp_path: Path):
+    """事实核对放行后导出的文档必须带**文章标题**，不是搜索关键词。
+
+    成稿正文里没有标题（标题是单独字段），导出时才补。cache_pending 收了
+    title 却没存进 _Pending 的话，这条链回落到 keyword —— 文档首行变成
+    「# 无线吸尘器」，而这正是本次要修的那个病在另一条导出路径上的翻版。
+    """
+    factcheck_service.reset_for_test()
+    factcheck_service.cache_pending(
+        "j9", plan=_plan(), out_dir=tmp_path, keyword="无线吸尘器",
+        fmt="markdown", allowed_numbers={220.0}, allowed_certs={"CE"},
+        title="2026年无线吸尘器十大排名",
+    )
+    res = factcheck_service.resolve_and_export(
+        "j9", final_text="## 一、品牌分析\n\n吸力220AW，CE认证。",
+        released_numbers=[], released_certs=[])
+    assert res["ok"] is True
+    assert res["title"] == "2026年无线吸尘器十大排名"
+    head = Path(res["document"]).read_text(encoding="utf-8").splitlines()[0]
+    assert head == "# 2026年无线吸尘器十大排名"

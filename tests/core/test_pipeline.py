@@ -38,11 +38,18 @@ def test_generate_system_prompt_is_empty_when_no_skill(tmp_path: Path):
          patch("csm_core.pipeline.assemble_plan", return_value=fake_plan), \
          patch("csm_core.pipeline.compose_draft", return_value="毛坯草稿内容"), \
          patch("csm_core.pipeline.export_article", return_value={
-             "markdown": str(tmp_path / "out.md"),
-             "assembly_json": str(tmp_path / "out.json"),
+             # 现行契约是 document/format/title。这个桩原来返回早已废弃的
+             # markdown/assembly_json，和同样读废弃键的 pipeline 互相对齐 ——
+             # 两边一起错，测试反而是绿的，把 `python -m csm_core` 的 KeyError
+             # 锁在了盲区里。
+             "document": str(tmp_path / "out.md"),
+             "format": "markdown",
+             "title": "T",
          }):
         result = generate(req)
 
+    # 返回值也要断言 —— 不然 pipeline 读错键这类问题测试永远看不见
+    assert result.markdown_path == str(tmp_path / "out.md")
     assert len(client.calls) == 1
     # user_skill_prompt=None → system layer is empty string
     assert client.calls[0]["system"] == ""
@@ -63,11 +70,17 @@ def test_generate_user_skill_prompt_becomes_system_layer(tmp_path: Path):
          patch("csm_core.pipeline.assemble_plan", return_value=fake_plan), \
          patch("csm_core.pipeline.compose_draft", return_value="毛坯草稿内容"), \
          patch("csm_core.pipeline.export_article", return_value={
-             "markdown": str(tmp_path / "out.md"),
-             "assembly_json": str(tmp_path / "out.json"),
+             # 现行契约是 document/format/title。这个桩原来返回早已废弃的
+             # markdown/assembly_json，和同样读废弃键的 pipeline 互相对齐 ——
+             # 两边一起错，测试反而是绿的，把 `python -m csm_core` 的 KeyError
+             # 锁在了盲区里。
+             "document": str(tmp_path / "out.md"),
+             "format": "markdown",
+             "title": "T",
          }):
         result = generate(req)
 
+    assert result.markdown_path == str(tmp_path / "out.md")
     assert len(client.calls) == 1
     assert client.calls[0]["system"] == skill_text
     assert "宠物吸尘器推荐" in client.calls[0]["user"]

@@ -379,9 +379,11 @@ describe("BlockEditor — 从目录识别小节", () => {
     expect(w.text()).not.toContain("市场口碑数据");
   });
 
-  it("切到主推卡（hero_brand）时面板不渲染 —— 竞品卡形状写进 hero 会被静默吞掉", async () => {
-    // HeroSection 是 extra=ignore：h2/required/pick_variants 被丢弃，
-    // module/filter 被重置成空，schema 照样放行、模板照样存下去。
+  it("切到主推卡（hero_brand）时旧结果必须清掉 —— 竞品卡形状写进 hero 会被静默吞掉", async () => {
+    // 主推卡现在也有自己的识别（走 /note_sections），但**这一次的竞品结果**
+    // 不能留在面板上：HeroSection 是 extra=ignore，h2/required/pick_variants
+    // 会被丢弃、module/filter 重置成空，schema 照样放行、模板照样存下去。
+    // 失效靠 detectScopeKey 里的 kind。
     const w = mountEditor(poolCard([{ label: "市场口碑数据", pick_variants: 1 }]));
     await flushPromises();
     await detect(w);
@@ -642,5 +644,318 @@ describe("BlockEditor — 卡片模式隐藏不生效的开关", () => {
 
     expect(w.text()).toContain("子素材随机数量");
     expect(w.text()).toContain("不重复素材");
+  });
+});
+
+
+/**
+ * 主推卡的识别是**另一套**：一个小节 = 一整篇笔记，靠 frontmatter 字段区分
+ * （`模块: 参考价格`），正文里根本没有 H2。缺了它的代价就是这次要修的病：
+ * 小节名手敲、筛选值另配，对不上时第一节空池报错，而没配筛选的小节会静默
+ * 命中整个目录随机抽。
+ */
+const HERO_DETECTED = {
+  field: "模块",
+  field_candidates: ["模块", "模块序号"],
+  note_count: 4,
+  values: [
+    { value: "标题行", note_count: 1, with_body: 1, order: 0 },
+    { value: "参考价格", note_count: 1, with_body: 1, order: 1 },
+    { value: "除醛技术", note_count: 1, with_body: 1, order: 2 },
+    { value: "外观颜值", note_count: 1, with_body: 0, order: 3 },
+  ],
+};
+
+async function detectHero(w: any, data: any = HERO_DETECTED) {
+  postMock.mockResolvedValueOnce({ data });
+  await btn(w, "从目录识别")!.trigger("click");
+  await flushPromises();
+}
+
+function lastSections(w: any): any[] {
+  const ev = w.emitted("update:modelValue")!;
+  return ev[ev.length - 1][0].sections;
+}
+
+describe("BlockEditor — 主推卡从目录识别", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    postMock.mockReset();
+    getMock.mockResolvedValue({ data: { attributes: [] } });
+  });
+
+  it("走 /note_sections，并把当前小节用的筛选字段回传", async () => {
+    // 不回传的话后端自己推断，`模块` 和 `模块序号` 都能一篇一值，
+    // 换个字段用户就看不懂了。
+    const w = mountEditor(heroCard([
+      { label: "品牌实力", module: null, filter: { 模块: "品牌实力" } },
+    ]));
+    await flushPromises();
+    await detectHero(w);
+
+    expect(postMock).toHaveBeenCalledWith("/api/vault/note_sections", {
+      module: "模板二/DARZD9",
+      filter: {},
+      field: "模块",
+    });
+  });
+
+  it("没配过筛选时 field 传 null，由后端推断", async () => {
+    const w = mountEditor(heroCard([{ label: "空节", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w);
+
+    expect(postMock).toHaveBeenCalledWith(
+      "/api/vault/note_sections",
+      expect.objectContaining({ field: null }),
+    );
+  });
+
+  it("落库写成 filter={字段: 取值}，顺序按识别结果", async () => {
+    const w = mountEditor(heroCard([{ label: "空节", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "按目录替换")!.trigger("click");
+
+    const secs = lastSections(w);
+    expect(secs.map((s: any) => s.label)).toEqual(["标题行", "参考价格", "除醛技术"]);
+    expect(secs[1]).toMatchObject({
+      label: "参考价格", module: null, filter: { 模块: "参考价格" },
+      pick_notes: 1, pick_variants_per_note: 1,
+    });
+  });
+
+  it("认亲后**改写** filter —— 从别的模板复制来的旧筛选值必须被纠正", async () => {
+    // 这就是模板四的真实坏法：label 是「参考价格」，filter 却还是从模板二
+    // 复制来的 {模块: 品牌实力}，而模板四目录里压根没有「品牌实力」。
+    // 认亲时原样带走 filter 等于把病一起带走，识别按钮点了也白点。
+    const w = mountEditor(heroCard([
+      { label: "参考价格", module: null, filter: { 模块: "品牌实力" }, pick_notes: 2 },
+    ]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "按目录替换")!.trigger("click");
+
+    const hit = lastSections(w).find((s: any) => s.label === "参考价格");
+    expect(hit.filter).toEqual({ 模块: "参考价格" });
+    // 用户调过的候选数是他的显式选择，替换的是「有哪些节」不是推倒重来
+    expect(hit.pick_notes).toBe(2);
+  });
+
+  it("默认不勾没正文的取值 —— 抽出来是空段", async () => {
+    const w = mountEditor(heroCard([{ label: "空节", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "按目录替换")!.trigger("click");
+
+    expect(lastSections(w).map((s: any) => s.label)).not.toContain("外观颜值");
+  });
+
+  it("取消勾选后不导入（`标题行` 这类不该当正文小节的靠用户取消）", async () => {
+    const w = mountEditor(heroCard([{ label: "空节", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w);
+    const boxes = w.findAll("input[type=checkbox]");
+    const labels = w.findAll("label");
+    const i = labels.findIndex((l: any) => l.text().includes("标题行"));
+    await labels[i].find("input").setValue(false);
+    await btn(w, "按目录替换")!.trigger("click");
+
+    expect(lastSections(w).map((s: any) => s.label)).toEqual(["参考价格", "除醛技术"]);
+    expect(boxes.length).toBeGreaterThan(0);
+  });
+
+  it("追加模式：对不上任何取值的老小节要明说会报空池", async () => {
+    const w = mountEditor(heroCard([
+      { label: "品牌实力", module: null, filter: { 模块: "品牌实力" } },
+    ]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "只补未配置的")!.trigger("click");
+    await flushPromises();
+
+    expect(w.text()).toContain("这个目录里没有这个取值");
+    // 老小节留在原位，新取值追加在后面
+    expect(lastSections(w).map((s: any) => s.label))
+      .toEqual(["品牌实力", "标题行", "参考价格", "除醛技术"]);
+  });
+
+  it("不显示竞品池那套「N/M 篇有此小节」—— 主推卡一个取值就一篇", async () => {
+    const w = mountEditor(heroCard([{ label: "空节", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w);
+
+    expect(w.text()).not.toContain("篇有此小节");
+    expect(w.text()).toContain("按「模块」拆成小节");
+    expect(w.text()).toContain("3 节");          // 勾了 3 个（外观颜值没正文）
+    expect(w.text()).not.toContain("张卡入册");
+  });
+
+  it("没有任何字段能分开笔记时说清是分组字段的问题，不说「没写 ## 小节」", async () => {
+    const w = mountEditor(heroCard([{ label: "空节", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w, { field: "", field_candidates: [], note_count: 3, values: [] });
+
+    expect(w.text()).toContain("没有哪个 frontmatter 字段能把它们分开");
+    expect(w.text()).not.toContain("## 小节");
+  });
+
+  it("目录没选时按钮禁用，提示说的是主推卡不是竞品池", async () => {
+    const w = mountEditor({
+      ...heroCard([{ label: "空节", module: null, filter: {} }]),
+      source: { type: "notes_query", module: "", filter: {} },
+    });
+    await flushPromises();
+    const b = btn(w, "从目录识别")!;
+    expect(b.attributes("disabled")).toBeDefined();
+    expect(b.attributes("title")).toContain("主推卡");
+  });
+});
+
+
+describe("BlockEditor — 主推卡识别的四个陷阱（对抗性审查发现）", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    postMock.mockReset();
+    getMock.mockResolvedValue({ data: { attributes: [] } });
+  });
+
+  it("认亲先按小节名、后按筛选值 —— 反了会把标签和内容绑错并丢掉一整节", async () => {
+    // 反着来的失败形态：{label:"选购建议", filter:{模块:"参考价格"}} 被取值
+    // 「参考价格」先按 filter 认走并固化，真正的「选购建议」再生成一条同名
+    // 小节、被去重丢掉 —— 成稿里「选购建议」印的是参考价格的正文。
+    const w = mountEditor(heroCard([
+      { label: "选购建议", module: null, filter: { 模块: "参考价格" } },
+      { label: "除醛技术", module: null, filter: {} },
+    ]));
+    await flushPromises();
+    await detectHero(w, {
+      field: "模块", field_candidates: ["模块"], note_count: 4,
+      values: [
+        { value: "标题行", note_count: 1, with_body: 1, order: 0 },
+        { value: "参考价格", note_count: 1, with_body: 1, order: 1 },
+        { value: "除醛技术", note_count: 1, with_body: 1, order: 2 },
+        { value: "选购建议", note_count: 1, with_body: 1, order: 3 },
+      ],
+    });
+    // 现有小节都对得上 → 默认只勾它们；把另外两个也勾上，测最狠的情况
+    for (const t of ["标题行", "参考价格"]) {
+      const l = w.findAll("label").find((x: any) => x.text().includes(t));
+      if (l && !l.find("input").element.checked) await l.find("input").setValue(true);
+    }
+    await btn(w, "按目录替换")!.trigger("click");
+
+    const secs = lastSections(w);
+    const byLabel = Object.fromEntries(secs.map((x: any) => [x.label, x.filter]));
+    expect(byLabel["选购建议"]).toEqual({ 模块: "选购建议" });
+    expect(byLabel["参考价格"]).toEqual({ 模块: "参考价格" });
+    expect(secs.length).toBe(4);
+  });
+
+  it("认亲时目录也归零 —— 老小节自带的目录会让引擎去 B 目录查 A 目录的取值", async () => {
+    const w = mountEditor(heroCard([
+      { label: "参考价格", module: "另一个目录/别的产品", filter: {} },
+    ]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "按目录替换")!.trigger("click");
+    await flushPromises();
+
+    const hit = lastSections(w).find((x: any) => x.label === "参考价格");
+    expect(hit.module).toBeNull();
+    expect(w.text()).toContain("原来单独指定了目录");
+  });
+
+  it("filter 是合并不是整体替换 —— 别把用户额外加的约束无声抹掉", async () => {
+    const w = mountEditor(heroCard([
+      { label: "参考价格", module: null, filter: { 模块: "品牌实力", 推荐位: "主推" } },
+    ]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "按目录替换")!.trigger("click");
+
+    const hit = lastSections(w).find((x: any) => x.label === "参考价格");
+    expect(hit.filter).toEqual({ 模块: "参考价格", 推荐位: "主推" });
+  });
+
+  it("不按 label 去重 —— 空小节名是主推卡文档支持的写法（续段），删了是丢数据", async () => {
+    // schema 的 label 唯一性校验只加在 competitor_pool 上；HeroSection 的
+    // label 留空 = 只输出正文不输出小节标题。照搬竞品那套会把所有续段合并。
+    const w = mountEditor(heroCard([
+      { label: "分维度硬核测评", module: null, filter: { 模块: "除醛" } },
+      { label: "", module: null, filter: { 模块: "消毒" } },
+      { label: "", module: null, filter: { 模块: "过敏原" } },
+      { label: "", module: null, filter: { 模块: "体验" } },
+    ]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "只补未配置的")!.trigger("click");
+
+    const secs = lastSections(w);
+    expect(secs.filter((x: any) => x.label === "").length).toBe(3);
+    expect(secs.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("在已配好的块上识别，默认只勾对得上的 —— 不能用修复按钮把能跑的版本改坏", async () => {
+    // 用户 5 个目录里每个都躺着一篇 `模块: 标题行`（有正文）。默认全勾的话，
+    // 在本来正常的版本上点一下就会多出 `**标题行** ：… TOP1. DARZ D9`。
+    const w = mountEditor(heroCard([
+      { label: "参考价格", module: null, filter: { 模块: "参考价格" } },
+      { label: "除醛技术", module: null, filter: { 模块: "除醛技术" } },
+    ]));
+    await flushPromises();
+    await detectHero(w);
+    // 面板在点「按目录替换」后就收起来了，提示要在收起之前断言
+    expect(w.text()).toContain("个取值没勾");
+    await btn(w, "按目录替换")!.trigger("click");
+
+    expect(lastSections(w).map((x: any) => x.label)).toEqual(["参考价格", "除醛技术"]);
+  });
+
+  it("没配过的块（刚开卡片模式）仍然默认全勾有正文的，不然点了等于没点", async () => {
+    const w = mountEditor(heroCard([{ label: "市场口碑数据", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w);
+    await btn(w, "按目录替换")!.trigger("click");
+
+    expect(lastSections(w).map((x: any) => x.label))
+      .toEqual(["标题行", "参考价格", "除醛技术"]);
+  });
+
+  it("后端换掉了分不开笔记的字段时要说清楚", async () => {
+    const w = mountEditor(heroCard([{ label: "x", module: null, filter: { 素材类型: "产品推荐格式" } }]));
+    await flushPromises();
+    await detectHero(w, { ...HERO_DETECTED, field_rejected: "素材类型" });
+
+    expect(w.text()).toContain("素材类型");
+    expect(w.text()).toContain("已改用");
+  });
+
+  it("字段拆不出小节时列出这个目录能用的字段，不说「没有字段能分开」", async () => {
+    const w = mountEditor(heroCard([{ label: "x", module: null, filter: {} }]));
+    await flushPromises();
+    await detectHero(w, {
+      field: "核心关键词", field_candidates: ["模块", "模块序号"],
+      note_count: 11, values: [],
+    });
+
+    expect(w.text()).toContain("模块");
+    expect(w.text()).not.toContain("没有哪个 frontmatter 字段能把它们分开");
+  });
+
+  it("同 id 不同 kind 切换也要清掉旧结果（detectScopeKey 里的 kind 真被用上）", async () => {
+    // 原来那条用例是 pool_1 → hero_1，id 本身就变了，把 kind 从 key 里删掉
+    // 照样绿 —— 守不住回归。这里把 id 钉死，只换 kind。
+    const w = mountEditor({ ...poolCard([{ label: "市场口碑数据", pick_variants: 1 }]), id: "same" });
+    await flushPromises();
+    await detect(w);
+    expect(btn(w, "按目录替换")).toBeDefined();
+
+    await w.setProps({
+      modelValue: { ...heroCard([{ label: "品牌实力", module: null, filter: {} }]), id: "same" },
+    });
+    await flushPromises();
+
+    expect(btn(w, "按目录替换")).toBeUndefined();
   });
 });

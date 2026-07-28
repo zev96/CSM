@@ -245,9 +245,18 @@ def _sample_hero_card(
     筛选，所以「品牌实力」和「核心参数」可以各自随机组合。
     """
     picks: list[PickedVariant] = []
+    loose: list[str] = []
     for i, sec in enumerate(block.sections):
         module = sec.module or (block.source.module if block.source else "")
         src = NotesQuerySource(module=module, filter=dict(sec.filter))
+        # 没配筛选的小节命中**整个目录**然后随机抽 —— 用户以为配的是「参考
+        # 价格」，实际每次生成随机换一个模块，还会和别的小节撞车。这既不空
+        # 池也不报错，是最难查的一种坏法。目录只有一篇时才是合法写法，所以
+        # 判据放在这里（拿得到素材）而不是 lint（纯结构、看不见资料库）。
+        if not sec.filter:
+            n = len(index.query(module=module, filters=None))
+            if n > 1:
+                loose.append(f"{sec.label or f'第{i + 1}节'}（{n} 篇里随机）")
         sec_picks = _sample_notes_source(
             f"{block.id}#{i + 1}·{sec.label or '正文'}", src,
             constraints=["unique_notes"],
@@ -264,13 +273,19 @@ def _sample_hero_card(
     # 小节素材不够时上浮告警。竞品那边「十大不许静默变七大」，主推卡少一
     # 个点同样不能没人知道。
     capped = [p for p in picks if p.meta.get("capped")]
-    note = ""
+    notes: list[str] = []
     if capped:
         labels = sorted({
             str(p.meta.get("section_label") or f"#{p.meta.get('section_index', 0) + 1}")
             for p in capped
         })
-        note = f"小节「{'、'.join(labels)}」素材不足，实际出的条数少于设置"
+        notes.append(f"小节「{'、'.join(labels)}」素材不足，实际出的条数少于设置")
+    if loose:
+        notes.append(
+            f"小节 {'、'.join(loose)} 没配筛选，抽到哪篇全凭运气 —— "
+            f"用模板编辑器的「从目录识别」一次配齐"
+        )
+    note = "；".join(notes)
     return BlockResult(
         block_id=block.id, kind="hero_brand", text=block.title, picks=picks,
         note=note,

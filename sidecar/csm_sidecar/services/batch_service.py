@@ -1,10 +1,17 @@
 """Batch generation orchestration.
 
-We don't call :func:`csm_core.batch.runner.run_batch` directly because its
-tail end references ``paths["markdown"]`` / ``paths["assembly_json"]`` —
-keys that no longer exist in the current ``export_article`` (snapshot
-sidecar was dropped). The same stage composition is replayed here with
-the correct hand-off, mirroring the Group 2 generate_service pattern.
+We don't call :func:`csm_core.batch.runner.run_batch` directly: it is one
+blocking loop with only coarse per-item callbacks — no SSE stage events,
+no mid-item cancellation, and no hook for the sidecar-only stages
+(候选打分 / 事实核对 / 反馈采集). The same stage composition is replayed
+here, mirroring the generate_service pattern.
+
+⚠ The original reason recorded here was different — that ``run_batch`` was
+*broken*, reading ``paths["markdown"]`` / ``paths["assembly_json"]`` after the
+snapshot sidecar was dropped from ``export_article``. That was true and was
+never fixed at the source, so this note quietly became the only justification
+for the duplication. It is fixed now; the reason to keep this code is the
+SSE/cancellation one above.
 
 Why hold state in-memory in addition to publishing SSE
 ------------------------------------------------------

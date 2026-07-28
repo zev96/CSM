@@ -120,6 +120,8 @@ def _lint_regions_generic(template: Template) -> list[LintIssue]:
     而卡片/legacy 混用、卡片池没有主推这些问题与版本毫无关系。
     """
     issues: list[LintIssue] = []
+    issues.extend(_lint_hero_card_sections(template))
+    issues.extend(_lint_empty_legacy_hero(template))
     for hero, pools in _regions(template.blocks):
         card_pools = [p for p in pools if getattr(p, "sections", None)]
         if hero is None:
@@ -163,6 +165,99 @@ def _lint_regions_generic(template: Template) -> list[LintIssue]:
                             f"用同一个版本组。"
                         ),
                     ))
+    return issues
+
+
+def _lint_empty_legacy_hero(template: Template) -> list[LintIssue]:
+    """只会输出一行块名 + 「推荐理由」的空壳主推块。
+
+    卡片模式改造之前的旧主推块（``sections`` 为空）靠**吞并后面的段落块**
+    产出正文。改造后把正文挪进卡片小节、旧块常常忘了删 —— 它后面紧跟的
+    是另一个主推块，什么都吞不到，于是每篇文章里都渗进两行残留：
+
+        1. DARZ D9空气净化器
+        推荐理由
+
+    生成期不报错（它本来就允许没内容），没人提示就一直印。判据是纯结构的：
+    没有小节、后面到区尾也没有任何段落/列表块可吞。
+    """
+    issues: list[LintIssue] = []
+    blocks = list(template.blocks)
+    for i, b in enumerate(blocks):
+        if not isinstance(b, HeroBrandBlock) or b.sections:
+            continue
+        # 往后扫到区尾（下一个主推块 / 标题块），看有没有可吞的正文块
+        has_body = False
+        for nxt in blocks[i + 1:]:
+            if isinstance(nxt, HeroBrandBlock) or nxt.kind == "heading":
+                break
+            if nxt.kind in _REGION_BODY_KINDS:
+                has_body = True
+                break
+        if has_body:
+            continue
+        issues.append(LintIssue(
+            level="warning", code="empty_legacy_hero", block_id=b.id,
+            message=(
+                f"主推块 '{b.id}' 没有配小节，后面也没有可用的段落块 —— "
+                f"它每篇只会输出一行「{b.title or b.id}」加一行「{b.reason_label}」，"
+                f"没有正文。多半是改成卡片模式后忘了删的旧块。"
+            ),
+        ))
+    return issues
+
+
+def _lint_hero_card_sections(template: Template) -> list[LintIssue]:
+    """主推卡小节：没配筛选 / 两节配得一模一样。
+
+    主推卡的一个小节 = 一整篇笔记，靠「目录 + 筛选」定位。这两件事**分开
+    配**，而新加的小节默认 ``filter={}``：
+
+    * 空筛选不报错，它命中**整个目录**，然后随机抽一篇 —— 用户以为配的是
+      「参考价格」，实际每次生成随机抽一个模块，成文里还会重复。这种坏法
+      比报错难查得多，所以必须静态拦。
+    * 两节的（目录, 筛选）完全相同 = 同一个池抽两次，同样会重复。
+
+    两条都只报 **warning**：lint 是纯结构检查、看不到资料库，而「空筛选」在
+    目录里只躺着一篇笔记时是完全合法的写法（这一节 = 这个目录里那篇）。
+    判不了的事不能拿 error 去拦保存 —— 那会把一份能跑的模板锁死。真要下
+    定论得有素材在手，那一层在 ``sampler._sample_hero_card``（抽到 >1 篇
+    才告警）。
+
+    只在**卡片模式**（sections 非空）下检查；legacy 主推块没有小节。
+    """
+    issues: list[LintIssue] = []
+    for b in template.blocks:
+        if not isinstance(b, HeroBrandBlock) or not b.sections:
+            continue
+        default_module = getattr(getattr(b, "source", None), "module", "") or ""
+        seen: dict[tuple[str, str], str] = {}
+        for i, sec in enumerate(b.sections):
+            name = sec.label or f"第 {i + 1} 节"
+            module = sec.module or default_module
+            if not sec.filter:
+                issues.append(LintIssue(
+                    level="warning", code="hero_section_no_filter", block_id=b.id,
+                    message=(
+                        f"主推卡 '{b.id}' 的小节「{name}」没有配筛选 —— "
+                        f"它会命中目录 '{module or '（未设）'}' 下的全部素材并随机抽一篇。"
+                        f"该目录只有一篇笔记时没问题，否则抽到哪个模块全凭运气，"
+                        f"用「从目录识别」一次配齐。"
+                    ),
+                ))
+                continue
+            key = (module, repr(sorted(sec.filter.items(), key=lambda kv: str(kv[0]))))
+            if key in seen:
+                issues.append(LintIssue(
+                    level="warning", code="hero_section_duplicate", block_id=b.id,
+                    message=(
+                        f"主推卡 '{b.id}' 的小节「{name}」与「{seen[key]}」"
+                        f"目录和筛选完全相同 —— 两节从同一个池抽，成文里会出现"
+                        f"两段同类内容。"
+                    ),
+                ))
+            else:
+                seen[key] = name
     return issues
 
 

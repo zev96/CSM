@@ -376,6 +376,76 @@ def card_sections(body: CardSectionsRequest) -> dict[str, Any]:
     }
 
 
+class NoteSectionsRequest(BaseModel):
+    """「从目录识别」主推卡小节的入参。
+
+    ``field`` 留空 = 让后端推断分组字段；已经配过小节的块由前端把当前用的
+    字段回传，识别结果就跟着用户已有的口径走，不会自作主张换一个字段。
+    """
+
+    module: str
+    filter: dict[str, Any] = Field(default_factory=dict)
+    field: str | None = None
+
+
+@router.post("/api/vault/note_sections")
+def note_sections(body: NoteSectionsRequest) -> dict[str, Any]:
+    """归纳该目录能拆出哪些「一篇笔记 = 一个小节」的小节。
+
+    与 ``card_sections`` 是**两套语义**，不能合并：竞品卡一篇笔记装一整个
+    竞品、小节是正文里的 ``## H2``；主推卡一篇笔记就是一个小节，靠
+    frontmatter 字段（``模块: 参考价格``）区分，正文里根本没有 H2。用错
+    那一套的结果是「识别出 0 个小节」，而用户明明看得见目录里躺着 11 篇。
+
+    ``values[*].with_body`` 与 ``card_sections`` 同义 —— 正文非空的篇数。
+    空骨架笔记能被筛到，但抽出来是空段落。
+    """
+    from csm_core.vault.note_groups import (
+        field_candidates, group_notes_by_field, order_field_for,
+    )
+    from csm_core.vault.scanner import explain_empty_query
+
+    if not body.module.strip():
+        # 同 card_sections：空 module 等于「整个资料库」，几千篇分组毫无意义。
+        raise HTTPException(status_code=400, detail="请先给主推卡选目录")
+
+    index = _vault_index()
+    notes = index.query(module=body.module, filters=body.filter)
+    hint = explain_empty_query(index, body.module, body.filter) if not notes else ""
+
+    candidates = field_candidates(notes)
+
+    # 前端回传的 ``field`` **不能盲信**。它取的是「当前小节 filter 里出现最多
+    # 的键」，而筛选字段是个下拉，用户完全可能选中 `素材类型` / `品牌` 这类
+    # 同目录内取值全同的字段。拿它去分组只会得到 1 个组（`素材类型=产品推荐
+    # 格式`，11 篇全中），「按目录替换」就把 11 节坍缩成 1 节、且这一节命中
+    # 整个目录随机抽 —— 正是这次要修的病，由修复按钮本人制造，而且事后 lint
+    # 和 sampler 的两道告警都拦不住（filter 非空）。
+    # 所以：分不开就回落到推断字段，并在 ``field_rejected`` 里说清换掉了什么。
+    requested = (body.field or "").strip()
+    rejected = ""
+    chosen = requested or (candidates[0] if candidates else "")
+    if requested and requested not in candidates:
+        rejected, chosen = requested, (candidates[0] if candidates else "")
+
+    values = (
+        group_notes_by_field(notes, chosen,
+                             order_field=order_field_for(notes, chosen))
+        if chosen else []
+    )
+    return {
+        "module": body.module,
+        "filter": body.filter,
+        "field": chosen,
+        "field_rejected": rejected,
+        "field_candidates": candidates,
+        "note_count": len(notes),
+        "values": [v.as_dict() for v in values[:_MAX_DETECTED_SECTIONS]],
+        "truncated": len(values) > _MAX_DETECTED_SECTIONS,
+        "hint": hint,
+    }
+
+
 @router.get("/api/vault/attributes")
 def list_attributes(
     module: str | None = Query(
