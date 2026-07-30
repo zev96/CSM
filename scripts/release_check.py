@@ -54,14 +54,16 @@ def main(argv: list[str]) -> int:
         return 1
 
     if tag_version != canonical:
+        # ASCII-only output (repo convention: Windows CI / GBK consoles choke
+        # on non-ASCII prints from scripts).
         print(
-            f"ERROR: tag/version mismatch — argument='{raw}' "
+            f"ERROR: tag/version mismatch - argument='{raw}' "
             f"(parsed={tag_version}) != tauri.conf.json version='{canonical}'",
             file=sys.stderr,
         )
         return 1
 
-    print(f"OK — tag {raw} matches tauri.conf.json version {canonical}")
+    print(f"OK - tag {raw} matches tauri.conf.json version {canonical}")
     return 0
 
 

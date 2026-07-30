@@ -86,6 +86,9 @@ export interface ChainPass {
   // 暂未用于渲染；设可选让 mock/测试 fixture 不必逐个填（将来要展示再用）。
   input_tokens?: number;
   output_tokens?: number;
+  // 守卫说明 —— 本轮被排版守卫整轮回退 / 标题守卫纠正时的人话说明；
+  // null/缺省 = 干净通过。「润色过程」模态逐 pass 显示，done 时弹 warn 汇总。
+  guard_note?: string | null;
 }
 
 /** 链成本摘要（镜像后端 pricing.chain_cost）。cost=null = 未知 model 无价。 */
@@ -699,8 +702,17 @@ export const useArticle = defineStore("article", {
      * 复用 takeoff 的 lastJobId 重开同 id 的 SSE 流（链状态/factcheck/重跑此
      * pass 自动同源）。轻 reset：保留 draftText（链输入）/plan/lastRequest。
      * 守卫：未起飞（无 lastJobId/lastRequest）或初稿为空 → 直接 return（demo
-     * 模式由 ArticleView 处理，不调本函数）。从不抛。 */
-    async finalize(): Promise<void> {
+     * 模式由 ArticleView 处理，不调本函数）。从不抛。
+     *
+     * overrides = 界面**当前所选**的 skill（ArticleView 右栏下拉/链）。
+     * lastRequest 只是起飞时的快照 —— 用户起飞后换的润色 skill 若不在这里
+     * 覆盖，链会以快照里的（常常是空）skill 跑：system prompt 为空，LLM 只
+     * 做删敏感词/调标点级别的最小编辑，下拉成了摆设。覆盖后写回快照，后续
+     * 「重新随机」/再次润色沿用用户最新选择。不传 = 零回归走快照。 */
+    async finalize(overrides?: {
+      skill_id?: string | null;
+      skill_chain?: string[] | null;
+    }): Promise<void> {
       if (!this.lastJobId || !this.lastRequest || !this.draftText.trim()) return;
       this._teardown();
       _teardownRerun();          // 进入整篇润色 —— 放弃在跑的 rerun 流
@@ -713,6 +725,16 @@ export const useArticle = defineStore("article", {
 
       const sidecar = useSidecar();
       const req = this.lastRequest;
+      if (overrides && "skill_id" in overrides) {
+        // null = 用户显式选了「无」（区别于 undefined「从未设置」）——
+        // ArticleView 重挂载时据此不让 preferred_skill_id 把「无」顶回去。
+        req.skill_id = overrides.skill_id || null;
+      }
+      if (overrides && "skill_chain" in overrides) {
+        req.skill_chain = overrides.skill_chain?.length
+          ? [...overrides.skill_chain]
+          : null;
+      }
       try {
         const resp = await sidecar.client.post(
           `/api/generate/${this.lastJobId}/finalize`,

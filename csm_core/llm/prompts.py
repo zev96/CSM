@@ -9,6 +9,21 @@ from .layout_guard import LAYOUT_CLAUSE
 from .title_guard import TITLE_CLAUSE, keyword_title_clause
 
 
+def keyword_weave_clause(keyword: str) -> str:
+    """关键词自然植入引言/结尾的正向要求。
+
+    标题里的关键词有 title_guard 钉着；正文此前没人管 —— 毛坯文的引言/结尾
+    来自素材库，往往不含用户输入的搜索词，SEO 词全文只在标题出现一次。
+    措辞必须**幂等**（没有才补、有则保持）：链多 pass 逐段改写，每个 pass 都
+    带这条，非幂等措辞会让关键词越织越多。
+    """
+    return (
+        f"【关键词植入】检查引言（开篇段落）与结尾段：尚未出现关键词「{keyword}」"
+        "的，各自然融入一次 —— 贴合上下文、语句通顺，不得生硬堆砌或罗列；"
+        "已出现的位置保持原样，不要重复追加。"
+    )
+
+
 @dataclass
 class PromptInputs:
     user_skill_prompt: str | None
@@ -75,6 +90,7 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
                 "衔接和风格一致性；不新增虚构事实，不删减关键信息。"
             )
 
+    weave = f"\n{keyword_weave_clause(inputs.keyword)}" if inputs.keyword else ""
     layout = f"\n{LAYOUT_CLAUSE}" if inputs.preserve_layout else ""
     # 标题两种情形都要下约束，正文首行的 H1 就是全链路认定的文章标题：
     #   · 用户定了标题 → 一个字都不许动（上面 title_block 把标题当写作指引
@@ -97,6 +113,7 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
         f"【毛坯文】\n{inputs.draft}\n\n"
         f"{instruction}"
         f"{constraint}"
+        f"{weave}"
         f"{layout}"
         f"{title_rule}"
     )
@@ -106,6 +123,7 @@ def build_prompt(inputs: PromptInputs) -> tuple[str, str]:
 def build_refine_prompt(
     skill_body: str | None, prev_text: str, *,
     preserve_layout: bool = False, title_rule: str = "",
+    keyword: str = "",
 ) -> tuple[str, str]:
     """链 step[1:] 的精修 prompt：按 skill 风格改写上段输出，保守约束
     （保信息点/数字/单位/认证，只改文风）。step[0] 仍用 build_prompt。
@@ -113,8 +131,12 @@ def build_refine_prompt(
     ``title_rule`` 由调用方按上段输出的形态选：带标题行就下 TITLE_CLAUSE，
     否则下 keyword_title_clause —— 链越往后越容易被「改进措辞」顺手把标题
     改掉，或者临时起意加一个自己的标题。空串 = 不加（无标题也无关键词时）。
+
+    ``keyword`` 非空时同样下关键词植入条款（幂等措辞）：step0 织进引言/结尾
+    的关键词，精修 pass 一「改进措辞」就容易被润掉。默认空串 = 不加（零回归）。
     """
     system = (skill_body or "").strip()
+    weave = f"\n{keyword_weave_clause(keyword)}" if keyword else ""
     layout = f"\n{LAYOUT_CLAUSE}" if preserve_layout else ""
     title_rule = f"\n{title_rule}" if title_rule else ""
     user = (
@@ -122,6 +144,7 @@ def build_refine_prompt(
         "请按上面的风格指引改写这段正文：保留所有信息点、段落要点与全部"
         "数字/单位/认证名称，只改进措辞、语感与风格一致性；不新增虚构事实，"
         "不删减关键信息，不改动任何参数数字或认证。"
+        f"{weave}"
         f"{layout}"
         f"{title_rule}"
     )

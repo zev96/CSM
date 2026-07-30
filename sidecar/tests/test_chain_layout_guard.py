@@ -95,3 +95,32 @@ def test_rerun_is_guarded_too():
     out = chain_service.rerun("job", 0, client=broken)
     assert out["final_text"] == _CARD          # 回退到 pass 输入
     assert chain_service.get_state("job").layout_rejections
+
+
+def test_rolled_back_pass_carries_guard_note_for_the_frontend():
+    """回退不能只写日志 —— 用户点了润色、拿回一模一样的文本，没有任何提示
+    的话只会以为「润色没干活」。说明挂在 pass 上（to_dict 透传 SSE/done），
+    前端「润色过程」模态逐 pass 显示。"""
+    flattened = _CARD.replace("### ", "").replace("\n\n", "\n")
+    state = _run(_Client([flattened]), preserve=True)
+    p = state.passes[0]
+    assert p.guard_note and "回退" in p.guard_note
+    assert p.to_dict()["guard_note"] == p.guard_note
+
+
+def test_clean_pass_has_no_guard_note():
+    polished = _CARD.replace("销量稳步增长", "销量一路走高，口碑扎实")
+    state = _run(_Client([polished]), preserve=True)
+    assert state.passes[0].guard_note is None
+    assert state.passes[0].to_dict()["guard_note"] is None
+
+
+def test_rerun_pass_guard_note_reflects_this_round_only():
+    """rerun 重建 pass 对象 —— 上一轮干净、这一轮被拦，note 只反映这一轮。"""
+    good = _CARD.replace("销量稳步增长", "销量走高")
+    _run(_Client([good]), preserve=True, cache=True)
+    assert chain_service.get_state("job").passes[0].guard_note is None
+
+    broken = _Client(["全部揉成一段流水文，没有标题也没有加粗。"])
+    out = chain_service.rerun("job", 0, client=broken)
+    assert out["passes"][0]["guard_note"] and "回退" in out["passes"][0]["guard_note"]

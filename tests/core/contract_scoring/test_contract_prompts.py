@@ -1,5 +1,5 @@
 from csm_core.config import AppConfig, ContractConfig, ScoringConfig
-from csm_core.llm.prompts import PromptInputs, build_prompt
+from csm_core.llm.prompts import PromptInputs, build_prompt, keyword_weave_clause
 from csm_core.llm.title_guard import keyword_title_clause
 
 
@@ -18,6 +18,10 @@ def test_config_defaults():
 # 有关键词时**一律**追加标题硬约束。用户没选标题的默认流程里，链本来可以
 # 随便自造一个标题，而正文首行的 H1 就是全链路认定的文章标题 —— 关键词
 # 就这么被润色改没了。这里跟着更新的是**期望值**，不是放松断言。
+#
+# ⚠️ 口径变更（用户要求「关键词在润色时自然植入引言和结尾」）：有关键词时
+# 追加【关键词植入】条款（幂等措辞：没有才补、有则保持）。同上，更新的是
+# 期望值，不是放松断言。
 def test_conservative_default_unchanged():
     system, user = build_prompt(PromptInputs(
         user_skill_prompt="skill正文", keyword="吸尘器", draft="毛坯"))
@@ -27,6 +31,7 @@ def test_conservative_default_unchanged():
         "【毛坯文】\n毛坯\n\n"
         "请按**润色模式**重写：保留所有信息点和段落结构，只改进文字流畅度、"
         "衔接和风格一致性；不新增虚构事实，不删减关键信息。"
+        f"\n{keyword_weave_clause('吸尘器')}"
         f"\n{keyword_title_clause('吸尘器')}"
     )
 

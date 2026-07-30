@@ -281,6 +281,33 @@ def test_factcheck_on_violation_counts_not_blocks(
     assert item["score"] < 100.0  # 因核对违规被扣分
 
 
+# ── 4b) factcheck 白名单含关键词（与交互 finalize 同口径）───────────────────
+def test_factcheck_whitelists_the_keyword(
+    client: TestClient, tmp_path: Path, monkeypatch,
+):
+    """【关键词植入】指令会让 LLM 把关键词织进引言/结尾 —— 批量的核对白名单
+    必须和交互 finalize 一样含 keyword，否则「3000元以内…」这类带数字+单位的
+    关键词被织进正文后，会被自家核对记违规、把执行了植入指令的候选稿系统性
+    压分（best-of-K 反向淘汰新功能）。"""
+    _setup_world(
+        client, tmp_path, with_brand_vault=True, template_id="tpl-hero",
+        extra_config={"brand_memory": {"factcheck": True}},
+    )
+    # 成稿只引用了关键词里的「3000元」——不在型号 specs 里，也不在毛坯文里。
+    seq = _SeqClient(["预算3000元以内的话，这一档里它是均衡之选。"])
+    _patch_client(monkeypatch, seq)
+
+    resp = client.post("/api/batch", json={
+        "keywords": ["3000元以内无线吸尘器"], "template_id": "tpl-hero",
+    })
+    job_id = resp.json()["job_id"]
+    snap = _wait_for_finished(job_id, timeout=10.0)
+    assert snap is not None
+    item = snap["items"][0]
+    assert item["status"] == "success"
+    assert item["factcheck_violations"] == 0
+
+
 # ── 5) done 事件带 total_cost ───────────────────────────────────────────
 def test_done_carries_total_cost(client: TestClient, tmp_path: Path, monkeypatch):
     _setup_world(client, tmp_path, template_id="tpl-plain")

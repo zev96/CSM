@@ -165,3 +165,25 @@ def test_factcheck_sources_include_title_param(tmp_path: Path, monkeypatch):
         plan=AssemblyPlan(keyword="k", template_id="t", seed=0), out_dir=tmp_path,
     )
     assert captured["sources"] == ["草稿", "我的标题", "事实"]
+
+
+def test_factcheck_sources_include_keyword(tmp_path: Path, monkeypatch):
+    """关键词纳入白名单源 —— 植入指令会把关键词织进引言/结尾，关键词里带
+    数字+单位（如「3000元以内空气净化器推荐」的「3000元」）时不该被事实核对
+    当成越界参数拦下。（核对只抽「数字+计量单位」，纯年份裸数字本就不拦。）"""
+    factcheck_service.reset_for_test()
+    captured: dict = {}
+    monkeypatch.setattr(
+        generate_service, "build_whitelist",
+        lambda scopes, *, source_texts: captured.update(sources=source_texts)
+        or type("WL", (), {"numbers": set(), "certs": set()})())
+    monkeypatch.setattr(generate_service, "check_facts",
+                        lambda *a, **k: type("R", (), {"ok": True})())
+    cfg = AppConfig(out_dir="x", brand_memory=BrandMemoryConfig(factcheck=True))
+    generate_service._maybe_block_for_factcheck(
+        "jt", final_text="文本", scopes=[_scope()], draft="草稿",
+        brand_facts="事实", title="我的标题", keyword="3000元以内空气净化器推荐",
+        cfg=cfg,
+        plan=AssemblyPlan(keyword="k", template_id="t", seed=0), out_dir=tmp_path,
+    )
+    assert captured["sources"] == ["草稿", "我的标题", "3000元以内空气净化器推荐", "事实"]

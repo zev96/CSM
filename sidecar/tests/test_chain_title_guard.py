@@ -60,6 +60,8 @@ def test_existing_title_rewritten_by_the_chain_is_restored():
     )
     assert state.final_text.splitlines()[0] == "# 我自己写的标题"
     assert state.title_corrections and "改写" in state.title_corrections[0]
+    # 纠正说明同时挂在 pass 上（透传前端「润色过程」模态，不静默）
+    assert state.passes[0].guard_note and "标题" in state.passes[0].guard_note
 
 
 def test_chain_dropping_the_title_puts_it_back():

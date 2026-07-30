@@ -136,10 +136,19 @@ interface SkillRow { id: string; name: string; desc?: string }
 const templates = ref<TemplateRow[]>([]);
 const skills = ref<SkillRow[]>([]);
 
+// 「无」= 不带任何 skill 润色（system prompt 为空，只剩通用润色指令）。
+// 别写成「用模板默认」—— 模板的 default_skill_id 只有批量路径在用，
+// 创作区的整篇润色从不读它，那个文案会把用户引向"以为有兜底"的假润色。
 const skillOptions = computed(() => [
-  { label: "无（用模板默认）", value: "" },
+  { label: "无（不用 Skill）", value: "" },
   ...skills.value.map((s) => ({ label: s.name, value: s.id })),
 ]);
+// 链接管提示用 skill 名（链里存的是 id；名单没命中就原样显示 id）。
+const chainDisplay = computed(() =>
+  skillChain.value
+    .map((id) => skills.value.find((s) => s.id === id)?.name ?? id)
+    .join(" → "),
+);
 const templateOptions = computed(() => [
   { label: "未选择模板", value: "" },
   ...templates.value.map((t) => ({ label: t.name, value: t.id })),
@@ -413,6 +422,11 @@ function clearAll() {
 
 // ── 整篇润色（含 demo 模式弹窗）───────────────────────────────
 const polishing = ref(false);
+// onMounted 的 skill 初始化（query → 快照回填 → 偏好）要等两次 HTTP
+// （cfg.load + loadLookups）。就位前 skillId/skillChain 还是空 ref，此时
+// 点「整篇润色」不能拿它们当「界面当前所选」—— 会把快照里的 skill/链
+// 洗成空。就位前退回快照语义（finalize 不带 overrides）。
+const skillHydrated = ref(false);
 // 「成稿会被覆盖」确认框挂起中。单独一个标志：polishing 还驱动着 demo 的全屏
 // 假进度模态，借用它会在用户还没做决定时先罩满屏。只进重入守卫和按钮禁用。
 const confirming = ref(false);
@@ -457,7 +471,18 @@ async function polishAll() {
     // 进度由 overallProgress(isFinalizing) 呈现（逐 pass 输出在「润色过程」模态里）；
     // 切成稿 tab + 成功/失败提示由 watch(article.status) 统一处理
     // （finalize 流式早返回，这里不能同步判 status）。
-    await article.finalize();
+    // skill 以界面**当前所选**为准（与 takeoff 同一套解析规则：链非空优先，
+    // 否则单 skill 下拉）—— 起飞后在右栏换的 skill 必须生效，否则链拿着
+    // 起飞快照里的空 skill 跑，润色只剩最小编辑。视图 skill 未就位
+    // （mount 初始化还没跑完）时不带 overrides，退回快照语义。
+    await article.finalize(
+      skillHydrated.value
+        ? {
+            skill_id: skillId.value || null,
+            skill_chain: skillChain.value.length > 0 ? skillChain.value : null,
+          }
+        : undefined,
+    );
     return;
   }
 
@@ -917,13 +942,41 @@ onMounted(async () => {
   const qt = (route.query.template_id as string) ?? "";
   if (qt) templateId.value = qt;
   const qs = (route.query.skill_id as string) ?? "";
+  // 回填只在「不带起飞意图直进创作区」时做（leftnav 回看）。home 新起飞
+  // （query 带 keyword / mode=comparison）时，空 skill/空链正是用户对**这一次**
+  // 起飞的显式选择 —— 回填会把上一篇（含已取消的上一单）的 skill/链静默污染
+  // 进 mount 尾部自动起飞的新请求，且待用链在界面上完全不可见。
+  const freshTakeoff =
+    Boolean(qk) || ((route.query.mode as string) ?? "") === "comparison";
+  // 回填/偏好注入的 id 都要对照 /api/skills 实名单（列表拉失败时 fail-open
+  // 放行）：设置里存的 preferred_skill_id 指向已删除的 skill 时，把它送进
+  // finalize 会被后端 fail-fast 拒掉，整次润色白白失败。
+  const knownSkill = (id: string) =>
+    skills.value.length === 0 || skills.value.some((s) => s.id === id);
   if (qs) skillId.value = qs;
+  // query 没带 skill 时从起飞快照回填 —— 整篇润色以视图当前所选为准
+  // （polishAll 把 skillId/skillChain 传给 finalize），leftnav 不带 query
+  // 直进创作区时视图 ref 若空着，一点润色就把快照里的 skill/链静默降级成空。
+  else if (
+    !freshTakeoff &&
+    article.lastRequest?.skill_id &&
+    knownSkill(article.lastRequest.skill_id)
+  ) {
+    skillId.value = article.lastRequest.skill_id;
+  }
 
   // 角度 + 标题从 query 重建（home 起飞条扁平带过来）。拉一次词表让
   // header chip 能把卖点 key 显示成 label；失败静默（chip 退回 key）。
   angle.value = rebuildAngleFromQuery();
   title.value = ((route.query.title as string) ?? "").trim();
   skillChain.value = rebuildChainFromQuery();
+  if (
+    !freshTakeoff &&
+    !skillChain.value.length &&
+    article.lastRequest?.skill_chain?.length
+  ) {
+    skillChain.value = [...article.lastRequest.skill_chain];
+  }
   if (angle.value) article.fetchAngleTaxonomy();
 
   // 契约档单次覆盖 —— 只接受 conservative/aggressive，其余（含空/垃圾值）
@@ -934,9 +987,19 @@ onMounted(async () => {
   if (!templateId.value && templates.value[0]) {
     templateId.value = templates.value[0].id;
   }
-  if (!skillId.value && cfg.data?.preferred_skill_id) {
+  // lastRequest.skill_id === null 是用户在下拉里**显式选过「无」**（finalize
+  // 写回的哨兵值），偏好 skill 不得把它顶回去；undefined 才是「从未设置」。
+  if (
+    !skillId.value &&
+    cfg.data?.preferred_skill_id &&
+    article.lastRequest?.skill_id !== null &&
+    knownSkill(cfg.data.preferred_skill_id)
+  ) {
     skillId.value = cfg.data.preferred_skill_id;
   }
+  // 视图 skill 状态就位 —— 此前点「整篇润色」会以空 ref 覆盖快照（详见
+  // polishAll），此后以界面当前所选为准。
+  skillHydrated.value = true;
 
   // 带 ?keyword=... 进来 = home 发起的新一次起飞。这里清掉残留的
   // error 状态（不然 watcher 因为 status 没变 → 不会触发 alert，用户
@@ -1013,6 +1076,12 @@ watch(
         // 整篇润色（finalize）成稿就绪 → 切成稿 tab + 成功提示。
         activeTab.value = "final";
         toast.success("整篇润色完成");
+        // 有 pass 被排版/标题守卫回退或纠正 → 明说，别让用户对着几乎没变的
+        // 成稿猜「润色是不是没干活」。详情逐 pass 挂在「润色过程」模态里。
+        const guarded = article.passes.filter((p) => p.guard_note).length;
+        if (guarded > 0) {
+          toast.warn(`${guarded} 轮润色触发守卫保护（排版/标题），详见「润色过程」`);
+        }
       } else {
         // draft_only 起飞完成、finalText 还空 → 停初稿 tab 让用户检查后再润色。
         activeTab.value = "draft";
@@ -2212,8 +2281,18 @@ const tabSectionLabel = computed(() => {
                 :model-value="skillId"
                 :options="skillOptions"
                 width="100%"
+                :disabled="skillChain.length > 0"
                 @update:model-value="(v) => (skillId = String(v))"
               />
+              <!-- 起飞带了 skill 链时链优先（与起飞规则一致），单选下拉不参与
+                   润色 —— 置灰 + 明说，否则用户改了没效果只会以为又坏了。 -->
+              <div
+                v-if="skillChain.length > 0"
+                class="text-[10.5px]"
+                :style="{ color: 'var(--ink-3)', lineHeight: 1.6 }"
+              >
+                本篇由 skill 链接管：{{ chainDisplay }}。整篇润色按链执行，此下拉不生效。
+              </div>
             </div>
           </div>
         </Card>
@@ -2428,6 +2507,21 @@ const tabSectionLabel = computed(() => {
               <span>{{ article.rerunningIndex === p.index ? "取消" : "重跑此 pass" }}</span>
             </button>
           </div>
+          <!-- 守卫说明 —— 本轮被排版守卫回退 / 标题守卫纠正时明说。不显示
+               的话用户只看到「这轮输出和上轮一样」，会以为链坏了。 -->
+          <div
+            v-if="p.guard_note"
+            data-guard-note
+            class="text-[11px] mb-1.5"
+            :style="{
+              background: 'var(--yellow-soft)',
+              color: 'var(--yellow-deep)',
+              border: '1px solid var(--yellow)',
+              padding: '4px 9px',
+              borderRadius: '7px',
+              lineHeight: 1.6,
+            }"
+          >⚠ {{ p.guard_note }}</div>
           <!--
             按 markdown 渲染，不是 pre-wrap 纯文本。这块预览和成稿编辑器
             显示的是同一段正文，一个排好版、一个满屏 ## 和 ** —— 用户看到

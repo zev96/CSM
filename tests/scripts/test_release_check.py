@@ -1,5 +1,6 @@
 """scripts/release_check.py — verify git tag matches tauri.conf.json version."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,9 +11,16 @@ TAURI_CONF = ROOT / "frontend" / "src-tauri" / "tauri.conf.json"
 
 
 def _run(tag: str):
+    # 管道两侧的编码都显式钉死。text=True 不指定 encoding 时父进程按 locale
+    # 默认（中文 Windows = GBK）解码，而子进程的 sys.stderr 会跟随机器上的
+    # PYTHONIOENCODING（很多中文开发机全局设了 utf-8）写 UTF-8 —— 两侧错位，
+    # 读线程 UnicodeDecodeError，stderr 变 None，测试报的是无关的
+    # AttributeError。钉死后任何控制台代码页/环境变量组合下行为都一致。
     return subprocess.run(
         [sys.executable, str(SCRIPT), tag],
         capture_output=True, text=True, cwd=ROOT,
+        encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
 
 
