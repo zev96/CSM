@@ -757,8 +757,8 @@ def finalize_draft(
     if _maybe_block_for_factcheck(
         job_id, final_text=final_text, scopes=scopes, draft=draft,
         brand_facts=brand_facts if cfg_bm.inject else None,
-        title=title, cfg=cfg, plan=plan, out_dir=out_dir, passes=passes,
-        cost=cost, completeness=completeness,
+        title=title, keyword=keyword, cfg=cfg, plan=plan, out_dir=out_dir,
+        passes=passes, cost=cost, completeness=completeness,
     ):
         return FinalizeOutcome(
             final_text=final_text, passes=passes, blocked=True, cost=cost,
@@ -804,7 +804,8 @@ def _resolve_chain(
 
 def _maybe_block_for_factcheck(
     job_id: str, *, final_text: str, scopes: list, draft: str,
-    brand_facts: str | None, title: str | None = None, cfg, plan, out_dir: Path,
+    brand_facts: str | None, title: str | None = None,
+    keyword: str | None = None, cfg, plan, out_dir: Path,
     passes: list[dict[str, Any]] | None = None,
     cost: dict[str, Any] | None = None,
     completeness: dict[str, Any] | None = None,
@@ -812,13 +813,17 @@ def _maybe_block_for_factcheck(
     """导出前事实核对。命中越界 → 缓存待导出 + 以 done(blocked) 收尾、返回
     True（调用方须在导出前停下）。核对关 / 无型号 / 成稿干净 → False。
 
-    白名单源 = 毛坯文 + 标题（若有）+ 已注入品牌事实（若有）：标题往往
-    自带数字（如「220AW 实测」），不纳入会被事实核对误判越界。
+    白名单源 = 毛坯文 + 标题（若有）+ 关键词（若有）+ 已注入品牌事实（若有）：
+    标题往往自带数字（如「220AW 实测」）；关键词会被植入指令织进引言/结尾，
+    带数字+单位的关键词（如「3000元以内空气净化器推荐」）不纳入会被误判越界
+    （核对只抽「数字+计量单位」，纯年份等裸数字本就不在范围内）。批量路径的
+    白名单在 batch_service 里同口径维护。
 
     blocked done 也带 passes（链每段输出）：前端被拦时仍能逐 pass 预览/重跑。"""
     if not cfg.brand_memory.factcheck or not scopes:
         return False
-    sources = [draft] + ([title] if title else []) + ([brand_facts] if brand_facts else [])
+    sources = ([draft] + ([title] if title else []) + ([keyword] if keyword else [])
+               + ([brand_facts] if brand_facts else []))
     wl = build_whitelist(scopes, source_texts=sources)
     report = check_facts(
         final_text, allowed_numbers=wl.numbers, allowed_certs=wl.certs,

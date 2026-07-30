@@ -369,10 +369,16 @@ def _run_job(job_id: str) -> None:
                         final_k = chain_state.final_text
                         pass_dicts = [p.to_dict() for p in chain_state.passes]
                         total_cost_acc.append(pass_dicts)
-                        # 核对信号（计数不拦）
+                        # 核对信号（计数不拦）。白名单源与交互 finalize 的
+                        # _maybe_block_for_factcheck 同口径：draft + keyword +
+                        # brand_facts ——【关键词植入】指令会让 LLM 把关键词织进
+                        # 引言/结尾，「3000元以内…」这类带数字+单位的关键词不纳入
+                        # 就会被自家核对记违规、把听话的候选稿系统性压分。
                         fc_n = 0
                         if cfg.brand_memory.factcheck and scopes:
-                            sources = [draft] + ([brand_facts] if brand_facts else [])
+                            sources = ([draft]
+                                       + ([item.keyword] if item.keyword else [])
+                                       + ([brand_facts] if brand_facts else []))
                             wl = build_whitelist(scopes, source_texts=sources)
                             fc_n = len(check_facts(
                                 final_k, allowed_numbers=wl.numbers,

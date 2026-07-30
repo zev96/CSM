@@ -36,6 +36,11 @@ class ChainPass:
     skill_name: str
     input: str
     output: str
+    # 守卫说明：本轮输出被排版守卫整轮回退 / 标题守卫纠正时的人话说明；
+    # None = 干净通过。挂在 pass 上（随 SSE pass / done 透传前端）——
+    # 回退只写后端日志的话，用户拿回和输入几乎一样的成稿，只会以为
+    # 「润色没干活」。rerun 重建 pass 对象，note 天然只反映本轮。
+    guard_note: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +50,7 @@ class ChainPass:
             "input_tokens": pricing.estimate_tokens(self.input),
             "output_tokens": pricing.estimate_tokens(self.output),
             "output": self.output,
+            "guard_note": self.guard_note,
         }
 
 
@@ -64,8 +70,8 @@ class ChainState:
     # 榜单卡片区的结构特征（标题/小节名）。非空 = prompt 加排版硬约束 +
     # 逐 pass 卡片区指纹校验。空 = 今天行为。
     card_signature: Any = None
-    # 被结构校验拦下并回退的 pass 说明（进 generate_service 的 warning 日志，
-    # 别静默；目前不透前端）。
+    # 被结构校验拦下并回退的 pass 说明 —— 链级聚合，供 generate_service 的
+    # warning 日志用；面向用户的透传走每个 ChainPass.guard_note（SSE/done）。
     layout_rejections: list[str] = field(default_factory=list)
     # 被标题守卫纠正的 pass 说明（同上）。
     title_corrections: list[str] = field(default_factory=list)
@@ -125,32 +131,34 @@ def _prompt_for(state: ChainState, idx: int, prev_output: str) -> tuple[str, str
         title_rule = ""
     system, user = build_refine_prompt(
         step.body, prev_output, preserve_layout=bool(state.card_signature),
-        title_rule=title_rule,
+        title_rule=title_rule, keyword=state.keyword,
     )
     return system, user, prev_output
 
 
-def _guard_layout(state: ChainState, idx: int, before: str, after: str) -> str:
+def _guard_layout(state: ChainState, idx: int, before: str, after: str) -> tuple[str, str | None]:
     """卡片区结构校验 —— 破坏结构的这一 pass 直接回退到输入文本。
 
     prompt 里已经下了排版硬约束，但 LLM 不保证遵守；榜单卡片被润成流水文
     用户就拿不到榜单了。保结构优先于保润色：这一 pass 的成果作废，链继续
     往下走（后面的 pass 仍有机会在结构完好的文本上润色）。
+
+    返回 ``(文本, 守卫说明|None)`` —— 说明挂到 ChainPass.guard_note 透传前端。
     """
     if not state.card_signature:
-        return after
+        return after, None
     violation = layout_guard.check(before, after, state.card_signature)
     if violation is None:
-        return after
+        return after, None
     state.layout_rejections.append(f"pass {idx}: {violation} —— 已回退本轮润色")
     logger.warning(
         "chain job %s pass %s 破坏卡片排版（%s），回退到输入文本",
         state.job_id, idx, violation,
     )
-    return before
+    return before, f"{violation} —— 本轮润色已回退，保持上一轮正文"
 
 
-def _guard_title(state: ChainState, idx: int, before: str, after: str) -> str:
+def _guard_title(state: ChainState, idx: int, before: str, after: str) -> tuple[str, str | None]:
     """标题守卫 —— 润色不得新增/改写/删除文章标题，只纠正标题那一行。
 
     prompt 里已经下了标题硬约束，但 LLM 不保证遵守。正文首行的 H1 就是全链路
@@ -158,15 +166,17 @@ def _guard_title(state: ChainState, idx: int, before: str, after: str) -> str:
     被 LLM 换掉的话，用户选的标题（以及标题里那个必须原样保留的关键词）就
     悄悄没了。和排版守卫的整轮回退不同，这里只动标题行 —— 正文的润色成果
     照常保留。
+
+    返回 ``(文本, 守卫说明|None)`` —— 说明挂到 ChainPass.guard_note 透传前端。
     """
     fixed, note = title_guard.enforce(
         before, after, title=state.title, keyword=state.keyword,
     )
     if note is None:
-        return after
+        return after, None
     state.title_corrections.append(f"pass {idx}: {note}")
     logger.warning("chain job %s pass %s 标题守卫：%s", state.job_id, idx, note)
-    return fixed
+    return fixed, note
 
 
 def run_chain(
@@ -194,10 +204,12 @@ def run_chain(
         checkpoint()
         system, user, input_text = _prompt_for(state, idx, prev)
         out = client.complete(system=system, user=user)
-        out = _guard_layout(state, idx, input_text, out)
-        out = _guard_title(state, idx, input_text, out)
+        out, layout_note = _guard_layout(state, idx, input_text, out)
+        out, title_note = _guard_title(state, idx, input_text, out)
+        note = "；".join(n for n in (layout_note, title_note) if n)
         p = ChainPass(index=idx, skill_id=step.skill_id, role=step.role,
-                      skill_name=step.name, input=input_text, output=out)
+                      skill_name=step.name, input=input_text, output=out,
+                      guard_note=note or None)
         state.passes.append(p)
         on_pass(p)
         prev = out
@@ -230,12 +242,14 @@ def rerun(
         out = client.complete(system=system, user=user)
         # 「重跑这一段」同样要过排版 / 标题守卫 —— 它恰恰是最容易把卡片揉平、
         # 把标题改掉的入口。
-        out = _guard_layout(state, idx, input_text, out)
-        out = _guard_title(state, idx, input_text, out)
+        out, layout_note = _guard_layout(state, idx, input_text, out)
+        out, title_note = _guard_title(state, idx, input_text, out)
+        note = "；".join(n for n in (layout_note, title_note) if n)
         old = state.passes[idx]
         p = ChainPass(
             index=idx, skill_id=old.skill_id, role=old.role,
-            skill_name=old.skill_name, input=input_text, output=out)
+            skill_name=old.skill_name, input=input_text, output=out,
+            guard_note=note or None)
         state.passes[idx] = p
         on_pass(p)
         prev = out

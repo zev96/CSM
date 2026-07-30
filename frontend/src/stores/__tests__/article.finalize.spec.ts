@@ -61,6 +61,45 @@ describe("article store — finalize（整篇润色=成稿增强）", () => {
     });
   });
 
+  it("finalize overrides：整篇润色以界面当前所选 skill 为准，并写回 lastRequest", async () => {
+    // 根因修复：右栏「AI 润色 Skill」下拉改的是视图本地 ref，而 finalize 一直
+    // 读起飞时的 lastRequest 快照 —— 起飞后换的 skill 从未生效，链以空 skill
+    // 跑（system prompt 为空），LLM 只做最小编辑。overrides = 界面当前所选。
+    postMock.mockResolvedValueOnce({ data: { job_id: "job-A" } });
+    const a = useArticle();
+    seedAfterTakeoff(a); // 快照里是 skill_chain: ["人设", "去味"]、无 skill_id
+    await a.finalize({ skill_id: "空气净化器家电博主", skill_chain: null });
+    const body = postMock.mock.calls[0][1];
+    expect(body.skill_id).toBe("空气净化器家电博主");
+    expect(body.skill_chain).toBeNull();
+    // 写回快照 —— 后续「重新随机」/再次润色沿用用户最新选择，不再回摆
+    expect(a.lastRequest?.skill_id).toBe("空气净化器家电博主");
+    expect(a.lastRequest?.skill_chain).toBeNull();
+  });
+
+  it("finalize overrides：空 skill_id（下拉选「无」）→ body 清空、快照记显式 null", async () => {
+    postMock.mockResolvedValueOnce({ data: { job_id: "job-A" } });
+    const a = useArticle();
+    seedAfterTakeoff(a);
+    (a.lastRequest as any).skill_id = "旧skill";
+    await a.finalize({ skill_id: "", skill_chain: null });
+    const body = postMock.mock.calls[0][1];
+    expect(body.skill_id).toBeNull();
+    expect(body.skill_chain).toBeNull();
+    // null 哨兵 = 显式选过「无」——重挂载时 preferred_skill_id 不得顶回去
+    expect(a.lastRequest?.skill_id).toBeNull();
+  });
+
+  it("finalize 无 overrides：零回归，仍走 lastRequest 快照", async () => {
+    postMock.mockResolvedValueOnce({ data: { job_id: "job-A" } });
+    const a = useArticle();
+    seedAfterTakeoff(a);
+    await a.finalize();
+    const body = postMock.mock.calls[0][1];
+    expect(body.skill_id).toBeNull();
+    expect(body.skill_chain).toEqual(["人设", "去味"]);
+  });
+
   it("finalize 带上 lastRequest 的 contract_mode（per-article 契约覆盖不丢，PR-B 遗留修复）", async () => {
     // takeoff 存了 contract_mode，但真正的 LLM 润色在 finalize —— 若 finalize
     // body 不带 contract_mode，后端回退全局，用户选的激进/保守被静默忽略。
