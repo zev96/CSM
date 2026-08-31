@@ -37,6 +37,10 @@ import {
   formatRelativeTime,
 } from "@/utils/monitor-batch";
 import {
+  buildRetentionCsv,
+  type RetentionExportItem,
+} from "@/utils/comment-retention-export";
+import {
   type TaskSnapshotPair,
 } from "@/utils/monitor-snapshot";
 import {
@@ -544,6 +548,69 @@ function batchRunState(batchName: string): { label: string; disabled: boolean } 
   return { label: `监测中 ${total - runningCount}/${total}`, disabled: true };
 }
 
+// ── 导出留存率 CSV ───────────────────────────────────────────────────
+// 「当前批次的评论留存率情况」：每条链接是否留存 / 排第几 + 头部汇总
+// （总计 / 留存 / 留存率 / 状态分布）。内容由纯函数 buildRetentionCsv
+// 生成（vitest 覆盖）；这里只管两条保存路径：Tauri 原生「另存为」（主）
+// / 浏览器 <a download>（dev 兜底），与 MiningView.onTaskExport 同款。
+async function exportBatchRetention(batchName: string) {
+  const videos = realVideosByBatchId.value[batchName] ?? [];
+  if (!videos.length) {
+    toast.warn("该批次暂无可导出的数据");
+    return;
+  }
+  const items: RetentionExportItem[] = videos.map((v) => {
+    const taskId = realTaskIdFromVideoId(v.id);
+    return {
+      video: v,
+      checkedAt: (taskId != null ? props.taskSnapshots[taskId]?.latest?.checked_at : null) || null,
+    };
+  });
+  // 平台标签从批次首个 task.type 反查（与 _buildCommentAlertData 同法），
+  // 免得依赖"当前 subtab 一定等于批次平台"的隐含假设。
+  const first = props.tasks.find((t) => parseBatchName(t.name) === batchName);
+  const platformLabel =
+    first?.type === "bilibili_comment" ? "B站"
+    : first?.type === "douyin_comment" ? "抖音"
+    : first?.type === "kuaishou_comment" ? "快手"
+    : (PLATFORMS.find((p) => p.k === props.commentSubtab)?.l ?? "评论");
+  // BOM 让 Excel 认出 UTF-8 —— 与 mining / 知乎导出保持一致
+  const csv = "\ufeff" + buildRetentionCsv({ batchName, platformLabel, items });
+  const safeName = batchName.replace(/[\\/:*?"<>|]/g, "_");
+  const defaultName = `评论留存率-${safeName}-${new Date().toISOString().slice(0, 10)}.csv`;
+  try {
+    const isTauri =
+      typeof window !== "undefined" &&
+      // @ts-expect-error — ambient Tauri global
+      Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
+    if (!isTauri) {
+      // 浏览器 dev 模式 fallback —— Blob + <a download>
+      const blobUrl = URL.createObjectURL(
+        new Blob([csv], { type: "text/csv;charset=utf-8" }),
+      );
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = defaultName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const path = await save({
+      defaultPath: defaultName,
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!path) return; // 用户取消
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
+    await writeFile(path, new TextEncoder().encode(csv));
+    toast.success(`已导出到：${path}`);
+  } catch (e: any) {
+    toast.error(`导出失败：${e?.message ?? e}`);
+  }
+}
+
 // 父组件历史报告 drill-down 时调用：先切 activeTab/commentSubtab，
 // 然后等两 tick 让 atomic load 跑完，最后调本接口把 L2/L3 选中态写到位。
 function selectBatchAndVideo(batchName: string, taskId: number) {
@@ -907,6 +974,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                           ? { key: 'stop', label: '停止监测', icon: 'x' }
                           : { key: 'run', label: '立刻监测', icon: 'play' },
                         { key: 'edit', label: '编辑批次', icon: 'edit' },
+                        { key: 'export', label: '导出留存率', icon: 'download' },
                         { key: 'delete', label: '删除批次', icon: 'trash', tone: 'danger' },
                       ]"
                       align="right"
@@ -915,6 +983,7 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                         if (k === 'run') emit('run-batch', t.id);
                         else if (k === 'stop') emit('cancel-batch', t.id);
                         else if (k === 'edit') emit('edit-batch', t.id);
+                        else if (k === 'export') exportBatchRetention(t.id);
                         else if (k === 'delete') emit('delete-batch', t.id);
                       }"
                     >
@@ -982,6 +1051,24 @@ defineExpose({ selectBatchAndVideo, clearSelectionIfBatch });
                   border: '1px solid var(--line)',
                 }"
               >{{ selectedTaskVideos.length }} 条评论</span>
+              <!-- 导出当前批次留存率 CSV（每条链接是否留存/排名 + 汇总统计）-->
+              <button
+                v-if="!demoMode"
+                type="button"
+                class="inline-flex flex-shrink-0 items-center justify-center"
+                :style="{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '999px',
+                  background: 'var(--card-2)',
+                  border: '1px solid var(--line)',
+                  color: 'var(--ink-2)',
+                }"
+                title="导出留存率 CSV"
+                @click="exportBatchRetention(selectedCommentTaskId!)"
+              >
+                <Icon name="download" :size="13" />
+              </button>
             </div>
             <!-- 视频列表列头 -->
             <div
