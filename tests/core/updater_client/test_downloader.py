@@ -44,6 +44,28 @@ def test_download_writes_file_and_returns_sha(tmp_path: Path):
     assert out.read_bytes() == content
 
 
+def test_http_error_carries_status_code(tmp_path: Path):
+    """401/403 需要让调用方识别出「凭证问题」才能做匿名降级重试。"""
+    out = tmp_path / "out.zip"
+    with _patch_stream(b"", status=401):
+        with pytest.raises(DownloadError) as ei:
+            download_with_verification(
+                url="https://x/y.zip", target=out, expected_sha256="0" * 64,
+            )
+    assert ei.value.status_code == 401
+
+
+def test_non_http_download_error_has_no_status_code(tmp_path: Path):
+    content = b"actual content" * 50
+    out = tmp_path / "out.zip"
+    with _patch_stream(content):
+        with pytest.raises(DownloadError) as ei:
+            download_with_verification(
+                url="https://x/y.zip", target=out, expected_sha256="0" * 64,
+            )
+    assert ei.value.status_code is None
+
+
 def test_download_sha_mismatch_raises_and_deletes(tmp_path: Path):
     content = b"actual content" * 50
     out = tmp_path / "out.zip"

@@ -24,7 +24,15 @@ PROGRESS_INTERVAL = 256 * 1024  # ~256 KB between callbacks
 
 
 class DownloadError(Exception):
-    """Network failure / HTTP error / SHA mismatch."""
+    """Network failure / HTTP error / SHA mismatch.
+
+    ``status_code`` is set only when the failure was an HTTP error response,
+    so callers can distinguish auth failures (401/403) and retry anonymously.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class DownloadCancelled(Exception):
@@ -68,7 +76,8 @@ def download_with_verification(
             with client.stream("GET", url, headers=headers or {}) as resp:
                 if resp.status_code >= 400:
                     raise DownloadError(
-                        f"HTTP {resp.status_code} from {url}")
+                        f"HTTP {resp.status_code} from {url}",
+                        status_code=resp.status_code)
                 content_length = int(resp.headers.get("content-length", 0))
                 with open(target, "wb") as f:
                     for chunk in resp.iter_bytes(CHUNK_SIZE):
