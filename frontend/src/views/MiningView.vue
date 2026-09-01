@@ -35,11 +35,12 @@ import { ref, computed, onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import Icon from "@/components/ui/Icon.vue";
 import StartJobModal from "@/components/mining/StartJobModal.vue";
+import GenerateBatchModal from "@/components/mining/GenerateBatchModal.vue";
 import SyncToMonitorModal from "@/components/mining/SyncToMonitorModal.vue";
 import TaskListPanel from "@/components/mining/TaskListPanel.vue";
 import SubtaskListPanel from "@/components/mining/SubtaskListPanel.vue";
 import VideoDetailPanel from "@/components/mining/VideoDetailPanel.vue";
-import { useMiningStore, type Platform } from "@/stores/mining";
+import { useMiningStore, type Platform, type SearchFilters } from "@/stores/mining";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 
@@ -57,7 +58,7 @@ const syncModalKeyword = ref('');
 
 // 默认显示「全部」+「全部平台」—— 用户进页面第一眼想看完整的视频清单，
 // 而不是被 unread 过滤掉一半。要看待评论时手动切下拉。
-const tab = ref<"unread" | "done" | "all">("all");
+const tab = ref<"unread" | "done" | "pending" | "all">("all");
 const platform = ref<"all" | Platform>("all");
 const selected = ref(new Set<number>());
 const bulkMarkBusy = ref(false);
@@ -75,6 +76,7 @@ const filtered = computed(() => {
   return store.videos.filter((v) => {
     if (tab.value === "unread" && v.already_commented) return false;
     if (tab.value === "done" && !v.already_commented) return false;
+    if (tab.value === "pending" && !(v.pending_review_count ?? 0)) return false;
     if (platform.value !== "all" && v.platform !== platform.value) return false;
     return true;
   });
@@ -139,14 +141,82 @@ async function onSelectJob(id: number) {
   await store.selectJob(id);
 }
 
-async function onStartSubmit(payload: { keyword: string; platforms: Platform[]; target: number; brandKeywords: string[] }) {
+async function onStartSubmit(payload: { keyword: string; platforms: Platform[]; target: number; brandKeywords: string[]; filters: SearchFilters }) {
   showNewTask.value = false;
   try {
-    const newJobId = await store.startJob(payload.keyword, payload.platforms, payload.target, payload.brandKeywords);
+    const newJobId = await store.startJob(payload.keyword, payload.platforms, payload.target, payload.brandKeywords, payload.filters);
     await store.selectJob(newJobId);
   } catch (e: any) {
     const detail = e?.response?.data?.detail as string | undefined;
     toast.error("新建任务失败" + (detail ? "：" + detail : ""));
+  }
+}
+
+// ── 批量 AI 生成 + 批量通过（P2）────────────────────────────────────────
+const showGenModal = ref(false);
+const bulkApproveBusy = ref(false);
+
+async function onGenerateSubmit(payload: { tiersPerVideo: number; toneHint: string }) {
+  showGenModal.value = false;
+  try {
+    await store.generateBatch(Array.from(selected.value), payload.tiersPerVideo, payload.toneHint);
+    toast.success("已开始生成，完成的视频会实时出现在评论楼");
+    selected.value = new Set();
+  } catch (e: any) {
+    if (e?.name === "LLMNotConfiguredError") {
+      toast.error("请先在设置中配置 AI 服务");
+      return;
+    }
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("生成启动失败" + (detail ? "：" + detail : ""));
+  }
+}
+
+// 生成批次收尾提示：active true→false 时报一次结果。
+watch(
+  () => store.genState?.active,
+  (active, was) => {
+    if (was === true && active === false && store.genState) {
+      const g = store.genState;
+      toast.success(`生成完成：新草稿 ${g.generated} 条` + (g.failed ? `，失败 ${g.failed} 条` : ""));
+    }
+  },
+);
+
+async function onBulkApprove() {
+  if (selected.value.size === 0 || bulkApproveBusy.value) return;
+  bulkApproveBusy.value = true;
+  try {
+    const approved = await store.reviewBulk(Array.from(selected.value));
+    toast.success(`已通过 ${approved} 条评论`);
+    selected.value = new Set();
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("批量通过失败" + (detail ? "：" + detail : ""));
+  } finally {
+    bulkApproveBusy.value = false;
+  }
+}
+
+// ── 同步腾讯文档（P3）──────────────────────────────────────────────────
+async function onSyncToDocs() {
+  if (store.syncingToDocs) return;
+  try {
+    const r = await store.syncToDocs();
+    if (r.synced_videos === 0 && r.skipped_in_doc === 0) {
+      toast.success("没有待同步的已通过评论（先在待审核里通过一批）");
+      return;
+    }
+    let msg = `已同步 ${r.synced_videos} 条视频（${r.synced_comments} 条评论）到腾讯文档`;
+    if (r.skipped_in_doc) msg += `，${r.skipped_in_doc} 条已在表格中跳过`;
+    toast.success(msg);
+  } catch (e: any) {
+    const data = e?.response?.data;
+    if (data?.code === "tencent_docs_disabled" || data?.code === "tencent_docs_token") {
+      toast.error(`${data.detail}（设置 → 腾讯文档同步）`);
+    } else {
+      toast.error("同步失败" + (data?.detail ? "：" + data.detail : "，可先用任务导出 CSV 兜底"));
+    }
   }
 }
 
@@ -346,13 +416,29 @@ onMounted(async () => {
       同款）：原 "Outreach · 引流" 文案换成「评论视频」；下方的「视频抓取
       + 当前任务关键词」整段删除（任务关键词在左栏抓取任务列表已经显示）。
     -->
-    <header style="flex-shrink: 0;">
+    <header style="flex-shrink: 0;" class="flex items-center justify-between">
       <div
         class="text-[11px] uppercase"
         :style="{ letterSpacing: '1.5px', color: 'var(--ink-3)' }"
       >
         评论视频
       </div>
+      <!-- P3：把全部已通过（approved）的评论追加到共享腾讯文档表格。
+           未配置时 toast 引导去设置页；CSV 导出兜底在任务列表 ⋯ 菜单里。 -->
+      <button
+        :disabled="store.syncingToDocs"
+        @click="onSyncToDocs"
+        class="inline-flex items-center gap-1.5 text-[11.5px] font-medium"
+        :style="{
+          height: '28px', padding: '0 12px', borderRadius: '999px',
+          background: store.syncingToDocs ? 'var(--card-2)' : 'var(--card-white)',
+          color: 'var(--ink-2)', border: '1px solid var(--line)',
+          cursor: store.syncingToDocs ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+        }"
+      >
+        <Icon name="upload" :size="11"/>
+        {{ store.syncingToDocs ? '同步中…' : '同步腾讯文档' }}
+      </button>
     </header>
 
     <!-- Three-column body —— flex-1 撑满；每栏自己管滚动。 -->
@@ -477,6 +563,35 @@ onMounted(async () => {
             {{ bulkMarkBusy ? '标记中…' : '标记已评论' }}
           </button>
           <button
+            :disabled="store.genState?.active"
+            @click="showGenModal = true"
+            class="inline-flex items-center gap-1 text-[11.5px] font-medium"
+            :style="{
+              height: '26px', padding: '0 12px', borderRadius: '999px',
+              background: store.genState?.active ? 'rgba(245,192,66,0.5)' : 'var(--yellow, #f5c042)',
+              color: 'var(--dark)', border: 'none',
+              cursor: store.genState?.active ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+            }"
+          >
+            <Icon name="wand" :size="11"/>
+            {{ store.genState?.active ? '生成中…' : 'AI 生成' }}
+          </button>
+          <button
+            v-if="tab === 'pending'"
+            :disabled="bulkApproveBusy"
+            @click="onBulkApprove"
+            class="inline-flex items-center gap-1 text-[11.5px] font-medium"
+            :style="{
+              height: '26px', padding: '0 12px', borderRadius: '999px',
+              background: bulkApproveBusy ? 'rgba(122,155,94,0.55)' : 'var(--green)',
+              color: '#fff', border: 'none',
+              cursor: bulkApproveBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+            }"
+          >
+            <Icon name="check" :size="11"/>
+            {{ bulkApproveBusy ? '通过中…' : '通过审核' }}
+          </button>
+          <button
             @click="selected = new Set()"
             class="inline-flex items-center justify-center"
             :style="{
@@ -487,6 +602,42 @@ onMounted(async () => {
           >
             <Icon name="x" :size="11"/>
           </button>
+        </div>
+
+        <!-- AI 生成进度 pill —— 浮在工具条上方；工具条隐藏时落到底部。 -->
+        <div
+          v-if="store.genState?.active"
+          class="anim-in"
+          :style="{
+            position: 'absolute',
+            bottom: selected.size > 0 ? '52px' : '14px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 24,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            background: 'var(--card-white)',
+            border: '1px solid var(--line)',
+            borderRadius: '999px',
+            padding: '5px 8px 5px 14px',
+            boxShadow: '0 10px 24px -10px rgba(var(--shadow-rgb),0.4)',
+            whiteSpace: 'nowrap',
+          }"
+        >
+          <span class="text-[11.5px]" style="color: var(--ink-2);">
+            AI 生成中
+            <b class="font-display" style="color: var(--primary-deep)">{{ store.genState.done }}/{{ store.genState.total }}</b>
+          </span>
+          <button
+            @click="store.cancelGeneration()"
+            class="inline-flex items-center gap-1 text-[11px]"
+            :style="{
+              height: '22px', padding: '0 9px', borderRadius: '999px',
+              background: 'var(--card-2)', color: 'var(--ink-2)',
+              border: '1px solid var(--line)', cursor: 'pointer',
+            }"
+          >停止</button>
         </div>
       </div>
 
@@ -547,6 +698,12 @@ onMounted(async () => {
       v-model:visible="syncModalVisible"
       :job-id="syncModalJobId"
       :job-keyword="syncModalKeyword"
+    />
+    <GenerateBatchModal
+      :open="showGenModal"
+      :count="selected.size"
+      @update:open="(v: boolean) => (showGenModal = v)"
+      @submit="onGenerateSubmit"
     />
   </div>
 </template>

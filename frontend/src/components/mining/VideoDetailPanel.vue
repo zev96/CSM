@@ -109,6 +109,17 @@ async function onDeleteComment(id: number) {
 }
 function onCommentSaved() { /* store 已写入 commentsByVideo */ }
 
+// v14 审核：单条通过（pending → approved）。
+async function onApproveComment(id: number) {
+  try {
+    await store.approveComment(id, props.v.id);
+    toast.success("已通过");
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("操作失败" + (detail ? "：" + detail : ""));
+  }
+}
+
 // ── 完成 / 继续盖楼 ────────────────────────────────────────────────────
 const bulkBusy = ref(false);
 async function onMarkDone() {
@@ -519,6 +530,7 @@ const pillLabel = computed(() => {
             tone="active"
             @edit="onEditFloor"
             @delete="onDeleteComment"
+            @approve="onApproveComment"
           />
           <div
             v-else

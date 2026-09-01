@@ -33,9 +33,11 @@ interface PromptPair {
 interface AIPromptsResponse {
   summary: PromptPair;
   suggest: PromptPair;
+  rewrite: PromptPair;
   vars: {
     summary: string[];
     suggest: string[];
+    rewrite: string[];
   };
 }
 
@@ -55,11 +57,19 @@ const suggestDefault = ref("");
 const suggestVars = ref<string[]>([]);
 const suggestSaving = ref(false);
 
+const rewriteDraft = ref("");
+const rewriteBaseline = ref("");
+const rewriteDefault = ref("");
+const rewriteVars = ref<string[]>([]);
+const rewriteSaving = ref(false);
+
 const summaryDirty = computed(() => summaryDraft.value !== summaryBaseline.value);
 const suggestDirty = computed(() => suggestDraft.value !== suggestBaseline.value);
+const rewriteDirty = computed(() => rewriteDraft.value !== rewriteBaseline.value);
 
 const summaryIsDefault = computed(() => summaryBaseline.value.trim() === "");
 const suggestIsDefault = computed(() => suggestBaseline.value.trim() === "");
+const rewriteIsDefault = computed(() => rewriteBaseline.value.trim() === "");
 
 function fmtVars(vars: string[]): string {
   return vars.map(v => `{${v}}`).join(" · ");
@@ -78,6 +88,11 @@ async function load() {
     suggestDefault.value = resp.data.suggest?.default ?? "";
     suggestDraft.value = suggestBaseline.value;
     suggestVars.value = resp.data.vars?.suggest ?? [];
+
+    rewriteBaseline.value = resp.data.rewrite?.current ?? "";
+    rewriteDefault.value = resp.data.rewrite?.default ?? "";
+    rewriteDraft.value = rewriteBaseline.value;
+    rewriteVars.value = resp.data.vars?.rewrite ?? [];
   } catch (e: any) {
     const detail = e?.response?.data?.detail as string | undefined;
     toast.error("读取 AI prompt 失败" + (detail ? "：" + detail : ""));
@@ -87,7 +102,7 @@ async function load() {
 }
 
 async function patchPrompts(
-  body: { summary?: string; suggest?: string },
+  body: { summary?: string; suggest?: string; rewrite?: string },
 ): Promise<AIPromptsResponse> {
   const resp = await sidecar.client.patch<AIPromptsResponse>(
     "/api/mining/ai_prompts",
@@ -157,6 +172,38 @@ async function resetSuggest() {
     toast.error("重置失败" + (detail ? "：" + detail : ""));
   } finally {
     suggestSaving.value = false;
+  }
+}
+
+async function saveRewrite() {
+  if (!rewriteDirty.value || rewriteSaving.value) return;
+  rewriteSaving.value = true;
+  try {
+    const data = await patchPrompts({ rewrite: rewriteDraft.value });
+    rewriteBaseline.value = data.rewrite?.current ?? "";
+    rewriteDraft.value = rewriteBaseline.value;
+    toast.success("评论改写 prompt 已保存");
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("保存失败" + (detail ? "：" + detail : ""));
+  } finally {
+    rewriteSaving.value = false;
+  }
+}
+
+async function resetRewrite() {
+  if (rewriteSaving.value) return;
+  rewriteSaving.value = true;
+  try {
+    const data = await patchPrompts({ rewrite: "" });
+    rewriteBaseline.value = data.rewrite?.current ?? "";
+    rewriteDraft.value = rewriteBaseline.value;
+    toast.success("已重置为默认");
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail as string | undefined;
+    toast.error("重置失败" + (detail ? "：" + detail : ""));
+  } finally {
+    rewriteSaving.value = false;
   }
 }
 
@@ -302,6 +349,63 @@ onMounted(load);
             small
             :disabled="suggestIsDefault || suggestSaving"
             @click="resetSuggest"
+          >
+            <Icon name="refresh" :size="11"/>
+            <span>重置为默认</span>
+          </Btn>
+        </div>
+      </div>
+
+      <!-- 分隔线 -->
+      <div :style="{ height: '1px', background: 'var(--line)', margin: '18px 0' }"/>
+
+      <!-- 评论改写（批量生成） -->
+      <div>
+        <div class="flex items-center gap-2">
+          <div class="text-[12.5px] font-semibold">评论改写（批量生成）</div>
+          <Pill v-if="rewriteIsDefault">默认</Pill>
+          <Pill v-else tone="primary">自定义</Pill>
+        </div>
+        <div
+          class="mt-1 font-mono text-[10.5px]"
+          :style="{ color: 'var(--ink-3)' }"
+          :title="'批量生成时按「模板 × 视频分析」改写；会用视频字段 + 评论区样本 + 模板替换'"
+        >
+          可用占位符: {{ fmtVars(rewriteVars) }}
+        </div>
+        <textarea
+          v-model="rewriteDraft"
+          :placeholder="rewriteDefault || '输入自定义评论改写 prompt…'"
+          rows="4"
+          class="mt-2 w-full outline-none"
+          :style="{
+            padding: '10px 12px',
+            borderRadius: '10px',
+            background: 'var(--card-white)',
+            border: '1px solid var(--line)',
+            fontSize: '12px',
+            lineHeight: 1.55,
+            color: 'var(--ink)',
+            fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+            minHeight: '100px',
+            resize: 'vertical',
+          }"
+        />
+        <div class="mt-2 flex items-center gap-2">
+          <Btn
+            variant="solid"
+            small
+            :disabled="!rewriteDirty || rewriteSaving"
+            @click="saveRewrite"
+          >
+            <Spinner v-if="rewriteSaving" :size="11"/>
+            <span>{{ rewriteSaving ? "保存中…" : "保存" }}</span>
+          </Btn>
+          <Btn
+            variant="ghost"
+            small
+            :disabled="rewriteIsDefault || rewriteSaving"
+            @click="resetRewrite"
           >
             <Icon name="refresh" :size="11"/>
             <span>重置为默认</span>

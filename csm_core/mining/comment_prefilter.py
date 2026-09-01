@@ -59,12 +59,41 @@ def count_brand_hits(texts: list[str], brands: list[str]) -> int:
     )
 
 
-def fetch_video_comment_texts(platform: str, video_url: str, limit: int = 30) -> list[str]:
-    """Fetch the first ~limit comment texts for a video, reusing monitor adapters.
+def _resolve_adapter(ctype: str, platform: str):
+    """Pick the comment adapter for one prefilter fetch.
+
+    抖音优先走 TikHub API（配置了 tikhub key 时）：本地抖音评论接口的
+    X-Bogus 是假桩，基本抓不到东西 —— 见 douyin_comment.py 模块注释。
+    B 站 / 快手本地路径免费可用，留在本地省 TikHub 额度。TikHub 构建
+    失败（缺依赖 / 配置损坏）时回落本地，与整体 fail-open 口径一致。
+    """
+    if platform == "douyin":
+        try:
+            from csm_core.config import get_config, read_api_key
+
+            cfg = get_config()
+            if (read_api_key("tikhub", cfg) or "").strip():
+                from csm_core.monitor.tikhub import build_api_adapters
+
+                return build_api_adapters(get_config, read_api_key)[ctype]
+        except Exception:
+            logger.info(
+                "[prefilter] tikhub adapter unavailable for douyin, falling back to local",
+                exc_info=True,
+            )
+    from csm_core.monitor.platforms import ALL as _ADAPTERS  # registry confirmed
+    return _ADAPTERS.get(ctype)
+
+
+def fetch_video_comments(
+    platform: str, video_url: str, limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Fetch the first ~limit comments for a video, reusing monitor adapters.
 
     Delegates to the same comment-retention adapter that powers the Monitor tab
-    (bilibili_comment / douyin_comment / kuaishou_comment). The adapter handles
-    cookie selection, anti-scrape measures, and pagination internally.
+    (bilibili_comment / kuaishou_comment locally; douyin via TikHub when a key
+    is configured — see ``_resolve_adapter``). The adapter handles cookie
+    selection, anti-scrape measures, and pagination internally.
 
     A placeholder ``my_comment_text`` is injected so that ``build_match_result``
     does not short-circuit with status="failed". The caller only cares about the
@@ -76,18 +105,18 @@ def fetch_video_comment_texts(platform: str, video_url: str, limit: int = 30) ->
         limit:     Approximate number of comments to fetch (maps to scrape_top_n).
 
     Returns:
-        List of comment text strings, or [] on any failure (fail-open: callers
-        should not exclude a video simply because comments couldn't be fetched).
+        List of ``{"text": str, "likes": int|None, "author": str}`` dicts, or []
+        on any failure (fail-open: callers should not exclude a video simply
+        because comments couldn't be fetched).
     """
     ctype = _PLATFORM_COMMENT_TYPE.get(platform)
     if ctype is None:
         return []
 
     try:
-        from csm_core.monitor.platforms import ALL as _ADAPTERS  # registry confirmed
         from csm_core.monitor.base import MonitorTask
 
-        adapter = _ADAPTERS.get(ctype)
+        adapter = _resolve_adapter(ctype, platform)
         if adapter is None:
             return []
 
@@ -107,7 +136,14 @@ def fetch_video_comment_texts(platform: str, video_url: str, limit: int = 30) ->
             return []
 
         hots: list[dict[str, Any]] = (result.metric or {}).get("hot_comments") or []
-        return [str(c.get("text") or "") for c in hots]
+        return [
+            {
+                "text": str(c.get("text") or ""),
+                "likes": c.get("likes"),
+                "author": str(c.get("author") or ""),
+            }
+            for c in hots
+        ]
 
     except Exception:
         logger.info(
@@ -117,3 +153,8 @@ def fetch_video_comment_texts(platform: str, video_url: str, limit: int = 30) ->
             exc_info=True,
         )
         return []
+
+
+def fetch_video_comment_texts(platform: str, video_url: str, limit: int = 30) -> list[str]:
+    """Text-only convenience wrapper around ``fetch_video_comments``."""
+    return [c["text"] for c in fetch_video_comments(platform, video_url, limit=limit)]

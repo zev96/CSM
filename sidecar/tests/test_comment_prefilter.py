@@ -105,6 +105,9 @@ def test_fetch_video_comment_texts_ok(monkeypatch):
     """When the adapter returns status=ok, texts are extracted from hot_comments."""
     from csm_core.mining import comment_prefilter as mod
 
+    # 钉死无 tikhub key —— 抖音走本地注册表，测试与开发机 keyring 解耦。
+    monkeypatch.setattr("csm_core.config.read_api_key", lambda *a, **k: "")
+
     fake_adapter = MagicMock()
     fake_adapter.fetch.return_value = _make_ok_result(["a", "b"])
     fake_all = {
@@ -157,6 +160,8 @@ def test_fetch_video_comment_texts_passes_limit(monkeypatch):
     """scrape_top_n in the task config should reflect the limit argument."""
     from csm_core.mining import comment_prefilter as mod
 
+    monkeypatch.setattr("csm_core.config.read_api_key", lambda *a, **k: "")
+
     fake_adapter = MagicMock()
     fake_adapter.fetch.return_value = _make_ok_result(["x"])
 
@@ -172,6 +177,63 @@ def test_fetch_video_comment_texts_passes_limit(monkeypatch):
         mod.fetch_video_comment_texts("douyin", "https://v.douyin.com/fake", limit=42)
 
     assert captured_tasks[0].config["scrape_top_n"] == 42
+
+
+# ---------------------------------------------------------------------------
+# fetch_video_comments（dict 形状 + 抖音 TikHub 路由）
+# ---------------------------------------------------------------------------
+
+def test_fetch_video_comments_returns_dicts(monkeypatch):
+    """New rich accessor returns {text, likes, author} dicts."""
+    from csm_core.mining import comment_prefilter as mod
+
+    fake_adapter = MagicMock()
+    fake_adapter.fetch.return_value = _make_ok_result(["a", "b"])
+    fake_all = {"bilibili_comment": fake_adapter}
+    with patch.dict("csm_core.monitor.platforms.ALL", fake_all, clear=False):
+        result = mod.fetch_video_comments("bilibili", "https://b.bilibili.com/fake", limit=10)
+
+    assert result == [
+        {"text": "a", "likes": 0, "author": "u"},
+        {"text": "b", "likes": 0, "author": "u"},
+    ]
+
+
+def test_douyin_routes_to_tikhub_when_key_present(monkeypatch):
+    """抖音 + 有 tikhub key → 用 TikHub 适配器（本地 X-Bogus 是桩）。"""
+    from csm_core.mining import comment_prefilter as mod
+
+    monkeypatch.setattr("csm_core.config.read_api_key", lambda *a, **k: "sk-test")
+
+    tikhub_adapter = MagicMock()
+    tikhub_adapter.fetch.return_value = _make_ok_result(["via tikhub"])
+
+    def fake_build(get_config, key_reader):
+        return {"douyin_comment": tikhub_adapter}
+
+    monkeypatch.setattr("csm_core.monitor.tikhub.build_api_adapters", fake_build)
+
+    local_adapter = MagicMock()
+    local_adapter.fetch.return_value = _make_ok_result(["via local"])
+    with patch.dict("csm_core.monitor.platforms.ALL", {"douyin_comment": local_adapter}, clear=False):
+        result = mod.fetch_video_comments("douyin", "https://v.douyin.com/fake", limit=10)
+
+    assert [c["text"] for c in result] == ["via tikhub"]
+    assert local_adapter.fetch.call_count == 0
+
+
+def test_douyin_falls_back_to_local_without_key(monkeypatch):
+    """抖音 + 无 tikhub key → 回落本地注册表。"""
+    from csm_core.mining import comment_prefilter as mod
+
+    monkeypatch.setattr("csm_core.config.read_api_key", lambda *a, **k: "")
+
+    local_adapter = MagicMock()
+    local_adapter.fetch.return_value = _make_ok_result(["via local"])
+    with patch.dict("csm_core.monitor.platforms.ALL", {"douyin_comment": local_adapter}, clear=False):
+        result = mod.fetch_video_comments("douyin", "https://v.douyin.com/fake", limit=10)
+
+    assert [c["text"] for c in result] == ["via local"]
 
 
 # ---------------------------------------------------------------------------

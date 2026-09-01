@@ -55,6 +55,7 @@ def submit_job(
     platforms: list[str],
     target_per_platform: int,
     brand_keywords: list[str] | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> int:
     global _active_job_id
     if _executor is None or _runner is None:
@@ -62,7 +63,8 @@ def submit_job(
     # Reserve the slot atomically with the check. Create the DB row first
     # (cheap) so the reservation refers to a real job_id.
     job_id = mining_storage.create_job(
-        keyword, platforms, target_per_platform, brand_keywords=brand_keywords
+        keyword, platforms, target_per_platform,
+        brand_keywords=brand_keywords, filters=filters,
     )
     with _active_lock:
         if _active_job_id is not None:

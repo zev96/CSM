@@ -27,6 +27,7 @@ import NotificationPrefsModal from "@/components/ui/NotificationPrefsModal.vue";
 import FormInput from "@/components/forms/FormInput.vue";
 import Spinner from "@/components/ui/Spinner.vue";
 import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
+import TencentDocsCard from "@/components/settings/TencentDocsCard.vue";
 import XhsPromptsCard from "@/components/settings/XhsPromptsCard.vue";
 import BrandMemoryCard from "@/components/settings/BrandMemoryCard.vue";
 import PricingCard from "@/components/settings/PricingCard.vue";
@@ -1277,6 +1278,11 @@ async function saveAccountEdit() {
               小红书 AI 提示词
             </div>
             <XhsPromptsCard />
+
+            <div class="mb-3 mt-5 text-[11.5px]" :style="{ color: 'var(--ink-3)' }">
+              腾讯文档同步
+            </div>
+            <TencentDocsCard />
           </template>
 
           <!-- ━━━━━━━━ 品牌记忆 ━━━━━━━━ -->

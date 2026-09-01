@@ -22,6 +22,7 @@ defineProps<{
 defineEmits<{
   (e: "edit", id: number): void;
   (e: "delete", id: number): void;
+  (e: "approve", id: number): void;
 }>();
 </script>
 
@@ -51,6 +52,7 @@ defineEmits<{
       :tone="tone"
       @edit="(id: number) => $emit('edit', id)"
       @delete="(id: number) => $emit('delete', id)"
+      @approve="(id: number) => $emit('approve', id)"
     />
   </div>
 </template>

@@ -102,8 +102,46 @@ class Video(BaseModel):
     source_keywords: list[str] = Field(default_factory=list)  # joined from video_source_keywords
 
 
+# ── 搜索筛选（按平台分组，UI 只展示各平台真实支持的档位）───────────────
+# 存进 mining_jobs.filters_json（v13），adapter.search(filters=...) 各取
+# 自己那份。值全部用平台原生参数格式，adapter 侧尽量零转换。
+
+class DouyinFilters(BaseModel):
+    """抖音网页搜索 URL 参数。publish_time 只有档位：0=不限 1=一天内
+    7=一周内 182=半年内；sort_type：0=综合 1=最多点赞 2=最新发布。
+    content_types 含 "note" 时改走综合搜索并按 aweme 结构后过滤图文。"""
+    publish_time: Literal["0", "1", "7", "182"] = "0"
+    sort_type: Literal["0", "1", "2"] = "0"
+    content_types: list[Literal["video", "note"]] = Field(
+        default_factory=lambda: ["video"]
+    )
+
+
+class BilibiliFilters(BaseModel):
+    """B 站 search/type 直连参数。order：totalrank=综合 click=最多点击
+    pubdate=最新发布 dm=最多弹幕 stow=最多收藏；时间为任意日期区间
+    （YYYY-MM-DD，adapter 转 pubtime_begin_s / pubtime_end_s 秒级时间戳）。"""
+    order: Literal["totalrank", "click", "pubdate", "dm", "stow"] = "totalrank"
+    time_begin: str | None = None
+    time_end: str | None = None
+
+
+class KuaishouFilters(BaseModel):
+    """快手 visionSearchPhoto 无服务端时间参数 —— 日期区间在 adapter 内
+    按 published_at 本地后过滤（不计入 emitted，自动翻页补偿产出）。"""
+    time_begin: str | None = None
+    time_end: str | None = None
+
+
+class SearchFilters(BaseModel):
+    douyin: DouyinFilters = Field(default_factory=DouyinFilters)
+    bilibili: BilibiliFilters = Field(default_factory=BilibiliFilters)
+    kuaishou: KuaishouFilters = Field(default_factory=KuaishouFilters)
+
+
 class StartJobRequest(BaseModel):
     keyword: str = Field(min_length=1, max_length=80)
     platforms: list[Platform] = Field(default_factory=lambda: ["douyin", "bilibili", "kuaishou"])
     target_per_platform: int = Field(default=50, ge=10, le=200)
     brand_keywords: list[str] = Field(default_factory=list)
+    filters: SearchFilters = Field(default_factory=SearchFilters)
