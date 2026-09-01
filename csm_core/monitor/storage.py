@@ -25,7 +25,7 @@ from typing import Any, Iterable
 from .base import MonitorResult, MonitorTask, TaskType, MonitorStatus
 
 
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 15
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -188,6 +188,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # v12 重建表会连带删掉 v6 建在旧表上的 (type, target_url) 查询索引 ——
     # 幂等重跑一次补回（首次安装 / 已重建库都是 no-op）。
     mining_storage.apply_v6_migration(conn)
+    # v13: 评论工作流 P1 —— mining_jobs.filters_json（搜索筛选参数）+
+    #      videos.top_comments_json（品牌预筛热评快照）。PRAGMA 判存幂等。
+    mining_storage.apply_v13_migration(conn)
+    # v14: 评论工作流 P2 —— video_comments 审核状态机五列
+    #      (review_status/template_id/ai_flavor_score/reviewed_at/synced_at)。
+    mining_storage.apply_v14_migration(conn)
+    # v15: 评论工作流 P3 —— sync_batches 腾讯文档同步对账表。
+    mining_storage.apply_v15_migration(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
         (str(_SCHEMA_VERSION),),

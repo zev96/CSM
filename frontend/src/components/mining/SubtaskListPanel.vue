@@ -38,14 +38,14 @@ const props = defineProps<{
   videos: Video[];
   selectedVideoId: number | null;
   selected: Set<number>;
-  tab: "unread" | "done" | "all";
+  tab: "unread" | "done" | "pending" | "all";
   platform: "all" | Platform;
 }>();
 
 const emit = defineEmits<{
   (e: "select-video", id: number): void;
   (e: "toggle-select", id: number): void;
-  (e: "update:tab", v: "unread" | "done" | "all"): void;
+  (e: "update:tab", v: "unread" | "done" | "pending" | "all"): void;
   (e: "update:platform", v: "all" | Platform): void;
 }>();
 
@@ -68,6 +68,15 @@ function pillFor(v: Video): { label: string; bg: string; fg: string } {
   if (v.already_commented) {
     return { label: "已完成", bg: "rgba(122,155,94,0.18)", fg: "var(--green-deep)" };
   }
+  // v14 审核队列：有 pending 的 AI 草稿 → 「待审 N」优先于泛泛的「待评论」。
+  // pending_review_count 是 list_videos SQL 聚合列，与 already_commented
+  // 一样在 video record 上，永远准确（不依赖 commentsByVideo 预加载）。
+  if ((v.pending_review_count ?? 0) > 0) {
+    return {
+      label: `待审 ${v.pending_review_count}`,
+      bg: "rgba(238,106,42,0.14)", fg: "var(--primary-deep)",
+    };
+  }
   return { label: "待评论", bg: "var(--yellow-soft)", fg: "var(--yellow-deep)" };
 }
 
@@ -76,6 +85,7 @@ function pillFor(v: Video): { label: string; bg: string; fg: string } {
 // 本身只显示文字）。
 const TAB_OPTIONS = [
   { label: "待评论", value: "unread" },
+  { label: "待审核", value: "pending" },
   { label: "已评论", value: "done" },
   { label: "全部", value: "all" },
 ] as const;
@@ -138,7 +148,7 @@ const totalCount = computed(() => props.videos.length);
             :model-value="tab"
             :options="[...TAB_OPTIONS]"
             width="100%"
-            @update:model-value="(v) => emit('update:tab', v as 'unread' | 'done' | 'all')"
+            @update:model-value="(v) => emit('update:tab', v as 'unread' | 'done' | 'pending' | 'all')"
           />
         </div>
         <div style="flex: 1; min-width: 0;">

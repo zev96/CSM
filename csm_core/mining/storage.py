@@ -278,12 +278,13 @@ def create_job(
     platforms: list[str],
     target_per_platform: int,
     brand_keywords: list[str] | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> int:
     conn = get_conn()
     cur = conn.execute(
         """
-        INSERT INTO mining_jobs(keyword, platforms_json, target_per_platform, status, progress_json, brand_keywords_json)
-        VALUES(?, ?, ?, 'pending', ?, ?)
+        INSERT INTO mining_jobs(keyword, platforms_json, target_per_platform, status, progress_json, brand_keywords_json, filters_json)
+        VALUES(?, ?, ?, 'pending', ?, ?, ?)
         RETURNING id
         """,
         (
@@ -292,6 +293,7 @@ def create_job(
             target_per_platform,
             json.dumps({p: {"got": 0, "target": target_per_platform, "phase": "queued"} for p in platforms}, ensure_ascii=False),
             json.dumps(brand_keywords or [], ensure_ascii=False),
+            json.dumps(filters or {}, ensure_ascii=False),
         ),
     )
     return int(cur.fetchone()[0])
@@ -478,6 +480,11 @@ def _row_to_job_dict(row) -> dict[str, Any]:
         brand_keywords = json.loads(row["brand_keywords_json"]) if row["brand_keywords_json"] else []
     except (IndexError, KeyError):
         brand_keywords = []
+    # filters_json is v13-only; same tolerant pattern.
+    try:
+        filters = json.loads(row["filters_json"]) if row["filters_json"] else {}
+    except (IndexError, KeyError):
+        filters = {}
     return {
         "id": row["id"],
         "keyword": row["keyword"],
@@ -494,6 +501,7 @@ def _row_to_job_dict(row) -> dict[str, Any]:
         "video_count": video_count,
         "commented_count": commented_count,
         "brand_keywords": brand_keywords,
+        "filters": filters,
     }
 
 
@@ -685,7 +693,10 @@ def list_videos(
     ).fetchone()[0])
     rows = conn.execute(
         f"""
-        SELECT v.*, GROUP_CONCAT(DISTINCT vsk.keyword) AS source_keywords
+        SELECT v.*, GROUP_CONCAT(DISTINCT vsk.keyword) AS source_keywords,
+               (SELECT COUNT(*) FROM video_comments vc
+                WHERE vc.video_id = v.id AND vc.review_status = 'pending')
+                   AS _pending_review_count
         FROM videos v
         LEFT JOIN video_source_keywords vsk ON vsk.video_id = v.id
         WHERE {where_sql}
@@ -716,6 +727,17 @@ def _row_to_video_dict(row) -> dict[str, Any]:
         exclude_reason = row["exclude_reason"]
     except (IndexError, KeyError):
         exclude_reason = None
+    # top_comments_json is v13-only; same tolerant pattern.
+    try:
+        top_comments = json.loads(row["top_comments_json"]) if row["top_comments_json"] else None
+    except (IndexError, KeyError, ValueError):
+        top_comments = None
+    # _pending_review_count 仅 list_videos() SQL 注入；按 keys() 判存在。
+    keys = row.keys()
+    pending_review_count = (
+        int(row["_pending_review_count"] or 0)
+        if "_pending_review_count" in keys else 0
+    )
     return {
         "id": row["id"],
         "platform": row["platform"],
@@ -737,6 +759,8 @@ def _row_to_video_dict(row) -> dict[str, Any]:
         "ai_summary": ai_summary,
         "brand_comment_hits": brand_comment_hits,
         "exclude_reason": exclude_reason,
+        "top_comments": top_comments,
+        "pending_review_count": pending_review_count,
         "source_keywords": [k for k in keys_csv.split(",") if k],
     }
 
@@ -750,6 +774,15 @@ def soft_delete_video(video_id: int) -> bool:
 # ── Video comments (v4) ───────────────────────────────────────────────
 def _row_to_comment_dict(row) -> dict[str, Any]:
     image_ids = json.loads(row["image_ids_json"]) if row["image_ids_json"] else []
+
+    # v14 review columns — tolerate pre-v14 rows in mixed test setups
+    # (same pattern as ai_summary in _row_to_video_dict).
+    def _opt(key: str):
+        try:
+            return row[key]
+        except (IndexError, KeyError):
+            return None
+
     return {
         "id": row["id"],
         "video_id": row["video_id"],
@@ -762,6 +795,11 @@ def _row_to_comment_dict(row) -> dict[str, Any]:
         "image_urls": [f"/api/mining/images/{img}" for img in image_ids],
         "status": row["status"],
         "source": row["source"],
+        "review_status": _opt("review_status") or "",
+        "template_id": _opt("template_id"),
+        "ai_flavor_score": _opt("ai_flavor_score"),
+        "reviewed_at": _opt("reviewed_at"),
+        "synced_at": _opt("synced_at"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -773,14 +811,20 @@ def create_comment(
     text: str,
     image_ids: list[str] | None = None,
     source: str = "manual",
+    review_status: str = "approved",
 ) -> int:
     """Insert a new comment row. Raises sqlite3.IntegrityError on
-    UNIQUE(video_id, tier) violation — caller (T5 route) maps to 409."""
+    UNIQUE(video_id, tier) violation — caller (T5 route) maps to 409.
+
+    review_status 默认 'approved'：走 composer 的评论（人工手写 / 用户点
+    AI 建议后自己保存）都是用户亲手确认过的，不进审核队列。'pending'
+    只由批量生成服务经 upsert_ai_comment 写入。
+    """
     conn = get_conn()
     cur = conn.execute(
         """
-        INSERT INTO video_comments(video_id, tier, text, image_ids_json, source)
-        VALUES(?, ?, ?, ?, ?)
+        INSERT INTO video_comments(video_id, tier, text, image_ids_json, source, review_status)
+        VALUES(?, ?, ?, ?, ?, ?)
         RETURNING id
         """,
         (
@@ -789,6 +833,7 @@ def create_comment(
             text,
             json.dumps(list(image_ids or []), ensure_ascii=False),
             source,
+            review_status,
         ),
     )
     return int(cur.fetchone()[0])
@@ -1249,6 +1294,291 @@ def apply_v8_migration(conn: sqlite3.Connection) -> None:
         )
 
 
+# ── Schema v13 additions ────────────────────────────────────────────────
+# 评论工作流 P1：搜索筛选参数 + 预筛热评快照。
+#   - mining_jobs.filters_json：按平台分组的筛选条件（SearchFilters dump）。
+#   - videos.top_comments_json：品牌预筛抓到的前 N 条评论快照
+#     [{text, likes, author}...]。两个用途：① AI 生成环节当评论区语料，
+#     免二次抓取（抖音走 TikHub 计费，省一次是一次）；② 被排除的视频
+#     在 UI 可见命中了哪条评论。
+
+
+def apply_v13_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v12 → v13.
+
+    PRAGMA-guarded ALTERs（同 v8 写法）—— _migrate 每次启动都会重跑全部
+    迁移函数，只能用幂等语句。
+    """
+    jobs_cols = set()
+    for row in conn.execute("PRAGMA table_info(mining_jobs)").fetchall():
+        try:
+            jobs_cols.add(row[1])
+        except (IndexError, TypeError):
+            jobs_cols.add(row["name"])
+    if "filters_json" not in jobs_cols:
+        conn.execute(
+            "ALTER TABLE mining_jobs ADD COLUMN filters_json TEXT NOT NULL DEFAULT '{}'"
+        )
+
+    videos_cols = set()
+    for row in conn.execute("PRAGMA table_info(videos)").fetchall():
+        try:
+            videos_cols.add(row[1])
+        except (IndexError, TypeError):
+            videos_cols.add(row["name"])
+    if "top_comments_json" not in videos_cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN top_comments_json TEXT")
+
+
+# ── Schema v14 additions ────────────────────────────────────────────────
+# 评论工作流 P2：审核状态机。挂在 video_comments 上的五个新列：
+#   review_status   '' | pending | approved | synced | executed
+#                   ''=旧数据/人工评论（不进审核队列）；pending 仅由批量
+#                   AI 生成写入；approved=人审通过；synced/executed 留给 P3。
+#   template_id     生成时用的模板（软引用，不加 FK——模板删了留痕即可）
+#   ai_flavor_score 确定性 AI 味评分（scoring/ai_flavor 各信号 points 之和）
+#   reviewed_at / synced_at 审计时间戳
+# 不重载现有 status（draft/assigned/done）——它挂着「→done 自动入模板库」
+# 的 DAO 钩子，语义是「兼职执行进度」，与「内容审核」正交。
+
+
+def apply_v14_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v13 → v14.
+
+    PRAGMA-guarded ALTERs（同 v8/v13 写法），幂等。
+    """
+    cols = set()
+    for row in conn.execute("PRAGMA table_info(video_comments)").fetchall():
+        try:
+            cols.add(row[1])
+        except (IndexError, TypeError):
+            cols.add(row["name"])
+    if "review_status" not in cols:
+        conn.execute(
+            "ALTER TABLE video_comments ADD COLUMN review_status TEXT NOT NULL DEFAULT ''"
+        )
+    if "template_id" not in cols:
+        conn.execute("ALTER TABLE video_comments ADD COLUMN template_id INTEGER")
+    if "ai_flavor_score" not in cols:
+        conn.execute("ALTER TABLE video_comments ADD COLUMN ai_flavor_score REAL")
+    if "reviewed_at" not in cols:
+        conn.execute("ALTER TABLE video_comments ADD COLUMN reviewed_at TEXT")
+    if "synced_at" not in cols:
+        conn.execute("ALTER TABLE video_comments ADD COLUMN synced_at TEXT")
+
+
+# ── Review state machine (v14) ─────────────────────────────────────────
+
+
+class TierOccupiedError(Exception):
+    """upsert_ai_comment 撞上不可覆盖的楼层（人工写的 / 已通过 / 已执行）。"""
+
+    def __init__(self, video_id: int, tier: int):
+        super().__init__(f"tier {tier} of video {video_id} is occupied")
+        self.video_id = video_id
+        self.tier = tier
+
+
+def upsert_ai_comment(
+    video_id: int,
+    tier: int,
+    text: str,
+    *,
+    template_id: int | None = None,
+    ai_flavor_score: float | None = None,
+) -> int:
+    """写入一条 AI 生成的评论草稿（review_status='pending'）。
+
+    同楼层已有内容时的覆盖规则：仅当现有行是「AI 生成 + 未通过 +
+    status=draft」才覆盖（重新生成场景）；人工写的、已通过/已同步的、
+    兼职已执行的一律抛 TierOccupiedError，调用方按 skipped 记录。
+    """
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM video_comments WHERE video_id=? AND tier=?",
+        (video_id, tier),
+    ).fetchone()
+    if row is None:
+        cur = conn.execute(
+            """
+            INSERT INTO video_comments(video_id, tier, text, source, review_status,
+                                       template_id, ai_flavor_score)
+            VALUES(?, ?, ?, 'ai_suggested', 'pending', ?, ?)
+            RETURNING id
+            """,
+            (video_id, tier, text, template_id, ai_flavor_score),
+        )
+        return int(cur.fetchone()[0])
+    overwritable = (
+        row["source"] == "ai_suggested"
+        and (row["review_status"] or "") in ("", "pending")
+        and row["status"] == "draft"
+    )
+    if not overwritable:
+        raise TierOccupiedError(video_id, tier)
+    conn.execute(
+        """
+        UPDATE video_comments
+        SET text=?, template_id=?, ai_flavor_score=?, review_status='pending',
+            reviewed_at=NULL,
+            updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id=?
+        """,
+        (text, template_id, ai_flavor_score, row["id"]),
+    )
+    return int(row["id"])
+
+
+def approve_comment(comment_id: int) -> dict[str, Any] | None:
+    """单条通过：pending → approved（幂等：非 pending 不动，返回现状）。"""
+    conn = get_conn()
+    conn.execute(
+        """
+        UPDATE video_comments
+        SET review_status='approved',
+            reviewed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id=? AND review_status='pending'
+        """,
+        (comment_id,),
+    )
+    return get_comment(comment_id)
+
+
+def approve_pending_for_videos(video_ids: list[int]) -> int:
+    """批量通过：这些视频下所有 pending 评论 → approved。返回改动行数。"""
+    if not video_ids:
+        return 0
+    conn = get_conn()
+    placeholders = ",".join("?" * len(video_ids))
+    cur = conn.execute(
+        f"""
+        UPDATE video_comments
+        SET review_status='approved',
+            reviewed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE review_status='pending' AND video_id IN ({placeholders})
+        """,
+        list(video_ids),
+    )
+    return cur.rowcount
+
+
+def get_template(template_id: int) -> dict[str, Any] | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM comment_templates WHERE id=?", (template_id,),
+    ).fetchone()
+    return _row_to_template_dict(row) if row else None
+
+
+# ── Schema v15 additions ────────────────────────────────────────────────
+# 评论工作流 P3：腾讯文档同步对账表。一批 = 一次「同步已通过」动作，
+# 记录写进了表格的哪个行区间（0-based，含边界），重试防双写按
+# 表格「链接」列回读比对，此表用于人工排查 + 审计。
+_DDL_V15_SYNC: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS sync_batches (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_id          TEXT NOT NULL,
+        sheet_id        TEXT NOT NULL DEFAULT '',
+        row_start       INTEGER NOT NULL,
+        row_end         INTEGER NOT NULL,
+        video_ids_json  TEXT NOT NULL DEFAULT '[]',
+        synced_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sync_batches_time ON sync_batches(synced_at DESC)",
+]
+
+
+def apply_v15_migration(conn: sqlite3.Connection) -> None:
+    """Called by monitor.storage._migrate when bumping v14 → v15. Idempotent."""
+    for stmt in _DDL_V15_SYNC:
+        conn.execute(stmt)
+
+
+# ── 腾讯文档同步 DAO（v15）────────────────────────────────────────────
+
+
+def list_approved_for_sync(video_ids: list[int] | None = None) -> list[dict[str, Any]]:
+    """待同步集合：excluded=0 且含 ≥1 条 review_status='approved' 评论的视频。
+
+    返回 [{id, platform, url, title, comments: [{id, tier, text, image_ids}...]}]，
+    comments 只含 approved 的、按 tier 升序。video_ids 传入时限定范围。
+    """
+    conn = get_conn()
+    where = ["v.excluded=0", "c.review_status='approved'"]
+    args: list[Any] = []
+    if video_ids:
+        placeholders = ",".join("?" * len(video_ids))
+        where.append(f"v.id IN ({placeholders})")
+        args.extend(video_ids)
+    rows = conn.execute(
+        f"""
+        SELECT v.id AS video_id, v.platform, v.url, v.title,
+               c.id AS comment_id, c.tier, c.text, c.image_ids_json
+        FROM videos v
+        JOIN video_comments c ON c.video_id = v.id
+        WHERE {' AND '.join(where)}
+        ORDER BY v.id ASC, c.tier ASC
+        """,
+        args,
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    by_vid: dict[int, dict[str, Any]] = {}
+    for r in rows:
+        vid = r["video_id"]
+        if vid not in by_vid:
+            by_vid[vid] = {
+                "id": vid,
+                "platform": r["platform"],
+                "url": r["url"],
+                "title": r["title"] or "",
+                "comments": [],
+            }
+            out.append(by_vid[vid])
+        by_vid[vid]["comments"].append({
+            "id": r["comment_id"],
+            "tier": r["tier"],
+            "text": r["text"] or "",
+            "image_ids": json.loads(r["image_ids_json"] or "[]"),
+        })
+    return out
+
+
+def create_sync_batch(
+    doc_id: str, sheet_id: str, row_start: int, row_end: int, video_ids: list[int],
+) -> int:
+    conn = get_conn()
+    cur = conn.execute(
+        """
+        INSERT INTO sync_batches(doc_id, sheet_id, row_start, row_end, video_ids_json)
+        VALUES(?,?,?,?,?)
+        RETURNING id
+        """,
+        (doc_id, sheet_id, row_start, row_end,
+         json.dumps(list(video_ids), ensure_ascii=False)),
+    )
+    return int(cur.fetchone()[0])
+
+
+def mark_comments_synced(comment_ids: list[int]) -> int:
+    """approved → synced（幂等：只动 approved 行）。返回改动行数。"""
+    if not comment_ids:
+        return 0
+    conn = get_conn()
+    placeholders = ",".join("?" * len(comment_ids))
+    cur = conn.execute(
+        f"""
+        UPDATE video_comments
+        SET review_status='synced',
+            synced_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE review_status='approved' AND id IN ({placeholders})
+        """,
+        list(comment_ids),
+    )
+    return cur.rowcount
+
+
 # ── Brand pre-filter setters ──────────────────────────────────────────
 
 
@@ -1276,6 +1606,28 @@ def set_brand_hits(video_id: int, hits: int) -> bool:
     cur = conn.execute(
         "UPDATE videos SET brand_comment_hits=? WHERE id=?",
         (int(hits), video_id),
+    )
+    return cur.rowcount > 0
+
+
+def set_top_comments(video_id: int, comments: list[dict[str, Any]]) -> bool:
+    """Persist the prefilter's scraped hot-comment snapshot (v13).
+
+    每条只留 text / likes / author 三个字段，text 截 500 字符 —— 快照是
+    「生成语料 + 命中证据」，不是全量存档；防单条超长评论把 videos 行撑爆。
+    """
+    slim = [
+        {
+            "text": str(c.get("text") or "")[:500],
+            "likes": c.get("likes"),
+            "author": str(c.get("author") or "")[:80],
+        }
+        for c in comments
+    ]
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE videos SET top_comments_json=? WHERE id=?",
+        (json.dumps(slim, ensure_ascii=False), video_id),
     )
     return cur.rowcount > 0
 

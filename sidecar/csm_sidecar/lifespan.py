@@ -111,6 +111,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             from .services import mining_service
             mining_service.init()
+            from .services import comment_generation_service
+            comment_generation_service.init()
             from csm_core.browser_infra import mining_browser as _mb
             from csm_core import config as core_config
             # 登录态/浏览器 profile 统一放在 .auth/ 子目录下（含 cookie，不进 VCS）。
@@ -183,6 +185,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             from .services import mining_service
             mining_service.shutdown()
+            from .services import comment_generation_service
+            comment_generation_service.shutdown()
         except Exception:
             logger.exception("mining_service shutdown raised; ignoring")
         # Drain the four service-owned ThreadPoolExecutors. Each service

@@ -207,6 +207,25 @@ class FeedbackConfig(BaseModel):
     alpha: float = Field(default=0.5, ge=0.0, le=2.0)
 
 
+class TencentDocsConfig(BaseModel):
+    """settings.tencent_docs.* —— 评论工作流 P3：同步到共享腾讯文档表格。
+
+    Token 本体走 keyring（provider="tencent_docs"，即官方 skill 的
+    TENCENT_DOCS_TOKEN），不落 settings.json。列映射默认值 = 用户现有
+    兼职表格的实际表头；同步时读表格首行按列名定位，不假设列的位置。
+    截图1-3 列由兼职回填执行截图，同步不写。
+    """
+    enabled: bool = False
+    doc_url: str = ""    # 在线表格链接（含 ?tab= 时锁定子表）
+    col_map: dict[str, str] = Field(default_factory=lambda: {
+        "seq": "序号", "url": "链接",
+        "tier1": "内容一", "img1": "贴图一",
+        "tier2": "盖楼内容二", "img2": "贴图二",
+        "tier3": "盖楼内容三", "img3": "贴图三",
+        "date": "日期",
+    })
+
+
 class AppConfig(BaseModel):
     user_name: str | None = None
     user_product: str | None = None
@@ -273,6 +292,18 @@ class AppConfig(BaseModel):
     # 自定义格式：单一字符串 = system；含 "---user---" 分隔符 = (system, user) 两段。
     mining_summary_prompt: str = ""
     mining_suggest_prompt: str = ""
+    # P2 批量生成的「模板 × 视频分析 → 个性化改写」prompt。空 = 内置默认
+    # （comment_generation_service.DEFAULT_REWRITE_*）。同 ---user--- 约定。
+    mining_rewrite_prompt: str = ""
+
+    # ── 腾讯文档同步（评论工作流 P3）────────────────────────────────────
+    tencent_docs: TencentDocsConfig = Field(default_factory=TencentDocsConfig)
+
+    # ── Mining 品牌评论预筛参数 ─────────────────────────────────────────
+    # 每视频抓前 N 条评论做品牌词检查；命中 ≥ threshold 条即排除（已种草）。
+    # 业务口径（2026-08-31 拍板）：按「访客看到的前 20 条」查，命中 1 条就跳过。
+    mining_prefilter_top_n: int = Field(default=20, ge=1, le=100)
+    mining_prefilter_threshold: int = Field(default=1, ge=1, le=20)
 
     # ── XHS editor AI prompts (P4) ──────────────────────────────────────────
     # 空字符串 = 用 xhs_ai_service 内置默认 prompt（DEFAULT_GENERATE_SYSTEM /

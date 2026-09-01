@@ -40,9 +40,12 @@ class DouyinSearchAdapter:
         on_progress: OnProgress,
         cancel_event: threading.Event,
         max_attempts: int | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> SearchOutcome:
         if max_attempts is None:
             max_attempts = get_max_attempts("douyin")
+        dy_filters = (filters or {}).get("douyin") or {}
+        allowed_types = frozenset(dy_filters.get("content_types") or ["video"])
         if not mining_browser.has_login_cookie("douyin"):
             on_progress(ProgressUpdate(platform=self.platform, phase="needs_login", got=0, target=target_count))
             return SearchOutcome(
@@ -85,7 +88,7 @@ class DouyinSearchAdapter:
                     return
                 if body.get("status_code") not in (0, None):
                     return
-                for c in self._extract_cards(body):
+                for c in self._extract_cards(body, allowed_types=allowed_types):
                     if emitted >= target_count:
                         return
                     if c.platform_video_id in seen:
@@ -100,7 +103,7 @@ class DouyinSearchAdapter:
                 ))
 
             page.on("response", _on_response)
-            url = f"https://www.douyin.com/search/{quote(keyword)}?type=video"
+            url = _build_search_url(keyword, dy_filters)
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
             # Give the React bundle a beat to hydrate + emit the first XHR
@@ -150,7 +153,11 @@ class DouyinSearchAdapter:
         on_progress(ProgressUpdate(platform=self.platform, phase="done", got=emitted, target=target_count))
         return SearchOutcome(platform=self.platform, status="done", cards_emitted=emitted)
 
-    def _extract_cards(self, body: dict[str, Any]) -> list[VideoCard]:
+    def _extract_cards(
+        self,
+        body: dict[str, Any],
+        allowed_types: frozenset[str] = frozenset({"video", "note"}),
+    ) -> list[VideoCard]:
         if not isinstance(body, dict):
             return []
         cards: list[VideoCard] = []
@@ -172,15 +179,26 @@ class DouyinSearchAdapter:
             aweme_id = info.get("aweme_id")
             if not aweme_id:
                 continue
+            # 图文（note）判定：images 非空即图文；aweme_type=68 是图文的
+            # 类型码，双条件兜住 A/B 结构差异。综合搜索会混出图文+视频，
+            # 按 content_types 过滤 —— 被滤掉的不计数，翻页自然补偿。
+            is_note = bool(info.get("images")) or info.get("aweme_type") == 68
+            content_type = "note" if is_note else "video"
+            if content_type not in allowed_types:
+                continue
             author = info.get("author") or {}
             stats = info.get("statistics") or {}
             video = info.get("video") or {}
             cover_list = (video.get("cover") or {}).get("url_list") or []
             duration_ms = video.get("duration") or 0
+            fallback_url = (
+                f"https://www.douyin.com/note/{aweme_id}" if is_note
+                else f"https://www.douyin.com/video/{aweme_id}"
+            )
             cards.append(VideoCard(
                 platform="douyin",
                 platform_video_id=str(aweme_id),
-                url=info.get("share_url") or f"https://www.douyin.com/video/{aweme_id}",
+                url=info.get("share_url") or fallback_url,
                 title=info.get("desc", "") or "",
                 author_name=author.get("nickname", "") or "",
                 author_id=str(author.get("uid", "")) or "",
@@ -192,6 +210,30 @@ class DouyinSearchAdapter:
                 raw=info,
             ))
         return cards
+
+
+def _build_search_url(keyword: str, dy_filters: dict[str, Any]) -> str:
+    """Compose the Douyin search URL with filter params pushed down.
+
+    - 仅视频 → ``?type=video``（视频 tab，走 /search/item/ 端点）；
+      含图文 → 综合搜索（无 type 参数，走 general/search/single），图文/
+      视频混出，由 ``_extract_cards`` 按 content_types 过滤。
+    - ``publish_time``：抖音只有档位 0=不限 1=一天内 7=一周内 182=半年内。
+    - ``sort_type``：0=综合 1=最多点赞 2=最新发布。
+    默认值（"0"）不上 URL，保持与旧行为字节级一致。
+    """
+    content_types = set(dy_filters.get("content_types") or ["video"])
+    params: list[str] = []
+    if content_types == {"video"}:
+        params.append("type=video")
+    publish_time = str(dy_filters.get("publish_time") or "0")
+    if publish_time != "0":
+        params.append(f"publish_time={publish_time}")
+    sort_type = str(dy_filters.get("sort_type") or "0")
+    if sort_type != "0":
+        params.append(f"sort_type={sort_type}")
+    url = f"https://www.douyin.com/search/{quote(keyword)}"
+    return url + ("?" + "&".join(params) if params else "")
 
 
 def _ts_to_iso(ts) -> str | None:

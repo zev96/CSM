@@ -28,7 +28,9 @@ from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
 from csm_core.mining.platforms import _risk
-from csm_core.mining.platforms._common import OnCard, OnProgress
+from csm_core.mining.platforms._common import (
+    OnCard, OnProgress, date_to_epoch, iso_within_epoch_range,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +61,16 @@ class KuaishouSearchAdapter:
         on_progress: OnProgress,
         cancel_event: threading.Event,
         max_attempts: int | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> SearchOutcome:
         if max_attempts is None:
             max_attempts = get_max_attempts("kuaishou")
+        # 快手 visionSearchPhoto 无服务端时间参数 —— 本地按 published_at
+        # 后过滤。滤掉的不计入 emitted，翻页循环自然多翻补偿（受
+        # max_attempts 页数上限约束）。
+        ks_filters = (filters or {}).get("kuaishou") or {}
+        begin_epoch = date_to_epoch(ks_filters.get("time_begin"))
+        end_epoch = date_to_epoch(ks_filters.get("time_end"), end_of_day=True)
 
         if not mining_browser.has_login_cookie("kuaishou"):
             on_progress(ProgressUpdate(
@@ -258,6 +267,11 @@ class KuaishouSearchAdapter:
                 new_pcursor = vsp.get("pcursor") or "no_more"
 
                 new_this_round = 0
+                # fresh = 本页首次见到的卡（含被时间过滤掉的）。翻页终止判据
+                # 用 fresh 而不是 new：整页都被时间筛掉时仍应继续翻下一页
+                # （这正是"本地后过滤 + 补页"的补偿机制），只有服务端真的
+                # 不再给新结果才停。
+                fresh_this_round = 0
                 for feed in feeds:
                     if emitted >= target_count or cancel_event.is_set():
                         break
@@ -267,7 +281,13 @@ class KuaishouSearchAdapter:
                     if card.platform_video_id in seen:
                         continue
                     seen.add(card.platform_video_id)
+                    fresh_this_round += 1
+                    if not iso_within_epoch_range(
+                        card.published_at, begin_epoch, end_epoch,
+                    ):
+                        continue
                     emitted += 1
+                    card.rank_in_search = emitted
                     new_this_round += 1
                     on_card(card)
 
@@ -276,13 +296,13 @@ class KuaishouSearchAdapter:
                     got=emitted, target=target_count,
                 ))
                 logger.info(
-                    "[ks-graphql] page=%d new=%d emitted=%d pcursor=%r",
-                    page_index, new_this_round, emitted, new_pcursor,
+                    "[ks-graphql] page=%d fresh=%d new=%d emitted=%d pcursor=%r",
+                    page_index, fresh_this_round, new_this_round, emitted, new_pcursor,
                 )
 
                 breaker.record_success()
 
-                if new_pcursor == "no_more" or new_this_round == 0:
+                if new_pcursor == "no_more" or fresh_this_round == 0:
                     break
                 pcursor = new_pcursor
 

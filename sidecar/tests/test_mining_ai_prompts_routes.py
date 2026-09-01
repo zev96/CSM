@@ -11,25 +11,31 @@ def test_get_ai_prompts_initial_empty_current(client: TestClient, monitor_db: Pa
     assert r.status_code == 200
     body = r.json()
 
-    # Shape
-    assert set(body.keys()) == {"summary", "suggest", "vars"}
+    # Shape（P2 起含 rewrite —— 批量生成的改写 prompt）
+    assert set(body.keys()) == {"summary", "suggest", "rewrite", "vars"}
     assert set(body["summary"].keys()) == {"current", "default"}
     assert set(body["suggest"].keys()) == {"current", "default"}
+    assert set(body["rewrite"].keys()) == {"current", "default"}
 
     # Initial current is empty
     assert body["summary"]["current"] == ""
     assert body["suggest"]["current"] == ""
+    assert body["rewrite"]["current"] == ""
 
     # Default contains the system+separator+user concatenation
     assert "---user---" in body["summary"]["default"]
     assert "---user---" in body["suggest"]["default"]
+    assert "---user---" in body["rewrite"]["default"]
     assert body["summary"]["default"]  # non-empty
     assert body["suggest"]["default"]
+    assert body["rewrite"]["default"]
 
     # vars list is structured for UI hints
     assert "title" in body["vars"]["summary"]
     assert "tier" in body["vars"]["suggest"]
     assert "previous_block" in body["vars"]["suggest"]
+    assert "template_text" in body["vars"]["rewrite"]
+    assert "comments_block" in body["vars"]["rewrite"]
 
 
 def test_patch_summary_persists(client: TestClient, monitor_db: Path):
@@ -70,6 +76,13 @@ def test_patch_empty_string_clears(client: TestClient, monitor_db: Path):
     # Now clear back to default
     r = client.patch("/api/mining/ai_prompts", json={"summary": ""})
     assert r.status_code == 200
+    assert r.json()["summary"]["current"] == ""
+
+
+def test_patch_rewrite_persists(client: TestClient, monitor_db: Path):
+    r = client.patch("/api/mining/ai_prompts", json={"rewrite": "改写 {template_text}"})
+    assert r.status_code == 200
+    assert r.json()["rewrite"]["current"] == "改写 {template_text}"
     assert r.json()["summary"]["current"] == ""
 
 

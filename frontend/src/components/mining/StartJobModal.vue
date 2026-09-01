@@ -6,7 +6,8 @@ import Icon from "@/components/ui/Icon.vue";
 // Blob 已下线 —— 用户要求弹窗背景跟应用默认 Dialog 一致，不要黄色
 // 渐变光晕。
 import PlatformPickerCard from "./PlatformPickerCard.vue";
-import type { Platform } from "@/stores/mining";
+import { defaultSearchFilters } from "@/stores/mining";
+import type { Platform, SearchFilters } from "@/stores/mining";
 
 const props = defineProps<{
   open: boolean;
@@ -17,12 +18,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:open", v: boolean): void;
-  (e: "submit", payload: { keyword: string; platforms: Platform[]; target: number; brandKeywords: string[] }): void;
+  (e: "submit", payload: { keyword: string; platforms: Platform[]; target: number; brandKeywords: string[]; filters: SearchFilters }): void;
 }>();
 
 const kw = ref("");
-// 目标品牌词（选填）—— 抓完后逐视频抓评论，命中 ≥3 条的视频判为「已种草」
-// 跳过（见 mining/runner 预筛）。留空 → 后端 brand_keywords=[] → 预筛门控
+// 目标品牌词（选填）—— 抓完后逐视频抓评论区前 20 条，命中品牌词的视频判为
+// 「已种草」跳过（见 mining/runner 预筛；条数/阈值可在 settings.json 的
+// mining_prefilter_* 调）。留空 → 后端 brand_keywords=[] → 预筛门控
 // 不满足 → 不按品牌筛。支持多个，用逗号 / 顿号 / 空格分隔。
 const brandKw = ref("");
 // Auto-pick all logged-in platforms by default.
@@ -32,8 +34,21 @@ const picked = ref<Record<Platform, boolean>>({
   kuaishou: !!props.loginStatus.kuaishou,
 });
 const cap = ref(50);
-const sort = ref("综合");
-const range = ref("近 1 周");
+// 按平台分组的筛选条件 —— 每个平台只展示它真实支持的档位：
+// 抖音只有时间档位（无任意区间）、B 站支持任意日期区间、快手只能本地后过滤。
+const filters = ref<SearchFilters>(defaultSearchFilters());
+
+function toggleDouyinType(t: "video" | "note") {
+  const list = filters.value.douyin.content_types;
+  if (list.includes(t)) {
+    // 至少保留一种类型，全取消没有意义
+    if (list.length > 1) {
+      filters.value.douyin.content_types = list.filter(x => x !== t);
+    }
+  } else {
+    filters.value.douyin.content_types = [...list, t];
+  }
+}
 
 const total = computed(() =>
   Object.values(picked.value).filter(Boolean).length * cap.value
@@ -75,8 +90,7 @@ watch(
       kuaishou: !!props.loginStatus.kuaishou,
     };
     cap.value = 50;
-    sort.value = "综合";
-    range.value = "近 1 周";
+    filters.value = defaultSearchFilters();
     // 预填关键词（来自 GEO 闭环跳转）—— 只在 kw 刚被清空时填，不覆盖用户已输入的内容。
     if (props.prefillKeyword) {
       kw.value = props.prefillKeyword;
@@ -99,6 +113,7 @@ function onSubmit() {
     platforms: (["bilibili", "douyin", "kuaishou"] as Platform[]).filter(p => picked.value[p]),
     target: cap.value,
     brandKeywords: brandList.value,
+    filters: JSON.parse(JSON.stringify(filters.value)),
   });
 }
 </script>
@@ -185,12 +200,12 @@ function onSubmit() {
           </div>
           <div class="mt-1.5 text-[11px]" style="color: var(--ink-3);">
             <template v-if="brandList.length">
-              抓到的视频会顺带抓评论：评论区已有 <b style="color: var(--ink-2)">≥3 条</b>含
+              抓到的视频会顺带抓评论区<b style="color: var(--ink-2)">前 20 条</b>：已出现
               <b style="color: var(--ink-2)">{{ brandList.join(' / ') }}</b>
-              的视频自动跳过（避免重复种草，一条视频最多 3 条种草评论）。
+              的视频自动跳过（评论区已有我们的品牌评论＝已种草，不重复投放）。
             </template>
             <template v-else>
-              留空＝只去重、不按品牌预筛。填了品牌词，已种草 ≥3 条的视频会自动排除。
+              留空＝只去重、不按品牌预筛。填了品牌词，评论区前 20 条已出现品牌词的视频会自动排除。
             </template>
           </div>
         </div>
@@ -215,37 +230,102 @@ function onSubmit() {
           </div>
         </div>
 
-        <!-- 排序 / 时间 (UI only, not wired to backend in Phase 1) -->
-        <div class="grid grid-cols-2 gap-3 mt-5">
-          <div>
-            <label class="text-[11.5px] font-semibold mb-1.5 block">排序</label>
-            <div class="flex" style="background: var(--card-2); border-radius: 999px; padding: 3px; border: 1px solid var(--line);">
-              <button
-                v-for="s in ['综合', '最新', '最热']" :key="s"
-                @click="sort = s"
-                :style="{
-                  flex: 1, height: '28px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 500,
-                  background: sort === s ? 'var(--dark)' : 'transparent',
-                  color: sort === s ? 'var(--card)' : 'var(--ink-2)',
-                  border: 'none', cursor: 'pointer',
-                }"
-              >{{ s }}</button>
+        <!-- 按平台分组的筛选条件 —— 只展示各平台真实支持的档位：
+             抖音=时间档位+排序+类型；B站=排序+任意日期区间；快手=日期区间(本地过滤)。 -->
+        <div v-if="picked.douyin" class="filter-block mt-5">
+          <div class="mb-2 flex items-baseline gap-1.5">
+            <label class="text-[11.5px] font-semibold">抖音筛选</label>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="filter-sub-label">发布时间</div>
+              <div class="chip-row">
+                <button
+                  v-for="opt in [
+                    { v: '0', label: '不限' }, { v: '1', label: '一天内' },
+                    { v: '7', label: '一周内' }, { v: '182', label: '半年内' },
+                  ]" :key="opt.v"
+                  class="chip-btn"
+                  :class="{ 'chip-btn--on': filters.douyin.publish_time === opt.v }"
+                  @click="filters.douyin.publish_time = opt.v as any"
+                >{{ opt.label }}</button>
+              </div>
+            </div>
+            <div>
+              <div class="filter-sub-label">排序</div>
+              <div class="chip-row">
+                <button
+                  v-for="opt in [
+                    { v: '0', label: '综合' }, { v: '1', label: '最多点赞' }, { v: '2', label: '最新' },
+                  ]" :key="opt.v"
+                  class="chip-btn"
+                  :class="{ 'chip-btn--on': filters.douyin.sort_type === opt.v }"
+                  @click="filters.douyin.sort_type = opt.v as any"
+                >{{ opt.label }}</button>
+              </div>
             </div>
           </div>
-          <div>
-            <label class="text-[11.5px] font-semibold mb-1.5 block">时间范围</label>
-            <div class="flex" style="background: var(--card-2); border-radius: 999px; padding: 3px; border: 1px solid var(--line);">
+          <div class="mt-2.5">
+            <div class="filter-sub-label">内容类型（可多选）</div>
+            <div class="chip-row" style="max-width: 200px;">
               <button
-                v-for="s in ['不限', '近 1 天', '近 1 周', '近 1 月']" :key="s"
-                @click="range = s"
-                :style="{
-                  flex: 1, height: '28px', borderRadius: '999px', fontSize: '11px', fontWeight: 500,
-                  background: range === s ? 'var(--dark)' : 'transparent',
-                  color: range === s ? 'var(--card)' : 'var(--ink-2)',
-                  border: 'none', cursor: 'pointer',
-                  whiteSpace: 'nowrap', padding: '0 4px',
-                }"
-              >{{ s }}</button>
+                v-for="opt in [
+                  { v: 'video', label: '视频' }, { v: 'note', label: '图文' },
+                ]" :key="opt.v"
+                class="chip-btn"
+                :class="{ 'chip-btn--on': filters.douyin.content_types.includes(opt.v as any) }"
+                @click="toggleDouyinType(opt.v as any)"
+              >{{ opt.label }}</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="picked.bilibili" class="filter-block mt-3">
+          <div class="mb-2 flex items-baseline gap-1.5">
+            <label class="text-[11.5px] font-semibold">B站筛选</label>
+            <span class="text-[11px]" style="color: var(--ink-3);">仅视频 · 支持任意日期区间</span>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="filter-sub-label">排序</div>
+              <div class="chip-row">
+                <button
+                  v-for="opt in [
+                    { v: 'totalrank', label: '综合' }, { v: 'click', label: '播放' },
+                    { v: 'pubdate', label: '最新' }, { v: 'stow', label: '收藏' },
+                  ]" :key="opt.v"
+                  class="chip-btn"
+                  :class="{ 'chip-btn--on': filters.bilibili.order === opt.v }"
+                  @click="filters.bilibili.order = opt.v as any"
+                >{{ opt.label }}</button>
+              </div>
+            </div>
+            <div>
+              <div class="filter-sub-label">发布日期</div>
+              <div class="flex items-center gap-1.5">
+                <input type="date" class="date-input" :value="filters.bilibili.time_begin ?? ''"
+                       @input="filters.bilibili.time_begin = ($event.target as HTMLInputElement).value || null"/>
+                <span class="text-[11px]" style="color: var(--ink-3);">至</span>
+                <input type="date" class="date-input" :value="filters.bilibili.time_end ?? ''"
+                       @input="filters.bilibili.time_end = ($event.target as HTMLInputElement).value || null"/>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="picked.kuaishou" class="filter-block mt-3">
+          <div class="mb-2 flex items-baseline gap-1.5">
+            <label class="text-[11.5px] font-semibold">快手筛选</label>
+            <span class="text-[11px]" style="color: var(--ink-3);">平台无时间筛选，抓取后按发布时间过滤（产出会变慢）</span>
+          </div>
+          <div>
+            <div class="filter-sub-label">发布日期</div>
+            <div class="flex items-center gap-1.5">
+              <input type="date" class="date-input" :value="filters.kuaishou.time_begin ?? ''"
+                     @input="filters.kuaishou.time_begin = ($event.target as HTMLInputElement).value || null"/>
+              <span class="text-[11px]" style="color: var(--ink-3);">至</span>
+              <input type="date" class="date-input" :value="filters.kuaishou.time_end ?? ''"
+                     @input="filters.kuaishou.time_end = ($event.target as HTMLInputElement).value || null"/>
             </div>
           </div>
         </div>
@@ -310,5 +390,53 @@ function onSubmit() {
  */
 .kw-input:focus-visible {
   outline: none;
+}
+
+/* 按平台筛选块 —— 弱边框卡片，与弹窗其它区块视觉层级一致。 */
+.filter-block {
+  background: var(--card-white);
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+.filter-sub-label {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+}
+.chip-row {
+  display: flex;
+  background: var(--card-2);
+  border-radius: 999px;
+  padding: 3px;
+  border: 1px solid var(--line);
+}
+.chip-btn {
+  flex: 1;
+  height: 26px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--ink-2);
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 0 6px;
+}
+.chip-btn--on {
+  background: var(--dark);
+  color: var(--card);
+}
+.date-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--card-white);
+  color: var(--ink);
+  font-size: 11.5px;
+  padding: 0 8px;
 }
 </style>

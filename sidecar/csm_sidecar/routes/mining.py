@@ -20,9 +20,22 @@ from csm_core.mining.models import Platform, StartJobRequest
 from csm_core.mining.sync_to_monitor import SyncParams
 from csm_core.monitor import storage as monitor_storage
 
+from csm_core.sync.tencent_docs import TencentDocsError, TokenInvalidError
+
 from ..auth import RequireToken
 from ..event_bus import bus as event_bus
-from ..services import config_service, mining_ai_service, mining_images_service, mining_service
+from ..services import (
+    comment_generation_service,
+    config_service,
+    mining_ai_service,
+    mining_images_service,
+    mining_service,
+    tencent_docs_service,
+)
+from ..services.comment_generation_service import (
+    DEFAULT_REWRITE_PROMPT_SYSTEM,
+    DEFAULT_REWRITE_PROMPT_USER,
+)
 from ..services.llm_factory import LLMConfigError
 from ..services.mining_ai_service import (
     DEFAULT_SUGGEST_PROMPT_SYSTEM,
@@ -59,6 +72,7 @@ def start_job(body: StartJobRequest) -> dict[str, Any]:
             platforms=body.platforms,
             target_per_platform=body.target_per_platform,
             brand_keywords=body.brand_keywords,
+            filters=body.filters.model_dump(),
         )
     except RuntimeError as e:
         if "busy" in str(e):
@@ -404,6 +418,10 @@ _login_state = _LoginState()
 _PROMPT_VARS = {
     "summary": ["platform", "title", "author", "duration", "play_count"],
     "suggest": ["platform", "title", "author", "tier", "previous_block", "tone_hint"],
+    "rewrite": [
+        "platform", "title", "author", "play_count", "summary",
+        "comments_block", "template_text", "tier", "previous_block", "tone_hint",
+    ],
 }
 
 
@@ -418,6 +436,10 @@ def _ai_prompts_payload() -> dict[str, Any]:
             "current": cfg.mining_suggest_prompt,
             "default": DEFAULT_SUGGEST_PROMPT_SYSTEM + "\n---user---\n" + DEFAULT_SUGGEST_PROMPT_USER,
         },
+        "rewrite": {
+            "current": cfg.mining_rewrite_prompt,
+            "default": DEFAULT_REWRITE_PROMPT_SYSTEM + "\n---user---\n" + DEFAULT_REWRITE_PROMPT_USER,
+        },
         "vars": _PROMPT_VARS,
     }
 
@@ -427,6 +449,7 @@ class AIPromptsPatch(BaseModel):
 
     summary: str | None = None
     suggest: str | None = None
+    rewrite: str | None = None
 
 
 @router.get("/api/mining/ai_prompts")
@@ -447,6 +470,8 @@ def patch_ai_prompts(body: AIPromptsPatch) -> dict[str, Any]:
         updates["mining_summary_prompt"] = body.summary
     if body.suggest is not None:
         updates["mining_suggest_prompt"] = body.suggest
+    if body.rewrite is not None:
+        updates["mining_rewrite_prompt"] = body.rewrite
     if not updates:
         raise HTTPException(status_code=400, detail="no fields provided")
     config_service.patch(updates)
@@ -525,6 +550,12 @@ def patch_comment(comment_id: int, body: CommentPatch) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
     if removed:
         mining_images_service.delete_images(removed)
+    # 编辑即背书（spec §4.1）：用户改了 pending 草稿的文案并保存 → 视为
+    # 人审通过。只看 text 字段（换图/改 status 不算内容背书）。
+    if body.text is not None and existing.get("review_status") == "pending":
+        approved = mining_storage.approve_comment(comment_id)
+        if approved is not None:
+            updated = approved
     return updated
 
 
@@ -538,6 +569,133 @@ def delete_comment_route(comment_id: int) -> None:
         raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
     if image_ids:
         mining_images_service.delete_images(image_ids)
+
+
+# ── 批量 AI 生成 + 审核（评论工作流 P2）─────────────────────────────
+
+
+class GenerateBatchRequest(BaseModel):
+    """POST body for /api/mining/generate_batch."""
+
+    video_ids: list[int] = Field(..., min_length=1, max_length=200)
+    tiers_per_video: int = Field(1, ge=1, le=3)   # 上限 3 = 腾讯文档三层结构
+    template_ids: list[int] = Field(default_factory=list)  # 空 = 模板库自动轮换
+    tone_hint: str = Field("", max_length=100)
+
+
+@router.post("/api/mining/generate_batch", status_code=202)
+def generate_batch(body: GenerateBatchRequest) -> dict[str, Any]:
+    """Queue a batch generation run. 202 + batch_id; progress via SSE."""
+    try:
+        batch_id = comment_generation_service.submit_batch(
+            video_ids=body.video_ids,
+            tiers_per_video=body.tiers_per_video,
+            template_ids=body.template_ids,
+            tone_hint=body.tone_hint,
+        )
+    except LLMConfigError as e:
+        return JSONResponse(
+            status_code=503,
+            content={"code": "llm_not_configured", "detail": str(e)},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        if "busy" in str(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"batch_id": batch_id, "total": len(body.video_ids)}
+
+
+@router.get("/api/mining/generate_batch/{batch_id}/events")
+async def stream_generation_events(batch_id: int):
+    """SSE stream of generation.* events for one batch."""
+    queue_key = comment_generation_service.event_queue_id(batch_id)
+
+    async def event_gen():
+        async for event in event_bus.stream(queue_key):
+            yield {"event": event.get("kind", "message"), "data": _json(event)}
+
+    return EventSourceResponse(event_gen())
+
+
+@router.post("/api/mining/generate_batch/{batch_id}/cancel")
+def cancel_generation(batch_id: int) -> dict[str, Any]:
+    ok = comment_generation_service.cancel_batch(batch_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="batch not running")
+    return {"batch_id": batch_id, "cancelled": True}
+
+
+class ReviewAction(BaseModel):
+    action: str = Field(..., pattern="^approve$")
+
+
+@router.patch("/api/mining/comments/{comment_id}/review")
+def review_comment(comment_id: int, body: ReviewAction) -> dict[str, Any]:
+    """单条通过：pending → approved。非 pending 幂等返回现状。"""
+    updated = mining_storage.approve_comment(comment_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"comment not found: {comment_id}")
+    return updated
+
+
+class ReviewBulkRequest(BaseModel):
+    video_ids: list[int] = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/api/mining/comments/review_bulk")
+def review_bulk(body: ReviewBulkRequest) -> dict[str, Any]:
+    """批量通过：勾选视频下所有 pending 评论 → approved。"""
+    approved = mining_storage.approve_pending_for_videos(body.video_ids)
+    return {"approved": approved}
+
+
+# ── 腾讯文档同步（评论工作流 P3）─────────────────────────────────────
+
+
+def _tdocs_error_response(e: Exception) -> JSONResponse:
+    """腾讯文档错误 → 结构化 JSON（前端按 code 引导去设置页/重贴 token）。"""
+    if isinstance(e, TokenInvalidError):
+        return JSONResponse(status_code=400, content={
+            "code": "tencent_docs_token", "detail": e.reason,
+        })
+    if isinstance(e, tencent_docs_service.TencentDocsDisabledError):
+        return JSONResponse(status_code=400, content={
+            "code": "tencent_docs_disabled", "detail": str(e),
+        })
+    assert isinstance(e, TencentDocsError)
+    return JSONResponse(status_code=502, content={
+        "code": "tencent_docs_error", "detail": e.reason,
+    })
+
+
+@router.get("/api/mining/tencent_docs/status")
+def tencent_docs_status() -> dict[str, Any]:
+    return tencent_docs_service.status()
+
+
+@router.post("/api/mining/tencent_docs/test")
+def tencent_docs_test() -> Any:
+    """测试连接：读表头验证 token / 链接 / 列映射。"""
+    try:
+        return tencent_docs_service.test_connection()
+    except (TencentDocsError, tencent_docs_service.TencentDocsDisabledError) as e:
+        return _tdocs_error_response(e)
+
+
+class SyncToDocsRequest(BaseModel):
+    """POST body for /api/mining/sync_to_docs. video_ids 缺省 = 全部 approved。"""
+
+    video_ids: list[int] | None = None
+
+
+@router.post("/api/mining/sync_to_docs")
+def sync_to_docs(body: SyncToDocsRequest) -> Any:
+    try:
+        return tencent_docs_service.sync_approved(body.video_ids)
+    except (TencentDocsError, tencent_docs_service.TencentDocsDisabledError) as e:
+        return _tdocs_error_response(e)
 
 
 # ── Image upload + serve (Phase 2 T5) ────────────────────────────────

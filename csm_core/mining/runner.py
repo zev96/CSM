@@ -14,7 +14,7 @@ import time
 from typing import Callable
 
 from csm_core.mining import storage as mining_storage
-from csm_core.mining.comment_prefilter import count_brand_hits, fetch_video_comment_texts
+from csm_core.mining.comment_prefilter import count_brand_hits, fetch_video_comments
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
@@ -29,18 +29,39 @@ logger = logging.getLogger(__name__)
 PUBLISH_EVERY_N_CARDS = 5
 PUBLISH_EVERY_N_SECONDS = 10.0
 
-# Brand pre-filter constants.
-# A video is marked excluded when ≥ PREFILTER_THRESHOLD of its scraped
-# comments contain at least one brand keyword.
-PREFILTER_THRESHOLD = 3
+# Brand pre-filter fallback constants — the live values come from
+# AppConfig.mining_prefilter_threshold / mining_prefilter_top_n (settings.json)，
+# 这里只是配置读取失败时的兜底，与 AppConfig 默认值保持一致。
+# A video is marked excluded when ≥ threshold of its scraped comments
+# contain at least one brand keyword（2026-08-31 拍板：前 20 条命中 1 条即排除）。
+PREFILTER_THRESHOLD = 1
 # How many comments to fetch per video for the brand-hit check.
-PREFILTER_SCRAPE_TOP_N = 30
+PREFILTER_SCRAPE_TOP_N = 20
 
 
 EventPublisher = Callable[[str, dict], None]
 """Callable injected by mining_service to publish to the event bus.
 Signature: ``publish(kind, payload)`` — kind ∈ {"job.started", "job.progress",
 "job.platform_done", "job.finished", "login.required"}."""
+
+
+def _prefilter_params() -> tuple[int, int]:
+    """Resolve (top_n, threshold) from AppConfig, falling back to module constants.
+
+    每次 run 现读一次 settings.json（get_config 无缓存），用户改了设置
+    下一个任务生效，不用重启 sidecar。
+    """
+    try:
+        from csm_core.config import get_config
+
+        cfg = get_config()
+        return (
+            int(getattr(cfg, "mining_prefilter_top_n", PREFILTER_SCRAPE_TOP_N)),
+            int(getattr(cfg, "mining_prefilter_threshold", PREFILTER_THRESHOLD)),
+        )
+    except Exception:
+        logger.info("[runner] config read failed, using prefilter fallbacks", exc_info=True)
+        return PREFILTER_SCRAPE_TOP_N, PREFILTER_THRESHOLD
 
 
 def get_adapter(platform: Platform) -> SearchAdapter:
@@ -80,6 +101,8 @@ class MiningRunner:
             return
         cancel_event = self.register_cancel_event(job_id)
         brand_keywords: list[str] = job.get("brand_keywords") or []
+        filters: dict = job.get("filters") or {}
+        prefilter_top_n, prefilter_threshold = _prefilter_params()
         mining_storage.mark_started(job_id)
         self.publish("job.started", {"job_id": job_id, "keyword": job["keyword"]})
 
@@ -142,6 +165,7 @@ class MiningRunner:
                     on_card=_on_card,
                     on_progress=_on_progress,
                     cancel_event=cancel_event,
+                    filters=filters,
                 )
             except Exception as e:
                 logger.exception("adapter %s threw — recording as failed", platform)
@@ -177,15 +201,25 @@ class MiningRunner:
                             "phase": "prefilter", "got": i, "target": len(vids),
                             "note": "筛重复评论",
                         })
-                        texts = fetch_video_comment_texts(
-                            platform, v["url"], limit=PREFILTER_SCRAPE_TOP_N,
+                        comments = fetch_video_comments(
+                            platform, v["url"], limit=prefilter_top_n,
                         )
-                        if not texts:
+                        if not comments:
                             # fail-open：抓不到评论 → 不排除，且不写 brand_comment_hits（保持 NULL=未检查，
                             # 区别于「检查过、0 条品牌评论」的 0）。
                             continue
+                        # 快照持久化（排除与否都存）：AI 生成环节复用当
+                        # 评论区语料，免二次抓取；被排除的视频 UI 可回看
+                        # 命中了哪条评论。
+                        try:
+                            mining_storage.set_top_comments(v["id"], comments)
+                        except Exception:
+                            logger.exception(
+                                "[runner] set_top_comments failed video=%s", v["id"],
+                            )
+                        texts = [c["text"] for c in comments]
                         hits = count_brand_hits(texts, brand_keywords)
-                        if hits >= PREFILTER_THRESHOLD:
+                        if hits >= prefilter_threshold:
                             mining_storage.mark_brand_excluded(v["id"], hits)
                         else:
                             mining_storage.set_brand_hits(v["id"], hits)

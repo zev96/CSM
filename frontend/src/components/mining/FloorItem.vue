@@ -33,7 +33,12 @@ const props = defineProps<{
 defineEmits<{
   (e: "edit", id: number): void;
   (e: "delete", id: number): void;
+  (e: "approve", id: number): void;
 }>();
+
+// v14 审核：pending = AI 批量生成、待人审。ai_flavor_score ≥ 3 视为
+// 「有明确 AI 痕迹」（≈ 一个套话连接词的分值），黄标提醒优先人工改。
+const AI_FLAVOR_WARN = 3;
 
 const sidecar = useSidecar();
 const thumbUrls = computed(() =>
@@ -149,7 +154,62 @@ const ts = computed(() => {
           <span style="margin: 0 2px;">·</span>
           <Icon name="wand" :size="9"/> AI
         </span>
+        <!-- 审核状态徽标（v14）：pending 橙标；AI 味超标追加黄警示。 -->
+        <span
+          v-if="comment.review_status === 'pending'"
+          class="inline-flex items-center"
+          :style="{
+            padding: '0 6px', height: '16px', borderRadius: '999px',
+            background: 'rgba(238,106,42,0.14)', color: 'var(--primary-deep)',
+            fontSize: '10px', fontWeight: 600,
+          }"
+        >待审</span>
+        <span
+          v-if="comment.review_status === 'pending' && (comment.ai_flavor_score ?? 0) >= AI_FLAVOR_WARN"
+          class="inline-flex items-center"
+          :title="'检测到 AI 痕迹（评分 ' + comment.ai_flavor_score + '），建议手动改一下'"
+          :style="{
+            padding: '0 6px', height: '16px', borderRadius: '999px',
+            background: 'var(--yellow-soft)', color: 'var(--yellow-deep)',
+            fontSize: '10px', fontWeight: 600,
+          }"
+        >AI 味 {{ comment.ai_flavor_score }}</span>
+        <span
+          v-else-if="comment.review_status === 'approved'"
+          class="inline-flex items-center"
+          :style="{
+            padding: '0 6px', height: '16px', borderRadius: '999px',
+            background: 'rgba(122,155,94,0.16)', color: 'var(--green-deep)',
+            fontSize: '10px', fontWeight: 600,
+          }"
+        >已通过</span>
+        <span
+          v-else-if="comment.review_status === 'synced' || comment.review_status === 'executed'"
+          class="inline-flex items-center"
+          :style="{
+            padding: '0 6px', height: '16px', borderRadius: '999px',
+            background: 'var(--card-2)', color: 'var(--ink-3)',
+            fontSize: '10px', fontWeight: 600,
+            border: '1px solid var(--line)',
+          }"
+        >{{ comment.review_status === 'executed' ? '已执行' : '已同步' }}</span>
         <div class="ml-auto flex items-center" style="gap: 2px;">
+          <button
+            v-if="comment.review_status === 'pending'"
+            type="button"
+            class="inline-flex items-center gap-1 transition hover:bg-[rgba(122,155,94,0.12)]"
+            :style="{
+              height: '20px',
+              padding: '0 7px',
+              borderRadius: '6px',
+              color: 'var(--green-deep)',
+              fontSize: '10.5px',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }"
+            title="通过这层（进入可同步队列）"
+            @click="$emit('approve', comment.id)"
+          ><Icon name="check" :size="10"/><span>通过</span></button>
           <button
             type="button"
             class="inline-flex items-center gap-1 transition hover:bg-[rgba(var(--ink-rgb),0.05)]"

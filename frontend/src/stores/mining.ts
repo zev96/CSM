@@ -30,6 +30,45 @@ import { useNotifications } from "@/composables/useNotifications"
 export type Platform = "douyin" | "bilibili" | "kuaishou"
 export type CommentedFilter = "0" | "1" | "all"
 
+// ── 搜索筛选（按平台分组，与后端 SearchFilters 模型一一对应）──────────
+// 值全用平台原生参数格式；UI 只展示各平台真实支持的档位。
+export interface DouyinFilters {
+  /** 0=不限 1=一天内 7=一周内 182=半年内（抖音只有档位，无任意区间） */
+  publish_time: "0" | "1" | "7" | "182"
+  /** 0=综合 1=最多点赞 2=最新发布 */
+  sort_type: "0" | "1" | "2"
+  /** 含 "note" 时走综合搜索并本地过滤图文 */
+  content_types: ("video" | "note")[]
+}
+
+export interface BilibiliFilters {
+  /** totalrank=综合 click=最多点击 pubdate=最新发布 dm=最多弹幕 stow=最多收藏 */
+  order: "totalrank" | "click" | "pubdate" | "dm" | "stow"
+  /** YYYY-MM-DD，B 站原生支持任意日期区间 */
+  time_begin: string | null
+  time_end: string | null
+}
+
+export interface KuaishouFilters {
+  /** 快手无服务端时间参数 —— 抓取后按发布时间本地过滤（产出速率会降低） */
+  time_begin: string | null
+  time_end: string | null
+}
+
+export interface SearchFilters {
+  douyin: DouyinFilters
+  bilibili: BilibiliFilters
+  kuaishou: KuaishouFilters
+}
+
+export function defaultSearchFilters(): SearchFilters {
+  return {
+    douyin: { publish_time: "0", sort_type: "0", content_types: ["video"] },
+    bilibili: { order: "totalrank", time_begin: null, time_end: null },
+    kuaishou: { time_begin: null, time_end: null },
+  }
+}
+
 export interface PlatformProgress {
   got: number
   target: number
@@ -55,6 +94,8 @@ export interface MiningJob {
    *  = video_count → 用户已完成评论 → 显示「已完成」
    *  < video_count → 用户还有视频未评论 → 显示「进行中」 */
   commented_count?: number
+  /** v13：任务创建时的搜索筛选条件（按平台分组）。老任务为空对象。 */
+  filters?: Partial<SearchFilters>
 }
 
 export interface Video {
@@ -77,10 +118,16 @@ export interface Video {
   first_seen_at: string
   source_keywords: string[]
   ai_summary?: string | null
+  /** v13：品牌预筛抓到的前 N 条热评快照（生成语料 + 命中证据）。
+   *  null = 未检查（无品牌词任务 / 抓取失败 fail-open）。 */
+  top_comments?: { text: string; likes: number | null; author: string }[] | null
+  /** v14：该视频下 review_status='pending' 的评论数（审核队列徽标）。 */
+  pending_review_count?: number
 }
 
 export interface Comment {
   id: number
+  video_id?: number
   tier: number
   text: string
   image_ids: string[]
@@ -88,8 +135,27 @@ export interface Comment {
   image_urls: string[]
   status: "draft" | "assigned" | "done"
   source: "manual" | "ai_suggested"
+  /** v14 审核状态机：'' = 旧数据/人工（不进审核队列）；pending 仅批量
+   *  AI 生成写入；approved 人审通过；synced/executed 留给腾讯文档链路。 */
+  review_status: "" | "pending" | "approved" | "synced" | "executed"
+  /** 生成时用的模板 id（软引用，模板删了留痕）。 */
+  template_id?: number | null
+  /** 确定性 AI 味评分（≥3 审核视图标黄）。 */
+  ai_flavor_score?: number | null
+  reviewed_at?: string | null
+  synced_at?: string | null
   created_at: string
   updated_at: string
+}
+
+/** 批量 AI 生成的进行中状态（SSE 驱动）。null = 没有批次。 */
+export interface GenBatchState {
+  active: boolean
+  batchId: number
+  done: number
+  total: number
+  generated: number
+  failed: number
 }
 
 export interface CreateCommentPayload {
@@ -116,6 +182,19 @@ export interface SyncToMonitorResult {
   skipped_dup: number
   skipped_no_draft: number
   errors: Record<string, unknown>[]
+}
+
+/** POST /api/mining/sync_to_docs 的返回（P3 腾讯文档同步）。 */
+export interface SyncToDocsResult {
+  synced_videos: number
+  synced_comments: number
+  /** 表格「链接」列已有该视频 → 跳过写入、本地补标 synced（防双写）。 */
+  skipped_in_doc: number
+  /** 超出表格三层结构的楼层数（留在 app 内，保持 approved）。 */
+  skipped_extra_tiers: number
+  row_start: number
+  row_end: number
+  batch_id: number | null
 }
 
 /**
@@ -192,10 +271,17 @@ export const useMiningStore = defineStore("mining", () => {
     platforms: Platform[],
     target: number,
     brandKeywords: string[] = [],
+    filters: SearchFilters = defaultSearchFilters(),
   ): Promise<number> {
     const resp = await api().post<{ job_id: number; job: MiningJob }>(
       "/api/mining/jobs",
-      { keyword, platforms, target_per_platform: target, brand_keywords: brandKeywords },
+      {
+        keyword,
+        platforms,
+        target_per_platform: target,
+        brand_keywords: brandKeywords,
+        filters,
+      },
     )
     activeJob.value = resp.data.job
     subscribeToJob(resp.data.job_id)
@@ -614,6 +700,128 @@ export const useMiningStore = defineStore("mining", () => {
     return resp.data.updated
   }
 
+  // ── 批量 AI 生成 + 审核（P2）──────────────────────────────────────────
+  const genState = ref<GenBatchState | null>(null)
+  let stopGenSse: (() => void) | null = null
+
+  function _teardownGenSse() {
+    if (stopGenSse) { stopGenSse(); stopGenSse = null }
+  }
+
+  async function generateBatch(
+    videoIds: number[],
+    tiersPerVideo: number,
+    toneHint = "",
+    templateIds: number[] = [],
+  ): Promise<number> {
+    try {
+      const resp = await api().post<{ batch_id: number; total: number }>(
+        "/api/mining/generate_batch",
+        {
+          video_ids: videoIds,
+          tiers_per_video: tiersPerVideo,
+          tone_hint: toneHint,
+          template_ids: templateIds,
+        },
+      )
+      genState.value = {
+        active: true, batchId: resp.data.batch_id,
+        done: 0, total: resp.data.total, generated: 0, failed: 0,
+      }
+      _subscribeToGenBatch(resp.data.batch_id)
+      return resp.data.batch_id
+    } catch (err) {
+      _wrapLLMError(err)
+    }
+  }
+
+  function _subscribeToGenBatch(batchId: number) {
+    _teardownGenSse()
+    stopGenSse = subscribe(`/api/mining/generate_batch/${batchId}/events`, {
+      "generation.progress": (d: any) => {
+        if (genState.value?.batchId !== batchId) return
+        genState.value = { ...genState.value, done: d.done, total: d.total }
+        // 边生成边刷新对应视频的评论楼，右栏能实时看到新草稿。
+        if (d.video_id) loadComments(d.video_id).catch(() => {})
+      },
+      "generation.finished": (d: any) => {
+        if (genState.value?.batchId === batchId) {
+          genState.value = {
+            ...genState.value, active: false,
+            generated: d.generated ?? 0, failed: d.failed ?? 0,
+          }
+        }
+        // pending_review_count 变了 → 刷新视频列表（审核 tab 徽标）。
+        refreshVideos().catch(() => {})
+      },
+      done: () => {
+        _teardownGenSse()
+        if (genState.value?.batchId === batchId && genState.value.active) {
+          genState.value = { ...genState.value, active: false }
+        }
+      },
+    })
+  }
+
+  async function cancelGeneration(): Promise<void> {
+    const id = genState.value?.batchId
+    if (id == null) return
+    await api().post(`/api/mining/generate_batch/${id}/cancel`)
+  }
+
+  function _patchVideoPending(videoId: number, delta: number) {
+    const v = videos.value.find(x => x.id === videoId)
+    if (v) {
+      v.pending_review_count = Math.max(0, (v.pending_review_count ?? 0) + delta)
+    }
+  }
+
+  async function approveComment(commentId: number, videoId: number): Promise<Comment> {
+    const resp = await api().patch<Comment>(
+      `/api/mining/comments/${commentId}/review`,
+      { action: "approve" },
+    )
+    const list = commentsByVideo.value[videoId]
+    if (list) {
+      commentsByVideo.value[videoId] = list.map(c => (c.id === resp.data.id ? resp.data : c))
+    }
+    _patchVideoPending(videoId, -1)
+    return resp.data
+  }
+
+  async function reviewBulk(videoIds: number[]): Promise<number> {
+    const resp = await api().post<{ approved: number }>(
+      "/api/mining/comments/review_bulk",
+      { video_ids: videoIds },
+    )
+    for (const id of videoIds) {
+      if (commentsByVideo.value[id]) loadComments(id).catch(() => {})
+    }
+    await refreshVideos()
+    return resp.data.approved
+  }
+
+  // ── 腾讯文档同步（P3）────────────────────────────────────────────────
+  const syncingToDocs = ref(false)
+
+  async function syncToDocs(videoIds?: number[]): Promise<SyncToDocsResult> {
+    syncingToDocs.value = true
+    try {
+      const resp = await api().post<SyncToDocsResult>(
+        "/api/mining/sync_to_docs",
+        { video_ids: videoIds ?? null },
+      )
+      // approved → synced 后 pending/approved 统计变了，刷新列表 + 已加载的评论楼。
+      await refreshVideos()
+      for (const idStr of Object.keys(commentsByVideo.value)) {
+        loadComments(Number(idStr)).catch(() => {})
+      }
+      return resp.data
+    } finally {
+      syncingToDocs.value = false
+    }
+  }
+
   async function syncToMonitor(
     jobId: number,
     req: SyncToMonitorRequest,
@@ -649,5 +857,7 @@ export const useMiningStore = defineStore("mining", () => {
     loadComments, createComment, updateComment, deleteComment,
     uploadImage, summarize, suggestComment, bulkMarkCommented,
     syncToMonitor,
+    genState, generateBatch, cancelGeneration, approveComment, reviewBulk,
+    syncingToDocs, syncToDocs,
   }
 })

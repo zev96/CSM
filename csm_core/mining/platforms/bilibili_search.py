@@ -26,7 +26,7 @@ from csm_core.mining.models import (
 )
 from csm_core.mining.platforms import _http, _risk
 from csm_core.mining.platforms._common import (
-    OnCard, OnProgress, parse_duration, parse_int_count,
+    OnCard, OnProgress, date_to_epoch, parse_duration, parse_int_count,
 )
 from csm_core.mining.platforms._vendor.mc_bilibili_sign import BilibiliSign
 
@@ -59,9 +59,11 @@ class BilibiliSearchAdapter:
         on_progress: OnProgress,
         cancel_event: threading.Event,
         max_attempts: int | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> SearchOutcome:
         if max_attempts is None:
             max_attempts = get_max_attempts("bilibili")
+        extra_params = _build_filter_params((filters or {}).get("bilibili") or {})
 
         if not mining_browser.has_login_cookie("bilibili"):
             on_progress(ProgressUpdate(
@@ -167,6 +169,9 @@ class BilibiliSearchAdapter:
                         "keyword": keyword,
                         "page": page_num,
                         "page_size": _PAGE_SIZE,
+                        # 筛选参数（order / pubtime_begin_s / pubtime_end_s）——
+                        # WBI 签名器对参数集不敏感，多签几个 key 无副作用。
+                        **extra_params,
                     }
                     signed = signer.sign(dict(raw_params))
 
@@ -338,6 +343,30 @@ class BilibiliSearchAdapter:
                 raw=item,
             ))
         return cards
+
+
+_VALID_ORDERS = {"totalrank", "click", "pubdate", "dm", "stow"}
+
+
+def _build_filter_params(bl_filters: dict[str, Any]) -> dict[str, Any]:
+    """B 站筛选 dict → search/type 额外请求参数。
+
+    - order：totalrank（综合，API 默认）不上参数，保持旧行为一致。
+    - time_begin / time_end：YYYY-MM-DD → pubtime_begin_s / pubtime_end_s
+      （本地时区当天 00:00:00 / 23:59:59 的秒级时间戳，B 站原生支持任意区间）。
+    未知 order / 无效日期静默忽略（fail-open：筛选参数坏了不该让搜索失败）。
+    """
+    params: dict[str, Any] = {}
+    order = str(bl_filters.get("order") or "totalrank")
+    if order in _VALID_ORDERS and order != "totalrank":
+        params["order"] = order
+    begin = date_to_epoch(bl_filters.get("time_begin"))
+    if begin is not None:
+        params["pubtime_begin_s"] = begin
+    end = date_to_epoch(bl_filters.get("time_end"), end_of_day=True)
+    if end is not None:
+        params["pubtime_end_s"] = end
+    return params
 
 
 def _basename_no_ext(url: str) -> str:

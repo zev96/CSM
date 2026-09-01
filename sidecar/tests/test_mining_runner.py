@@ -27,8 +27,11 @@ class FakeAdapter:
         self.platform = platform
         self.cards = cards
         self.status = status
+        self.seen_filters = None
 
-    def search(self, keyword, target_count, on_card, on_progress, cancel_event):
+    def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+               max_attempts=None, filters=None):
+        self.seen_filters = filters
         on_progress(ProgressUpdate(platform=self.platform, phase="launching", got=0, target=target_count))
         for c in self.cards:
             if cancel_event.is_set():
@@ -97,8 +100,13 @@ def test_runner_partial_when_one_needs_login(db, monkeypatch):
     assert total == 1  # bilibili's one card persisted
 
 
+def _comments(*texts):
+    """fetch_video_comments 返回形状：[{text, likes, author}, ...]。"""
+    return [{"text": t, "likes": None, "author": ""} for t in texts]
+
+
 def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
-    """Brand-keyword job: videos with >=3 brand-hit comments get excluded=1."""
+    """Brand-keyword job: videos with >=threshold(1) brand-hit comments get excluded=1."""
     events = []
 
     def publish(kind, payload):
@@ -113,18 +121,21 @@ def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
     fake_b = FakeAdapter("bilibili", cards)
 
     monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: fake_b)
+    # 钉死 (top_n, threshold)，与用户机器上的 settings.json 解耦。
+    monkeypatch.setattr("csm_core.mining.runner._prefilter_params", lambda: (20, 1))
 
-    # B1: 3 comments with 石头 → should be excluded
-    # B2: 1 comment with 石头 → kept, brand_comment_hits=1
-    # B3: 0 comments → kept, brand_comment_hits=0
-    def fake_fetch(platform, video_url, limit=30):
+    # 阈值=1（2026-08-31 拍板：命中 1 条即排除）：
+    # B1: 3 comments with 石头 → excluded, hits=3
+    # B2: 1 comment with 石头 → excluded, hits=1
+    # B3: 0 brand comments → kept, brand_comment_hits=0
+    def fake_fetch(platform, video_url, limit=20):
         if "B1" in video_url:
-            return ["石头很好", "石头真棒", "石头不错"]
+            return _comments("石头很好", "石头真棒", "石头不错")
         if "B2" in video_url:
-            return ["石头还行", "其他内容"]
-        return ["无关评论", "another"]
+            return _comments("石头还行", "其他内容")
+        return _comments("无关评论", "another")
 
-    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comment_texts", fake_fetch)
+    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comments", fake_fetch)
 
     jid = ms.create_job("keyword", ["bilibili"], 50, brand_keywords=["石头"])
     runner.run(jid)
@@ -136,7 +147,7 @@ def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
     # Query videos table directly — list_videos hides excluded=1
     conn = ms.get_conn()
     rows = conn.execute(
-        "SELECT platform_video_id, excluded, exclude_reason, brand_comment_hits "
+        "SELECT platform_video_id, excluded, exclude_reason, brand_comment_hits, top_comments_json "
         "FROM videos ORDER BY platform_video_id"
     ).fetchall()
     row_by_id = {r["platform_video_id"]: dict(r) for r in rows}
@@ -146,13 +157,17 @@ def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
     assert row_by_id["B1"]["exclude_reason"] == "brand_seeded"
     assert row_by_id["B1"]["brand_comment_hits"] >= 3
 
-    # B2: kept, but hits recorded
-    assert row_by_id["B2"]["excluded"] == 0, "B2 should NOT be excluded"
+    # B2: threshold=1 → 命中 1 条也排除
+    assert row_by_id["B2"]["excluded"] == 1, "B2 should be excluded (threshold=1)"
     assert row_by_id["B2"]["brand_comment_hits"] == 1
 
     # B3: kept, hits=0
     assert row_by_id["B3"]["excluded"] == 0, "B3 should NOT be excluded"
     assert row_by_id["B3"]["brand_comment_hits"] == 0
+
+    # 热评快照持久化：检查过的视频（含被排除的）都应有 top_comments_json
+    for vid in ("B1", "B2", "B3"):
+        assert row_by_id[vid]["top_comments_json"], f"{vid} should have top_comments snapshot"
 
     # Platform must end on "done" so finalize counts success
     plat_done = [e for e in events if e[0] == "job.platform_done"]
@@ -176,17 +191,17 @@ def test_runner_no_brand_keywords_skips_prefilter(db, monkeypatch):
 
     fetch_calls = []
 
-    def fake_fetch(platform, video_url, limit=30):
+    def fake_fetch(platform, video_url, limit=20):
         fetch_calls.append((platform, video_url))
         return []
 
-    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comment_texts", fake_fetch)
+    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comments", fake_fetch)
 
     # No brand_keywords (default empty)
     jid = ms.create_job("keyword", ["bilibili"], 50)
     runner.run(jid)
 
-    assert fetch_calls == [], "fetch_video_comment_texts must not be called without brand_keywords"
+    assert fetch_calls == [], "fetch_video_comments must not be called without brand_keywords"
 
     # All videos still excluded=0
     conn = ms.get_conn()
@@ -200,7 +215,7 @@ def test_runner_no_brand_keywords_skips_prefilter(db, monkeypatch):
 def test_runner_prefilter_fetch_failure_leaves_null(db, monkeypatch):
     """Empty fetch (failure) must leave brand_comment_hits as NULL, not 0.
 
-    fail-open spec: when fetch_video_comment_texts returns [] we cannot
+    fail-open spec: when fetch_video_comments returns [] we cannot
     distinguish 'no comments exist' from 'fetch failed', so we must NOT
     write brand_comment_hits=0 (which would mean 'checked, 0 brand hits').
     The column must stay NULL (= not yet checked / unknown).
@@ -218,10 +233,10 @@ def test_runner_prefilter_fetch_failure_leaves_null(db, monkeypatch):
     monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: fake_b)
 
     # Always return [] — simulates a fetch failure
-    def fake_fetch(platform, video_url, limit=30):
+    def fake_fetch(platform, video_url, limit=20):
         return []
 
-    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comment_texts", fake_fetch)
+    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comments", fake_fetch)
 
     jid = ms.create_job("keyword", ["bilibili"], 50, brand_keywords=["石头"])
     runner.run(jid)
@@ -248,7 +263,8 @@ def test_runner_cancel_mid_job(db, monkeypatch):
     # Adapter that yields 5 cards but checks cancel between each.
     class SlowAdapter:
         platform = "bilibili"
-        def search(self, keyword, target_count, on_card, on_progress, cancel_event):
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
             emitted = 0
             for i in range(5):
                 if cancel_event.is_set():
