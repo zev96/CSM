@@ -50,14 +50,16 @@ def shutdown() -> None:
 def _read_release_token() -> str:
     """Pull the PAT out of csm_core.updater_client._token.
 
-    The real ``_token.py`` is gitignored and either:
-      - injected by CI on release builds (release.yml `Inject PAT` step)
-      - copy-pasted by a dev from ``_token.py.example`` for local testing
+    Since v0.8.1 official release builds ship WITHOUT a token — the repo is
+    public and anonymous reads work. (v0.8.0 及更早版本由 CI 注入 PAT,
+    2026-09 那批 token 过期导致全员更新检查 401,详见 CHANGELOG。)
+    The gitignored ``_token.py`` remains supported for private forks /
+    local testing via ``_token.py.example``.
 
-    Returns "" when the file isn't present — that's the dev default and
-    public-repo case. With an empty token, GitHub's anonymous rate limit
-    (60 req/h per IP) applies; that's fine for "Check updates" being a
-    user-triggered button, not a poll.
+    Returns "" when the file isn't present — that's the default. With an
+    empty token, GitHub's anonymous rate limit (60 req/h per IP) applies;
+    that's fine for "Check updates" being a user-triggered button, not a
+    poll.
     """
     try:
         from csm_core.updater_client._token import TOKEN
@@ -113,18 +115,16 @@ def _try_fetch_sha256(manifest_url: str) -> str | None:
     Expected manifest shape: ``{"sha256": "<64 hex chars>", ...}``.
     """
     try:
-        # API URL needs Accept: application/octet-stream to get the asset
-        # bytes; browser_download_url works with default Accept.
-        headers = {"Accept": "application/octet-stream"}
-        # 私有仓库需要带 token —— 没 token 时 anonymous GET 会 404。
-        # 详见 GitHub Releases asset download docs：private repo asset
-        # 不暴露给公网，必须 Bearer auth。
         tok = _read_release_token()
-        if tok:
-            headers["Authorization"] = f"Bearer {tok}"
-        resp = httpx.get(
-            manifest_url, headers=headers, timeout=5.0, follow_redirects=True,
-        )
+        resp = _fetch_asset(manifest_url, tok)
+        if tok and resp.status_code in (401, 403):
+            # 过期 PAT：GitHub 不会把带无效凭证的请求降级成匿名。public
+            # 仓库匿名可读，摘掉凭证重试一次（与 GitHubClient 同一策略）。
+            logger.warning(
+                "manifest fetch got HTTP %s with token — retrying anonymously",
+                resp.status_code,
+            )
+            resp = _fetch_asset(manifest_url, "")
         if resp.status_code != 200:
             logger.warning(
                 "manifest fetch returned HTTP %s for %s",
@@ -140,6 +140,19 @@ def _try_fetch_sha256(manifest_url: str) -> str | None:
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
         logger.warning("manifest fetch failed: %s", e)
         return None
+
+
+def _fetch_asset(url: str, tok: str) -> httpx.Response:
+    """GET a release asset via the API URL.
+
+    Accept: octet-stream makes GitHub return the asset bytes instead of the
+    JSON descriptor. Authorization is only attached when ``tok`` is set —
+    private repos need it; public repos work anonymously.
+    """
+    headers = {"Accept": "application/octet-stream"}
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    return httpx.get(url, headers=headers, timeout=5.0, follow_redirects=True)
 
 
 def submit_download(*, url: str, expected_sha256: str, target: Path | None = None) -> str:
@@ -176,13 +189,30 @@ def _run_download(job_id: str, url: str, expected_sha256: str, target: Path) -> 
         headers["Authorization"] = f"Bearer {tok}"
 
     try:
-        sha = download_with_verification(
-            url=url,
-            target=target,
-            expected_sha256=expected_sha256,
-            progress_cb=_on_progress,
-            headers=headers,
-        )
+        try:
+            sha = download_with_verification(
+                url=url,
+                target=target,
+                expected_sha256=expected_sha256,
+                progress_cb=_on_progress,
+                headers=headers,
+            )
+        except DownloadError as e:
+            if not (tok and e.status_code in (401, 403)):
+                raise
+            # 过期 PAT 同款降级:public 仓库资产匿名可下,摘凭证重试一次。
+            logger.warning(
+                "download got HTTP %s with token — retrying anonymously",
+                e.status_code,
+            )
+            headers.pop("Authorization", None)
+            sha = download_with_verification(
+                url=url,
+                target=target,
+                expected_sha256=expected_sha256,
+                progress_cb=_on_progress,
+                headers=headers,
+            )
         bus.finish(job_id, target=str(target), sha256=sha)
     except DownloadCancelled:
         bus.fail(job_id, error="cancelled")

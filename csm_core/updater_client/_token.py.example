@@ -1,8 +1,13 @@
-"""Template for the CI-injected GitHub PAT.
+"""Template for an optional GitHub PAT (private forks only).
 
-Copy this to ``_token.py`` for local testing OR let CI populate it during
-the build (the real ``_token.py`` is gitignored).
+Official builds ship WITHOUT a token since v0.8.1 — the release repo is
+public and anonymous reads work. CI no longer injects this file (the baked
+PAT expiring is what broke every installed client's update check in
+2026-09).
 
-The PAT must have ``Contents: Read`` permission on the CSM private repo.
+If you run a private fork: copy this to ``_token.py`` (gitignored) with a
+PAT that has ``Contents: Read`` on your fork. Mind the expiry — a baked
+token that expires bricks update checks for every installed build, and the
+client can only fall back anonymously if the repo is public.
 """
 TOKEN = ""
