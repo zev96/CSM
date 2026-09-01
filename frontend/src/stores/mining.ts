@@ -192,8 +192,14 @@ export interface SyncToDocsResult {
   skipped_in_doc: number
   /** 超出表格三层结构的楼层数（留在 app 内，保持 approved）。 */
   skipped_extra_tiers: number
-  row_start: number
-  row_end: number
+  /** 每个平台写入了哪张子表的哪个行区间（0-based）。 */
+  batches: {
+    platform: Platform
+    sheet_name: string
+    row_start: number
+    row_end: number
+    videos: number
+  }[]
   batch_id: number | null
 }
 

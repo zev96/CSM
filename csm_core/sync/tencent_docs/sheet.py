@@ -51,29 +51,51 @@ class SheetTarget:
     col_count: int = 0
 
 
-def resolve_sheet(client: TencentDocsMCPClient, doc_url: str) -> SheetTarget:
-    """URL → 具体子表。tab 参数命中就用它；否则取第一张 worksheet。"""
-    file_id, tab = parse_doc_url(doc_url)
+def list_sheets(client: TencentDocsMCPClient, file_id: str) -> list[SheetTarget]:
+    """文档下全部子表。空 → 抛错（无权限/坏链接的统一出口）。"""
     info = client.call_tool("sheet.get_sheet_info", {"file_id": file_id})
-    sheets = [s for s in (info.get("sheets") or []) if isinstance(s, dict)]
-    if not sheets:
+    raw = [s for s in (info.get("sheets") or []) if isinstance(s, dict)]
+    if not raw:
         raise TencentDocsError("表格里没有任何子表（或无访问权限）")
-
-    def _to_target(s: dict[str, Any]) -> SheetTarget:
-        return SheetTarget(
+    return [
+        SheetTarget(
             file_id=file_id,
             sheet_id=str(s.get("sheet_id") or ""),
             sheet_name=str(s.get("sheet_name") or ""),
             row_count=int(s.get("row_count") or 0),
             col_count=int(s.get("col_count") or 0),
         )
+        for s in raw
+    ]
 
+
+_WS_RE = re.compile(r"\s+")
+
+
+def pick_sheet_by_name(sheets: list[SheetTarget], name: str | None) -> SheetTarget | None:
+    """按子表名匹配（去空白全等：「B站」==「B 站」）。找不到返回 None。"""
+    want = _WS_RE.sub("", name or "")
+    if not want:
+        return None
+    for s in sheets:
+        if _WS_RE.sub("", s.sheet_name) == want:
+            return s
+    return None
+
+
+def pick_fallback_sheet(sheets: list[SheetTarget], tab: str | None) -> SheetTarget:
+    """兜底子表：URL 的 tab 命中就用它，否则第一张。"""
     if tab:
         for s in sheets:
-            if str(s.get("sheet_id")) == tab:
-                return _to_target(s)
-    worksheets = [s for s in sheets if s.get("sheet_type") in (None, "", "worksheet")]
-    return _to_target((worksheets or sheets)[0])
+            if s.sheet_id == tab:
+                return s
+    return sheets[0]
+
+
+def resolve_sheet(client: TencentDocsMCPClient, doc_url: str) -> SheetTarget:
+    """URL → 具体子表。tab 参数命中就用它；否则取第一张。"""
+    file_id, tab = parse_doc_url(doc_url)
+    return pick_fallback_sheet(list_sheets(client, file_id), tab)
 
 
 # ── 读 ──────────────────────────────────────────────────────────────────
@@ -174,6 +196,28 @@ def append_rows_csv(
         "start_row": start_row,
         "start_col": start_col,
         "csv_data": buf.getvalue(),
+    })
+
+
+# 批间分隔行的橙色底（ARGB）—— 对齐用户表格里手工维护的分隔行样式。
+SEPARATOR_BG_ARGB = "FFFFC000"
+
+
+def paint_row_background(
+    client: TencentDocsMCPClient,
+    target: SheetTarget,
+    row: int,
+    width: int,
+    *,
+    bg_argb: str = SEPARATOR_BG_ARGB,
+) -> None:
+    """给一行前 width 列上背景色（分隔行用）。调用方自行 fail-open。"""
+    client.call_tool("sheet.set_cell_style", {
+        "file_id": target.file_id,
+        "sheet_id": target.sheet_id,
+        "start_row": row, "start_col": 0,
+        "end_row": row, "end_col": max(0, width - 1),
+        "format": {"bg_color": bg_argb},
     })
 
 

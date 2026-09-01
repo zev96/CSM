@@ -207,7 +207,9 @@ async function onSyncToDocs() {
       toast.success("没有待同步的已通过评论（先在待审核里通过一批）");
       return;
     }
+    const sheetNames = [...new Set((r.batches ?? []).map(b => b.sheet_name))].join("/");
     let msg = `已同步 ${r.synced_videos} 条视频（${r.synced_comments} 条评论）到腾讯文档`;
+    if (sheetNames) msg += `「${sheetNames}」`;
     if (r.skipped_in_doc) msg += `，${r.skipped_in_doc} 条已在表格中跳过`;
     toast.success(msg);
   } catch (e: any) {

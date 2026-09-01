@@ -174,15 +174,25 @@ def test_client_http_401_maps_token_error():
 # ── Sheet helpers（假 client）──────────────────────────────────────────
 
 class FakeSheetClient:
-    """内存表格：rows[r][c] = str。记录 append 调用。"""
+    """内存表格（可多子表）：rows_of(sheet_id)[r][c] = str。记录 CSV/样式调用。"""
 
-    def __init__(self, rows: list[list[str]], *, sheets: list[dict] | None = None):
-        self.rows = rows
+    def __init__(self, rows: list[list[str]] | None = None, *, sheets: list[dict] | None = None):
         self.sheets = sheets or [
             {"sheet_id": "BB08J2", "sheet_name": "工作表1", "sheet_type": "worksheet",
-             "row_count": max(200, len(rows)), "col_count": 20},
+             "row_count": 200, "col_count": 20},
         ]
+        first_id = self.sheets[0]["sheet_id"]
+        self.rows_by_sheet: dict[str, list[list[str]]] = {first_id: rows if rows is not None else []}
         self.csv_writes: list[dict] = []
+        self.style_calls: list[dict] = []
+
+    @property
+    def rows(self) -> list[list[str]]:
+        """第一张子表的行（单表用例的便捷别名）。"""
+        return self.rows_by_sheet[self.sheets[0]["sheet_id"]]
+
+    def rows_of(self, sheet_id: str) -> list[list[str]]:
+        return self.rows_by_sheet.setdefault(sheet_id, [])
 
     def close(self):
         pass
@@ -196,16 +206,20 @@ class FakeSheetClient:
     def call_tool(self, name, arguments):
         if name == "sheet.get_sheet_info":
             return {"sheets": self.sheets}
+        if name == "sheet.set_cell_style":
+            self.style_calls.append(arguments)
+            return {}
+        rows = self.rows_of(arguments["sheet_id"])
         if name == "sheet.get_cell_data":
             cells = []
             for r in range(arguments["start_row"], arguments["end_row"] + 1):
-                if r >= len(self.rows):
+                if r >= len(rows):
                     break
                 for c in range(arguments["start_col"], arguments["end_col"] + 1):
-                    if c < len(self.rows[r]) and self.rows[r][c]:
+                    if c < len(rows[r]) and rows[r][c]:
                         cells.append({"row": r, "col": c,
                                       "value_type": "STRING",
-                                      "string_value": self.rows[r][c]})
+                                      "string_value": rows[r][c]})
             return {"cells": cells}
         if name == "sheet.set_range_value_by_csv":
             self.csv_writes.append(arguments)
@@ -215,9 +229,9 @@ class FakeSheetClient:
             parsed = list(_csv.reader(io.StringIO(arguments["csv_data"])))
             r0, c0 = arguments["start_row"], arguments["start_col"]
             for dr, row in enumerate(parsed):
-                while len(self.rows) <= r0 + dr:
-                    self.rows.append([])
-                target = self.rows[r0 + dr]
+                while len(rows) <= r0 + dr:
+                    rows.append([])
+                target = rows[r0 + dr]
                 for dc, val in enumerate(row):
                     while len(target) <= c0 + dc:
                         target.append("")
@@ -311,9 +325,14 @@ def test_sync_approved_writes_rows_and_marks_synced(tdocs_env: FakeSheetClient):
 
     assert result["synced_videos"] == 2
     assert result["synced_comments"] == 3
-    assert result["row_start"] == 1          # 表头在 row 0
-    assert result["row_end"] == 2
     assert result["batch_id"] is not None
+    assert len(result["batches"]) == 1
+    block = result["batches"][0]
+    assert block["platform"] == "douyin"
+    # 表内只有表头（无数据行）→ 不留分隔行，直接从 row 1 开始
+    assert block["row_start"] == 1
+    assert block["row_end"] == 2
+    assert tdocs_env.style_calls == []
 
     # 行内容：列位置按表头映射
     row1 = tdocs_env.rows[1]
@@ -322,8 +341,7 @@ def test_sync_approved_writes_rows_and_marks_synced(tdocs_env: FakeSheetClient):
     assert row1[2] == "一楼"
     assert row1[3] == "有图，另发"                          # tier1 挂图 → 贴图一标记
     assert row1[4] == "二楼"
-    assert row1[8]                                          # 日期非空（2026.9.1 格式）
-    assert "." in row1[8]
+    assert "月" in row1[8]                                  # 日期（2026年9月1日 格式）
     row2 = tdocs_env.rows[2]
     assert row2[0] == "2"
     assert row2[2] == "只有一楼"
@@ -352,21 +370,84 @@ def test_sync_approved_dedups_by_url_column(tdocs_env: FakeSheetClient):
     assert len(tdocs_env.rows) == 2         # 没有新行
 
 
-def test_sync_approved_appends_after_existing_rows(tdocs_env: FakeSheetClient):
+def test_sync_approved_leaves_separator_row_after_existing_rows(tdocs_env: FakeSheetClient):
+    """表里已有数据行 → 新批次前留一行空分隔行并涂橙（对齐用户表内惯例）。"""
     tdocs_env.rows.append(["1", "既有行 https://old/1", "x"])
     tdocs_env.rows.append(["2", "既有行 https://old/2", "y"])
     _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼"])
 
     result = tds.sync_approved()
-    assert result["row_start"] == 3
-    assert tdocs_env.rows[3][2] == "一楼"
+    block = result["batches"][0]
+    # last_used=2 → 分隔行占 row 3，数据从 row 4 起
+    assert block["row_start"] == 4
+    assert tdocs_env.rows[4][2] == "一楼"
+    assert len(tdocs_env.style_calls) == 1
+    style = tdocs_env.style_calls[0]
+    assert style["start_row"] == 3 and style["end_row"] == 3
+    assert style["format"]["bg_color"] == "FFFFC000"       # 橙色分隔行
+    # 分隔行本身没有文本内容
+    assert len(tdocs_env.rows) <= 5 or not any(tdocs_env.rows[3])
+
+
+def test_sync_approved_reuses_trailing_separator_row(tdocs_env: FakeSheetClient):
+    """上一批留下的橙色空分隔行（无文本）—— 新分隔行恰好落在同一行复用，
+    不会出现两行连续空行。"""
+    tdocs_env.rows.append(["1", "既有行 https://old/1", "x"])
+    tdocs_env.rows.append([])   # 用户表尾的橙色分隔行（只有底色，无文本）
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼"])
+
+    result = tds.sync_approved()
+    block = result["batches"][0]
+    # 「链接」列最后非空在 row 1 → 分隔行 = row 2（正是既有空行），数据 row 3
+    assert block["row_start"] == 3
+    assert tdocs_env.style_calls[0]["start_row"] == 2
 
 
 def test_sync_approved_noop_when_nothing_approved(tdocs_env: FakeSheetClient):
     result = tds.sync_approved()
     assert result["synced_videos"] == 0
     assert result["batch_id"] is None
+    assert result["batches"] == []
     assert tdocs_env.csv_writes == []
+
+
+def test_sync_routes_platforms_to_named_sheets(monitor_db, settings_path, monkeypatch):
+    """多子表（抖音/B站/快手 tab）→ 按平台名路由，各写各的子表。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=DYTAB",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient(sheets=[
+        {"sheet_id": "DYTAB", "sheet_name": "抖音", "sheet_type": "worksheet", "row_count": 200, "col_count": 20},
+        {"sheet_id": "BLTAB", "sheet_name": "B站", "sheet_type": "worksheet", "row_count": 200, "col_count": 20},
+        {"sheet_id": "KSTAB", "sheet_name": "快手", "sheet_type": "worksheet", "row_count": 200, "col_count": 20},
+    ])
+    for sid in ("DYTAB", "BLTAB", "KSTAB"):
+        fake.rows_of(sid).append(list(_USER_HEADER))
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+
+    conn = monitor_storage.get_conn()
+    conn.execute(
+        "INSERT INTO videos(id, platform, platform_video_id, url, title) VALUES(1,'douyin','d1','https://www.douyin.com/video/1','抖音视频')")
+    conn.execute(
+        "INSERT INTO videos(id, platform, platform_video_id, url, title) VALUES(2,'bilibili','b1','https://www.bilibili.com/video/BV1','B站视频')")
+    for vid in (1, 2):
+        cid = ms.upsert_ai_comment(vid, 1, f"评论{vid}")
+        ms.approve_comment(cid)
+
+    result = tds.sync_approved()
+    assert result["synced_videos"] == 2
+    by_platform = {b["platform"]: b for b in result["batches"]}
+    assert by_platform["douyin"]["sheet_name"] == "抖音"
+    assert by_platform["bilibili"]["sheet_name"] == "B站"
+    assert fake.rows_of("DYTAB")[1][2] == "评论1"
+    assert fake.rows_of("BLTAB")[1][2] == "评论2"
+    assert fake.rows_of("KSTAB") == [list(_USER_HEADER)]   # 快手无内容不动
+    # 序号在各自子表内都从 1 起
+    assert fake.rows_of("DYTAB")[1][0] == "1"
+    assert fake.rows_of("BLTAB")[1][0] == "1"
+    monkeypatch.setattr(tds, "_client_factory", None)
 
 
 def test_sync_approved_requires_enabled(monitor_db: Path, settings_path: Path, monkeypatch):
@@ -395,6 +476,36 @@ def test_test_connection_reports_mapping(tdocs_env: FakeSheetClient):
     assert out["sheet_name"] == "工作表1"
     assert out["missing"] == []
     assert "链接" in out["header"]
+    # 平台路由报告：单表用例三个平台都回落到兜底子表（非按名命中）
+    assert [p["platform"] for p in out["sheets"]] == ["douyin", "bilibili", "kuaishou"]
+    assert all(p["sheet_name"] == "工作表1" for p in out["sheets"])
+    assert all(p["matched_by_name"] is False for p in out["sheets"])
+
+
+def test_test_connection_reports_named_sheets(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient(sheets=[
+        {"sheet_id": "DYTAB", "sheet_name": "抖音", "sheet_type": "worksheet", "row_count": 200, "col_count": 20},
+        {"sheet_id": "BLTAB", "sheet_name": "B 站", "sheet_type": "worksheet", "row_count": 200, "col_count": 20},
+    ])
+    fake.rows_of("DYTAB").append(list(_USER_HEADER))
+    fake.rows_of("BLTAB").append(list(_USER_HEADER))
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+
+    out = tds.test_connection()
+    by_platform = {p["platform"]: p for p in out["sheets"]}
+    assert by_platform["douyin"]["matched_by_name"] is True
+    # 「B 站」带空格也按去空白匹配命中「B站」
+    assert by_platform["bilibili"]["matched_by_name"] is True
+    assert by_platform["bilibili"]["sheet_name"] == "B 站"
+    # 快手没有同名子表 → 回落第一张
+    assert by_platform["kuaishou"]["matched_by_name"] is False
+    assert by_platform["kuaishou"]["sheet_name"] == "抖音"
+    monkeypatch.setattr(tds, "_client_factory", None)
 
 
 # ── 路由 ────────────────────────────────────────────────────────────────

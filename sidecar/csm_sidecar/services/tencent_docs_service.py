@@ -3,35 +3,49 @@
 「同步已通过」动作：把 review_status='approved' 的评论按兼职表格的
 列结构追加到共享在线表格，成功后本地标 synced + 记 sync_batches 对账。
 
+平台路由：表格按平台分子表（抖音/B站/快手 各一张 tab）——同步时按
+``TencentDocsConfig.sheet_map`` 的子表名匹配（去空白），把每个平台的
+视频写到自己的子表；找不到同名子表回落到 URL tab / 第一张子表。
+
+批次分隔：沿用用户表内惯例 —— 每批数据前留一行空分隔行并涂橙色底
+（子表里已有数据行时才留；上一批留下的空分隔行会被复用，不会连着
+出现两行）。涂色失败不阻塞同步（fail-open）。
+
 幂等三道闸：
   1. 本地门禁 —— 只取 approved（已 synced 不会再入选）；
-  2. 表格回读 —— 追加前读「链接」列，已出现该视频规范链接的行跳过
+  2. 表格回读 —— 追加前读该子表「链接」列，已出现该视频规范链接的跳过
      （防「写成功但响应丢失」后重试的双写）；
-  3. 对账表 —— sync_batches 记录每批写入的行区间，人工可查。
+  3. 对账表 —— sync_batches 记录每批写入的子表与行区间。
 
 行结构（按列名映射，不假设位置）：
-  序号(每批从 1 重排) | 链接(标题+规范链接) | 内容一/盖楼内容二/盖楼内容三 |
-  贴图一/二/三(该层挂图时写「有图，另发」，图走手机直发) | 日期(2026.9.1)
+  序号(每批每平台从 1 重排) | 链接(标题+规范链接) | 内容一/盖楼内容二/三 |
+  贴图一/二/三(该层挂图时写「有图，另发」) | 日期(2026年9月1日)
   截图1-3 由兼职回填，不写。
 """
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
 from csm_core.config import read_api_key
 from csm_core.mining import storage as mining_storage
 from csm_core.sync.tencent_docs import (
+    ColumnMap,
+    SheetTarget,
     TencentDocsError,
     TencentDocsMCPClient,
     TokenInvalidError,
     append_rows_csv,
     build_column_map,
-    find_last_used_row,
+    list_sheets,
+    paint_row_background,
+    parse_doc_url,
+    pick_fallback_sheet,
+    pick_sheet_by_name,
     read_column_texts,
     read_row_texts,
-    resolve_sheet,
 )
 
 from . import config_service
@@ -41,6 +55,8 @@ logger = logging.getLogger(__name__)
 KEYRING_PROVIDER = "tencent_docs"
 _IMG_MARKER = "有图，另发"
 _MAX_TIERS = 3
+_PLATFORM_ORDER = ("douyin", "bilibili", "kuaishou")
+_PLATFORM_LABEL = {"douyin": "抖音", "bilibili": "B站", "kuaishou": "快手"}
 
 # 测试注入点：替换成返回假 client 的 factory。
 _client_factory: Callable[[str], TencentDocsMCPClient] | None = None
@@ -68,34 +84,100 @@ def status() -> dict[str, Any]:
     }
 
 
+def _date_str() -> str:
+    today = datetime.now()
+    return f"{today.year}年{today.month}月{today.day}日"
+
+
+@dataclass
+class _SheetState:
+    """一张子表在本次同步中的累积状态（多平台可能共用兜底子表）。"""
+    target: SheetTarget
+    cmap: ColumnMap
+    header: list[str]
+    existing_blob: str          # 「链接」列已有文本拼串（防双写比对）
+    next_row: int               # 下一次写入的行号（0-based）
+    batches: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _load_sheet_state(
+    client: TencentDocsMCPClient, target: SheetTarget, col_names: dict[str, str],
+) -> _SheetState:
+    header = read_row_texts(client, target, 0)
+    cmap = build_column_map(header, col_names)
+    required_missing = [k for k in ("url", "tier1") if cmap.col(k) is None]
+    if required_missing:
+        names = "、".join(col_names.get(k, k) for k in required_missing)
+        raise TencentDocsError(
+            f"子表「{target.sheet_name}」里找不到必需列：{names}"
+            "（检查表头或设置页的列名映射）"
+        )
+    existing = read_column_texts(client, target, cmap.col("url"))
+    last_used = max(existing.keys()) if existing else 0  # 表头行兜底
+    return _SheetState(
+        target=target,
+        cmap=cmap,
+        header=header,
+        existing_blob="\n".join(existing.values()),
+        next_row=last_used + 1,
+    )
+
+
 def test_connection() -> dict[str, Any]:
-    """读表头验证连接 + 列映射。成功返回映射详情，失败抛 TencentDocsError。"""
+    """读表头验证连接 + 平台子表路由 + 列映射。失败抛 TencentDocsError。"""
     cfg = config_service.load()
     td = cfg.tencent_docs
     if not td.doc_url.strip():
         raise TencentDocsError("请先粘贴表格链接")
     with _build_client() as client:
-        target = resolve_sheet(client, td.doc_url)
-        header = read_row_texts(client, target, 0)
-        cmap = build_column_map(header, td.col_map)
+        file_id, url_tab = parse_doc_url(td.doc_url)
+        sheets = list_sheets(client, file_id)
+        fallback = pick_fallback_sheet(sheets, url_tab)
+
+        header_cache: dict[str, tuple[list[str], ColumnMap]] = {}
+
+        def _check(target: SheetTarget) -> tuple[list[str], ColumnMap]:
+            if target.sheet_id not in header_cache:
+                header = read_row_texts(client, target, 0)
+                header_cache[target.sheet_id] = (
+                    header, build_column_map(header, td.col_map),
+                )
+            return header_cache[target.sheet_id]
+
+        per_platform: list[dict[str, Any]] = []
+        for platform in _PLATFORM_ORDER:
+            wanted = td.sheet_map.get(platform, "")
+            named = pick_sheet_by_name(sheets, wanted)
+            target = named or fallback
+            header, cmap = _check(target)
+            per_platform.append({
+                "platform": platform,
+                "platform_label": _PLATFORM_LABEL[platform],
+                "sheet_name": target.sheet_name,
+                "matched_by_name": named is not None,
+                "missing": [td.col_map.get(k, k) for k in cmap.missing],
+            })
+
+    ok = all(not p["missing"] for p in per_platform)
     return {
-        "ok": not cmap.missing,
-        "sheet_name": target.sheet_name,
-        "sheet_id": target.sheet_id,
-        "row_count": target.row_count,
-        "header": [h for h in header if h],
-        "mapped": {k: td.col_map[k] for k in cmap.by_key},
-        "missing": [td.col_map.get(k, k) for k in cmap.missing],
+        "ok": ok,
+        "sheets": per_platform,
+        "all_sheet_names": [s.sheet_name for s in sheets],
+        # 兼容字段（旧 UI/测试）：取第一个平台的结果
+        "sheet_name": per_platform[0]["sheet_name"],
+        "header": [h for h in header_cache[fallback.sheet_id][0] if h]
+        if fallback.sheet_id in header_cache else [],
+        "missing": sorted({m for p in per_platform for m in p["missing"]}),
     }
 
 
 def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
-    """把已通过的评论批量追加到腾讯文档表格。
+    """把已通过的评论按平台路由批量追加到腾讯文档表格。
 
     Returns
     -------
     {synced_videos, synced_comments, skipped_in_doc, skipped_extra_tiers,
-     row_start, row_end, batch_id}  （无待同步时 synced_videos=0 直接返回）
+     batches: [{platform, sheet_name, row_start, row_end, videos}], batch_id}
 
     Raises
     ------
@@ -115,83 +197,123 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
         return {
             "synced_videos": 0, "synced_comments": 0,
             "skipped_in_doc": 0, "skipped_extra_tiers": 0,
-            "row_start": -1, "row_end": -1, "batch_id": None,
+            "batches": [], "batch_id": None,
         }
 
+    by_platform: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        by_platform.setdefault(item["platform"], []).append(item)
+
+    synced_comment_ids: list[int] = []
+    skipped_in_doc = 0
+    skipped_extra_tiers = 0
+    batches: list[dict[str, Any]] = []
+    date_str = _date_str()
+
     with _build_client() as client:
-        target = resolve_sheet(client, td.doc_url)
-        header = read_row_texts(client, target, 0)
-        cmap = build_column_map(header, td.col_map)
-        # 最低要求：链接 + 内容一两列必须在（其余缺列只影响对应字段的写入）。
-        required_missing = [k for k in ("url", "tier1") if cmap.col(k) is None]
-        if required_missing:
-            names = "、".join(td.col_map.get(k, k) for k in required_missing)
-            raise TencentDocsError(f"表格里找不到必需列：{names}（检查表头或设置页的列名映射）")
+        file_id, url_tab = parse_doc_url(td.doc_url)
+        sheets = list_sheets(client, file_id)
+        fallback = pick_fallback_sheet(sheets, url_tab)
+        states: dict[str, _SheetState] = {}
 
-        url_col = cmap.col("url")
-        existing = read_column_texts(client, target, url_col)  # {row: text}
-        last_used = max(existing.keys()) if existing else 0    # 表头行兜底
-        existing_blob = "\n".join(existing.values())
+        for platform in _PLATFORM_ORDER:
+            plat_items = by_platform.get(platform)
+            if not plat_items:
+                continue
+            target = pick_sheet_by_name(sheets, td.sheet_map.get(platform, "")) or fallback
+            state = states.get(target.sheet_id)
+            if state is None:
+                state = _load_sheet_state(client, target, td.col_map)
+                states[target.sheet_id] = state
+            cmap = state.cmap
+            width = max(cmap.by_key.values()) + 1
 
-        rows: list[list[str]] = []
-        synced_video_ids: list[int] = []
-        synced_comment_ids: list[int] = []
-        skipped_in_doc = 0
-        skipped_extra_tiers = 0
-        today = datetime.now()
-        date_str = f"{today.year}.{today.month}.{today.day}"
-        width = max(cmap.by_key.values()) + 1
+            rows: list[list[str]] = []
+            block_video_ids: list[int] = []
+            block_comment_ids: list[int] = []
+            for item in plat_items:
+                # 防双写：该子表「链接」列已出现规范链接 → 本地补标 synced，不写。
+                if item["url"] and item["url"] in state.existing_blob:
+                    skipped_in_doc += 1
+                    synced_comment_ids.extend(
+                        c["id"] for c in item["comments"] if c["tier"] <= _MAX_TIERS
+                    )
+                    continue
 
-        for item in items:
-            # 防双写：规范链接已出现在表格「链接」列 → 本地补标 synced，不再写。
-            if item["url"] and item["url"] in existing_blob:
-                skipped_in_doc += 1
-                synced_comment_ids.extend(c["id"] for c in item["comments"] if c["tier"] <= _MAX_TIERS)
+                row = [""] * width
+
+                def _put(key: str, value: str) -> None:
+                    col = cmap.col(key)
+                    if col is not None:
+                        row[col] = value
+
+                _put("seq", str(len(rows) + 1))  # 每批每平台从 1 重排
+                _put("url", f"{item['title']} {item['url']}".strip())
+                _put("date", date_str)
+                for c in item["comments"]:
+                    if c["tier"] > _MAX_TIERS:
+                        # 表格只有三层结构；更深楼层留在 app 内（保持 approved）。
+                        skipped_extra_tiers += 1
+                        continue
+                    _put(f"tier{c['tier']}", c["text"])
+                    if c["image_ids"]:
+                        _put(f"img{c['tier']}", _IMG_MARKER)
+                    block_comment_ids.append(c["id"])
+                rows.append(row)
+                block_video_ids.append(item["id"])
+
+            if not rows:
                 continue
 
-            row = [""] * width
+            # 批间分隔行：子表里已有数据行（next_row > 1，即表头之外有内容）
+            # 时留一行空行并涂橙。上一批若已留过空分隔行（只有底色没文本，
+            # 「链接」列读不到）——本行恰好落在它上面，等于复用，不会双空行。
+            separator_row: int | None = None
+            if state.next_row > 1:
+                separator_row = state.next_row
+                state.next_row += 1
 
-            def _put(key: str, value: str) -> None:
-                col = cmap.col(key)
-                if col is not None:
-                    row[col] = value
-
-            _put("seq", str(len(rows) + 1))  # 每批从 1 重排（沿用表内惯例）
-            _put("url", f"{item['title']} {item['url']}".strip())
-            _put("date", date_str)
-            for c in item["comments"]:
-                if c["tier"] > _MAX_TIERS:
-                    # 表格只有三层结构；更深的楼层留在 app 内（保持 approved）。
-                    skipped_extra_tiers += 1
-                    continue
-                _put(f"tier{c['tier']}", c["text"])
-                if c["image_ids"]:
-                    _put(f"img{c['tier']}", _IMG_MARKER)
-                synced_comment_ids.append(c["id"])
-            rows.append(row)
-            synced_video_ids.append(item["id"])
-
-        row_start = last_used + 1
-        row_end = row_start + len(rows) - 1
-        if rows:
+            row_start = state.next_row
+            row_end = row_start + len(rows) - 1
             append_rows_csv(client, target, row_start, rows)
+            if separator_row is not None:
+                try:
+                    paint_row_background(client, target, separator_row, width)
+                except TencentDocsError:
+                    logger.info("[tdocs] separator styling failed; continuing", exc_info=True)
+            state.next_row = row_end + 1
+            # 本次已写的链接也进比对串，防同一次同步里跨平台/重复视频再写。
+            state.existing_blob += "\n" + "\n".join(
+                r[cmap.col("url")] for r in rows if cmap.col("url") is not None
+            )
 
-    batch_id = None
-    if rows:
-        batch_id = mining_storage.create_sync_batch(
-            target.file_id, target.sheet_id, row_start, row_end, synced_video_ids,
-        )
+            synced_comment_ids.extend(block_comment_ids)
+            batches.append({
+                "platform": platform,
+                "sheet_name": target.sheet_name,
+                "row_start": row_start,
+                "row_end": row_end,
+                "videos": len(rows),
+                "_sheet_id": target.sheet_id,
+                "_video_ids": block_video_ids,
+            })
+
+    batch_row_ids: list[int] = []
+    for b in batches:
+        batch_row_ids.append(mining_storage.create_sync_batch(
+            file_id, b.pop("_sheet_id"), b["row_start"], b["row_end"], b.pop("_video_ids"),
+        ))
     marked = mining_storage.mark_comments_synced(synced_comment_ids)
+    total_videos = sum(b["videos"] for b in batches)
     logger.info(
-        "[tdocs] synced %d videos (%d comments, %d skipped-in-doc) rows %d..%d",
-        len(rows), marked, skipped_in_doc, row_start, row_end,
+        "[tdocs] synced %d videos (%d comments) across %d sheet blocks; %d skipped-in-doc",
+        total_videos, marked, len(batches), skipped_in_doc,
     )
     return {
-        "synced_videos": len(rows),
+        "synced_videos": total_videos,
         "synced_comments": marked,
         "skipped_in_doc": skipped_in_doc,
         "skipped_extra_tiers": skipped_extra_tiers,
-        "row_start": row_start if rows else -1,
-        "row_end": row_end if rows else -1,
-        "batch_id": batch_id,
+        "batches": batches,
+        "batch_id": batch_row_ids[0] if batch_row_ids else None,
     }
