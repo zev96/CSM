@@ -216,13 +216,18 @@ class TencentDocsConfig(BaseModel):
     截图1-3 列由兼职回填执行截图，同步不写。
     """
     enabled: bool = False
-    doc_url: str = ""    # 在线表格链接（含 ?tab= 时锁定子表）
+    doc_url: str = ""    # 在线表格链接（?tab= 作为找不到平台子表时的兜底）
     col_map: dict[str, str] = Field(default_factory=lambda: {
         "seq": "序号", "url": "链接",
         "tier1": "内容一", "img1": "贴图一",
         "tier2": "盖楼内容二", "img2": "贴图二",
         "tier3": "盖楼内容三", "img3": "贴图三",
         "date": "日期",
+    })
+    # 平台 → 子表名：同步时按名字路由到对应子表（去空白匹配，「B站」==「B 站」）。
+    # 找不到同名子表 → 回落 URL tab 指定的子表 / 第一张子表。
+    sheet_map: dict[str, str] = Field(default_factory=lambda: {
+        "douyin": "抖音", "bilibili": "B站", "kuaishou": "快手",
     })
 
 

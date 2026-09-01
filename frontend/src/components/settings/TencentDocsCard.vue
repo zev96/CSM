@@ -34,11 +34,19 @@ const savingToken = ref(false);
 const savingUrl = ref(false);
 const testing = ref(false);
 
+interface TestResultSheet {
+  platform: string;
+  platform_label: string;
+  sheet_name: string;
+  matched_by_name: boolean;
+  missing: string[];
+}
+
 interface TestResult {
   ok: boolean;
   sheet_name?: string;
   header?: string[];
-  mapped?: Record<string, string>;
+  sheets?: TestResultSheet[];   // 每平台路由到哪张子表 + 缺列情况
   missing?: string[];
   detail?: string;   // 错误路径（400/502 结构化错误）
 }
@@ -233,14 +241,18 @@ async function onTest() {
             color: 'var(--ink-2)',
           }"
         >
-          <template v-if="testResult.ok">
-            ✅ 连接成功：子表「{{ testResult.sheet_name || "（未命名）" }}」，
-            列映射全部命中（{{ Object.values(testResult.mapped ?? {}).join(" / ") }}）。
-          </template>
-          <template v-else-if="testResult.missing?.length">
-            ⚠️ 已连上「{{ testResult.sheet_name || "" }}」，但表头缺少列：
-            <b>{{ testResult.missing.join("、") }}</b>。
-            请检查表格首行列名（当前表头：{{ (testResult.header ?? []).join(" | ") }}）。
+          <template v-if="testResult.sheets?.length">
+            <div>{{ testResult.ok ? "✅ 连接成功，各平台将写入：" : "⚠️ 已连上，但有问题：" }}</div>
+            <div v-for="s in testResult.sheets" :key="s.platform" class="mt-0.5">
+              {{ s.platform_label }} → 子表「{{ s.sheet_name }}」
+              <template v-if="!s.matched_by_name">（未找到同名子表，回落到此表）</template>
+              <template v-if="s.missing.length">
+                · <b style="color: var(--red);">缺列：{{ s.missing.join("、") }}</b>
+              </template>
+            </div>
+            <div v-if="!testResult.ok" class="mt-1" :style="{ color: 'var(--ink-3)' }">
+              表头参考：{{ (testResult.header ?? []).join(" | ") }}
+            </div>
           </template>
           <template v-else>
             ❌ {{ testResult.detail || "连接失败" }}
