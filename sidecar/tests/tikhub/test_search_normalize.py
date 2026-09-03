@@ -106,3 +106,40 @@ def test_bilibili_next_params_increments_until_numpages():
     assert N.bilibili_next_params({"page": 50}, last) is None
     empty = {"data": {"data": {"page": 1, "numPages": 50, "result": []}}}
     assert N.bilibili_next_params({"page": 1}, empty) is None
+
+
+# ── 快手 ────────────────────────────────────────────────────────────────
+
+def test_kuaishou_first_params_keyword_only():
+    assert N.kuaishou_first_params("k", {"time_begin": "2026-01-01"}) == {"keyword": "k", "pcursor": ""}
+
+
+def test_kuaishou_normalize_real_fixture_skips_non_video_items():
+    raw = _load("tikhub_search_kuaishou.json")
+    cards = N.normalize_kuaishou_search(raw, {})
+    # fixture：3 条 itemType==5 视频 + 1 条 itemType==28 相关搜索卡（必须跳过）
+    assert len(cards) == 3
+    c = cards[0]
+    assert c.platform == "kuaishou"
+    assert c.platform_video_id == "5226427428337552341"
+    assert c.url == "https://www.kuaishou.com/short-video/5226427428337552341"
+    assert c.title.startswith("空气净化器千万不要买")
+    assert c.author_name == "恭喜的AI 科技"
+    assert c.play_count == 141046 and c.like_count == 832
+    assert c.duration_sec == 64                        # 64500ms → 64s
+    assert c.published_at == "2021-12-27T11:11:59Z"    # 1640603519820ms
+
+
+def test_kuaishou_normalize_local_time_filter_excludes_out_of_range():
+    raw = _load("tikhub_search_kuaishou.json")
+    # 首条发布于 2021-12-27；只要 2026 年的 → 应被本地后过滤掉
+    cards = N.normalize_kuaishou_search(raw, {"time_begin": "2026-01-01", "time_end": "2026-12-31"})
+    assert all(c.platform_video_id != "5226427428337552341" for c in cards)
+
+
+def test_kuaishou_next_params_stops_on_no_more():
+    raw = _load("tikhub_search_kuaishou.json")           # recoPcursor == "no_more"
+    assert N.kuaishou_next_params({"keyword": "k", "pcursor": ""}, raw) is None
+    more = {"data": {"pcursor": "2", "recoPcursor": "x", "mixFeeds": [{"itemType": 5}]}}
+    assert N.kuaishou_next_params({"keyword": "k", "pcursor": ""}, more) == {"keyword": "k", "pcursor": "2"}
+    assert N.kuaishou_next_params({"keyword": "k"}, {"data": {"pcursor": "no_more", "mixFeeds": [1]}}) is None

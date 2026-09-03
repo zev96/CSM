@@ -150,3 +150,65 @@ def normalize_bilibili_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
             raw=it,
         ))
     return cards
+
+
+# ── 快手 ────────────────────────────────────────────────────────────────
+
+def kuaishou_first_params(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
+    """快手 search_video_v2 无服务端筛选 —— 时间区间在 normalize 里本地后过滤。"""
+    return {"keyword": keyword, "pcursor": ""}
+
+
+def kuaishou_next_params(prev: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any] | None:
+    d = raw.get("data") or {}
+    pc = d.get("pcursor")
+    if d.get("recoPcursor") == "no_more" or not pc or pc == "no_more" or not d.get("mixFeeds"):
+        return None
+    params = dict(prev)
+    params["pcursor"] = str(pc)
+    return params
+
+
+def _first_cover(v: Any) -> str:
+    if isinstance(v, list) and v:
+        first = v[0]
+        if isinstance(first, dict):
+            return str(first.get("url") or "")
+        return str(first or "")
+    return ""
+
+
+def normalize_kuaishou_search(raw: dict[str, Any], f: dict[str, Any]) -> list[VideoCard]:
+    """只取 itemType==5 的视频项；feed 为 flat 字段；时间区间本地后过滤（被滤掉的不
+    计入 emitted，翻页自然补偿 —— 与浏览器快手适配器同口径）。"""
+    begin = date_to_epoch(f.get("time_begin"))
+    end = date_to_epoch(f.get("time_end"), end_of_day=True)
+    cards: list[VideoCard] = []
+    for it in (raw.get("data") or {}).get("mixFeeds") or []:
+        if not isinstance(it, dict) or str(it.get("itemType")) != "5":
+            continue
+        feed = it.get("feed") or {}
+        pid = feed.get("photo_id")
+        if not pid:
+            continue
+        pid = str(pid)
+        dur_ms = feed.get("duration") or 0
+        ts_ms = feed.get("timestamp") or 0
+        card = VideoCard(
+            platform="kuaishou",
+            platform_video_id=pid,
+            url=f"https://www.kuaishou.com/short-video/{pid}",
+            title=str(feed.get("caption") or "").strip(),
+            author_name=str(feed.get("user_name") or "").strip(),
+            author_id=str(feed.get("user_id") or ""),
+            cover_url=_first_cover(feed.get("cover_thumbnail_urls")),
+            duration_sec=int(dur_ms / 1000) if dur_ms else None,
+            play_count=_int_or_none(feed.get("view_count")),
+            like_count=_int_or_none(feed.get("like_count")),
+            published_at=_ts_ms_to_iso(ts_ms) if ts_ms else None,
+            raw=feed,
+        )
+        if not iso_within_epoch_range(card.published_at, begin, end):
+            continue
+        cards.append(card)
+    return cards
