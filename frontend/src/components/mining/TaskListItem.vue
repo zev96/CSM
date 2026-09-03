@@ -178,13 +178,20 @@ const derivedStatus = computed<DerivedStatus>(() => {
   return "in_progress";
 });
 
-// 任务行有 captcha 等待时，给 status pill 加 native :title tooltip 显示
-// 「请在浏览器手解」提示，避免用户以为程序卡死。
+// 任务行的 status pill 加 native :title tooltip 显示 runner 落库的进度 note：
+//   - captcha_waiting —— 沿用旧优先级：有 note 用 note，没有就固定文案提示手解
+//   - 其余状态（含 done/failed）—— runner 现在也会在 done 时落库 note（比如
+//     "第 2 页失败已停止：…" / "已翻 12 页，0 条命中（…）"），只要任一平台
+//     progress 带非空 note 就展示，之前只在 captcha_waiting 才显示会把这些
+//     诊断信息吞掉。
 const statusTitle = computed(() => {
-  if (derivedStatus.value !== "captcha_waiting") return undefined;
   const phases = Object.values(props.job.progress ?? {});
-  const waiting = phases.find(p => p?.phase === "captcha_waiting");
-  return waiting?.note || "请在弹出的浏览器中手动完成验证";
+  if (derivedStatus.value === "captcha_waiting") {
+    const waiting = phases.find(p => p?.phase === "captcha_waiting");
+    return waiting?.note || "请在弹出的浏览器中手动完成验证";
+  }
+  const withNote = phases.find(p => typeof p?.note === "string" && p.note.trim());
+  return withNote?.note || undefined;
 });
 
 const status = derivedStatus; // 兼容下面 isRunning 引用

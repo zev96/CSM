@@ -6,6 +6,8 @@ const props = defineProps<{
   platform: Platform;
   picked: boolean;
   loggedIn: boolean;
+  /** 采集走 TikHub 付费搜索：不需要登录，卡片恒可选、状态行显示「TikHub 就绪」。 */
+  tikhubMode?: boolean;
 }>();
 
 defineEmits<{
@@ -20,11 +22,12 @@ const META: Record<Platform, { l: string; letter: string; color: string }> = {
 };
 
 const meta = () => META[props.platform];
+const usable = () => props.tikhubMode || props.loggedIn;
 </script>
 
 <template>
   <button
-    @click="loggedIn ? $emit('toggle') : $emit('login')"
+    @click="usable() ? $emit('toggle') : $emit('login')"
     :style="{
       position: 'relative',
       textAlign: 'left',
@@ -34,7 +37,7 @@ const meta = () => META[props.platform];
       // 选中状态只靠卡片背景 + 右上角 check chip 表示；不再画彩色描边，
       // 视觉更干净，跟列表里的多卡选择气质一致。
       border: '1.5px solid transparent',
-      opacity: loggedIn ? 1 : 0.62,
+      opacity: usable() ? 1 : 0.62,
       transition: 'all .15s',
       cursor: 'pointer',
     }"
@@ -61,9 +64,12 @@ const meta = () => META[props.platform];
     </div>
     <div
       class="text-[10.5px] mt-2 flex items-center gap-1"
-      :style="{ color: loggedIn ? 'var(--green-deep)' : 'var(--red)' }"
+      :style="{ color: usable() ? 'var(--green-deep)' : 'var(--red)' }"
     >
-      <template v-if="loggedIn">
+      <template v-if="tikhubMode">
+        <Icon name="check" :size="10"/> TikHub 就绪
+      </template>
+      <template v-else-if="loggedIn">
         <Icon name="check" :size="10"/> 已登录
       </template>
       <template v-else>

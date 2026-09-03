@@ -41,10 +41,16 @@ import TaskListPanel from "@/components/mining/TaskListPanel.vue";
 import SubtaskListPanel from "@/components/mining/SubtaskListPanel.vue";
 import VideoDetailPanel from "@/components/mining/VideoDetailPanel.vue";
 import { useMiningStore, type Platform, type SearchFilters } from "@/stores/mining";
+import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
 
 const store = useMiningStore();
+const cfg = useConfig();
+// 采集数据源：默认 TikHub 付费搜索（免登录）；设置页可切回浏览器兜底
+const tikhubMode = computed(
+  () => ((cfg.data as any)?.mining_data_source_mode ?? "tikhub_api") === "tikhub_api",
+);
 const toast = useToast();
 const route = useRoute();
 
@@ -368,6 +374,7 @@ function openSyncModal(job: { id: number; keyword: string }) {
 }
 
 onMounted(async () => {
+  if (!cfg.data) void cfg.load();
   await Promise.all([
     store.refreshLoginStatus(),
     store.loadJobs(),
@@ -691,6 +698,7 @@ onMounted(async () => {
     <StartJobModal
       :open="showNewTask"
       :login-status="store.loginStatus"
+      :tikhub-mode="tikhubMode"
       :prefill-keyword="prefillKeyword"
       :prefill-source="prefillSource"
       @update:open="(v: boolean) => { showNewTask = v; if (!v) { prefillKeyword = ''; prefillSource = ''; } }"

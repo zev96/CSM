@@ -14,6 +14,8 @@ const props = defineProps<{
   loginStatus: Record<Platform, boolean>;
   prefillKeyword?: string;
   prefillSource?: string;
+  /** 采集走 TikHub：三平台默认全选，不看登录态。 */
+  tikhubMode?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -27,12 +29,13 @@ const kw = ref("");
 // mining_prefilter_* 调）。留空 → 后端 brand_keywords=[] → 预筛门控
 // 不满足 → 不按品牌筛。支持多个，用逗号 / 顿号 / 空格分隔。
 const brandKw = ref("");
-// Auto-pick all logged-in platforms by default.
-const picked = ref<Record<Platform, boolean>>({
-  bilibili: !!props.loginStatus.bilibili,
-  douyin: !!props.loginStatus.douyin,
-  kuaishou: !!props.loginStatus.kuaishou,
+// Auto-pick all logged-in platforms by default（TikHub 模式下三平台恒全选，不看登录态）。
+const pickAll = () => ({
+  bilibili: props.tikhubMode || !!props.loginStatus.bilibili,
+  douyin: props.tikhubMode || !!props.loginStatus.douyin,
+  kuaishou: props.tikhubMode || !!props.loginStatus.kuaishou,
 });
+const picked = ref<Record<Platform, boolean>>(pickAll());
 const cap = ref(50);
 // 按平台分组的筛选条件 —— 每个平台只展示它真实支持的档位：
 // 抖音只有时间档位（无任意区间）、B 站支持任意日期区间、快手只能本地后过滤。
@@ -84,11 +87,7 @@ watch(
     // 这样：新开弹窗干净 → 若有来自 GEO 信源榜的预填 → 填入。
     kw.value = "";
     brandKw.value = "";
-    picked.value = {
-      bilibili: !!props.loginStatus.bilibili,
-      douyin: !!props.loginStatus.douyin,
-      kuaishou: !!props.loginStatus.kuaishou,
-    };
+    picked.value = pickAll();
     cap.value = 50;
     filters.value = defaultSearchFilters();
     // 预填关键词（来自 GEO 闭环跳转）—— 只在 kw 刚被清空时填，不覆盖用户已输入的内容。
@@ -224,6 +223,7 @@ function onSubmit() {
               :platform="p"
               :picked="!!picked[p]"
               :logged-in="!!loginStatus[p]"
+              :tikhub-mode="!!tikhubMode"
               @toggle="togglePlatform(p)"
               @login="$emit('update:open', false)"
             />
