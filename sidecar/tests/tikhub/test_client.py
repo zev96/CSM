@@ -85,3 +85,34 @@ def test_log_redacts_key_from_echoed_error_body(caplog):
             c.get("/p", {})
     assert secret not in caplog.text
     assert "***" in caplog.text
+
+
+def test_post_sends_json_body_and_auth():
+    seen = {}
+
+    def h(req):
+        seen["auth"] = req.headers.get("authorization")
+        seen["ct"] = req.headers.get("content-type")
+        seen["body"] = req.read()
+        seen["method"] = req.method
+        return httpx.Response(200, json={"code": 200, "data": {"ok": 1}})
+
+    out = _client(h).post("/api/v1/douyin/search/fetch_video_search_v2", {"keyword": "x", "cursor": 0})
+    assert out["data"] == {"ok": 1}
+    assert seen["method"] == "POST"
+    assert seen["auth"] == "Bearer k"
+    assert "application/json" in seen["ct"]
+    assert b'"keyword": "x"' in seen["body"] or b'"keyword":"x"' in seen["body"]
+
+
+def test_post_402_trips_latch():
+    c = _client(lambda req: httpx.Response(402, json={"code": 402}))
+    with pytest.raises(TikHubBalanceExhausted):
+        c.post("/p", {})
+    assert balance_exhausted() is True
+
+
+def test_post_body_code_non_200_raises():
+    c = _client(lambda req: httpx.Response(200, json={"code": 500, "message": "boom"}))
+    with pytest.raises(TikHubError):
+        c.post("/p", {})

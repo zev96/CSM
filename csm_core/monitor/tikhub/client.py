@@ -52,7 +52,7 @@ def _trip_balance_latch() -> None:
 
 
 class TikHubClient:
-    """TikHub API 的最小 HTTP client:一个鉴权 GET 方法。"""
+    """TikHub API 的最小 HTTP client:鉴权 GET/POST。"""
 
     def __init__(
         self,
@@ -85,25 +85,8 @@ class TikHubClient:
         )
         raise err
 
-    def get(self, path: str, params: dict) -> dict:
-        """对 TikHub API 发起一次鉴权 GET,返回解析后的 JSON 响应体(整个 wrapper)。
-
-        触发 TikHubError 的情形:HTTP 非 200 / 响应体 code != 200 / 非法 JSON / 网络错误。
-        402(HTTP 或 body code)会额外触发进程级余额闩。
-        """
-        if not path.startswith("/"):
-            path = "/" + path
-        # 日志绝不带 Authorization / key —— 只记录路径与参数。
-        logger.info("[tikhub] GET %s params=%s", path, dict(params))
-        try:
-            r = self._http.get(
-                self._base + path,
-                params=params,
-                headers={"Authorization": f"Bearer {self._key}"},
-            )
-        except httpx.HTTPError as e:
-            raise TikHubError("网络错误") from e
-
+    def _parse(self, r: httpx.Response, path: str) -> dict:
+        """HTTP 状态 → JSON → 业务 code 三层校验(get/post 共用)。"""
         # 1) HTTP 层错误
         if r.status_code != 200:
             self._fail(r.status_code, r.status_code, path, r.text)
@@ -123,6 +106,45 @@ class TikHubClient:
             self._fail(biz_code, 200, path, r.text)
 
         return data
+
+    def get(self, path: str, params: dict) -> dict:
+        """对 TikHub API 发起一次鉴权 GET,返回解析后的 JSON 响应体(整个 wrapper)。
+
+        触发 TikHubError 的情形:HTTP 非 200 / 响应体 code != 200 / 非法 JSON / 网络错误。
+        402(HTTP 或 body code)会额外触发进程级余额闩。
+        """
+        if not path.startswith("/"):
+            path = "/" + path
+        # 日志绝不带 Authorization / key —— 只记录路径与参数。
+        logger.info("[tikhub] GET %s params=%s", path, dict(params))
+        try:
+            r = self._http.get(
+                self._base + path,
+                params=params,
+                headers={"Authorization": f"Bearer {self._key}"},
+            )
+        except httpx.HTTPError as e:
+            raise TikHubError("网络错误") from e
+        return self._parse(r, path)
+
+    def post(self, path: str, json_body: dict) -> dict:
+        """对 TikHub API 发起一次鉴权 POST(JSON body),错误语义与 get() 完全一致。
+
+        抖音搜索系列端点(/api/v1/douyin/search/*)只收 POST。日志只记 body 的
+        key 列表(keyword 可能含用户敏感词,不记值)。
+        """
+        if not path.startswith("/"):
+            path = "/" + path
+        logger.info("[tikhub] POST %s body_keys=%s", path, sorted(json_body))
+        try:
+            r = self._http.post(
+                self._base + path,
+                json=json_body,
+                headers={"Authorization": f"Bearer {self._key}"},
+            )
+        except httpx.HTTPError as e:
+            raise TikHubError("网络错误") from e
+        return self._parse(r, path)
 
 
 def paginate(page_fn, target: int, max_pages: int, cancel_token=None, stop_predicate=None):
