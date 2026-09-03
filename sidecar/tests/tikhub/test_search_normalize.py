@@ -131,6 +131,17 @@ def test_douyin_normalize_never_locally_filters_by_content_types():
         assert cards[0].platform_video_id == "123"
 
 
+def test_douyin_normalize_skips_malformed_card_keeps_others(caplog):
+    """business_data[0].aweme_info.author 是字符串 → 共享抽取器对这一张卡抛
+    AttributeError；单卡容错必须只跳过这一张，不能连累同页其余 2 张视频卡。"""
+    raw = _load("tikhub_search_douyin.json")
+    raw["data"]["business_data"][0]["data"]["aweme_info"]["author"] = "x"
+    with caplog.at_level(logging.WARNING):
+        cards = N.normalize_douyin_search(raw, {"content_types": ["video"]})
+    assert len(cards) == 2
+    assert "douyin card skipped" in caplog.text
+
+
 def test_douyin_normalize_logs_inner_error_code(caplog):
     with caplog.at_level(logging.WARNING):
         cards = N.normalize_douyin_search({"data": {"status_code": 8, "business_data": []}}, {})
@@ -253,6 +264,24 @@ def test_bilibili_next_params_numpages_missing_relies_on_adapter_cap():
     assert nxt0 is not None and nxt0["page"] == 4
 
 
+def test_bilibili_normalize_skips_malformed_card_keeps_others(caplog):
+    """play 是超长数字字符串 → parse_int_count 内部 float() 得到 inf，
+    int(inf * 10000) 抛 OverflowError；单卡容错必须只跳过这一张，保留其余卡。"""
+    raw = {"data": {"data": {"result": [
+        {"type": "video", "bvid": "BV1x", "title": "t", "author": "a", "mid": 1,
+         "pic": "//i0.hdslb.com/x.jpg", "duration": "1:00",
+         "play": "9" * 400 + "万", "like": 2, "pubdate": 1620000000},
+        {"type": "video", "bvid": "BV2y", "title": "t2", "author": "a2", "mid": 2,
+         "pic": "//i0.hdslb.com/y.jpg", "duration": "1:00",
+         "play": 1, "like": 2, "pubdate": 1620000000},
+    ]}}}
+    with caplog.at_level(logging.WARNING):
+        cards = N.normalize_bilibili_search(raw, {})
+    assert len(cards) == 1
+    assert cards[0].platform_video_id == "BV2y"
+    assert "bilibili card skipped" in caplog.text
+
+
 def test_bilibili_normalize_logs_inner_error_code(caplog):
     with caplog.at_level(logging.WARNING):
         cards = N.normalize_bilibili_search({"data": {"code": -412, "data": {"result": []}}}, {})
@@ -330,6 +359,24 @@ def test_kuaishou_next_params_none_on_stuck_pcursor():
     prev = {"keyword": "k", "pcursor": "5"}
     raw = {"data": {"pcursor": "5", "mixFeeds": [{"itemType": 5}]}}
     assert N.kuaishou_next_params(prev, raw) is None
+
+
+def test_kuaishou_normalize_per_card_tolerance(caplog):
+    """cover_thumbnail_urls 是畸形 dict（非 list）已由 _first_cover 兜底成空字符串,
+    不影响出卡；feed 本身是非法类型（字符串）时 _dict() 已兜底成 {}，缺 photo_id
+    正常被跳过——两者组合验证单卡容错改造后行为不变。"""
+    raw = {"data": {"mixFeeds": [
+        {"itemType": 5, "feed": {
+            "photo_id": "1", "caption": "c", "user_name": "u", "user_id": "1",
+            "cover_thumbnail_urls": {"a": 1}, "view_count": 5, "like_count": 1,
+            "timestamp": 1640603519820,
+        }},
+        {"itemType": 5, "feed": "junk"},
+    ]}}
+    cards = N.normalize_kuaishou_search(raw, {})
+    assert len(cards) == 1
+    assert cards[0].platform_video_id == "1"
+    assert cards[0].cover_url == ""
 
 
 def test_kuaishou_normalize_logs_inner_error_code(caplog):

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -35,10 +34,27 @@ from csm_core.monitor.tikhub.errors import TikHubBalanceExhausted, TikHubError
 logger = logging.getLogger(__name__)
 
 HARD_CAP = 80          # 每平台单次采集条数硬顶（spec D3）
-MAX_PAGES = 12         # 翻页硬闸：抖音每页 ~6–14 条，80 条最多 ~12 页；超过视为异常停
+# 翻页硬闸：抖音每页 ~6–14 条，80 条最多 ~12 页；超过视为异常停。
+# 上界优先成本：抖音实测每页 6–14 条，落到 6 条/页时 12 页只有 72 < 80，可能翻不满硬顶。
+MAX_PAGES = 12
 PAGE_RETRIES = 3       # 每页最多尝试次数（官方：搜索偶发失败，同参重试 1–3 次）
 _RETRY_SLEEP_S = 1.0   # 重试间隔（测试里 monkeypatch 成 0）
 _CURSOR_KEYS = ("cursor", "page", "pcursor")
+
+
+def _retryable(e: TikHubError) -> bool:
+    """只重试「服务端没出货」的失败：网络错误（code None）/ HTTP 5xx / 429 限流。
+    401/403（key 无效，重试无意义）、其它 4xx、以及 HTTP 200 + body code≠200
+    （服务端已返回内容，可能已计费）都不重试。"""
+    if getattr(e, "from_body", False):
+        return False
+    code = e.code
+    return code is None or code == 429 or (isinstance(code, int) and 500 <= code < 600)
+
+
+def _retry_delay(code: int | None, attempt: int) -> float:
+    """429 指数退避（1×,2×,4×…），其它固定间隔。"""
+    return _RETRY_SLEEP_S * (2 ** (attempt - 1)) if code == 429 else _RETRY_SLEEP_S
 
 
 @dataclass(frozen=True)
@@ -92,7 +108,9 @@ class TikHubSearchAdapter:
             return client.post(self.spec.path, req)
         return client.get(self.spec.path, req)
 
-    def _call_with_retry(self, client: TikHubClient, req: dict[str, Any]) -> dict[str, Any]:
+    def _call_with_retry(
+        self, client: TikHubClient, req: dict[str, Any], cancel_event: threading.Event,
+    ) -> dict[str, Any]:
         last: TikHubError | None = None
         for attempt in range(1, PAGE_RETRIES + 1):
             try:
@@ -101,23 +119,35 @@ class TikHubSearchAdapter:
                 raise                                   # 余额耗尽不重试
             except TikHubError as e:
                 last = e
+                if not _retryable(e):
+                    raise                                # 服务端已出货/鉴权失败等：重试无意义或有风险
                 logger.info(
                     "[tikhub-search] %s page attempt %d/%d failed: %s",
                     self.platform, attempt, PAGE_RETRIES, e.reason,
                 )
                 if attempt < PAGE_RETRIES:
-                    time.sleep(_RETRY_SLEEP_S)
+                    # 用 Event.wait 代替 sleep：取消事件在等待期间被置位会立即唤醒，
+                    # 不必等满整个重试间隔才发现用户已取消（M1）。
+                    if cancel_event.wait(_retry_delay(e.code, attempt)):
+                        raise _PageError("已取消") from e
         assert last is not None
         raise last
 
     def _fetch_page(
         self, client: TikHubClient, req: dict[str, Any], plat_filters: dict[str, Any],
+        cancel_event: threading.Event,
     ) -> tuple[list[VideoCard], dict[str, Any] | None]:
         """取一页并归一化，返回 (cards, next_req)。任何异常统一成 _PageError。"""
         try:
-            raw = self._call_with_retry(client, req)
+            raw = self._call_with_retry(client, req, cancel_event)
+        except _PageError:
+            raise                                        # 已经是页级错误（如取消），原样上抛
         except TikHubError as e:
             raise _PageError(e.reason) from e
+        except Exception as e:  # noqa: BLE001 — 适配器层永不异常穿透：覆盖 httpx.InvalidURL /
+            # UnicodeEncodeError / transport 插件 bug 等不是 TikHubError 的异常（I1）。
+            logger.warning("[tikhub-search] %s request error: %r", self.platform, e, exc_info=True)
+            raise _PageError(f"请求失败：{e!r}"[:160]) from e
         try:
             cards = self.spec.normalize(raw, plat_filters)
             nxt = self.spec.next_request(req, raw)
@@ -138,7 +168,10 @@ class TikHubSearchAdapter:
         filters: dict[str, Any] | None = None,
     ) -> SearchOutcome:
         target = max(1, min(int(target_count), HARD_CAP))
-        plat_filters = (filters or {}).get(self.platform) or {}
+        plat_filters = filters.get(self.platform) if isinstance(filters, dict) else None
+        plat_filters = plat_filters if isinstance(plat_filters, dict) else {}
+        # 不读 mining/config.MAX_ATTEMPTS_PER_PLATFORM：那是浏览器路径的反爬翻页上限；
+        # API 路径无风控，页数只是成本闸。
         max_pages = MAX_PAGES if max_attempts is None else max(1, min(MAX_PAGES, int(max_attempts)))
 
         def _progress(phase: str, got: int, note: str = "") -> None:
@@ -171,13 +204,20 @@ class TikHubSearchAdapter:
         emitted = 0
         pages = 0
         seen: set[str] = set()
-        req = self.spec.first_request(keyword, plat_filters)
+        try:
+            req = self.spec.first_request(keyword, plat_filters)
+        except Exception as e:  # noqa: BLE001 — 筛选值类型错等，记失败不穿透
+            return _failed(f"请求构造失败：{e!r}"[:160], 0)
         while emitted < target and pages < max_pages:
             if cancel_event.is_set():
                 return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
             try:
-                cards, nxt = self._fetch_page(client, req, plat_filters)
+                cards, nxt = self._fetch_page(client, req, plat_filters, cancel_event)
             except _PageError as e:
+                if cancel_event.is_set():
+                    # 重试等待期间被取消（M1）：不算失败，也不算已停止的 done —— 与
+                    # 用户主动取消同一语义。
+                    return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
                 if emitted == 0:
                     return _failed(e.reason, 0, pages)
                 # 已有候选入库：后续页失败只停止，不把整个平台记成失败（runner 只对 done 跑预筛）
@@ -212,7 +252,10 @@ class TikHubSearchAdapter:
 
         if cancel_event.is_set():
             return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
-        return _done(emitted)
+        # 翻了页却一条都没命中：多半是筛选条件过严/关键词冷门，不是采集本身出了问题——
+        # 给用户一个可诊断的提示,而不是静默的"done, 0 条"。
+        note = f"已翻 {pages} 页，0 条命中（筛选条件可能过严或无结果）" if emitted == 0 and pages > 0 else ""
+        return _done(emitted, note)
 
 
 def build_tikhub_search_adapters(get_config, key_reader) -> dict[str, TikHubSearchAdapter]:

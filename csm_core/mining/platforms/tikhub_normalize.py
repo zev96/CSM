@@ -172,7 +172,15 @@ def normalize_douyin_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vide
         for it in raw_items
         if isinstance(it, dict) and str(it.get("type")) == "1" and isinstance(it.get("data"), dict)
     ]
-    return _DY._extract_cards({"data": items}, allowed_types=allowed)
+    # 单卡容错：逐张调抽取器而不是整批传入——一张卡叶子字段类型错（比如 author
+    # 是字符串）只应该丢这一张，不该连累同页其余正常卡片。
+    cards: list[VideoCard] = []
+    for it in items:
+        try:
+            cards.extend(_DY._extract_cards({"data": [it]}, allowed_types=allowed))
+        except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
+            logger.warning("[tikhub-normalize] douyin card skipped: %r", e)
+    return cards
 
 
 # ── B站 ─────────────────────────────────────────────────────────────────
@@ -234,20 +242,26 @@ def normalize_bilibili_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
         bvid = it.get("bvid")
         if not bvid:
             continue
-        cards.append(VideoCard(
-            platform="bilibili",
-            platform_video_id=str(bvid),
-            url=f"https://www.bilibili.com/video/{bvid}",
-            title=_strip_em(str(it.get("title") or "")).strip(),
-            author_name=str(it.get("author") or "").strip(),
-            author_id=str(it.get("mid") or ""),
-            cover_url=_normalize_url(str(it.get("pic") or "")),
-            duration_sec=parse_duration(str(it.get("duration") or "")),
-            play_count=_count(it.get("play")),
-            like_count=_count(it.get("like")),
-            published_at=_pubdate_to_iso(it.get("pubdate")),
-            raw=it,
-        ))
+        # 单卡容错：畸形叶子字段（比如 play 是超长数字字符串，parse_int_count 内部
+        # float() 溢出成 inf 再 int() 抛 OverflowError）只应该丢这一张卡。
+        try:
+            cards.append(VideoCard(
+                platform="bilibili",
+                platform_video_id=str(bvid),
+                url=f"https://www.bilibili.com/video/{bvid}",
+                title=_strip_em(str(it.get("title") or "")).strip(),
+                author_name=str(it.get("author") or "").strip(),
+                author_id=str(it.get("mid") or ""),
+                cover_url=_normalize_url(str(it.get("pic") or "")),
+                duration_sec=parse_duration(str(it.get("duration") or "")),
+                play_count=_count(it.get("play")),
+                like_count=_count(it.get("like")),
+                published_at=_pubdate_to_iso(it.get("pubdate")),
+                raw=it,
+            ))
+        except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
+            logger.warning("[tikhub-normalize] bilibili card skipped: %r", e)
+            continue
     return cards
 
 
@@ -300,24 +314,29 @@ def normalize_kuaishou_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
         pid = feed.get("photo_id")
         if not pid:
             continue
-        pid = str(pid)
-        dur_ms = _to_int(feed.get("duration"))
-        ts_ms = feed.get("timestamp") or 0
-        card = VideoCard(
-            platform="kuaishou",
-            platform_video_id=pid,
-            url=f"https://www.kuaishou.com/short-video/{pid}",
-            title=str(feed.get("caption") or "").strip(),
-            author_name=str(feed.get("user_name") or "").strip(),
-            author_id=str(feed.get("user_id") or ""),
-            cover_url=_first_cover(feed.get("cover_thumbnail_urls")),
-            duration_sec=int(dur_ms / 1000) if dur_ms else None,
-            play_count=_count(feed.get("view_count")),
-            like_count=_count(feed.get("like_count")),
-            published_at=_ts_ms_to_iso(ts_ms) if ts_ms else None,
-            raw=feed,
-        )
-        if not iso_within_epoch_range(card.published_at, begin, end):
+        # 单卡容错：畸形叶子字段不该打崩整页，只跳过这一张。
+        try:
+            pid = str(pid)
+            dur_ms = _to_int(feed.get("duration"))
+            ts_ms = feed.get("timestamp") or 0
+            card = VideoCard(
+                platform="kuaishou",
+                platform_video_id=pid,
+                url=f"https://www.kuaishou.com/short-video/{pid}",
+                title=str(feed.get("caption") or "").strip(),
+                author_name=str(feed.get("user_name") or "").strip(),
+                author_id=str(feed.get("user_id") or ""),
+                cover_url=_first_cover(feed.get("cover_thumbnail_urls")),
+                duration_sec=int(dur_ms / 1000) if dur_ms else None,
+                play_count=_count(feed.get("view_count")),
+                like_count=_count(feed.get("like_count")),
+                published_at=_ts_ms_to_iso(ts_ms) if ts_ms else None,
+                raw=feed,
+            )
+            if not iso_within_epoch_range(card.published_at, begin, end):
+                continue
+            cards.append(card)
+        except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
+            logger.warning("[tikhub-normalize] kuaishou card skipped: %r", e)
             continue
-        cards.append(card)
     return cards
