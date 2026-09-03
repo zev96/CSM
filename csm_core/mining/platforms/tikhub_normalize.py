@@ -82,3 +82,71 @@ def normalize_douyin_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vide
         if isinstance(it, dict) and it.get("type") == 1 and isinstance(it.get("data"), dict)
     ]
     return DouyinSearchAdapter()._extract_cards({"data": items}, allowed_types=allowed)
+
+
+# ── B站 ─────────────────────────────────────────────────────────────────
+
+_BL_VALID_ORDERS = {"totalrank", "click", "pubdate", "dm", "stow"}   # 与 bilibili_search 同集合
+_BL_PAGE_SIZE = 20
+
+
+def bilibili_first_params(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
+    """B站 general_search：order 必填（实测 totalrank 通过；其余为 B 站原生取值），
+    日期区间 → pubtime_begin_s / pubtime_end_s（本地时区当天 00:00:00 / 23:59:59）。"""
+    order = str(f.get("order") or "totalrank")
+    params: dict[str, Any] = {
+        "keyword": keyword,
+        "order": order if order in _BL_VALID_ORDERS else "totalrank",
+        "page": 1,
+        "page_size": _BL_PAGE_SIZE,
+    }
+    begin = date_to_epoch(f.get("time_begin"))
+    if begin is not None:
+        params["pubtime_begin_s"] = begin
+    end = date_to_epoch(f.get("time_end"), end_of_day=True)
+    if end is not None:
+        params["pubtime_end_s"] = end
+    return params
+
+
+def bilibili_next_params(prev: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any] | None:
+    inner = (raw.get("data") or {}).get("data") or {}
+    if not inner.get("result"):
+        return None
+    page = int(inner.get("page") or prev.get("page") or 1)
+    num_pages = int(inner.get("numPages") or 0)
+    if num_pages and page >= num_pages:
+        return None
+    params = dict(prev)
+    params["page"] = page + 1
+    return params
+
+
+def _int_or_none(v: Any) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def normalize_bilibili_search(raw: dict[str, Any], f: dict[str, Any]) -> list[VideoCard]:
+    inner = (raw.get("data") or {}).get("data") or {}
+    cards: list[VideoCard] = []
+    for it in inner.get("result") or []:
+        if not isinstance(it, dict) or it.get("type") != "video":
+            continue
+        bvid = it.get("bvid")
+        if not bvid:
+            continue
+        cards.append(VideoCard(
+            platform="bilibili",
+            platform_video_id=str(bvid),
+            url=f"https://www.bilibili.com/video/{bvid}",
+            title=_strip_em(str(it.get("title") or "")).strip(),
+            author_name=str(it.get("author") or "").strip(),
+            author_id=str(it.get("mid") or ""),
+            cover_url=_normalize_url(str(it.get("pic") or "")),
+            duration_sec=parse_duration(str(it.get("duration") or "")),
+            play_count=_int_or_none(it.get("play")),
+            like_count=_int_or_none(it.get("like")),
+            published_at=_pubdate_to_iso(it.get("pubdate")),
+            raw=it,
+        ))
+    return cards

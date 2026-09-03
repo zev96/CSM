@@ -59,3 +59,50 @@ def test_douyin_next_body_none_when_no_more():
     raw = {"data": {"business_config": {"has_more": 0}}}
     assert N.douyin_next_body(N.douyin_first_body("k", {}), raw) is None
     assert N.douyin_next_body(N.douyin_first_body("k", {}), {"data": {}}) is None
+
+
+# ── B站 ─────────────────────────────────────────────────────────────────
+
+def test_bilibili_first_params_pushes_order_and_date_range():
+    p = N.bilibili_first_params("空气净化器", {
+        "order": "pubdate", "time_begin": "2026-08-01", "time_end": "2026-08-31",
+    })
+    assert p["keyword"] == "空气净化器"
+    assert p["order"] == "pubdate"
+    assert p["page"] == 1 and p["page_size"] == 20
+    assert isinstance(p["pubtime_begin_s"], int)
+    assert isinstance(p["pubtime_end_s"], int)
+    assert p["pubtime_end_s"] > p["pubtime_begin_s"]
+
+
+def test_bilibili_first_params_defaults_and_bad_order():
+    p = N.bilibili_first_params("k", {"order": "nonsense"})
+    assert p["order"] == "totalrank"
+    assert "pubtime_begin_s" not in p and "pubtime_end_s" not in p
+
+
+def test_bilibili_normalize_real_fixture():
+    raw = _load("tikhub_search_bilibili.json")
+    cards = N.normalize_bilibili_search(raw, {})
+    assert len(cards) == 3
+    c = cards[0]
+    assert c.platform == "bilibili"
+    assert c.platform_video_id == "BV1w8Mr6VEfW"
+    assert c.url == "https://www.bilibili.com/video/BV1w8Mr6VEfW"
+    assert "<em" not in c.title and "空气净化器" in c.title      # <em> 高亮已 strip
+    assert c.author_name == "科技先疯队"
+    assert c.play_count == 173047 and c.like_count == 5297
+    assert c.duration_sec == 11 * 60 + 28
+    assert c.published_at == "2026-08-05T01:28:20Z"
+    assert c.cover_url.startswith("https://")
+
+
+def test_bilibili_next_params_increments_until_numpages():
+    raw = _load("tikhub_search_bilibili.json")            # page=1, numPages=50
+    prev = N.bilibili_first_params("k", {})
+    nxt = N.bilibili_next_params(prev, raw)
+    assert nxt is not None and nxt["page"] == 2
+    last = {"data": {"data": {"page": 50, "numPages": 50, "result": [{"type": "video"}]}}}
+    assert N.bilibili_next_params({"page": 50}, last) is None
+    empty = {"data": {"data": {"page": 1, "numPages": 50, "result": []}}}
+    assert N.bilibili_next_params({"page": 1}, empty) is None
