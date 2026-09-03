@@ -162,7 +162,8 @@ class TencentDocsMCPClient:
 
     # ── Public API ───────────────────────────────────────────────────────
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """调一个 sheet.* 工具，返回工具的结构化结果 dict（成功空结果 = {}）。"""
+        """调一个表格工具（不带前缀，如 ``get_sheet_info``），返回结构化结果
+        dict（成功空结果 = {}）。工具名由 tools/list 确认，见 sheet.py 顶注。"""
         self._ensure_initialized()
         msg = self._post({
             "jsonrpc": "2.0",
@@ -192,6 +193,39 @@ class TencentDocsMCPClient:
             except ValueError:
                 pass
         return {}
+
+    def list_tools(self) -> list[str]:
+        """枚举服务端注册的工具名（MCP ``tools/list``）—— 纯诊断用。
+
+        现网 ``sheet-mcp`` 实为「智能表格（smartsheet.*）」服务，与本模块
+        假设的经典表格 ``sheet.*`` 单元格工具不是一套；「测试连接」用它把
+        服务端真实工具清单摊给用户，据实定方案（见设计文档 §5.1 待验证项）。
+        分页游标 ``nextCursor`` 存在则续拉（工具数很少，10 页硬上限兜底）。
+        """
+        self._ensure_initialized()
+        names: list[str] = []
+        cursor: str | None = None
+        for _ in range(10):
+            params: dict[str, Any] = {"cursor": cursor} if cursor else {}
+            msg = self._post({
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "tools/list",
+                "params": params,
+            })
+            if msg is None:
+                break
+            if "error" in msg:
+                err = msg["error"] or {}
+                raise map_error(str(err.get("message") or err))
+            result = msg.get("result") or {}
+            for tool in result.get("tools") or []:
+                if isinstance(tool, dict) and tool.get("name"):
+                    names.append(str(tool["name"]))
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        return names
 
     def __repr__(self) -> str:  # 日志里绝不能露 token
         return f"TencentDocsMCPClient(token={_redact(self._token)})"

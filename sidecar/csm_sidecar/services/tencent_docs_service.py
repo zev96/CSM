@@ -123,40 +123,72 @@ def _load_sheet_state(
     )
 
 
+def _discover_tools(client: TencentDocsMCPClient) -> list[str]:
+    """best-effort 枚举服务端工具（tools/list）。token 失效照抛，其余吞掉。"""
+    try:
+        return client.list_tools()
+    except TokenInvalidError:
+        raise
+    except TencentDocsError:
+        logger.info("[tdocs] tools/list 诊断探测失败，忽略", exc_info=True)
+        return []
+
+
+def _augment_with_tools(e: TencentDocsError, tools: list[str]) -> TencentDocsError:
+    """把 tools/list 清单挂到错误 reason 上（诊断），保留原异常子类型。"""
+    if tools:
+        e.reason = (
+            f"{e.reason}\n\n【诊断】服务端实际暴露的 MCP 工具（tools/list）：\n"
+            f"{'、'.join(tools)}"
+        )
+        e.args = (e.reason,)
+    return e
+
+
 def test_connection() -> dict[str, Any]:
-    """读表头验证连接 + 平台子表路由 + 列映射。失败抛 TencentDocsError。"""
+    """读表头验证连接 + 平台子表路由 + 列映射。失败抛 TencentDocsError。
+
+    诊断：先用 MCP ``tools/list`` 枚举服务端真实工具；若后续 ``sheet.*`` 调用
+    因「tool not found」失败，把真实工具清单挂到错误里，便于据实定方案。
+    """
     cfg = config_service.load()
     td = cfg.tencent_docs
     if not td.doc_url.strip():
         raise TencentDocsError("请先粘贴表格链接")
     with _build_client() as client:
-        file_id, url_tab = parse_doc_url(td.doc_url)
-        sheets = list_sheets(client, file_id)
-        fallback = pick_fallback_sheet(sheets, url_tab)
+        available_tools = _discover_tools(client)
+        try:
+            file_id, url_tab = parse_doc_url(td.doc_url)
+            sheets = list_sheets(client, file_id)
+            fallback = pick_fallback_sheet(sheets, url_tab)
 
-        header_cache: dict[str, tuple[list[str], ColumnMap]] = {}
+            header_cache: dict[str, tuple[list[str], ColumnMap]] = {}
 
-        def _check(target: SheetTarget) -> tuple[list[str], ColumnMap]:
-            if target.sheet_id not in header_cache:
-                header = read_row_texts(client, target, 0)
-                header_cache[target.sheet_id] = (
-                    header, build_column_map(header, td.col_map),
-                )
-            return header_cache[target.sheet_id]
+            def _check(target: SheetTarget) -> tuple[list[str], ColumnMap]:
+                if target.sheet_id not in header_cache:
+                    header = read_row_texts(client, target, 0)
+                    header_cache[target.sheet_id] = (
+                        header, build_column_map(header, td.col_map),
+                    )
+                return header_cache[target.sheet_id]
 
-        per_platform: list[dict[str, Any]] = []
-        for platform in _PLATFORM_ORDER:
-            wanted = td.sheet_map.get(platform, "")
-            named = pick_sheet_by_name(sheets, wanted)
-            target = named or fallback
-            header, cmap = _check(target)
-            per_platform.append({
-                "platform": platform,
-                "platform_label": _PLATFORM_LABEL[platform],
-                "sheet_name": target.sheet_name,
-                "matched_by_name": named is not None,
-                "missing": [td.col_map.get(k, k) for k in cmap.missing],
-            })
+            per_platform: list[dict[str, Any]] = []
+            for platform in _PLATFORM_ORDER:
+                wanted = td.sheet_map.get(platform, "")
+                named = pick_sheet_by_name(sheets, wanted)
+                target = named or fallback
+                header, cmap = _check(target)
+                per_platform.append({
+                    "platform": platform,
+                    "platform_label": _PLATFORM_LABEL[platform],
+                    "sheet_name": target.sheet_name,
+                    "matched_by_name": named is not None,
+                    "missing": [td.col_map.get(k, k) for k in cmap.missing],
+                })
+        except TokenInvalidError:
+            raise
+        except TencentDocsError as e:
+            raise _augment_with_tools(e, available_tools) from e
 
     ok = all(not p["missing"] for p in per_platform)
     return {
@@ -168,6 +200,8 @@ def test_connection() -> dict[str, Any]:
         "header": [h for h in header_cache[fallback.sheet_id][0] if h]
         if fallback.sheet_id in header_cache else [],
         "missing": sorted({m for p in per_platform for m in p["missing"]}),
+        # 诊断字段：服务端 tools/list 真实工具清单（据实定方案用）
+        "available_tools": available_tools,
     }
 
 

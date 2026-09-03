@@ -239,6 +239,7 @@ async function onTest() {
             borderRadius: '10px',
             padding: '10px 12px',
             color: 'var(--ink-2)',
+            whiteSpace: 'pre-line',
           }"
         >
           <template v-if="testResult.sheets?.length">

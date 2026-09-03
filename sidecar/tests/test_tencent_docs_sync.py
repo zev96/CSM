@@ -121,7 +121,7 @@ def test_client_call_tool_json_path():
         }))
 
     with _mk_client(handler) as client:
-        out = client.call_tool("sheet.get_sheet_info", {"file_id": "D1"})
+        out = client.call_tool("get_sheet_info", {"file_id": "D1"})
     assert out == {"sheets": [{"sheet_id": "S1"}]}
     assert [p.get("method") for p in seen] == [
         "initialize", "notifications/initialized", "tools/call",
@@ -143,7 +143,7 @@ def test_client_call_tool_sse_and_structured():
                               headers={"Content-Type": "text/event-stream"})
 
     with _mk_client(handler) as client:
-        out = client.call_tool("sheet.get_cell_data", {})
+        out = client.call_tool("get_cell_data", {})
     assert out == {"ok": 1}
 
 
@@ -159,7 +159,7 @@ def test_client_maps_token_error():
 
     with _mk_client(handler) as client:
         with pytest.raises(TokenInvalidError):
-            client.call_tool("sheet.get_sheet_info", {})
+            client.call_tool("get_sheet_info", {})
 
 
 def test_client_http_401_maps_token_error():
@@ -168,7 +168,51 @@ def test_client_http_401_maps_token_error():
 
     with _mk_client(handler) as client:
         with pytest.raises(TokenInvalidError):
-            client.call_tool("sheet.get_sheet_info", {})
+            client.call_tool("get_sheet_info", {})
+
+
+def test_client_list_tools_enumerates_names():
+    """tools/list 诊断：initialize 后枚举服务端注册的工具名。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}") if request.content else {}
+        method = payload.get("method")
+        if method == "initialize":
+            return httpx.Response(200, json=_jsonrpc_result({"serverInfo": {}}),
+                                  headers={"Mcp-Session-Id": "s"})
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            return httpx.Response(200, json=_jsonrpc_result({"tools": [
+                {"name": "smartsheet.list_tables", "description": "列出工作表"},
+                {"name": "smartsheet.add_records"},
+                {"bad": "no name → 跳过"},
+            ]}))
+        raise AssertionError(f"unexpected method {method}")
+
+    with _mk_client(handler) as client:
+        assert client.list_tools() == ["smartsheet.list_tables", "smartsheet.add_records"]
+
+
+def test_client_list_tools_follows_cursor():
+    """tools/list 分页：nextCursor 存在时续拉，直到无游标。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}") if request.content else {}
+        method = payload.get("method")
+        if method == "initialize":
+            return httpx.Response(200, json=_jsonrpc_result({}),
+                                  headers={"Mcp-Session-Id": "s"})
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            cursor = (payload.get("params") or {}).get("cursor")
+            if not cursor:
+                return httpx.Response(200, json=_jsonrpc_result({
+                    "tools": [{"name": "a"}], "nextCursor": "c2"}))
+            return httpx.Response(200, json=_jsonrpc_result({"tools": [{"name": "b"}]}))
+        raise AssertionError(f"unexpected method {method}")
+
+    with _mk_client(handler) as client:
+        assert client.list_tools() == ["a", "b"]
 
 
 # ── Sheet helpers（假 client）──────────────────────────────────────────
@@ -194,6 +238,9 @@ class FakeSheetClient:
     def rows_of(self, sheet_id: str) -> list[list[str]]:
         return self.rows_by_sheet.setdefault(sheet_id, [])
 
+    def list_tools(self) -> list[str]:
+        return ["get_sheet_info", "get_cell_data", "set_range_value_by_csv"]
+
     def close(self):
         pass
 
@@ -204,13 +251,13 @@ class FakeSheetClient:
         pass
 
     def call_tool(self, name, arguments):
-        if name == "sheet.get_sheet_info":
+        if name == "get_sheet_info":
             return {"sheets": self.sheets}
-        if name == "sheet.set_cell_style":
+        if name == "set_cell_style":
             self.style_calls.append(arguments)
             return {}
         rows = self.rows_of(arguments["sheet_id"])
-        if name == "sheet.get_cell_data":
+        if name == "get_cell_data":
             cells = []
             for r in range(arguments["start_row"], arguments["end_row"] + 1):
                 if r >= len(rows):
@@ -221,7 +268,7 @@ class FakeSheetClient:
                                       "value_type": "STRING",
                                       "string_value": rows[r][c]})
             return {"cells": cells}
-        if name == "sheet.set_range_value_by_csv":
+        if name == "set_range_value_by_csv":
             self.csv_writes.append(arguments)
             # 回放进内存表格，方便断言后续读
             import csv as _csv
@@ -476,10 +523,55 @@ def test_test_connection_reports_mapping(tdocs_env: FakeSheetClient):
     assert out["sheet_name"] == "工作表1"
     assert out["missing"] == []
     assert "链接" in out["header"]
+    # 诊断字段：无论成败都带上服务端真实工具清单（tools/list）
+    assert out["available_tools"] == [
+        "get_sheet_info", "get_cell_data", "set_range_value_by_csv",
+    ]
     # 平台路由报告：单表用例三个平台都回落到兜底子表（非按名命中）
     assert [p["platform"] for p in out["sheets"]] == ["douyin", "bilibili", "kuaishou"]
     assert all(p["sheet_name"] == "工作表1" for p in out["sheets"])
     assert all(p["matched_by_name"] is False for p in out["sheets"])
+
+
+class _ToolNotFoundClient:
+    """模拟真服务：sheet.* 一律 tool not found，但 tools/list 能列出真实工具。"""
+
+    tools = ["smartsheet.list_tables", "smartsheet.list_records", "smartsheet.add_records"]
+
+    def list_tools(self):
+        return list(self.tools)
+
+    def call_tool(self, name, arguments):
+        raise TencentDocsError(
+            f"腾讯文档服务报错：tool not found: {name}, trace_id:deadbeef")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_test_connection_surfaces_available_tools_on_tool_not_found(
+    monitor_db, settings_path, monkeypatch,
+):
+    """sheet.get_sheet_info 不存在时，错误里挂上 tools/list 真实清单（诊断）。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    monkeypatch.setattr(tds, "_client_factory", lambda token: _ToolNotFoundClient())
+    with pytest.raises(TencentDocsError) as ei:
+        tds.test_connection()
+    reason = ei.value.reason
+    assert "tool not found" in reason
+    assert "smartsheet.list_tables" in reason           # 诊断清单已挂上
+    assert "smartsheet.add_records" in reason
+    monkeypatch.setattr(tds, "_client_factory", None)
 
 
 def test_test_connection_reports_named_sheets(monitor_db, settings_path, monkeypatch):

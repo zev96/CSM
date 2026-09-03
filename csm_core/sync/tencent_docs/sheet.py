@@ -1,6 +1,12 @@
 """表格高层操作：URL 解析、表头列映射、找末行、CSV 追加、区间读取。
 
 行列约定与 sheet-mcp 一致：全部 0-based。
+
+工具名【不带前缀】—— 真服务 tools/list 确认为 ``get_sheet_info`` /
+``get_cell_data`` / ``set_range_value_by_csv`` / ``set_cell_style``（sheet
+精细编辑引擎的原生名）。曾误加 ``sheet.`` 前缀导致 “tool not found”
+（官方龙虾 skill 的 mcporter 里 ``sheet-mcp.<tool>`` 是「服务名.工具名」，
+CLI 惯例，不是工具真名——照抄成前缀就错了）。别再加回前缀。
 """
 from __future__ import annotations
 
@@ -53,7 +59,7 @@ class SheetTarget:
 
 def list_sheets(client: TencentDocsMCPClient, file_id: str) -> list[SheetTarget]:
     """文档下全部子表。空 → 抛错（无权限/坏链接的统一出口）。"""
-    info = client.call_tool("sheet.get_sheet_info", {"file_id": file_id})
+    info = client.call_tool("get_sheet_info", {"file_id": file_id})
     raw = [s for s in (info.get("sheets") or []) if isinstance(s, dict)]
     if not raw:
         raise TencentDocsError("表格里没有任何子表（或无访问权限）")
@@ -105,7 +111,7 @@ def read_row_texts(
 ) -> list[str]:
     """读一整行的文本值（按列序，空单元格为 ""）。表头解析用。"""
     end_col = max(0, min(target.col_count - 1, 199))
-    data = client.call_tool("sheet.get_cell_data", {
+    data = client.call_tool("get_cell_data", {
         "file_id": target.file_id,
         "sheet_id": target.sheet_id,
         "start_row": row, "start_col": 0,
@@ -130,7 +136,7 @@ def read_column_texts(
     row = start_row
     while row <= last:
         chunk_end = min(last, row + 9999)
-        data = client.call_tool("sheet.get_cell_data", {
+        data = client.call_tool("get_cell_data", {
             "file_id": target.file_id,
             "sheet_id": target.sheet_id,
             "start_row": row, "start_col": col,
@@ -190,7 +196,7 @@ def append_rows_csv(
     writer = _csv.writer(buf, lineterminator="\n")
     for r in rows:
         writer.writerow(["" if v is None else str(v) for v in r])
-    client.call_tool("sheet.set_range_value_by_csv", {
+    client.call_tool("set_range_value_by_csv", {
         "file_id": target.file_id,
         "sheet_id": target.sheet_id,
         "start_row": start_row,
@@ -212,7 +218,7 @@ def paint_row_background(
     bg_argb: str = SEPARATOR_BG_ARGB,
 ) -> None:
     """给一行前 width 列上背景色（分隔行用）。调用方自行 fail-open。"""
-    client.call_tool("sheet.set_cell_style", {
+    client.call_tool("set_cell_style", {
         "file_id": target.file_id,
         "sheet_id": target.sheet_id,
         "start_row": row, "start_col": 0,
