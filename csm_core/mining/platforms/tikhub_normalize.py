@@ -136,7 +136,7 @@ def douyin_next_body(prev: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any
     body["backtrace"] = cfg.get("backtrace") or ""
     # 游标不动点防护：服务端偶尔回声同一个 cursor（has_more 却仍是 1），照买会
     # 死循环重复拉同一页。cursor 不推进就当作没有下一页。
-    if prev.get("cursor") is not None and body["cursor"] == prev.get("cursor"):
+    if prev.get("cursor") is not None and str(body["cursor"]) == str(prev.get("cursor")):
         return None
     return body
 
@@ -289,7 +289,7 @@ def normalize_kuaishou_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
         if not pid:
             continue
         pid = str(pid)
-        dur_ms = feed.get("duration") or 0
+        dur_ms = _to_int(feed.get("duration"))
         ts_ms = feed.get("timestamp") or 0
         card = VideoCard(
             platform="kuaishou",

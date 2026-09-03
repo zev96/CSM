@@ -313,3 +313,20 @@ def test_bilibili_next_params_defaults_on_non_numeric_fields():
         {"data": {"data": {"page": "zz", "numPages": "q", "result": [1]}}},
     )
     assert isinstance(p, dict) and p["page"] == 2
+
+
+def test_kuaishou_normalize_tolerates_non_numeric_duration():
+    raw = _load("tikhub_search_kuaishou.json")
+    for it in raw["data"]["mixFeeds"]:
+        if str(it.get("itemType")) == "5":
+            it["feed"]["duration"] = "abc"
+    cards = N.normalize_kuaishou_search(raw, {})
+    assert len(cards) == 3 and all(c.duration_sec is None for c in cards)
+
+
+def test_douyin_next_body_stuck_cursor_detected_across_types():
+    prev = dict(N.douyin_first_body("k", {}))
+    prev["cursor"] = 8
+    raw = {"data": {"business_config": {"has_more": 1, "backtrace": "b",
+                                        "next_page": {"cursor": "8", "search_id": "s"}}}}
+    assert N.douyin_next_body(prev, raw) is None       # int 8 vs str "8" 也算不动点
