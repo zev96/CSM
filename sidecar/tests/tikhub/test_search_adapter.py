@@ -296,3 +296,12 @@ def test_page_log_records_cursor_but_not_keyword(caplog):
     page_lines = [r.getMessage() for r in caplog.records if "page 1 [" in r.getMessage()]
     assert page_lines and "cursor=0" in page_lines[0]
     assert all("keyword" not in line for line in page_lines)
+
+
+def test_malformed_leaf_field_on_first_page_is_failed_not_raised():
+    """aweme_info.author 是字符串 → 共享抽取器抛 AttributeError → 适配器兜成 failed，绝不穿透。"""
+    page = _dy_page(["1"], has_more=0, next_cursor=0)
+    page["data"]["business_data"][0]["data"]["aweme_info"]["author"] = "x"
+    out, cards, progress = _run(_adapter(lambda req: httpx.Response(200, json=page)))
+    assert out.status == "failed" and out.cards_emitted == 0
+    assert "解析" in out.error_message and progress[-1].phase == "failed"

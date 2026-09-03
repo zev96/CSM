@@ -15,9 +15,8 @@
 
 约定：``*_first_*(keyword, plat_filters)`` 造首页请求；``*_next_*(prev, raw)`` 从上一页
 响应造下一页请求，返回 None = 没有下一页；``normalize_*(raw, plat_filters)`` 出卡片。
-所有函数对畸形/非预期结构的 ``raw``/``f`` 永不抛异常（spec：永不异常穿透）—— 统一
-经 ``_dict``/``_to_int`` 兜底，解析不出来就当空处理，而不是让 AttributeError/ValueError
-往上穿。
+对实测到的畸形结构（非 dict 层级、数值字段为字符串、游标类型漂移）做兜底；叶子字段
+类型错误由适配器层（``tikhub_search._fetch_page``）统一按页级错误处理。
 """
 from __future__ import annotations
 
@@ -58,10 +57,6 @@ def _to_int(v: Any, default: int = 0) -> int:
         return default
 
 
-def _int_or_none(v: Any) -> int | None:
-    return v if isinstance(v, int) and not isinstance(v, bool) else None
-
-
 def _count(v: Any) -> int | None:
     """B站计数字段可能是真实 int，也可能是 "1.2万"/"3,456" 这类展示态字符串
     （浏览器适配器一直有这层兜底，TikHub 归一化之前漏掉了）。"""
@@ -82,8 +77,15 @@ def _first_cover(v: Any) -> str:
 
 
 def _douyin_content_type(f: dict[str, Any]) -> str:
-    """UI content_types → 抖音 content_type 档位：仅视频=1、仅图文=2、两者都要=0（全部）。"""
-    types = set(_dict(f).get("content_types") or ["video"])
+    """UI content_types → 抖音 content_type 档位：仅视频=1、仅图文=2、两者都要=0（全部）。
+    实测出现过裸字符串（非 list）——不能直接 set() 拆成一堆单字符。"""
+    raw = _dict(f).get("content_types")
+    if isinstance(raw, str):
+        types = {raw}
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        types = set(raw) or {"video"}
+    else:
+        types = {"video"}
     if types == {"video"}:
         return "1"
     if types == {"note"}:
@@ -91,10 +93,19 @@ def _douyin_content_type(f: dict[str, Any]) -> str:
     return "0"
 
 
+def _preview(raw: Any, n: int = 200) -> str:
+    """日志预览用——绝不能反过来把归一化本身打崩：畸形 raw（例如键是 tuple 之类
+    非法 JSON key）会让 json.dumps 抛 TypeError，此时兜底成 repr。"""
+    try:
+        return json.dumps(raw, ensure_ascii=False, default=str)[:n]
+    except Exception:  # noqa: BLE001 — 日志预览绝不能反过来把归一化打崩
+        return repr(raw)[:n]
+
+
 def _log_inner_error(platform: str, code: Any, raw: Any) -> None:
     logger.warning(
         "[tikhub-normalize] %s inner error code=%s first200=%s",
-        platform, code, json.dumps(raw, ensure_ascii=False, default=str)[:200],
+        platform, code, _preview(raw),
     )
 
 
@@ -107,8 +118,8 @@ _DY_PUBLISH_TIME = {"0": "0", "1": "1", "7": "7", "182": "180"}
 def douyin_first_body(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
     """抖音首页 POST body：筛选全部下推（排序 / 发布时间 / 内容类型）。
 
-    content_type：仅视频=1、仅图文=2、两者都要=0（全部）再由 normalize 按
-    content_types 后过滤（与浏览器适配器"综合搜索 + 后过滤"同口径）。
+    content_type 下推给服务端；本地不再按类型后过滤（TikHub 已按 content_type
+    筛过；本地 images/aweme_type 判据对 TikHub 形态不可靠）。
     """
     f = _dict(f)
     return {
@@ -124,8 +135,11 @@ def douyin_first_body(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
 
 def douyin_next_body(prev: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any] | None:
     cfg = _dict(_dict(_dict(raw).get("data")).get("business_config"))
-    # has_more 是弱类型字段（int/str/bool 都实测出现过），未归一前别信严格 ==。
-    if cfg.get("has_more") not in (1, "1", True):
+    # has_more 是弱类型字段（int/str/bool 都实测出现过），白名单枚举"真值"反而会漏
+    # 掉未枚举到的等价写法（"true"/2/1.0 等），提前误判没有下一页。改为只认显式
+    # 否定值为停止信号，其余一律继续翻页——游标不动点防护 + 适配器层"全重复页停"
+    # 兜底控制误判继续翻页的代价。
+    if cfg.get("has_more") in (0, "0", False, None, "", "false", "False"):
         return None
     nxt = _dict(cfg.get("next_page"))
     if nxt.get("cursor") is None:
@@ -143,17 +157,14 @@ def douyin_next_body(prev: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any
 
 def normalize_douyin_search(raw: dict[str, Any], f: dict[str, Any]) -> list[VideoCard]:
     """只取 type==1 的视频卡（type 未标注 untrusted，实测出现过 int 也出现过
-    str，统一 str() 比较）；aweme_info 与浏览器 XHR 同形，直接借用现有抽取器。"""
-    f = _dict(f)
+    str，统一 str() 比较）；aweme_info 与浏览器 XHR 同形，直接借用现有抽取器。
+    content_type 下推给服务端；本地不再按类型后过滤（TikHub 已按 content_type
+    筛过；本地 images/aweme_type 判据对 TikHub 形态不可靠）。"""
     data = _dict(_dict(raw).get("data"))
     code = data.get("status_code")
     if code not in (None, 0, "0"):
         _log_inner_error("douyin", code, raw)
-    ct = _douyin_content_type(f)
-    # 只有本次请求让服务端返回"全部"（content_type=="0"）时才需要本地按
-    # content_types 后过滤；若已下推给服务端做单一类型过滤，本地全信任
-    # （否则本地的 images/aweme_type 启发式误判会把服务端已筛好的结果又滤掉）。
-    allowed = frozenset({"video", "note"}) if ct != "0" else frozenset(f.get("content_types") or ["video"])
+    allowed = frozenset({"video", "note"})
     raw_items = data.get("business_data")
     raw_items = raw_items if isinstance(raw_items, list) else []
     items = [
@@ -194,9 +205,10 @@ def bilibili_next_params(prev: dict[str, Any], raw: dict[str, Any]) -> dict[str,
     result = inner.get("result")
     if not isinstance(result, list) or not result:
         return None
-    # page 取"我们请求的"和"服务端回声的"两者较大值 —— 绝不能只信回声：曾实测
-    # 到服务端回声一个不递增（甚至更小）的 page，直接采信会导致重复拉同一页。
-    page = max(_to_int(prev.get("page")), _to_int(inner.get("page"))) or 1
+    # page 只信"我们自己请求的"那一份，服务端回声整段不采信 —— 曾实测到回声
+    # page/numPages 与我们请求的页码不一致（例如首页请求就回声 page=numPages=50，
+    # 或回声一个比我们请求页更大的 page），照单全收会误判尾页、白白跳过中间页。
+    page = _to_int(prev.get("page")) or 1
     num_pages = _to_int(inner.get("numPages"))
     # numPages 缺失或 0 时不拦截翻页——交给调用方 adapter 的 MAX_PAGES 兜底防止死循环。
     if num_pages and page >= num_pages:
@@ -217,7 +229,7 @@ def normalize_bilibili_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
     result = result if isinstance(result, list) else []
     cards: list[VideoCard] = []
     for it in result:
-        if not isinstance(it, dict) or it.get("type") != "video":
+        if not isinstance(it, dict) or str(it.get("type")).lower() != "video":
             continue
         bvid = it.get("bvid")
         if not bvid:
@@ -300,8 +312,8 @@ def normalize_kuaishou_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
             author_id=str(feed.get("user_id") or ""),
             cover_url=_first_cover(feed.get("cover_thumbnail_urls")),
             duration_sec=int(dur_ms / 1000) if dur_ms else None,
-            play_count=_int_or_none(feed.get("view_count")),
-            like_count=_int_or_none(feed.get("like_count")),
+            play_count=_count(feed.get("view_count")),
+            like_count=_count(feed.get("like_count")),
             published_at=_ts_ms_to_iso(ts_ms) if ts_ms else None,
             raw=feed,
         )

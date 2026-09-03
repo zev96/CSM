@@ -32,6 +32,14 @@ def test_douyin_first_body_content_type_mapping():
     assert N.douyin_first_body("k", {})["content_type"] == "1"          # 缺省=仅视频
 
 
+def test_douyin_first_body_content_type_tolerates_bare_string_and_junk():
+    """content_types 实测出现过裸字符串（非 list）——不能直接 set() 拆成一堆字符。"""
+    assert N.douyin_first_body("k", {"content_types": "video"})["content_type"] == "1"
+    assert N.douyin_first_body("k", {"content_types": "note"})["content_type"] == "2"
+    assert N.douyin_first_body("k", {"content_types": 5})["content_type"] == "1"      # 非 str/list → 兜底仅视频
+    assert N.douyin_first_body("k", {"content_types": []})["content_type"] == "1"     # 空 list → 兜底仅视频
+
+
 def test_douyin_normalize_real_fixture_filters_non_video_cards():
     raw = _load("tikhub_search_douyin.json")
     cards = N.normalize_douyin_search(raw, {"content_types": ["video"]})
@@ -74,15 +82,28 @@ def test_douyin_next_body_none_when_no_more():
 
 
 def test_douyin_next_body_has_more_type_tolerant():
-    """has_more 弱类型：1/"1"/True 都算"有下一页"，0/"0"/False/缺失都算没有。"""
+    """has_more 只按显式否定值判停；其余（包括 "true"/2/1.0 这类未白名单枚举的
+    "看起来是真"的值）都继续翻页——白名单曾经漏掉 "true"/2/1.0 等价写法，反而
+    提前把还有下一页的请求判停。"""
     prev = N.douyin_first_body("k", {})
-    for v in (1, "1", True):
+    for v in (1, "1", True, "true", "True", 2, 1.0):
         raw = {"data": {"business_config": {"has_more": v, "next_page": {"cursor": 8}}}}
         assert N.douyin_next_body(prev, raw) is not None, f"has_more={v!r} 应产出下一页"
-    for v in (0, "0", False, None):
+    for v in (0, "0", False, None, "", "false", "False"):
         cfg = {} if v is None else {"has_more": v}
         raw = {"data": {"business_config": {**cfg, "next_page": {"cursor": 8}}}}
         assert N.douyin_next_body(prev, raw) is None, f"has_more={v!r} 应为 None"
+
+
+def test_douyin_next_body_none_when_next_page_missing():
+    prev = N.douyin_first_body("k", {})
+    for cfg in (
+        {"has_more": 1},
+        {"has_more": 1, "next_page": {}},
+        {"has_more": 1, "next_page": {"cursor": None}},
+    ):
+        raw = {"data": {"business_config": cfg}}
+        assert N.douyin_next_body(prev, raw) is None, f"cfg={cfg!r} 应为 None"
 
 
 def test_douyin_next_body_none_on_stuck_cursor():
@@ -93,23 +114,36 @@ def test_douyin_next_body_none_on_stuck_cursor():
     assert N.douyin_next_body(prev, raw) is None
 
 
-def test_douyin_normalize_trusts_server_filter_when_content_type_not_all():
-    """content_types=["note"] 时已下推 content_type=="2" 给服务端，本地全信任 —— 即使
-    本地启发式（images/aweme_type）会误判成 video，也不能把服务端已筛好的结果滤掉。"""
+def test_douyin_normalize_never_locally_filters_by_content_types():
+    """content_type 已下推给服务端过滤；本地不再按 content_types 二次后过滤——即使
+    UI 传的 content_types 与卡片本身形态不一致（本地 images/aweme_type 启发式对
+    TikHub 数据形态不可靠，旧逻辑在这种情况下会误判成 video 从而漏判该保留的卡），
+    结果必须与 content_types 无关，原样放行。"""
     raw = {"data": {"business_data": [
         {"type": 1, "data": {"aweme_info": {
             "aweme_id": "123", "aweme_type": 0, "images": None,
             "author": {}, "statistics": {}, "video": {},
         }}},
     ]}}
-    cards = N.normalize_douyin_search(raw, {"content_types": ["note"]})
-    assert len(cards) == 1
-    assert cards[0].platform_video_id == "123"
+    for content_types in (["note"], ["video"], []):
+        cards = N.normalize_douyin_search(raw, {"content_types": content_types})
+        assert len(cards) == 1
+        assert cards[0].platform_video_id == "123"
 
 
 def test_douyin_normalize_logs_inner_error_code(caplog):
     with caplog.at_level(logging.WARNING):
         cards = N.normalize_douyin_search({"data": {"status_code": 8, "business_data": []}}, {})
+    assert cards == []
+    assert "8" in caplog.text
+
+
+def test_inner_error_log_preview_never_raises_on_unserializable_raw(caplog):
+    """日志预览用 json.dumps 失败(比如 dict 键是 tuple,不是合法 JSON key)不能反过来
+    把归一化本身打崩 —— 必须兜底成 repr,而不是让 TypeError 穿透。"""
+    raw = {"data": {"status_code": 8, (1, 2): "x"}}
+    with caplog.at_level(logging.WARNING):
+        cards = N.normalize_douyin_search(raw, {})
     assert cards == []
     assert "8" in caplog.text
 
@@ -150,6 +184,19 @@ def test_bilibili_normalize_real_fixture():
     assert c.cover_url.startswith("https://")
 
 
+def test_bilibili_normalize_type_compare_case_insensitive():
+    """type 字段大小写未标注 untrusted，与抖音 str() 比较同口径，不能只信恰好小写
+    的 "video"。"""
+    raw = {"data": {"data": {"result": [
+        {"type": "Video", "bvid": "BV1x", "title": "t", "author": "a", "mid": 1,
+         "pic": "//i0.hdslb.com/x.jpg", "duration": "1:00",
+         "play": 1, "like": 2, "pubdate": 1620000000},
+    ]}}}
+    cards = N.normalize_bilibili_search(raw, {})
+    assert len(cards) == 1
+    assert cards[0].platform_video_id == "BV1x"
+
+
 def test_bilibili_normalize_count_string_fallback():
     """播放/点赞可能是展示态字符串（"1.2万"/"3,456"）—— 浏览器适配器一直有这层
     parse_int_count 兜底，TikHub 归一化不能丢。"""
@@ -175,13 +222,25 @@ def test_bilibili_next_params_increments_until_numpages():
     assert N.bilibili_next_params({"page": 1}, empty) is None
 
 
-def test_bilibili_next_params_trusts_max_not_echoed_page():
-    """服务端回声了一个不递增的 page（1），但我们本来就请求了第 2 页 —— 下一页必须
-    是 3，不能被回声值拽回去重复拉第 2 页。"""
-    prev = {"page": 2}
-    raw = {"data": {"data": {"page": 1, "numPages": 50, "result": [{"type": "video"}]}}}
-    nxt = N.bilibili_next_params(prev, raw)
-    assert nxt is not None and nxt["page"] == 3
+def test_bilibili_next_params_ignores_echoed_page():
+    """page 只信我们自己请求的那一份，回声值整个不采信 —— 曾经取
+    max(请求页, 回声页)：回声 page=50,numPages=50（我们首页才请求了 page=1）
+    会让 max 命中 50>=numPages 直接判尾页返回 None，白白吞掉第 2~49 页；
+    回声 page=10（我们仍在第 1 页）则会把 max 拽到 10，跳过第 2~10 页。"""
+    prev2 = {"page": 2}
+    raw_echo1 = {"data": {"data": {"page": 1, "numPages": 50, "result": [{"type": "video"}]}}}
+    assert N.bilibili_next_params(prev2, raw_echo1) == {"page": 3}
+
+    prev1 = N.bilibili_first_params("k", {})       # page=1
+    raw_bogus_last = {"data": {"data": {
+        "page": 50, "numPages": 50, "result": [{"type": "video"}],
+    }}}
+    nxt = N.bilibili_next_params(prev1, raw_bogus_last)
+    assert nxt is not None and nxt["page"] == 2       # 不能因为回声就判尾页
+
+    raw_bogus_jump = {"data": {"data": {"page": 10, "numPages": 50, "result": [{"type": "video"}]}}}
+    nxt2 = N.bilibili_next_params(prev1, raw_bogus_jump)
+    assert nxt2 is not None and nxt2["page"] == 2       # 不能被回声拽着跳页
 
 
 def test_bilibili_next_params_numpages_missing_relies_on_adapter_cap():
@@ -221,6 +280,25 @@ def test_kuaishou_normalize_real_fixture_skips_non_video_items():
     assert c.play_count == 141046 and c.like_count == 832
     assert c.duration_sec == 64                        # 64500ms → 64s
     assert c.published_at == "2021-12-27T11:11:59Z"    # 1640603519820ms
+
+
+def test_kuaishou_normalize_count_string_fallback():
+    """view_count/like_count 可能是展示态字符串（"141046"/"8.3万"），需与 B站同口径
+    经 _count 兜底；纯 int 原样通过；bool 视为脏数据不采信。"""
+    raw = {"data": {"mixFeeds": [
+        {"itemType": 5, "feed": {
+            "photo_id": "1", "caption": "c", "user_name": "u", "user_id": "1",
+            "view_count": "141046", "like_count": "8.3万", "timestamp": 1640603519820,
+        }},
+        {"itemType": 5, "feed": {
+            "photo_id": "2", "caption": "c", "user_name": "u", "user_id": "1",
+            "view_count": 5, "like_count": True, "timestamp": 1640603519820,
+        }},
+    ]}}
+    cards = N.normalize_kuaishou_search(raw, {})
+    assert len(cards) == 2
+    assert cards[0].play_count == 141046 and cards[0].like_count == 83000
+    assert cards[1].play_count == 5 and cards[1].like_count is None
 
 
 def test_kuaishou_normalize_local_time_filter_excludes_out_of_range():
