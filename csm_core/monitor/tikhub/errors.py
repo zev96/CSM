@@ -16,6 +16,10 @@ class TikHubError(Exception):
     def __init__(self, reason: str, code: int | None = None):
         self.reason = reason
         self.code = code
+        # HTTP 200 但 body.code != 200:服务端已经出货(可能已计费),重试无意义/有风险。
+        # 由 client._fail() 按 http_status 是否为 200 置位;默认 False(HTTP 层错误 /
+        # 网络错误都算"服务端没出货")。
+        self.from_body: bool = False
         super().__init__(reason)
 
 

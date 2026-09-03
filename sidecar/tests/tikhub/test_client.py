@@ -116,3 +116,42 @@ def test_post_body_code_non_200_raises():
     c = _client(lambda req: httpx.Response(200, json={"code": 500, "message": "boom"}))
     with pytest.raises(TikHubError):
         c.post("/p", {})
+
+
+def test_get_log_does_not_record_param_values(caplog):
+    # GET 参数可能带 keyword 等业务敏感值(如 Bilibili/Kuaishou 搜索的 keyword)——
+    # 日志只能记参数名列表,不能记值。
+    with caplog.at_level(logging.INFO, logger="csm_core.monitor.tikhub.client"):
+        _client(lambda req: httpx.Response(200, json={"code": 200, "data": {}})).get(
+            "/p", {"keyword": "秘密词", "page": 1}
+        )
+    assert "秘密词" not in caplog.text
+    assert "keyword" in caplog.text
+
+
+def test_from_body_true_when_http_200_body_code_error():
+    # HTTP 200 + body code != 200:服务端已经出货(可能已计费),from_body 必须为 True。
+    c = _client(lambda req: httpx.Response(200, json={"code": 500, "message": "boom"}))
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.from_body is True
+    assert ei.value.code == 500
+
+
+def test_from_body_false_when_http_status_error():
+    c = _client(lambda req: httpx.Response(500, json={"code": 500}))
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.from_body is False
+    assert ei.value.code == 500
+
+
+def test_from_body_false_on_network_error():
+    def h(req):
+        raise httpx.ConnectError("x")
+
+    c = _client(h)
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.from_body is False
+    assert ei.value.code is None

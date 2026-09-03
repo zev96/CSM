@@ -77,6 +77,7 @@ class TikHubClient:
     def _fail(self, effective_code: int, http_status: int, path: str, body_text: str) -> None:
         """按 effective_code 映射错误、必要时置余额闩、redact 后落日志,然后抛出。"""
         err = map_error(effective_code, effective_code)
+        err.from_body = (http_status == 200)
         if isinstance(err, TikHubBalanceExhausted):
             _trip_balance_latch()
         logger.warning(
@@ -115,8 +116,9 @@ class TikHubClient:
         """
         if not path.startswith("/"):
             path = "/" + path
-        # 日志绝不带 Authorization / key —— 只记录路径与参数。
-        logger.info("[tikhub] GET %s params=%s", path, dict(params))
+        # 日志绝不带 Authorization / key —— 也不记参数值(Bilibili/Kuaishou 搜索会把
+        # keyword 当 GET 参数传,值可能是用户敏感词);只记参数名列表。
+        logger.info("[tikhub] GET %s param_keys=%s", path, sorted(params))
         try:
             r = self._http.get(
                 self._base + path,
