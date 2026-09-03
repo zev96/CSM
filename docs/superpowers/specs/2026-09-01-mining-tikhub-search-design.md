@@ -38,11 +38,11 @@
 |---|---|---|---|---|
 | 抖音 | `/api/v1/douyin/search/fetch_video_search_v2` | **POST**（json body） | `keyword`；`sort_type`(0综合/1最多点赞/2最新)；`publish_time`(0不限/1一天/7一周/**180**半年)；`content_type`(0全部/1视频/2图片/3文章)；`filter_duration`(0/0-1/1-5/5-10000)；`cursor`(int,默认0) | `cursor` + 响应里的 `search_id`/`backtrace` |
 | B站 | `/api/v1/bilibili/web/fetch_general_search` | GET | `keyword`；`order`(必填,字符串：totalrank综合/pubdate最新/click最多播放/dm最多弹幕/stow最多收藏——需实现期用一发确认取值)；`page`；`page_size`；`pubtime_begin_s`/`pubtime_end_s`(10位秒级时间戳,日期区间)；`duration` | `page` 递增 |
-| 快手 | `/api/v1/kuaishou/app/search_video_v2` | GET | `keyword`(必填)；`pcursor` | `pcursor`（`data.recoPcursor=="no_more"` 或空页停） |
+| 快手 | `/api/v1/kuaishou/app/search_video_v2` | GET | `keyword`(必填)；`pcursor` | `pcursor`（主判据：缺失/空/`"no_more"`/与上页相同即停；`recoPcursor` **不作**终止信号，见 §7 R6） |
 
 **筛选映射**（图二 UI → TikHub 参数）：
-- 抖音：发布时间/排序/内容类型/时长 **全部 1:1 下推**（UI 的 182 → API 的 180）。
-- B站：排序 + **发布日期区间**（`pubtime_begin_s/end_s`）+ 时长，与现有 B站 UI 一致。
+- 抖音：发布时间/排序/内容类型 **1:1 下推**（UI 的 182 → API 的 180）；端点虽支持 `filter_duration`，但 UI 无时长档位（`DouyinFilters` 无该字段），不下推。
+- B站：排序 + **发布日期区间**（`pubtime_begin_s/end_s`），与现有 B站 UI 一致；`duration` 同上不下推。
 - 快手：TikHub 无服务端筛选 → 时间条件**本地后过滤 + 自动补页**（与现状一致）。
 
 ### 4.2 响应结构（视频列表路径 + 字段，实测钉死；fixture 已落 `sidecar/tests/tikhub/fixtures/tikhub_search_{douyin,bilibili,kuaishou}.json`）
@@ -56,7 +56,7 @@
 
 **快手** `data.mixFeeds[]`（本发 22 项，`itemType==5` 为视频共 19 项，`itemType==28` 为相关搜索/其它需跳过）→ `item["feed"]` flat 字段：
 - `photo_id`、`caption`、`user_name`、`user_id`、`view_count`、`like_count`、`comment_count`、`share_count`、`collect_count`、`duration`(ms)、`timestamp`(发布,ms)、`cover_thumbnail_urls`、`main_mv_urls`、`kwaiId`。
-- 翻页：`data.pcursor`（"1"→下一页），`data.recoPcursor=="no_more"` 结束。
+- 翻页：`data.pcursor`（"1"→下一页；缺失/空/"no_more"/与上页相同即停）。同一响应里 `recoPcursor=="no_more"` 与 `pcursor="1"` 并存，判定 `recoPcursor` 是推荐流游标、**不作终止信号**（同族评论端点末页 `pcursor="no_more"` 佐证 "no_more" 是 pcursor 一族的终值）。
 
 ## 5. 架构设计
 
@@ -83,7 +83,7 @@
   `search(keyword, target_count, on_card, on_progress, cancel_event, max_attempts=None, filters=None) -> SearchOutcome`。
 - 流程：`first_request(keyword, filters[platform])` 下推筛选 → 调 client（抖音 POST / B站快手 GET，每页失败重试 ≤3）→ `next_request(prev, raw)` 翻页（各自游标 + `MAX_PAGES` 硬闸）→ `normalize(raw, filters)` 成现有 `VideoCard` → `on_card`（带 `rank_in_search`）+ `on_progress`。
 - normalize 复用：**抖音借用 `_extract_cards`**；B站/快手新写小 normalizer（§4.2 字段已钉）。B站 title 去 `<em>` 标签；duration 字符串转秒。
-- **永不异常穿透**（对齐 `SearchOutcome` 语义）：页失败重试耗尽 → `status="failed"`（附已抓页数），**绝不返残缺列表**、绝不回退浏览器；`cancel_event` 命中 → `cancelled`（返回已抓部分不算失败）。
+- **适配器层永不异常穿透**（normalize / next_request 的异常按页级错误处理；归一化模块只对实测到的畸形结构兜底）：**首页**失败（重试耗尽 / 解析异常）→ `status="failed"`；**已发出 ≥1 张卡后**的后续页失败 → `status="done"` + note（已入库候选不因翻页失败被记失败——runner 只对 done 跑品牌预筛）；绝不回退浏览器；`cancel_event` 命中 → `cancelled`。终止判据（按序）：达 target / 整页都是重复卡（cards 非空且 0 张新卡，游标疑似卡住）/ 无下一页 / `MAX_PAGES` 硬闸；整页被本地过滤为空**不**停（快手日期区间靠翻页补偿）。
 - 快手/B站的本地时间后过滤沿用现状（快手无服务端时间参数）。
 
 ### 5.4 成本护栏
@@ -113,6 +113,7 @@
 - **R3 TikHub 单点故障**：宕机=三平台同黑（D5 不回退）；缓解=一键切回浏览器兜底（D2 强调该出口）。
 - **R4 成本失控**：靠 §5.4 每平台上限 + max_pages + 频率提示 + 402 余额闩共同兜底。
 - **R5 快手 mixFeeds 噪音**：`itemType!=5` 的相关搜索/运营卡需过滤（§4.2 已确认判据）。
+- **R6 快手翻页语义未真机验证**：实现期 TikHub 快手端点处于临时故障（连首页都 400「Request failed. Please retry … won't be charged」，同 `feedback_tikhub_transient_400_outage_diagnosis` 签名），无法验证 `pcursor="1"` 能否取到第 2 页。已按最安全口径实现（pcursor 主判据 + 游标不动点闸 + 后页失败降 done）：最坏情况是第 2 页白请求一次（该类失败不计费），而 recoPcursor 主判据的最坏情况是永久单页且完全静默。首次真机采集后看日志里每页 pcursor 是否 "1"→"2" 推进即可确认。
 
 ## 8. 不做（YAGNI）
 

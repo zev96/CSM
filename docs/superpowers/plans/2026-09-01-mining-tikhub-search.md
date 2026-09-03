@@ -1854,3 +1854,25 @@ git commit -m "docs(changelog): 采集走 TikHub 搜索 + 腾讯文档惯例对�
 **类型/命名一致性：** `build_tikhub_search_adapters` / `TikHubSearchAdapter` / `SearchSpec` / `HARD_CAP` / `MAX_PAGES` / `PAGE_RETRIES` / `_RETRY_SLEEP_S`（Task 6 定义，测试引用一致）；`douyin_first_body / douyin_next_body / normalize_douyin_search`、`bilibili_first_params / bilibili_next_params / normalize_bilibili_search`、`kuaishou_first_params / kuaishou_next_params / normalize_kuaishou_search`（Task 3/4/5 定义，Task 6 spec 引用一致）；`_data_source_mode` / `get_adapter(platform, mode)`（Task 7）；`build_column_map_auto` / `max_tier`（Task 10 定义，Task 11 引用）；`mining_data_source_mode`（Task 2 定义，Task 7/8/9 引用）。
 
 **占位符扫描：** 无 TBD / "类似 Task N"；每个代码步骤都给了完整代码；Task 8 Step 3 / Task 9 Step 1 / Task 12 Step 1 用 `grep` 先定位是因为对应文件我未逐行读过，但要插入的代码已完整给出。
+
+
+---
+
+## Amendments（实现期修订，与正文冲突时**以此为准**）
+
+### 修订 A（Tasks 3–5 审查后，已落 7a89be14）
+- 快手终止判据改为 **pcursor 主判据**（缺失/空/"no_more"/与上页相同即停；`recoPcursor` 不作终止信号）；三平台 `*_next_*` 加游标不动点闸；非 dict 载荷防御（`_dict/_to_int`）；抖音 `type`/`has_more` 类型归一；B站计数 `parse_int_count` 兜底；内层错误码 `logger.warning`；`_VALID_ORDERS` 导入复用；`_DY` 单例；仅 `content_type=="0"` 时本地后过滤。
+- 遗留两条一行加固并入 **Task 6 Step 0**（单独 commit）：快手 `duration` 走 `_to_int`；抖音不动点比较 `str()` 归一。
+
+### 修订 B（Task 6 适配器，以实现者收到的代码为准）
+1. 终止判据加「**整页都是重复卡**（cards 非空且 0 张新卡）→ 停」；**整页被本地过滤为空不停**（快手日期区间靠翻页补偿）。
+2. 页级错误语义：**首页**失败 → `failed`；**已发出 ≥1 张卡后**的后续页失败 → `done` + note（`error_message` 与 progress note 同文，形如「第 N 页失败已停止：…」）。
+3. `normalize` / `next_request` 包 try/except → 统一为页级错误（适配器层永不异常穿透）。
+4. `max_attempts` 判 `is not None` 且 clamp 到 `[1, MAX_PAGES]`。
+5. 每页 `logger.info` 记录游标字段（cursor/page/pcursor）与卡数，**不记 keyword**。
+6. 测试相应新增：后页失败降 done、全重复页停、空过滤页不停、normalize 异常（首页→failed / 后页→done）、`max_attempts` 上限、页日志含游标不含 keyword。
+
+### 修订 C（Task 7 分派）
+1. `get_adapter(platform, mode=None)`：`mode is None` 时内部调 `_data_source_mode()`；`run()` 仍调 `get_adapter(platform)`（既有 `test_mining_runner.py` 七处单参 fake 不动）。
+2. `csm_core.config.get_config()` 读 `default_config_path()`，**不受** `settings_path` fixture 影响 → Task 7 的 `_data_source_mode` 测试与分派测试改为 monkeypatch `csm_core.config.get_config`（runner 在函数内 import，patch 模块属性即生效），不再用 `config_service.patch`。
+3. `run()` 里 adapter 抛异常的兜底：用 `_on_card` 计数报告已入库条数，不再写死 `got=0`。
