@@ -64,7 +64,33 @@ def _prefilter_params() -> tuple[int, int]:
         return PREFILTER_SCRAPE_TOP_N, PREFILTER_THRESHOLD
 
 
-def get_adapter(platform: Platform) -> SearchAdapter:
+def _data_source_mode() -> str:
+    """每次任务现读 settings.json（get_config 无缓存），用户改了开关下个任务生效。
+    读不到 / 非法值 → tikhub_api（与 AppConfig 默认一致）。"""
+    try:
+        from csm_core.config import get_config
+
+        mode = str(getattr(get_config(), "mining_data_source_mode", "") or "")
+        return mode if mode in ("tikhub_api", "local") else "tikhub_api"
+    except Exception:
+        logger.info("[runner] config read failed, defaulting mining data source to tikhub_api", exc_info=True)
+        return "tikhub_api"
+
+
+def get_adapter(platform: Platform, mode: str | None = None) -> SearchAdapter:
+    """按数据源模式选适配器：tikhub_api → TikHub 付费搜索（免登录、免并发风控）；
+    local → 浏览器（手动兜底）。mode=None 时现读 AppConfig.mining_data_source_mode。
+    保持单参调用兼容（run() 与既有测试的 fake 都只传 platform）。"""
+    if mode is None:
+        mode = _data_source_mode()
+    if mode == "tikhub_api":
+        from csm_core.config import get_config, read_api_key
+        from csm_core.mining.platforms.tikhub_search import build_tikhub_search_adapters
+
+        adapters = build_tikhub_search_adapters(get_config, read_api_key)
+        if platform in adapters:
+            return adapters[platform]
+        raise ValueError(f"unknown platform: {platform}")
     if platform == "bilibili":
         return BilibiliSearchAdapter()
     if platform == "kuaishou":
@@ -118,6 +144,7 @@ class MiningRunner:
                 continue
 
             adapter = get_adapter(platform)
+            emitted = [0]
 
             def _on_card(card: VideoCard, platform=platform) -> None:
                 conn = mining_storage.get_conn()
@@ -135,6 +162,7 @@ class MiningRunner:
                     )
                 try:
                     mining_storage.upsert_video_and_link(card, job_id)
+                    emitted[0] += 1
                 except Exception as e:
                     logger.exception("upsert_video_and_link failed: %s", e)
 
@@ -171,12 +199,12 @@ class MiningRunner:
                 logger.exception("adapter %s threw — recording as failed", platform)
                 mining_storage.update_platform_progress(
                     job_id, platform,
-                    got=0, target=job["target_per_platform"],
+                    got=emitted[0], target=job["target_per_platform"],
                     phase="failed", note=str(e)[:200],
                 )
                 self.publish("job.platform_done", {
                     "job_id": job_id, "platform": platform,
-                    "status": "failed", "count": 0, "error": str(e)[:200],
+                    "status": "failed", "count": emitted[0], "error": str(e)[:200],
                 })
                 continue
 
@@ -239,6 +267,7 @@ class MiningRunner:
                 got=outcome.cards_emitted,
                 target=job["target_per_platform"],
                 phase=outcome.status if outcome.status != "done" else "done",
+                note=outcome.error_message or "",
             )
             self.publish("job.platform_done", {
                 "job_id": job_id, "platform": platform,

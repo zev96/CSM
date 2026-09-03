@@ -281,3 +281,47 @@ def test_runner_cancel_mid_job(db, monkeypatch):
     runner.run(jid)
     rows, total = ms.list_videos(commented="all")
     assert total == 0  # nothing emitted
+
+
+def test_done_outcome_note_is_persisted(db, monkeypatch):
+    """适配器以 done + error_message（如「第 2 页失败已停止」）收尾 → note 落到 progress，不被最终写抹掉。"""
+
+    class NotingAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            on_card(VideoCard(platform="bilibili", platform_video_id="B1", url="u1", title="t1"))
+            return SearchOutcome(platform="bilibili", status="done", cards_emitted=1,
+                                 error_message="第 2 页失败已停止：TikHub 限流")
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: NotingAdapter())
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    jid = ms.create_job("k", ["bilibili"], 50)
+    runner.run(jid)
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert prog["phase"] == "done" and prog["got"] == 1
+    assert "第 2 页失败已停止" in (prog.get("note") or "")
+
+
+def test_adapter_exception_reports_cards_already_emitted(db, monkeypatch):
+    """适配器在吐出 2 张卡后抛异常 → phase=failed 但 got=2（不再写死 0）。"""
+
+    class ExplodingAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            on_card(VideoCard(platform="bilibili", platform_video_id="B1", url="u1", title="t1"))
+            on_card(VideoCard(platform="bilibili", platform_video_id="B2", url="u2", title="t2"))
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: ExplodingAdapter())
+    events = []
+    runner = MiningRunner(publish=lambda kind, payload: events.append((kind, payload)))
+    jid = ms.create_job("k", ["bilibili"], 50)
+    runner.run(jid)
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert prog["phase"] == "failed" and prog["got"] == 2
+    done_evt = [p for k, p in events if k == "job.platform_done"][-1]
+    assert done_evt["status"] == "failed" and done_evt["count"] == 2
