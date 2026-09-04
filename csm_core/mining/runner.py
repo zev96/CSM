@@ -205,7 +205,14 @@ class MiningRunner:
                 except Exception as e:
                     logger.exception("upsert_video_and_link failed: %s", e)
 
-            def _on_progress(pu: ProgressUpdate, platform=platform) -> None:
+            def _on_progress(
+                pu: ProgressUpdate, platform=platform,
+                last_pub_time=last_pub_time, last_pub_count=last_pub_count,
+            ) -> None:
+                # last_pub_time/last_pub_count 同样必须显式绑成默认参数(同
+                # _on_card 那一条注释里说的晚绑定坑)——否则这个闭包存活到
+                # 下一个平台的循环体时,读到的会是下一个平台新建的节流状态
+                # 列表,而不是自己定义时捕获的那一份。
                 mining_storage.update_platform_progress(
                     job_id, platform,
                     got=pu.got, target=pu.target, phase=pu.phase, note=pu.note,
@@ -306,7 +313,7 @@ class MiningRunner:
                 got=outcome.cards_emitted,
                 target=job["target_per_platform"],
                 phase=outcome.status if outcome.status != "done" else "done",
-                note=outcome.error_message or "",
+                note=(outcome.error_message or "")[:200],
             )
             self.publish("job.platform_done", {
                 "job_id": job_id, "platform": platform,

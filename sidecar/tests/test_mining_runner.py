@@ -494,3 +494,90 @@ def test_mode_resolved_once_per_job(db, monkeypatch):
 
     assert recorded == [("bilibili", "local"), ("kuaishou", "local")]
     assert call_count["n"] == 1, f"config.get_config should be read exactly once per job, called {call_count['n']}x"
+
+
+# ── R5: _on_progress throttle state must be bound per-closure, not per-name ─
+
+def test_on_progress_closure_binds_its_own_throttle_state(db, monkeypatch):
+    """镜像 R3 的 _on_card 闭包测试，换成 _on_progress 的节流状态
+    (last_pub_time / last_pub_count)。A（bilibili）先真实调用一次自己的
+    on_progress（phase=done，正常收尾，与闭包 bug 无关），再把 on_progress
+    存进共享槽位。B（kuaishou）先用槽位里 A 的 on_progress 重放一条
+    got=99 的 scrolling 进度，然后才开始发自己真正的 scrolling 进度
+    (got=1..6)。
+
+    如果 _on_progress 对 last_pub_time/last_pub_count 是晚绑定闭包（引用
+    run() 作用域里的同名变量而不是把列表对象绑成默认参数）——B 平台的循环
+    体这时已经为 B 新建了这两个节流状态列表,于是 A 的重放会被错误地写进
+    B 自己的节流状态里,把基线拉到 got=99、时间戳拉到刚刚。随后 B 自己
+    真正的 1..6 进度全部因为「count 差距是负的 + 时间差距几乎是 0」被节流
+    吞掉，一条都发不出来。修复后 A 的 on_progress 操作的是 A 自己在定义时
+    捕获的列表对象，B 的节流状态分毫不动,B 的首条 scrolling 进度按时间阈值
+    正常发布。"""
+    slot: dict = {}
+
+    class StoringAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            slot["on_progress"] = on_progress
+            on_progress(ProgressUpdate(platform=self.platform, phase="done", got=1, target=target_count))
+            return SearchOutcome(platform=self.platform, status="done", cards_emitted=0)
+
+    class ReplayThenScrollAdapter:
+        platform = "kuaishou"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            # 用 A 存下的 on_progress 重放一条大 got 值的 scrolling 进度——
+            # 如果闭包晚绑定，这一下会污染 B 自己的节流基线。
+            slot["on_progress"](ProgressUpdate(platform="bilibili", phase="scrolling", got=99, target=target_count))
+            for i in range(1, 7):
+                on_progress(ProgressUpdate(platform=self.platform, phase="scrolling", got=i, target=target_count))
+            return SearchOutcome(platform=self.platform, status="done", cards_emitted=6)
+
+    adapters = {"bilibili": StoringAdapter(), "kuaishou": ReplayThenScrollAdapter()}
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: adapters[p])
+
+    events = []
+    runner = MiningRunner(publish=lambda kind, payload: events.append((kind, payload)))
+    jid = ms.create_job("k", ["bilibili", "kuaishou"], 50)
+    runner.run(jid)
+
+    ks_scrolling = [
+        e[1] for e in events
+        if e[0] == "job.progress" and e[1]["platform"] == "kuaishou" and e[1]["phase"] == "scrolling"
+    ]
+    assert ks_scrolling, (
+        "kuaishou 自己的 scrolling 进度必须能发布出来——节流基线不该被 A 的重放污染"
+    )
+    assert any(p["got"] == 1 for p in ks_scrolling), (
+        "kuaishou 的首条 scrolling 进度应按时间阈值发布（说明它自己的 last_pub_time "
+        "起点还是 0.0，没有被 A 重放时留下的近期时间戳污染）"
+    )
+
+
+# ── R6: final "done" note truncation must match the exception-path cap ─────
+
+def test_final_done_note_truncated_to_200_chars(db, monkeypatch):
+    """适配器以 done + 超长 error_message 收尾——最终写落的 note 必须和异常
+    路径（note=str(e)[:200]）同一截断口径，不能整段原样写进去。"""
+
+    class VerboseAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            return SearchOutcome(
+                platform=self.platform, status="done", cards_emitted=0,
+                error_message="警" * 500,
+            )
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: VerboseAdapter())
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    jid = ms.create_job("k", ["bilibili"], 50)
+    runner.run(jid)
+
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert len(prog.get("note") or "") <= 200
