@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -32,6 +33,17 @@ SHEET_MCP_URL = "https://docs.qq.com/api/v6/sheet/mcp"
 
 _PROTOCOL_VERSION = "2025-03-26"
 _CLIENT_INFO = {"name": "csm-sidecar", "version": "1.0"}
+
+# tools/list 里的工具名不可信（服务端可控）——诊断清单会原样拼进错误文案
+# 展示给用户，控制字符（\r\n\t 等）能伪造出看起来像另一行诊断信息的文本。
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f]")
+_MAX_TOOL_NAME_LEN = 80
+_MAX_TOOL_COUNT = 200
+
+
+def _sanitize_tool_name(name: str) -> str:
+    """去控制字符 + 截断到 80 字符（list_tools 诊断清单专用）。"""
+    return _CONTROL_CHARS_RE.sub("", name)[:_MAX_TOOL_NAME_LEN]
 
 
 def _redact(token: str) -> str:
@@ -98,15 +110,21 @@ class TencentDocsMCPClient:
             raise TokenInvalidError()
         if resp.status_code >= 400:
             raise TencentDocsError(
-                f"腾讯文档服务 HTTP {resp.status_code}：{resp.text[:200]}"
+                f"腾讯文档服务 HTTP {resp.status_code}：{self._redact_text(resp.text[:200])}"
             )
         # 202/204 = 通知类请求被接受，无 body。
         if resp.status_code in (202, 204) or not resp.content:
             return None
         return self._parse_response(resp)
 
-    @staticmethod
-    def _parse_response(resp: httpx.Response) -> dict[str, Any]:
+    def _redact_text(self, text: str) -> str:
+        """服务端错误文案可能原样回显 token（网关拒绝消息常见）——落进
+        TencentDocsError.reason（日志/UI 都会展示）之前先脱敏。"""
+        if not self._token:
+            return text
+        return text.replace(self._token, "***")
+
+    def _parse_response(self, resp: httpx.Response) -> dict[str, Any]:
         ctype = resp.headers.get("content-type", "")
         text = resp.text
         if "text/event-stream" in ctype:
@@ -132,9 +150,13 @@ class TencentDocsMCPClient:
         try:
             body = json.loads(text)
         except ValueError as e:
-            raise TencentDocsError(f"腾讯文档服务返回非 JSON：{text[:200]}") from e
+            raise TencentDocsError(
+                f"腾讯文档服务返回非 JSON：{self._redact_text(text[:200])}"
+            ) from e
         if not isinstance(body, dict):
-            raise TencentDocsError(f"腾讯文档服务返回异常结构：{text[:200]}")
+            raise TencentDocsError(
+                f"腾讯文档服务返回异常结构：{self._redact_text(text[:200])}"
+            )
         return body
 
     def _ensure_initialized(self) -> None:
@@ -152,7 +174,7 @@ class TencentDocsMCPClient:
         })
         if msg is not None and "error" in msg:
             err = msg["error"] or {}
-            raise map_error(str(err.get("message") or err))
+            raise map_error(self._redact_text(str(err.get("message") or err)))
         # initialized 通知：规范要求；服务端不认时忽略失败（stateless 实现常见）。
         try:
             self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -175,11 +197,11 @@ class TencentDocsMCPClient:
             raise TencentDocsError(f"{name} 无响应")
         if "error" in msg:
             err = msg["error"] or {}
-            raise map_error(str(err.get("message") or err))
+            raise map_error(self._redact_text(str(err.get("message") or err)))
         result = msg.get("result") or {}
 
         if result.get("isError"):
-            raise map_error(_content_text(result))
+            raise map_error(self._redact_text(_content_text(result)))
 
         structured = result.get("structuredContent")
         if isinstance(structured, dict):
@@ -201,11 +223,17 @@ class TencentDocsMCPClient:
         假设的经典表格 ``sheet.*`` 单元格工具不是一套；「测试连接」用它把
         服务端真实工具清单摊给用户，据实定方案（见设计文档 §5.1 待验证项）。
         分页游标 ``nextCursor`` 存在则续拉（工具数很少，10 页硬上限兜底）。
+
+        清单最终会拼进错误文案展示给用户，服务端名字不可信：跳过非字符串
+        名字、去控制字符（防伪造换行冒充另一行诊断信息）、单条截到 80
+        字符、总数封顶 200 条。
         """
         self._ensure_initialized()
         names: list[str] = []
         cursor: str | None = None
         for _ in range(10):
+            if len(names) >= _MAX_TOOL_COUNT:
+                break
             params: dict[str, Any] = {"cursor": cursor} if cursor else {}
             msg = self._post({
                 "jsonrpc": "2.0",
@@ -217,15 +245,21 @@ class TencentDocsMCPClient:
                 break
             if "error" in msg:
                 err = msg["error"] or {}
-                raise map_error(str(err.get("message") or err))
+                raise map_error(self._redact_text(str(err.get("message") or err)))
             result = msg.get("result") or {}
             for tool in result.get("tools") or []:
-                if isinstance(tool, dict) and tool.get("name"):
-                    names.append(str(tool["name"]))
+                if not isinstance(tool, dict):
+                    continue
+                name = tool.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                names.append(_sanitize_tool_name(name))
+                if len(names) >= _MAX_TOOL_COUNT:
+                    break
             cursor = result.get("nextCursor")
             if not cursor:
                 break
-        return names
+        return names[:_MAX_TOOL_COUNT]
 
     def __repr__(self) -> str:  # 日志里绝不能露 token
         return f"TencentDocsMCPClient(token={_redact(self._token)})"

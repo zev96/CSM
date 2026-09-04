@@ -190,11 +190,18 @@ def test_connection() -> dict[str, Any]:
                     "optional_missing": [td.col_map.get(k, k) for k in cmap.optional_missing],
                     "tier_gaps": cmap.tier_gaps,
                     "tiers_detected": max_tier(cmap),
+                    # 有评论层列但没有对应贴图列的层号——同步时会静默丢图
+                    # （不再污染正文），先在「测试连接」里报出来让用户提前配。
+                    "image_cols_missing": [
+                        n for n in range(1, max_tier(cmap) + 1)
+                        if cmap.col(f"tier{n}") is not None and cmap.col(f"img{n}") is None
+                    ],
                 })
         except TokenInvalidError:
             raise
         except TencentDocsError as e:
-            raise _augment_with_tools(e, available_tools) from e
+            _augment_with_tools(e, available_tools)
+            raise
 
     ok = all(not p["missing"] for p in per_platform)
     return {
@@ -237,7 +244,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
     if not items:
         return {
             "synced_videos": 0, "synced_comments": 0,
-            "skipped_in_doc": 0, "skipped_extra_tiers": 0, "images_inlined": 0,
+            "skipped_in_doc": 0, "skipped_extra_tiers": 0, "images_dropped": 0,
             "batches": [], "batch_id": None,
         }
 
@@ -248,7 +255,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
     synced_comment_ids: list[int] = []
     skipped_in_doc = 0
     skipped_extra_tiers = 0
-    images_inlined = 0
+    images_dropped = 0
     batches: list[dict[str, Any]] = []
     date_str = _date_str()
 
@@ -281,6 +288,13 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                         c["id"] for c in item["comments"]
                         if cmap.col(f"tier{c['tier']}") is not None
                     )
+                    # 超出表头层数的评论在这条分支里也留在 app 内（不标
+                    # synced）——同样要计进 skipped_extra_tiers，不然「这批
+                    # 还剩几层没进表格」的统计在去重路径上会悄悄漏掉。
+                    skipped_extra_tiers += sum(
+                        1 for c in item["comments"]
+                        if cmap.col(f"tier{c['tier']}") is None
+                    )
                     continue
 
                 row = [""] * width
@@ -306,9 +320,12 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                         if img_col is not None:
                             row[img_col] = _IMG_MARKER
                         else:
-                            # 该层没有贴图列：标记并入正文，不让「有图」信息静默消失。
-                            row[col] = f"{c['text']}（{_IMG_MARKER}）"
-                            images_inlined += 1
+                            # 该层没有贴图列：绝不把内部指示语（「有图，另发」）
+                            # 混进评论正文——兼职是原样复制评论文本去发布的，
+                            # 混进去的指示语会被公开贴出去。正文保持干净，
+                            # 只计数，缺列本身在「测试连接」的
+                            # image_cols_missing 里提前提示用户去补配。
+                            images_dropped += 1
                     block_comment_ids.append(c["id"])
                 rows.append(row)
                 block_video_ids.append(item["id"])
@@ -365,7 +382,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
         "synced_comments": marked,
         "skipped_in_doc": skipped_in_doc,
         "skipped_extra_tiers": skipped_extra_tiers,
-        "images_inlined": images_inlined,
+        "images_dropped": images_dropped,
         "batches": batches,
         "batch_id": batch_row_ids[0] if batch_row_ids else None,
     }

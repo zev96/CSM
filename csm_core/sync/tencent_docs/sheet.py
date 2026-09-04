@@ -276,8 +276,11 @@ def build_column_map(header: list[str], col_names: dict[str, str]) -> ColumnMap:
 # ── 表头惯例自动发现（2026-09-01 用户拍板的列命名）──────────────────────
 # 评论A / 评论B / … → tier1 / tier2 / …；评论A的图片 / 评论A图片 → img1 / …
 # 层数由表头实际有几列决定（不再硬顶 3 层）。链接列容忍 链接/视频链接/文章链接。
-_TIER_RE = re.compile(r"^评论([A-Za-z])$")
-_IMG_RE = re.compile(r"^评论([A-Za-z])的?图片$")
+# 字母上限收窄到 A–E（对齐生成端 5 层评论上限）：占位符文案「评论X」或罗马
+# 数字「评论Ⅰ」不是惯例里的具体字母，绝不能被误判成 tier24 / tier9 这种
+# 不存在的深层列（那样会让真正该判「无此列」的评论被错误放行去写别处）。
+_TIER_RE = re.compile(r"^评论([A-Ea-e])$")
+_IMG_RE = re.compile(r"^评论([A-Ea-e])的?图片$")
 _ALIASES: dict[str, tuple[str, ...]] = {
     "url": ("链接", "视频链接", "文章链接"),
     "seq": ("序号",),
