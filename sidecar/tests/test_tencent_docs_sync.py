@@ -119,6 +119,44 @@ def test_column_map_auto_missing_reports_only_required():
     assert cmap2.col("url") == 0 and cmap2.missing == ["tier1"]
 
 
+def test_column_map_auto_exact_match_wins_over_convention():
+    """配置列名精确匹配（内容一）优先于表头惯例发现（评论A），不被后者覆盖。"""
+    cmap = build_column_map_auto(["链接", "内容一", "评论A"], _COL_NAMES)
+    assert cmap.col("tier1") == 1
+
+
+def test_column_map_auto_alias_priority_prefers_higher_priority_name():
+    """url 的别名 (链接, 视频链接, 文章链接) 按 tuple 顺序定优先级，不是按
+    表头出现顺序——「链接」排第一，即使「视频链接」在表头里更靠前也不选它。
+
+    col_names 里不配 "url" 精确匹配目标，逼着走纯别名解析路径（否则
+    build_column_map 的精确匹配会先一步命中，测不出别名优先级排序本身）。"""
+    cmap = build_column_map_auto(["视频链接", "链接"], {"tier1": "内容一"})
+    assert cmap.col("url") == 1
+
+
+def test_column_map_auto_nfkc_normalizes_fullwidth_letters():
+    """全角字母 评论Ａ 经 NFKC 规整后等价于半角 评论A，命中 tier1。"""
+    cmap = build_column_map_auto(["链接", "评论Ａ"], _COL_NAMES)
+    assert cmap.col("tier1") == 1
+
+
+def test_column_map_auto_reports_optional_missing_and_tier_gaps():
+    """T2：可选列缺失 (optional_missing) 与表头断层 (tier_gaps) 都要能报出来
+    （不阻断，只用于「测试连接」告警展示）。"""
+    legacy_header_no_tier2 = ["序号", "链接", "内容一", "贴图一", "盖楼内容三", "贴图三", "日期"]
+    cmap = build_column_map_auto(legacy_header_no_tier2, _COL_NAMES)
+    assert cmap.missing == []
+    assert "tier2" in cmap.optional_missing and "img2" in cmap.optional_missing
+
+    gap_cmap = build_column_map_auto(["链接", "评论A", "评论C"], _COL_NAMES)
+    assert gap_cmap.tier_gaps == [2]
+
+    full_cmap = build_column_map_auto(_USER_HEADER, _COL_NAMES)
+    assert full_cmap.optional_missing == []
+    assert full_cmap.tier_gaps == []
+
+
 # ── MCP client（httpx.MockTransport）──────────────────────────────────
 
 def _jsonrpc_result(result: dict) -> dict:
@@ -478,6 +516,77 @@ def test_sync_skips_tiers_deeper_than_header(monitor_db, settings_path, monkeypa
     monkeypatch.setattr(tds, "_client_factory", None)
 
 
+def test_sync_gap_header_skips_missing_middle_tier(monitor_db, settings_path, monkeypatch):
+    """T1：表头断层（评论A/评论C 之间没有评论B）不能再用「表头最大层号」判断
+    某一层能不能写——按该层的列是否真实存在决定。断层的那层留在 app 内
+    （保持 approved，不假标 synced），已有列的层照常写、照常标 synced。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论C"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼", "三楼"])
+
+    result = tds.sync_approved()
+    assert result["synced_comments"] == 2
+    assert result["skipped_extra_tiers"] == 1
+    row = fake.rows[1]
+    assert row[1] == "一楼"     # tier1 → 评论A 列
+    assert row[2] == "三楼"     # tier3 → 评论C 列
+    assert "二楼" not in row    # tier2 没有列，没有被误写进任何位置
+
+    comments_by_tier = {c["tier"]: c for c in ms.list_comments(1)}
+    assert comments_by_tier[1]["review_status"] == "synced"
+    assert comments_by_tier[2]["review_status"] == "approved"   # 断层层：留在 app 内
+    assert comments_by_tier[3]["review_status"] == "synced"
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_literal_comment_x_header_is_harmless(monitor_db, settings_path, monkeypatch):
+    """表头里字面出现「评论X」（占位符文案，不是惯例里具体的字母）会被当成
+    真实的 tier24 列——这里确认这种边缘表头不会让 tier2 被误判成「有列可写」。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论X"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼"])
+
+    result = tds.sync_approved()
+    assert result["skipped_extra_tiers"] == 1
+    row = fake.rows[1]
+    assert row[1] == "一楼"
+
+    tier2 = next(c for c in ms.list_comments(1) if c["tier"] == 2)
+    assert tier2["review_status"] == "approved"    # 没有列可写，没有被假标 synced
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_image_marker_inlined_when_img_column_missing(monitor_db, settings_path, monkeypatch):
+    """T3：某层有图但表头没有对应的「评论X的图片」列时，「有图，另发」标记
+    不能静默消失——并入正文，并计进 images_inlined。有图列的层照常走列。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论A的图片", "评论B"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111",
+                              ["一楼", "二楼"], images_on={1, 2})
+
+    result = tds.sync_approved()
+    assert result["images_inlined"] == 1
+    row = fake.rows[1]
+    assert row[2] == "有图，另发"              # tier1 有图片列 → 走列
+    assert row[3] == "二楼（有图，另发）"        # tier2 没有图片列 → 标记并入正文
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
 def test_test_connection_reports_tiers_detected(monitor_db, settings_path, monkeypatch):
     config_service.patch({"tencent_docs": {
         "enabled": True,
@@ -505,6 +614,47 @@ def test_test_connection_missing_required_uses_friendly_labels(monitor_db, setti
     assert any("视频链接" in m for m in out["missing"])
     assert any("评论A" in m for m in out["missing"])
     monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_reports_optional_missing_columns(monitor_db, settings_path, monkeypatch):
+    """T2：可选列（非 url/tier1）配置了但表头里没有 → optional_missing 报出来，
+    但不算错（ok 仍为 True，missing 仍为空）。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    legacy_header_no_tier2 = ["序号", "链接", "内容一", "贴图一", "盖楼内容三", "贴图三", "日期"]
+    fake = FakeSheetClient([legacy_header_no_tier2])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert out["ok"] is True
+    assert out["missing"] == []
+    assert "盖楼内容二" in out["optional_missing"]
+    assert "贴图二" in out["optional_missing"]
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_reports_tier_gaps(monitor_db, settings_path, monkeypatch):
+    """T2：表头断层（评论A/评论C 之间缺评论B）要能报出 tier_gaps，供前端提醒。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论C"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert all(p["tier_gaps"] == [2] for p in out["sheets"])
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_full_header_no_optional_missing_no_gaps(tdocs_env: FakeSheetClient):
+    """T2 反面：表头齐全（_USER_HEADER）时 optional_missing / tier_gaps 都该是空。"""
+    out = tds.test_connection()
+    assert all(p["optional_missing"] == [] for p in out["sheets"])
+    assert all(p["tier_gaps"] == [] for p in out["sheets"])
+    assert out["optional_missing"] == []
 
 
 def test_sync_approved_dedups_by_url_column(tdocs_env: FakeSheetClient):

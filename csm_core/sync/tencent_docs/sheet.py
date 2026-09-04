@@ -12,13 +12,17 @@ from __future__ import annotations
 
 import io
 import csv as _csv
+import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .client import TencentDocsMCPClient
 from .errors import TencentDocsError
+
+logger = logging.getLogger(__name__)
 
 # https://docs.qq.com/sheet/DWHhY...?tab=BB08J2 → (file_id, tab)
 _SHEET_PATH_RE = re.compile(r"/sheet/([A-Za-z0-9]+)")
@@ -234,6 +238,12 @@ class ColumnMap:
     """表头列名 → 列号。缺列记进 missing，由「测试连接」报给用户。"""
     by_key: dict[str, int] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
+    # 可选列（非 url/tier1）配置了但表头里没找到——不阻断同步，仅用于
+    # 「测试连接」的告警展示（例如漏配了 贴图二 列）。
+    optional_missing: list[str] = field(default_factory=list)
+    # 表头断层：评论层里夹在已发现的最深层之内、但自己缺列的层号
+    # （如只有 评论A/评论C → tier_gaps=[2]）。同样只用于展示告警。
+    tier_gaps: list[int] = field(default_factory=list)
 
     def col(self, key: str) -> int | None:
         return self.by_key.get(key)
@@ -280,17 +290,35 @@ def _letter_to_tier(ch: str) -> int:
     return ord(ch.upper()) - ord("A") + 1
 
 
+def max_tier(cmap: ColumnMap) -> int:
+    """表头里最深的评论层（tierN 的最大 N）；没有 → 0。"""
+    return max(
+        (int(k[4:]) for k in cmap.by_key if k.startswith("tier") and k[4:].isdigit()),
+        default=0,
+    )
+
+
+def _normalize_header_cell(h: str | None) -> str:
+    """NFKC 规整（全角字母/数字 → 半角，如 评论Ａ → 评论A）再去空白。"""
+    return _WS_RE.sub("", unicodedata.normalize("NFKC", h or ""))
+
+
 def build_column_map_auto(header: list[str], col_names: dict[str, str]) -> ColumnMap:
     """先按配置列名精确匹配（`build_column_map`），再按表头惯例自动发现补齐。
 
-    发现规则（去空白、字母不分大小写）：``评论X`` → ``tierN``、``评论X的图片`` /
-    ``评论X图片`` → ``imgN``（X=A→1、B→2…），``链接/视频链接/文章链接`` → ``url``，
-    ``序号`` → ``seq``，``日期/任务日期`` → ``date``。精确匹配优先（不覆盖）。
-    ``missing`` 只报必需列（url、tier1）—— 可选列缺失不算错。
+    发现规则（NFKC 规整、去空白、字母不分大小写）：``评论X`` → ``tierN``、
+    ``评论X的图片`` / ``评论X图片`` → ``imgN``（X=A→1、B→2…），
+    ``链接/视频链接/文章链接`` → ``url``，``序号`` → ``seq``，
+    ``日期/任务日期`` → ``date``。精确匹配优先（不覆盖）。别名之间按
+    ``_ALIASES`` 里 tuple 的顺序定优先级（不是表头出现顺序）——同一个 key
+    的多个别名都出现在表头时选优先级最高的那个，并 warn 一下选了哪个。
+    ``missing`` 只报必需列（url、tier1）——可选列缺失记进 ``optional_missing``，
+    表头断层记进 ``tier_gaps``，两者都不算错，只用于「测试连接」展示告警。
     """
     cmap = build_column_map(header, col_names)
-    for i, h in enumerate(header):
-        name = _WS_RE.sub("", h or "")
+    normalized_header = [_normalize_header_cell(h) for h in header]
+
+    for i, name in enumerate(normalized_header):
         if not name:
             continue
         m = _TIER_RE.match(name)
@@ -300,18 +328,35 @@ def build_column_map_auto(header: list[str], col_names: dict[str, str]) -> Colum
         m = _IMG_RE.match(name)
         if m:
             cmap.by_key.setdefault(f"img{_letter_to_tier(m.group(1))}", i)
+
+    for key, names in _ALIASES.items():
+        if key in cmap.by_key:
             continue
-        for key, names in _ALIASES.items():
-            if key not in cmap.by_key and name in names:
-                cmap.by_key[key] = i
+        matched = [i for i, name in enumerate(normalized_header) if name in names]
+        if not matched:
+            continue
+        chosen: int | None = None
+        for alias_name in names:  # tuple 顺序 = 优先级
+            for i in matched:
+                if normalized_header[i] == alias_name:
+                    chosen = i
+                    break
+            if chosen is not None:
                 break
+        assert chosen is not None  # matched 非空必能命中某个 alias_name
+        cmap.by_key[key] = chosen
+        if len(matched) > 1:
+            seen_names = "、".join(dict.fromkeys(normalized_header[i] for i in matched))
+            logger.warning(
+                "[tdocs] 表头里 %s 的别名出现了不止一个（%s），按优先级选用第 %d 列",
+                key, seen_names, chosen,
+            )
+
     cmap.missing = [k for k in _REQUIRED_KEYS if k not in cmap.by_key]
+    cmap.optional_missing = [
+        k for k in col_names if k not in cmap.by_key and k not in _REQUIRED_KEYS
+    ]
+    cmap.tier_gaps = [
+        n for n in range(1, max_tier(cmap) + 1) if f"tier{n}" not in cmap.by_key
+    ]
     return cmap
-
-
-def max_tier(cmap: ColumnMap) -> int:
-    """表头里最深的评论层（tierN 的最大 N）；没有 → 0。"""
-    return max(
-        (int(k[4:]) for k in cmap.by_key if k.startswith("tier") and k[4:].isdigit()),
-        default=0,
-    )

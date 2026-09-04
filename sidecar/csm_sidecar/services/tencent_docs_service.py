@@ -114,10 +114,7 @@ def _load_sheet_state(
     cmap = build_column_map_auto(header, col_names)
     if cmap.missing:
         names = "、".join(_REQUIRED_LABELS.get(k, k) for k in cmap.missing)
-        raise TencentDocsError(
-            f"子表「{target.sheet_name}」里找不到必需列：{names}"
-            "（检查表头：需要 链接 列和 评论A 列）"
-        )
+        raise TencentDocsError(f"子表「{target.sheet_name}」里找不到必需列：{names}")
     existing = read_column_texts(client, target, cmap.col("url"))
     last_used = max(existing.keys()) if existing else 0  # 表头行兜底
     return _SheetState(
@@ -190,6 +187,8 @@ def test_connection() -> dict[str, Any]:
                     "sheet_name": target.sheet_name,
                     "matched_by_name": named is not None,
                     "missing": [_REQUIRED_LABELS.get(k, k) for k in cmap.missing],
+                    "optional_missing": [td.col_map.get(k, k) for k in cmap.optional_missing],
+                    "tier_gaps": cmap.tier_gaps,
                     "tiers_detected": max_tier(cmap),
                 })
         except TokenInvalidError:
@@ -207,6 +206,7 @@ def test_connection() -> dict[str, Any]:
         "header": [h for h in header_cache[fallback.sheet_id][0] if h]
         if fallback.sheet_id in header_cache else [],
         "missing": sorted({m for p in per_platform for m in p["missing"]}),
+        "optional_missing": sorted({m for p in per_platform for m in p["optional_missing"]}),
         # 诊断字段：服务端 tools/list 真实工具清单（据实定方案用）
         "available_tools": available_tools,
     }
@@ -237,7 +237,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
     if not items:
         return {
             "synced_videos": 0, "synced_comments": 0,
-            "skipped_in_doc": 0, "skipped_extra_tiers": 0,
+            "skipped_in_doc": 0, "skipped_extra_tiers": 0, "images_inlined": 0,
             "batches": [], "batch_id": None,
         }
 
@@ -248,6 +248,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
     synced_comment_ids: list[int] = []
     skipped_in_doc = 0
     skipped_extra_tiers = 0
+    images_inlined = 0
     batches: list[dict[str, Any]] = []
     date_str = _date_str()
 
@@ -267,7 +268,6 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 state = _load_sheet_state(client, target, td.col_map)
                 states[target.sheet_id] = state
             cmap = state.cmap
-            tiers_available = max_tier(cmap)
             width = max(cmap.by_key.values()) + 1
 
             rows: list[list[str]] = []
@@ -278,7 +278,8 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 if item["url"] and item["url"] in state.existing_blob:
                     skipped_in_doc += 1
                     synced_comment_ids.extend(
-                        c["id"] for c in item["comments"] if c["tier"] <= tiers_available
+                        c["id"] for c in item["comments"]
+                        if cmap.col(f"tier{c['tier']}") is not None
                     )
                     continue
 
@@ -293,13 +294,21 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 _put("url", f"{item['title']} {item['url']}".strip())
                 _put("date", date_str)
                 for c in item["comments"]:
-                    if c["tier"] > tiers_available:
-                        # 表头没有这一层的「评论X」列；更深楼层留在 app 内（保持 approved）。
+                    col = cmap.col(f"tier{c['tier']}")
+                    if col is None:
+                        # 表头没有这一层的「评论X」列（超出层数或表头断层）；
+                        # 留在 app 内（保持 approved），不按「最大层号」误判可写。
                         skipped_extra_tiers += 1
                         continue
-                    _put(f"tier{c['tier']}", c["text"])
+                    row[col] = c["text"]
                     if c["image_ids"]:
-                        _put(f"img{c['tier']}", _IMG_MARKER)
+                        img_col = cmap.col(f"img{c['tier']}")
+                        if img_col is not None:
+                            row[img_col] = _IMG_MARKER
+                        else:
+                            # 该层没有贴图列：标记并入正文，不让「有图」信息静默消失。
+                            row[col] = f"{c['text']}（{_IMG_MARKER}）"
+                            images_inlined += 1
                     block_comment_ids.append(c["id"])
                 rows.append(row)
                 block_video_ids.append(item["id"])
@@ -356,6 +365,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
         "synced_comments": marked,
         "skipped_in_doc": skipped_in_doc,
         "skipped_extra_tiers": skipped_extra_tiers,
+        "images_inlined": images_inlined,
         "batches": batches,
         "batch_id": batch_row_ids[0] if batch_row_ids else None,
     }
