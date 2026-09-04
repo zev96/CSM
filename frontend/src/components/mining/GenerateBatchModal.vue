@@ -68,7 +68,7 @@ function onSubmit() {
       <label class="text-[11.5px] font-semibold mb-1.5 block">每视频楼层数</label>
       <div class="flex" style="background: var(--card-2); border-radius: 999px; padding: 3px; border: 1px solid var(--line); max-width: 220px;">
         <button
-          v-for="n in [1, 2, 3]" :key="n"
+          v-for="n in [1, 2, 3, 4, 5]" :key="n"
           @click="tiers = n"
           :style="{
             flex: 1, height: '28px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 500,
@@ -79,7 +79,7 @@ function onSubmit() {
         >{{ n }} 层</button>
       </div>
       <div class="mt-1.5 text-[11px]" style="color: var(--ink-3);">
-        第 2、3 层是盖楼跟评（与前层形成对话感）。上限 3 层对齐兼职表格结构。
+        第 2 层起是盖楼跟评（与前层形成对话感）。上限 5 层，实际写入层数由腾讯文档表头的「评论X」列数决定。
       </div>
     </div>
 

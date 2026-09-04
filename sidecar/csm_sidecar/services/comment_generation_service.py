@@ -66,7 +66,7 @@ REWRITE_FLAVOR_THRESHOLD = 3.0
 _COMMENTS_BLOCK_MAX = 10
 _COMMENT_TEXT_CAP = 120
 
-_MAX_TIERS = 3  # 与腾讯文档表格的三层结构对齐（spec §3.4）
+_MAX_TIERS = 5  # 评论A–E；腾讯文档实际写入层数由表头「评论X」列数决定（tencent_docs_service）
 
 
 # ── Batch runner state（仿 mining_service 单 worker + 忙碌位）───────────

@@ -218,3 +218,8 @@ def test_resolve_templates_auto_requires_nonempty_library(monitor_db: Path):
         gen._resolve_templates(None)
     _seed_template()
     assert len(gen._resolve_templates(None)) == 1
+
+
+def test_submit_batch_clamps_tiers_to_five():
+    from csm_sidecar.services import comment_generation_service as cgs
+    assert cgs._MAX_TIERS == 5
