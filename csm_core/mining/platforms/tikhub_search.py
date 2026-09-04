@@ -44,12 +44,15 @@ _CURSOR_KEYS = ("cursor", "page", "pcursor")
 
 def _retryable(e: TikHubError) -> bool:
     """只重试「服务端没出货」的失败：网络错误（code None）/ HTTP 5xx / 429 限流。
-    401/403（key 无效，重试无意义）、其它 4xx、以及 HTTP 200 + body code≠200
-    （服务端已返回内容，可能已计费）都不重试。"""
-    if getattr(e, "from_body", False):
-        return False
+    429 是纯粹的限流，不管是 HTTP 429 还是 HTTP 200 + body code=429，服务端都没有
+    真正出货，可以退避重试。401/403（key 无效，重试无意义）、其它 4xx、以及
+    HTTP 200 + body code≠200 且不是 429（服务端已返回内容，可能已计费）都不重试。"""
     code = e.code
-    return code is None or code == 429 or (isinstance(code, int) and 500 <= code < 600)
+    if code == 429:                     # 限流：HTTP 429 或 body 429 都没出货，可退避重试
+        return True
+    if getattr(e, "from_body", False):  # HTTP 200 + body code≠200：服务端已出货，可能已计费
+        return False
+    return code is None or (isinstance(code, int) and 500 <= code < 600)
 
 
 def _retry_delay(code: int | None, attempt: int) -> float:
@@ -150,6 +153,11 @@ class TikHubSearchAdapter:
             raise _PageError(f"请求失败：{e!r}"[:160]) from e
         try:
             cards = self.spec.normalize(raw, plat_filters)
+            # 具体化 + 校验必须在 try 内完成：normalize 可能返回一个惰性生成器，
+            # 真正的异常要到迭代时才抛出——如果这里只是把生成器原样传出去，异常会在
+            # try 块外的 for 循环里穿透 search()。同时过滤掉非 VideoCard 元素，
+            # 防止归一化实现返回脏数据时下游属性访问穿透。
+            cards = [c for c in (cards or []) if isinstance(c, VideoCard)]
             nxt = self.spec.next_request(req, raw)
         except Exception as e:  # noqa: BLE001 — 适配器层永不异常穿透
             logger.warning("[tikhub-search] %s parse error: %r", self.platform, e, exc_info=True)
@@ -180,6 +188,7 @@ class TikHubSearchAdapter:
             ))
 
         def _failed(reason: str, emitted: int, pages: int = 0) -> SearchOutcome:
+            reason = reason[:200]
             _progress("failed", emitted, reason)
             suffix = f"（已抓 {pages} 页）" if pages else ""
             return SearchOutcome(
@@ -250,7 +259,10 @@ class TikHubSearchAdapter:
                 break
             req = nxt
 
-        if cancel_event.is_set():
+        # 循环退出后取消事件已置位：只有还没达标时才算真正的"用户取消打断"；已经
+        # 凑够 target 条的话，循环是因为 emitted>=target 正常退出的，不应把已经
+        # 入库的候选降级成 cancelled 而丢弃。
+        if cancel_event.is_set() and emitted < target:
             return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
         # 翻了页却一条都没命中：多半是筛选条件过严/关键词冷门，不是采集本身出了问题——
         # 给用户一个可诊断的提示,而不是静默的"done, 0 条"。

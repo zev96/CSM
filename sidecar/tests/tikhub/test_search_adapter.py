@@ -233,6 +233,88 @@ def test_normalize_exception_after_cards_is_done():
     assert out.status == "done" and out.cards_emitted == 1 and "第 2 页" in out.error_message
 
 
+# ── A2：normalize 返回值必须在 try 内被具体化/校验 ──────────────────────────
+
+def test_normalize_returns_none_is_done_with_zero_hits_note():
+    """normalize 返回 None(而不是空 list)—— 不能让下游 for 循环 TypeError 穿透
+    search()，应等价于 0 张卡的一页正常收尾。"""
+    spec = dataclasses.replace(S.DOUYIN_SEARCH_SPEC, normalize=lambda raw, f: None)
+    h = lambda req: httpx.Response(200, json=_dy_page([], has_more=0, next_cursor=0))
+    out, cards, progress = _run(_adapter(h, spec=spec))
+    assert out.status == "done" and out.cards_emitted == 0 and len(cards) == 0
+    assert "0 条命中" in out.error_message
+
+
+def test_normalize_returns_non_videocard_items_are_filtered():
+    """normalize 混入非 VideoCard 元素(如裸 object()/字符串)—— 必须被过滤掉，
+    不能让 card.platform_video_id 之类的属性访问穿透 search()。"""
+    spec = dataclasses.replace(S.DOUYIN_SEARCH_SPEC, normalize=lambda raw, f: [object(), "x"])
+    h = lambda req: httpx.Response(200, json=_dy_page([], has_more=0, next_cursor=0))
+    out, cards, progress = _run(_adapter(h, spec=spec))
+    assert out.status == "done" and out.cards_emitted == 0 and len(cards) == 0
+    assert "0 条命中" in out.error_message
+
+
+def test_normalize_returns_lazy_generator_that_raises_is_failed_not_raised():
+    """normalize 返回一个生成器(惰性求值)，真正的异常在第一次 next() 时才抛出 ——
+    这类异常必须发生在 _fetch_page 的 try 块内部才能被捕获成 _PageError；如果
+    normalize 的返回值没有在 try 内被具体化(list()化)，异常会在 try 块外的
+    for 循环里穿透 search()。"""
+    def boom_gen(raw, f):
+        def gen():
+            raise RuntimeError("bad shape")
+            yield  # pragma: no cover — 使其成为生成器函数
+        return gen()
+
+    spec = dataclasses.replace(S.DOUYIN_SEARCH_SPEC, normalize=boom_gen)
+    h = lambda req: httpx.Response(200, json=_dy_page(["1"], has_more=0, next_cursor=0))
+    out, cards, progress = _run(_adapter(h, spec=spec))
+    assert out.status == "failed" and out.cards_emitted == 0 and "解析" in out.error_message
+    assert progress[-1].phase == "failed"
+
+
+# ── A4：已达 target 后循环退出，收尾时取消事件已置位不应把 done 降级 ────────
+
+def test_cancel_set_after_reaching_target_stays_done():
+    """target=2，一页刚好 2 张卡；on_card 在收到第 2 张卡时才置位取消事件 ——
+    此时采集已经达标，循环因 emitted>=target 自然退出，不应因为退出后取消事件
+    恰好已置位就把结果降级成 cancelled(那会丢弃已经入库的候选)。"""
+    ev = threading.Event()
+
+    def h(req):
+        return httpx.Response(200, json=_dy_page(["1", "2"], has_more=0, next_cursor=0))
+
+    cards = []
+
+    def on_card_and_maybe_cancel(card):
+        cards.append(card)
+        if len(cards) == 2:
+            ev.set()
+
+    out = _adapter(h).search(
+        keyword="k", target_count=2,
+        on_card=on_card_and_maybe_cancel, on_progress=lambda pu: None,
+        cancel_event=ev, filters=None,
+    )
+    assert out.status == "done" and out.cards_emitted == 2
+
+
+# ── A5：failed 的 reason 必须截断，避免 note 无界增长 ───────────────────────
+
+def test_failed_reason_is_bounded_even_for_huge_exception_message():
+    def cf():
+        raise RuntimeError("x" * 500)
+
+    adapter = S.TikHubSearchAdapter(S.DOUYIN_SEARCH_SPEC, cf)
+    out = adapter.search(
+        keyword="k", target_count=10,
+        on_card=lambda c: None, on_progress=lambda pu: None,
+        cancel_event=threading.Event(), filters=None,
+    )
+    assert out.status == "failed"
+    assert len(out.error_message) < 260
+
+
 def test_max_attempts_caps_pages():
     calls = {"n": 0}
 
@@ -354,6 +436,24 @@ def test_filters_non_dict_falls_back_to_empty_plat_filters():
     h = lambda req: httpx.Response(200, json=_dy_page(["1"], has_more=0, next_cursor=0))
     out, cards, _ = _run(_adapter(h), filters=["x"])
     assert out.status == "done" and out.cards_emitted == 1
+
+
+# ── A1：HTTP 200 + body code=429 也是限流，没出货，可退避重试 ──────────────
+
+def test_body_429_is_retried_not_from_body_short_circuit():
+    """限流有的走 HTTP 429，有的走 HTTP 200 + body code=429 —— 两种都没有真出货，
+    必须都能退避重试，不能被 from_body(=True, 因为 http=200) 误判成"已出货不重试"。"""
+    calls = {"n": 0}
+
+    def h(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(200, json={"code": 429})
+        return httpx.Response(200, json=_dy_page(["1"], has_more=0, next_cursor=0))
+
+    out, cards, _ = _run(_adapter(h))
+    assert out.status == "done" and out.cards_emitted == 1
+    assert calls["n"] == 2
 
 
 # ── B2 (I4)：重试只重试「服务端没出货」的失败；429 指数退避 ──────────────────
