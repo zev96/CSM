@@ -87,6 +87,38 @@ def test_build_column_map_whitespace_tolerant_and_missing():
     assert cmap.missing == ["tier1"]
 
 
+from csm_core.sync.tencent_docs import build_column_map_auto
+
+
+def test_column_map_auto_detects_comment_letters_dynamic_tiers():
+    header = ["视频链接", "评论A", "评论A的图片", "评论B", "评论C", "评论D", "评论D的图片"]
+    cmap = build_column_map_auto(header, _COL_NAMES)
+    assert cmap.col("url") == 0                 # 别名：视频链接
+    assert cmap.col("tier1") == 1 and cmap.col("img1") == 2
+    assert cmap.col("tier2") == 3 and cmap.col("tier3") == 4
+    assert cmap.col("tier4") == 5 and cmap.col("img4") == 6     # 层数由表头决定，不硬顶 3
+    assert cmap.missing == []
+
+
+def test_column_map_auto_tolerates_whitespace_and_lowercase():
+    header = ["链接", "评论 a", "评论a图片"]
+    cmap = build_column_map_auto(header, _COL_NAMES)
+    assert cmap.col("tier1") == 1 and cmap.col("img1") == 2
+
+
+def test_column_map_auto_legacy_header_still_exact_matches():
+    cmap = build_column_map_auto(_USER_HEADER, _COL_NAMES)
+    assert cmap.col("tier1") == 2 and cmap.col("img1") == 3 and cmap.col("tier3") == 6
+    assert cmap.missing == []
+
+
+def test_column_map_auto_missing_reports_only_required():
+    cmap = build_column_map_auto(["发布类型", "平台", "文章标题"], _COL_NAMES)
+    assert cmap.missing == ["url", "tier1"]
+    cmap2 = build_column_map_auto(["文章链接"], _COL_NAMES)
+    assert cmap2.col("url") == 0 and cmap2.missing == ["tier1"]
+
+
 # ── MCP client（httpx.MockTransport）──────────────────────────────────
 
 def _jsonrpc_result(result: dict) -> dict:

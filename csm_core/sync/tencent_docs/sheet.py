@@ -261,3 +261,57 @@ def build_column_map(header: list[str], col_names: dict[str, str]) -> ColumnMap:
         else:
             cmap.by_key[key] = found
     return cmap
+
+
+# ── 表头惯例自动发现（2026-09-01 用户拍板的列命名）──────────────────────
+# 评论A / 评论B / … → tier1 / tier2 / …；评论A的图片 / 评论A图片 → img1 / …
+# 层数由表头实际有几列决定（不再硬顶 3 层）。链接列容忍 链接/视频链接/文章链接。
+_TIER_RE = re.compile(r"^评论([A-Za-z])$")
+_IMG_RE = re.compile(r"^评论([A-Za-z])的?图片$")
+_ALIASES: dict[str, tuple[str, ...]] = {
+    "url": ("链接", "视频链接", "文章链接"),
+    "seq": ("序号",),
+    "date": ("日期", "任务日期"),
+}
+_REQUIRED_KEYS = ("url", "tier1")
+
+
+def _letter_to_tier(ch: str) -> int:
+    return ord(ch.upper()) - ord("A") + 1
+
+
+def build_column_map_auto(header: list[str], col_names: dict[str, str]) -> ColumnMap:
+    """先按配置列名精确匹配（`build_column_map`），再按表头惯例自动发现补齐。
+
+    发现规则（去空白、字母不分大小写）：``评论X`` → ``tierN``、``评论X的图片`` /
+    ``评论X图片`` → ``imgN``（X=A→1、B→2…），``链接/视频链接/文章链接`` → ``url``，
+    ``序号`` → ``seq``，``日期/任务日期`` → ``date``。精确匹配优先（不覆盖）。
+    ``missing`` 只报必需列（url、tier1）—— 可选列缺失不算错。
+    """
+    cmap = build_column_map(header, col_names)
+    for i, h in enumerate(header):
+        name = _WS_RE.sub("", h or "")
+        if not name:
+            continue
+        m = _TIER_RE.match(name)
+        if m:
+            cmap.by_key.setdefault(f"tier{_letter_to_tier(m.group(1))}", i)
+            continue
+        m = _IMG_RE.match(name)
+        if m:
+            cmap.by_key.setdefault(f"img{_letter_to_tier(m.group(1))}", i)
+            continue
+        for key, names in _ALIASES.items():
+            if key not in cmap.by_key and name in names:
+                cmap.by_key[key] = i
+                break
+    cmap.missing = [k for k in _REQUIRED_KEYS if k not in cmap.by_key]
+    return cmap
+
+
+def max_tier(cmap: ColumnMap) -> int:
+    """表头里最深的评论层（tierN 的最大 N）；没有 → 0。"""
+    return max(
+        (int(k[4:]) for k in cmap.by_key if k.startswith("tier") and k[4:].isdigit()),
+        default=0,
+    )
