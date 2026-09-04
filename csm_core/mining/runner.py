@@ -45,16 +45,21 @@ Signature: ``publish(kind, payload)`` — kind ∈ {"job.started", "job.progress
 "job.platform_done", "job.finished", "login.required"}."""
 
 
-def _prefilter_params() -> tuple[int, int]:
+def _prefilter_params(cfg=None) -> tuple[int, int]:
     """Resolve (top_n, threshold) from AppConfig, falling back to module constants.
 
     每次 run 现读一次 settings.json（get_config 无缓存），用户改了设置
     下一个任务生效，不用重启 sidecar。
+
+    cfg 可选：run() 一个任务只读一次 settings.json，与 _data_source_mode 共享
+    同一次读取结果（传进来直接用，不重复 IO）；不传时（独立调用 / 测试）自己
+    现读一次。
     """
     try:
-        from csm_core.config import get_config
+        if cfg is None:
+            from csm_core.config import get_config
 
-        cfg = get_config()
+            cfg = get_config()
         return (
             int(getattr(cfg, "mining_prefilter_top_n", PREFILTER_SCRAPE_TOP_N)),
             int(getattr(cfg, "mining_prefilter_threshold", PREFILTER_THRESHOLD)),
@@ -64,13 +69,21 @@ def _prefilter_params() -> tuple[int, int]:
         return PREFILTER_SCRAPE_TOP_N, PREFILTER_THRESHOLD
 
 
-def _data_source_mode() -> str:
-    """每次任务现读 settings.json（get_config 无缓存），用户改了开关下个任务生效。
-    读不到 / 非法值 → tikhub_api（与 AppConfig 默认一致）。"""
-    try:
-        from csm_core.config import get_config
+def _data_source_mode(cfg=None) -> str:
+    """每个任务开始时读一次settings.json（get_config 无缓存；任务内三平台同一
+    数据源，不会出现同一个 job 里一个平台走本地、另一个平台走 TikHub 的情况）。
+    用户改了开关下个任务生效。读不到 / 非法值 → tikhub_api（与 AppConfig 默认一致）。
 
-        mode = str(getattr(get_config(), "mining_data_source_mode", "") or "")
+    cfg 可选：run() 与 _prefilter_params 共享同一次读取结果（传进来直接用）；
+    不传时（独立调用 / 测试，含 get_adapter(mode=None) 的内部调用）自己现读
+    一次。
+    """
+    try:
+        if cfg is None:
+            from csm_core.config import get_config
+
+            cfg = get_config()
+        mode = str(getattr(cfg, "mining_data_source_mode", "") or "")
         return mode if mode in ("tikhub_api", "local") else "tikhub_api"
     except Exception:
         logger.info("[runner] config read failed, defaulting mining data source to tikhub_api", exc_info=True)
@@ -128,13 +141,22 @@ class MiningRunner:
         cancel_event = self.register_cancel_event(job_id)
         brand_keywords: list[str] = job.get("brand_keywords") or []
         filters: dict = job.get("filters") or {}
-        prefilter_top_n, prefilter_threshold = _prefilter_params()
+        # 一个任务只读一次 settings.json,预筛参数和数据源模式共享同一次读取
+        # 结果——既省一次冗余 IO,也保证任务内所有平台看到的是同一份配置快照
+        # (不会出现同一个 job 里第一个平台读到 local、第二个平台读到
+        # tikhub_api 这种因为设置在任务运行期间被改动导致的"半路换源")。
+        try:
+            from csm_core.config import get_config
+
+            cfg = get_config()
+        except Exception:
+            logger.info("[runner] config read failed for job %d, using fallbacks", job_id, exc_info=True)
+            cfg = None
+        prefilter_top_n, prefilter_threshold = _prefilter_params(cfg)
         mining_storage.mark_started(job_id)
         self.publish("job.started", {"job_id": job_id, "keyword": job["keyword"]})
 
-        # Per-card publisher state, reset between platforms.
-        last_pub_time = [0.0]
-        last_pub_count = [0]
+        data_source_mode = _data_source_mode(cfg)
 
         for platform in job["platforms"]:
             if cancel_event.is_set():
@@ -143,12 +165,27 @@ class MiningRunner:
                 )
                 continue
 
-            adapter = get_adapter(platform)
+            adapter = get_adapter(platform, data_source_mode)
             emitted = [0]
+            # 每张卡的发布节流状态,平台之间必须重置——否则第二个平台会带着
+            # 第一个平台"已经发布过"的计数/时间戳基线起步,导致它自己的早期
+            # scrolling 进度被节流阈值吞掉,一条都发不出来。
+            last_pub_time = [0.0]
+            last_pub_count = [0]
 
-            def _on_card(card: VideoCard, platform=platform) -> None:
-                conn = mining_storage.get_conn()
+            def _on_card(card: VideoCard, platform=platform, emitted=emitted) -> None:
+                # 先计数,再去重/入库:emitted 记录的是"适配器交给我们的卡数",
+                # 与 adapter 自身的 cards_emitted / 在制 got 同一语义——不管这张
+                # 卡最终有没有被去重跳过、有没有 upsert 成功都要计入,否则采集
+                # 进度看起来比实际吞吐慢一大截。
+                # platform / emitted 都以默认参数显式绑定各自平台的值(而不是
+                # 靠闭包晚绑定引用 run() 作用域里的同名变量)——晚绑定的话,一旦
+                # 某个平台的适配器把 on_card 缓存下来、在后续平台的循环体里才
+                # 真正调用它,这次调用会被错误地记到"当前正在跑的平台"头上,
+                # 而不是这个 on_card 本来所属的平台。
+                emitted[0] += 1
                 try:
+                    conn = mining_storage.get_conn()
                     if mining_storage.is_video_tracked_anywhere(conn, card.platform, card.platform_video_id):
                         logger.info(
                             "[runner] skipped_dup platform=%s video_id=%s",
@@ -156,13 +193,15 @@ class MiningRunner:
                         )
                         return
                 except Exception:
+                    # get_conn() 本身失败(如 DB 被锁)也走这条路径:记日志、
+                    # 落到下面的 upsert try(它会再拿一次 conn),而不是让异常
+                    # 逃出 on_card、击穿 adapter.search()。
                     logger.exception(
                         "dedup check failed for %s/%s, falling through to upsert",
                         card.platform, card.platform_video_id,
                     )
                 try:
                     mining_storage.upsert_video_and_link(card, job_id)
-                    emitted[0] += 1
                 except Exception as e:
                     logger.exception("upsert_video_and_link failed: %s", e)
 

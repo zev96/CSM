@@ -1,6 +1,7 @@
 """Runner integration test with a fake adapter — no real browser."""
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -56,7 +57,7 @@ def test_runner_two_platforms_done(db, monkeypatch):
         VideoCard(platform="kuaishou", platform_video_id="K1", url="u3", title="t3"),
     ])
 
-    def fake_get_adapter(platform):
+    def fake_get_adapter(platform, mode=None):
         return {"bilibili": fake_b, "kuaishou": fake_k}[platform]
 
     monkeypatch.setattr("csm_core.mining.runner.get_adapter", fake_get_adapter)
@@ -87,7 +88,7 @@ def test_runner_partial_when_one_needs_login(db, monkeypatch):
     ])
     bad = FakeAdapter("douyin", [], status="needs_login")
 
-    def fake_get_adapter(platform):
+    def fake_get_adapter(platform, mode=None):
         return {"bilibili": good, "douyin": bad}[platform]
 
     monkeypatch.setattr("csm_core.mining.runner.get_adapter", fake_get_adapter)
@@ -120,9 +121,9 @@ def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
     ]
     fake_b = FakeAdapter("bilibili", cards)
 
-    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: fake_b)
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: fake_b)
     # 钉死 (top_n, threshold)，与用户机器上的 settings.json 解耦。
-    monkeypatch.setattr("csm_core.mining.runner._prefilter_params", lambda: (20, 1))
+    monkeypatch.setattr("csm_core.mining.runner._prefilter_params", lambda cfg=None: (20, 1))
 
     # 阈值=1（2026-08-31 拍板：命中 1 条即排除）：
     # B1: 3 comments with 石头 → excluded, hits=3
@@ -187,7 +188,7 @@ def test_runner_no_brand_keywords_skips_prefilter(db, monkeypatch):
         VideoCard(platform="bilibili", platform_video_id="B1", url="http://b.com/v/B1", title="t1"),
     ]
     fake_b = FakeAdapter("bilibili", cards)
-    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: fake_b)
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: fake_b)
 
     fetch_calls = []
 
@@ -230,7 +231,7 @@ def test_runner_prefilter_fetch_failure_leaves_null(db, monkeypatch):
         VideoCard(platform="bilibili", platform_video_id="X1", url="http://b.com/v/X1", title="t1"),
     ]
     fake_b = FakeAdapter("bilibili", cards)
-    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: fake_b)
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: fake_b)
 
     # Always return [] — simulates a fetch failure
     def fake_fetch(platform, video_url, limit=20):
@@ -274,7 +275,7 @@ def test_runner_cancel_mid_job(db, monkeypatch):
             on_progress(ProgressUpdate(platform=self.platform, phase="done", got=emitted, target=target_count))
             return SearchOutcome(platform=self.platform, status="done", cards_emitted=emitted)
 
-    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: SlowAdapter())
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: SlowAdapter())
     jid = ms.create_job("k", ["bilibili"], 50)
     cancel_event = runner.register_cancel_event(jid)
     cancel_event.set()  # cancel before run
@@ -295,7 +296,7 @@ def test_done_outcome_note_is_persisted(db, monkeypatch):
             return SearchOutcome(platform="bilibili", status="done", cards_emitted=1,
                                  error_message="第 2 页失败已停止：TikHub 限流")
 
-    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: NotingAdapter())
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: NotingAdapter())
     runner = MiningRunner(publish=lambda kind, payload: None)
     jid = ms.create_job("k", ["bilibili"], 50)
     runner.run(jid)
@@ -316,7 +317,7 @@ def test_adapter_exception_reports_cards_already_emitted(db, monkeypatch):
             on_card(VideoCard(platform="bilibili", platform_video_id="B2", url="u2", title="t2"))
             raise RuntimeError("boom")
 
-    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p: ExplodingAdapter())
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: ExplodingAdapter())
     events = []
     runner = MiningRunner(publish=lambda kind, payload: events.append((kind, payload)))
     jid = ms.create_job("k", ["bilibili"], 50)
@@ -325,3 +326,171 @@ def test_adapter_exception_reports_cards_already_emitted(db, monkeypatch):
     assert prog["phase"] == "failed" and prog["got"] == 2
     done_evt = [p for k, p in events if k == "job.platform_done"][-1]
     assert done_evt["status"] == "failed" and done_evt["count"] == 2
+
+
+# ── R1: progress-publish throttle state must reset between platforms ───────
+
+class ScrollingAdapter:
+    """每张卡都紧跟一条 phase="scrolling" 的 on_progress —— 用来验证发布节流
+    状态（last_pub_count/last_pub_time）在平台之间被重置，而不是从上一个平台
+    带着"已经发布过"的残留计数进入下一个平台，导致下一个平台的早期进度被
+    节流吞掉、一条都发不出来。"""
+
+    def __init__(self, platform, n=6):
+        self.platform = platform
+        self.n = n
+
+    def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+               max_attempts=None, filters=None):
+        for i in range(1, self.n + 1):
+            on_card(VideoCard(platform=self.platform, platform_video_id=f"{self.platform}{i}", url=f"u{i}"))
+            on_progress(ProgressUpdate(platform=self.platform, phase="scrolling", got=i, target=target_count))
+        return SearchOutcome(platform=self.platform, status="done", cards_emitted=self.n)
+
+
+def test_progress_events_published_for_every_platform(db, monkeypatch):
+    """两个平台各自吐 6 张卡、每张卡后带一条 scrolling 进度。PUBLISH_EVERY_N_CARDS=5
+    时第一个平台理应在 got=5 时发布一条；如果节流状态没有按平台重置，第二个
+    平台会继承第一个平台已经"发过"的计数基线，导致它的 6 条 scrolling 进度
+    一条都发不出来（此前的真实 bug：只有第一个平台能看到滚动进度）。"""
+    events = []
+
+    def publish(kind, payload):
+        events.append((kind, payload))
+
+    runner = MiningRunner(publish=publish)
+    adapters = {"bilibili": ScrollingAdapter("bilibili"), "kuaishou": ScrollingAdapter("kuaishou")}
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: adapters[p])
+
+    jid = ms.create_job("k", ["bilibili", "kuaishou"], 50)
+    runner.run(jid)
+
+    scrolling_platforms = {
+        e[1]["platform"] for e in events if e[0] == "job.progress" and e[1]["phase"] == "scrolling"
+    }
+    assert scrolling_platforms == {"bilibili", "kuaishou"}, (
+        f"expected scrolling progress from both platforms, got {scrolling_platforms}"
+    )
+
+
+# ── R2: got must count every card the adapter handed us, incl. dedup skips ─
+
+def test_got_counts_fetched_cards_including_dedup_skips(db, monkeypatch):
+    """预先插入一条"已存在"的视频，让适配器再次吐出它 + 1 张新卡后抛异常。
+    got 的语义是"适配器交给我们的卡数"（与 adapter 自己的 cards_emitted /
+    在制 got 同一口径），不是"成功入库的卡数"——去重跳过的那张卡也要计入，
+    否则采集进度看起来比实际吞吐慢一大截。同时确认真正落库/挂到本 job 的
+    视频只有 1 条（被去重的那条压根没链接到这个 job）。"""
+    conn = ms.get_conn()
+    conn.execute(
+        "INSERT INTO videos(platform, platform_video_id, url) VALUES(?,?,?)",
+        ("bilibili", "DUP1", "http://b.com/v/DUP1"),
+    )
+    conn.commit()
+
+    class DupThenNewAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            on_card(VideoCard(platform="bilibili", platform_video_id="DUP1", url="http://b.com/v/DUP1", title="dup"))
+            on_card(VideoCard(platform="bilibili", platform_video_id="NEW1", url="http://b.com/v/NEW1", title="new"))
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: DupThenNewAdapter())
+    events = []
+    runner = MiningRunner(publish=lambda kind, payload: events.append((kind, payload)))
+    jid = ms.create_job("k", ["bilibili"], 50)
+    runner.run(jid)
+
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert prog["phase"] == "failed" and prog["got"] == 2, f"expected got=2 (fetched), got {prog}"
+
+    done_evt = [p for k, p in events if k == "job.platform_done"][-1]
+    assert done_evt["count"] == 2
+
+    linked = conn.execute(
+        "SELECT COUNT(*) AS c FROM video_source_keywords WHERE job_id = ?", (jid,)
+    ).fetchone()["c"]
+    assert linked == 1, "only the genuinely new card should be linked to this job"
+
+
+# ── R3: _on_card closures must bind their OWN platform's emitted counter ───
+
+def test_on_card_closure_binds_its_own_platform_counter(db, monkeypatch):
+    """A（bilibili）先真实调用一次自己的 on_card（自身计数=1，走 outcome.cards_emitted
+    的正常路径,与闭包 bug 无关，纯粹确认 A 正常跑完），再把 on_card 存进一个共享
+    槽位留给后面用。B（kuaishou）自己一次都不调用 on_card，只是把 A 存的
+    on_card 拿出来对一张 bilibili 平台的卡重放一次，然后抛异常。
+
+    B 的 except 分支上报的 got 来自 run() 里当前平台对应的 emitted 影子计数器
+    ——如果 _on_card 闭包对 emitted 是"晚绑定"（旧 bug：闭包体内直接引用外层
+    变量名,而不是把列表对象绑成默认参数）,重放调用发生时 run() 作用域里的
+    emitted 名字已经指向 B 平台新建的列表,于是这次重放会被错误地记到 B 头上，
+    B 的 got 变成 1（明明 B 自己一次都没有收到过卡）。修复后重放操作的是 A
+    自己在定义时捕获到的列表对象,B 的计数器分毫不动,B 的 got 正确地是 0。"""
+    slot: dict = {}
+
+    class StoringAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            on_card(VideoCard(platform="bilibili", platform_video_id="A-own", url="ua"))
+            slot["on_card"] = on_card
+            return SearchOutcome(platform=self.platform, status="done", cards_emitted=1)
+
+    class ReplayThenRaiseAdapter:
+        platform = "kuaishou"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            slot["on_card"](VideoCard(platform="bilibili", platform_video_id="A-replayed", url="ub"))
+            raise RuntimeError("boom")
+
+    adapters = {"bilibili": StoringAdapter(), "kuaishou": ReplayThenRaiseAdapter()}
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: adapters[p])
+
+    jid = ms.create_job("k", ["bilibili", "kuaishou"], 50)
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    runner.run(jid)
+
+    progress = ms.get_job(jid)["progress"]
+    assert progress["bilibili"]["got"] == 1
+    assert progress["kuaishou"]["phase"] == "failed"
+    assert progress["kuaishou"]["got"] == 0, (
+        "kuaishou never called its own on_card — replaying bilibili's stored "
+        "callback must not credit kuaishou's shadow counter"
+    )
+
+
+# ── R4: data-source mode is resolved once per job, not once per platform ───
+
+def test_mode_resolved_once_per_job(db, monkeypatch):
+    """config stub 第一次调用返回 'local'，之后每次都返回 'tikhub_api' ——
+    如果 runner 在每个平台的循环体内各读一次配置，两个平台会分别拿到
+    'local' 和 'tikhub_api'（同一个任务内用了两种不同数据源，语义上不该
+    发生：分派层设计上是"每个任务开始时读一次，任务内三平台同一数据源"）。"""
+    call_count = {"n": 0}
+
+    def fake_get_config():
+        call_count["n"] += 1
+        mode = "local" if call_count["n"] == 1 else "tikhub_api"
+        return SimpleNamespace(mining_data_source_mode=mode)
+
+    monkeypatch.setattr("csm_core.config.get_config", fake_get_config)
+
+    recorded = []
+
+    def fake_get_adapter(platform, mode=None):
+        recorded.append((platform, mode))
+        return FakeAdapter(platform, [])
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", fake_get_adapter)
+
+    jid = ms.create_job("k", ["bilibili", "kuaishou"], 50)
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    runner.run(jid)
+
+    assert recorded == [("bilibili", "local"), ("kuaishou", "local")]
+    assert call_count["n"] == 1, f"config.get_config should be read exactly once per job, called {call_count['n']}x"
