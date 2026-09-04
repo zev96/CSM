@@ -81,12 +81,15 @@ def _first_cover(v: Any) -> str:
 
 def _douyin_content_type(f: dict[str, Any]) -> str:
     """UI content_types → 抖音 content_type 档位：仅视频=1、仅图文=2、两者都要=0（全部）。
-    实测出现过裸字符串（非 list）——不能直接 set() 拆成一堆单字符。"""
+    实测出现过裸字符串（非 list）——不能直接 set() 拆成一堆单字符；list 里混入非
+    字符串元素（比如脏数据 dict）也不能让它原样进 set() 参与后面的 == 比较——
+    非 str 元素必然不等于 "video"/"note"，只会让判据永远落到"两者都要"这个错误
+    档位，必须先过滤掉。"""
     raw = _dict(f).get("content_types")
     if isinstance(raw, str):
         types = {raw}
     elif isinstance(raw, (list, tuple, set, frozenset)):
-        types = set(raw) or {"video"}
+        types = {x for x in raw if isinstance(x, str)} or {"video"}
     else:
         types = {"video"}
     if types == {"video"}:
@@ -97,12 +100,19 @@ def _douyin_content_type(f: dict[str, Any]) -> str:
 
 
 def _preview(raw: Any, n: int = 200) -> str:
-    """日志预览用——绝不能反过来把归一化本身打崩：畸形 raw（例如键是 tuple 之类
-    非法 JSON key）会让 json.dumps 抛 TypeError，此时兜底成 repr。"""
+    """日志预览用——外层信封是计费路由/请求回声等噪音（TikHub 聚合网关会把
+    request_id、路由信息、联系方式之类的样板文字都塞在顶层），真正有诊断价值的
+    status_code / params.keyword 往往被挤到 1KB 开外，200 字符的预览窗口经常连
+    ``data`` 字段本身都看不到。``data`` 存在就只预览 ``data``；不存在（比如整个
+    raw 本身已经畸形，没有这一层结构）才退回整个 raw。
+    绝不能反过来把归一化本身打崩：畸形 raw（例如键是 tuple 之类非法 JSON key）
+    会让 json.dumps 抛 TypeError，此时兜底成 repr。"""
+    d = _dict(raw)
+    target = d.get("data") if "data" in d else raw
     try:
-        return json.dumps(raw, ensure_ascii=False, default=str)[:n]
+        return json.dumps(target, ensure_ascii=False, default=str)[:n]
     except Exception:  # noqa: BLE001 — 日志预览绝不能反过来把归一化打崩
-        return repr(raw)[:n]
+        return repr(target)[:n]
 
 
 def _log_inner_error(platform: str, code: Any, raw: Any) -> None:
@@ -116,6 +126,9 @@ def _log_inner_error(platform: str, code: Any, raw: Any) -> None:
 
 # UI 档位 → TikHub publish_time（UI 半年=182，TikHub 半年=180）
 _DY_PUBLISH_TIME = {"0": "0", "1": "1", "7": "7", "182": "180"}
+# 抖音 sort_type：0=综合排序、1=最多点赞、2=最新发布——白名单之外的值（畸形筛选值/
+# 未来平台新增档位我们还不认识）一律兜底成 0，不能把未知取值原样透传给上游 API。
+_DY_SORT_TYPES = frozenset({"0", "1", "2"})
 
 
 def douyin_first_body(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
@@ -125,12 +138,15 @@ def douyin_first_body(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
     筛过；本地 images/aweme_type 判据对 TikHub 形态不可靠）。
     """
     f = _dict(f)
+    sort_type = str(f.get("sort_type") or "0")
+    if sort_type not in _DY_SORT_TYPES:
+        sort_type = "0"
     return {
         "keyword": keyword,
         "cursor": 0,
         "search_id": "",
         "backtrace": "",
-        "sort_type": str(f.get("sort_type") or "0"),
+        "sort_type": sort_type,
         "publish_time": _DY_PUBLISH_TIME.get(str(f.get("publish_time") or "0"), "0"),
         "content_type": _douyin_content_type(f),
     }

@@ -14,7 +14,10 @@
   json.JSONDecodeError 击穿上层适配器的 `except TikHubError`。
 - 日志绝不写 Authorization 头或 key(R7 安全红线):只记录 path/params 与状态码;
   记录响应体前先 `_redact()` 抹掉 key —— 防网关/CDN 把请求头回显进错误体导致泄漏。
-- 不做自动重试(§9:重试可能重复计费);GET/POST 均如此。
+- 不做自动重试(§9:重试可能重复计费);GET/POST 均如此。请求发送阶段的失败按
+  "是否已出货"分三类映射(连接失败可重试 / 已发出可能已计费不重试 / 发送前构造
+  失败不重试),`err.retryable` 显式声明,上层(tikhub_search._retryable)按这个
+  信号做重试判断,不必再靠 code 猜。
 - 本模块只负责单次 GET/POST;自适应翻页属于 Task 3(paginate()),此处不实现。
 """
 
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import httpx
 
@@ -34,25 +38,39 @@ logger = logging.getLogger(__name__)
 # (而不是每个任务各自撞一次 402、刷一堆重复通知)。
 _balance_lock = threading.Lock()
 _balance_exhausted = False
+_balance_tripped_at: float | None = None
+# 闩的 TTL 兜底:正常情况下闩由监控调度器 tick 主动 reset_balance_latch();但如果
+# 那条轮询循环从未启动(比如后台调度器没起来),一次 402 会把 TikHub 锁死到进程
+# 重启 —— 这里超时自动放行,下一次真实请求会重新验证余额状态(还没恢复的话很快
+# 会再次置闩,不会造成实质性的费用风险)。
+BALANCE_LATCH_TTL_S = 300.0
 
 
 def balance_exhausted() -> bool:
-    """查询进程级余额闩是否已置位。分派层应在发请求前先查这个。"""
+    """查询进程级余额闩是否已置位。分派层应在发请求前先查这个。超过
+    BALANCE_LATCH_TTL_S 未被显式 reset 时自动清闩(见模块顶部注释)。"""
+    global _balance_exhausted, _balance_tripped_at
     with _balance_lock:
+        if _balance_exhausted and _balance_tripped_at is not None:
+            if time.monotonic() - _balance_tripped_at > BALANCE_LATCH_TTL_S:
+                _balance_exhausted = False
+                _balance_tripped_at = None
         return _balance_exhausted
 
 
 def reset_balance_latch() -> None:
     """重置余额闩(用户手动重置,或下一整点定时重置)。"""
-    global _balance_exhausted
+    global _balance_exhausted, _balance_tripped_at
     with _balance_lock:
         _balance_exhausted = False
+        _balance_tripped_at = None
 
 
 def _trip_balance_latch() -> None:
-    global _balance_exhausted
+    global _balance_exhausted, _balance_tripped_at
     with _balance_lock:
         _balance_exhausted = True
+        _balance_tripped_at = time.monotonic()
 
 
 class TikHubClient:
@@ -111,10 +129,16 @@ class TikHubClient:
 
         # 3) 业务层错误:HTTP 200 但 body.code != 200(聚合 API 常见做法)
         biz_code = data.get("code") if isinstance(data, dict) else None
-        if isinstance(biz_code, bool):                      # bool 是 int 子类，不当作业务码
-            biz_code = None
+        if isinstance(biz_code, bool):                      # bool 是 int 子类,但要先于
+            biz_code = 200 if biz_code else 0                # int 分支拦下来单独按真假值编码
         elif isinstance(biz_code, str) and biz_code.strip().isdecimal():
-            biz_code = int(biz_code.strip())
+            # isdecimal() 为真不代表 int() 一定能转换成功:超长数字字符串(数千位)
+            # 会撞 Python 的整数字符串转换长度上限抛 ValueError,不能让它以非
+            # TikHubError 的形态击穿上层——按业务错误(0)处理,而不是让请求假装成功。
+            try:
+                biz_code = int(biz_code.strip())
+            except ValueError:
+                biz_code = 0
         if isinstance(biz_code, int) and biz_code != 200:
             self._fail(biz_code, 200, path, r.text)
 
@@ -129,16 +153,34 @@ class TikHubClient:
         if not path.startswith("/"):
             path = "/" + path
         # 日志绝不带 Authorization / key —— 也不记参数值(Bilibili/Kuaishou 搜索会把
-        # keyword 当 GET 参数传,值可能是用户敏感词);只记参数名列表。
-        logger.info("[tikhub] GET %s param_keys=%s", path, sorted(params))
+        # keyword 当 GET 参数传,值可能是用户敏感词);只记参数名列表。map(str, ...)
+        # 防御参数名本身不是 str(理论上不该发生,但 sorted() 混类型比较会直接抛
+        # TypeError 把日志这一行打崩)。
+        logger.info("[tikhub] GET %s param_keys=%s", path, sorted(map(str, params)))
         try:
             r = self._http.get(
                 self._base + path,
                 params=params,
                 headers={"Authorization": f"Bearer {self._key}"},
             )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # 连接都没建立:请求没有真正发出,没出货,可以安全重试。
+            err = TikHubError("网络错误（未连上，可重试）")
+            err.retryable = True
+            raise err from e
         except httpx.HTTPError as e:
-            raise TikHubError("网络错误") from e
+            # ReadTimeout / RemoteProtocolError 等:请求已经发到服务端(或已在链路
+            # 上),响应没能收全 ≠ 服务端没处理——可能已计费,绝不能当成"没出货"重试。
+            err = TikHubError("网络错误（请求已发出，可能已计费，不重试）")
+            err.retryable = False
+            raise err from e
+        except Exception as e:  # noqa: BLE001 — 发送前失败(如 key 含非 ASCII 字符导致
+            # header 编码阶段 UnicodeEncodeError)。S1 安全红线:绝不能把异常 repr/str
+            # 带出去——UnicodeEncodeError 的 repr() 会包含整个待编码字符串(即完整的
+            # "Bearer <key>"),只记类型名。这类失败请求从未真正发出,不可重试。
+            err = TikHubError(f"请求构造失败：{type(e).__name__}")
+            err.retryable = False
+            raise err from e
         return self._parse(r, path)
 
     def post(self, path: str, json_body: dict) -> dict:
@@ -149,15 +191,25 @@ class TikHubClient:
         """
         if not path.startswith("/"):
             path = "/" + path
-        logger.info("[tikhub] POST %s body_keys=%s", path, sorted(json_body))
+        logger.info("[tikhub] POST %s body_keys=%s", path, sorted(map(str, json_body)))
         try:
             r = self._http.post(
                 self._base + path,
                 json=json_body,
                 headers={"Authorization": f"Bearer {self._key}"},
             )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            err = TikHubError("网络错误（未连上，可重试）")
+            err.retryable = True
+            raise err from e
         except httpx.HTTPError as e:
-            raise TikHubError("网络错误") from e
+            err = TikHubError("网络错误（请求已发出，可能已计费，不重试）")
+            err.retryable = False
+            raise err from e
+        except Exception as e:  # noqa: BLE001 — 见 get() 同一注释:S1 安全红线
+            err = TikHubError(f"请求构造失败：{type(e).__name__}")
+            err.retryable = False
+            raise err from e
         return self._parse(r, path)
 
 

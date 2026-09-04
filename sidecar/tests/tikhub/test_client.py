@@ -1,6 +1,7 @@
 import logging
 
 import pytest, httpx
+from csm_core.monitor.tikhub import client as tclient
 from csm_core.monitor.tikhub.client import (
     TikHubClient,
     balance_exhausted,
@@ -196,3 +197,121 @@ def test_fullwidth_digit_body_code_still_trips_balance_latch():
     with pytest.raises(TikHubBalanceExhausted):
         c.get("/p", {})
     assert balance_exhausted() is True
+
+
+# ── 小硬化:bool/超长数字字符串业务码防御 ────────────────────────────────────
+
+def test_bool_false_body_code_raises_as_from_body_error():
+    # bool 是 int 子类,但 True/False 不能笼统当成"不是业务码"而放行——False 明确
+    # 表达"这一路业务失败了",必须按 0(!= 200)当错误处理;True 才等价于成功的 200。
+    c = _client(lambda req: httpx.Response(200, json={"code": False, "message": "boom"}))
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.from_body is True
+    assert ei.value.code == 0
+
+
+def test_huge_digit_string_body_code_does_not_raise_as_python_error():
+    # Python 3.11+ 对超长数字字符串转 int() 有转换位数上限(默认 4300 位),超过会抛
+    # ValueError——之前的 int(biz_code.strip()) 没有兜底,会以非 TikHubError 的形态
+    # 击穿 _parse(),把一次"畸形业务码"误判成 Python 内部错误。
+    huge = "9" * 5000
+    c = _client(lambda req: httpx.Response(200, json={"code": huge, "data": {"x": 1}}))
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.from_body is True
+
+
+# ── S1:请求发送阶段的三类失败必须显式声明 retryable,且绝不泄漏 key ──────────
+
+def test_connect_error_maps_retryable_true_and_未连上_hint():
+    def h(req):
+        raise httpx.ConnectError("boom")
+
+    c = _client(h)
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.retryable is True
+    assert "未连上" in ei.value.reason
+
+
+def test_read_timeout_maps_retryable_false_billed_hint():
+    # ReadTimeout:请求已经发出去了,响应没收全 != 服务端没处理,可能已计费,不能重试。
+    def h(req):
+        raise httpx.ReadTimeout("boom")
+
+    c = _client(h)
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.retryable is False
+    assert "已发出" in ei.value.reason
+
+
+def test_pre_send_exception_maps_retryable_false_construction_error():
+    # header 编码失败等发送前故障:请求从未真正发出,不可重试,且绝不能把异常
+    # repr/str 带出去(见下面的非 ASCII key 场景,repr() 会带出整个 "Bearer <key>")。
+    def h(req):
+        raise UnicodeEncodeError("ascii", "x", 0, 1, "boom")
+
+    c = _client(h)
+    with pytest.raises(TikHubError) as ei:
+        c.get("/p", {})
+    assert ei.value.retryable is False
+    assert "请求构造失败" in ei.value.reason
+    assert "UnicodeEncodeError" in ei.value.reason
+
+
+def test_non_ascii_key_error_never_contains_bearer_or_key(caplog):
+    # 全角减号/零宽空格等非 ASCII 字符混进 key 会让 httpx 编码 "Bearer <key>" 头时
+    # 抛 UnicodeEncodeError;repr(UnicodeEncodeError) 会带出整个待编码字符串
+    # (即完整的 "Bearer <key>")——S1 安全红线:error_message / 日志都绝不能出现
+    # key 的任何片段或 "Bearer" 字样。
+    secret = "sk-th-ABC\u200bTAIL"
+
+    def h(req):
+        return httpx.Response(200, json={"code": 200, "data": {}})
+
+    c = _client(h, api_key=secret)
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(TikHubError) as ei:
+            c.get("/p", {})
+    for blob in (str(ei.value), repr(ei.value), caplog.text):
+        assert "Bearer" not in blob
+        assert "ABC" not in blob
+        assert "TAIL" not in blob
+    assert ei.value.retryable is False
+
+
+def test_post_maps_same_three_exception_kinds():
+    def h_connect(req):
+        raise httpx.ConnectError("boom")
+
+    def h_timeout(req):
+        raise httpx.ReadTimeout("boom")
+
+    with pytest.raises(TikHubError) as e1:
+        _client(h_connect).post("/p", {})
+    assert e1.value.retryable is True
+
+    with pytest.raises(TikHubError) as e2:
+        _client(h_timeout).post("/p", {})
+    assert e2.value.retryable is False
+
+
+# ── 余额闩 TTL 兜底 ──────────────────────────────────────────────────────────
+
+def test_balance_latch_auto_clears_after_ttl(monkeypatch):
+    # 闩正常应该由监控调度器 tick 主动 reset;但如果那条轮询循环从未启动,一次
+    # 402 会把 TikHub 锁死到进程重启——TTL 超时后即使没人显式 reset 也要自动放行。
+    tclient._trip_balance_latch()
+    assert tclient.balance_exhausted() is True
+    real_now = tclient.time.monotonic()
+    monkeypatch.setattr(tclient.time, "monotonic", lambda: real_now + tclient.BALANCE_LATCH_TTL_S + 1)
+    assert tclient.balance_exhausted() is False
+
+
+def test_balance_latch_does_not_clear_before_ttl(monkeypatch):
+    tclient._trip_balance_latch()
+    real_now = tclient.time.monotonic()
+    monkeypatch.setattr(tclient.time, "monotonic", lambda: real_now + 1.0)
+    assert tclient.balance_exhausted() is True

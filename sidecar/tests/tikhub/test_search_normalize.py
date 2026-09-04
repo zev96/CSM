@@ -60,6 +60,25 @@ def test_douyin_first_body_content_type_tolerates_bare_string_and_junk():
     assert N.douyin_first_body("k", {"content_types": []})["content_type"] == "1"     # 空 list → 兜底仅视频
 
 
+def test_douyin_content_type_ignores_non_str_list_items():
+    """content_types list 里混入非字符串元素（比如脏数据 dict）——不能原样进 set()
+    参与 == 比较，非 str 元素必然不等于 "video"/"note"，会让判据错误落到"两者都要"
+    这个错误档位，必须先过滤掉只留字符串元素。"""
+    assert N._douyin_content_type({"content_types": [{"a": 1}, "video"]}) == "1"
+    assert N._douyin_content_type({"content_types": [None, "note"]}) == "2"
+    assert N._douyin_content_type({"content_types": [1, 2, 3]}) == "1"      # 全非 str → 兜底仅视频
+
+
+def test_douyin_first_body_sort_type_whitelist():
+    """sort_type 只认 TikHub 文档白名单内的 0/1/2，未枚举到的值（畸形筛选值/未来
+    平台新增档位）一律兜底成 0（综合排序），不能把未知取值原样透传给上游 API。"""
+    assert N.douyin_first_body("k", {"sort_type": "1"})["sort_type"] == "1"
+    assert N.douyin_first_body("k", {"sort_type": "2"})["sort_type"] == "2"
+    assert N.douyin_first_body("k", {"sort_type": "99"})["sort_type"] == "0"
+    assert N.douyin_first_body("k", {"sort_type": "bogus"})["sort_type"] == "0"
+    assert N.douyin_first_body("k", {})["sort_type"] == "0"
+
+
 def test_douyin_normalize_real_fixture_filters_non_video_cards():
     raw = _load("tikhub_search_douyin.json")
     cards = N.normalize_douyin_search(raw, {"content_types": ["video"]})
@@ -189,6 +208,33 @@ def test_inner_error_log_preview_never_raises_on_unserializable_raw(caplog):
     assert "(1, 2)" in caplog.text
 
 
+def test_preview_shows_data_not_outer_billing_envelope(caplog):
+    """外层信封是计费路由/请求回声等噪音（request_id、联系方式之类的样板文字）——
+    预览必须只看 data，不能被这些噪音把 200 字符窗口挤爆导致看不到真正的
+    status_code。data 存在的话预览只取 data，不再是整个 raw。"""
+    raw = {
+        "code": 200,
+        "router": "aggregated-router",
+        "params": {"keyword": "x" * 800},
+        "request_id": "req-aaaaaaaa-bbbb-cccc",
+        "message": "Contact us on Discord if you have questions",
+        "data": {"status_code": 8, "status_msg": "boom"},
+    }
+    with caplog.at_level(logging.WARNING):
+        cards = N.normalize_douyin_search(raw, {})
+    assert cards == []
+    assert "status_code" in caplog.text
+    assert "Discord" not in caplog.text
+    assert "request_id" not in caplog.text
+
+
+def test_preview_falls_back_to_whole_raw_when_no_data_key():
+    """raw 本身就没有 data 这一层（比如整个响应就已经畸形）——退回预览整个 raw，
+    而不是因为找不到 data 就预览成空。"""
+    raw = {"status_code": 8, "no_data_key_here": True}
+    assert "status_code" in N._preview(raw)
+
+
 # ── B站 ─────────────────────────────────────────────────────────────────
 
 def test_bilibili_first_params_pushes_order_and_date_range():
@@ -206,6 +252,17 @@ def test_bilibili_first_params_pushes_order_and_date_range():
 def test_bilibili_first_params_defaults_and_bad_order():
     p = N.bilibili_first_params("k", {"order": "nonsense"})
     assert p["order"] == "totalrank"
+    assert "pubtime_begin_s" not in p and "pubtime_end_s" not in p
+
+
+def test_date_to_epoch_non_str_input_returns_none_not_raises():
+    """time_begin 误传成 int（比如上游 UI bug 把日期传成整数而不是 "YYYY-MM-DD"
+    字符串）—— 原本 .strip() 会抛 AttributeError，不在 (ValueError, TypeError) 覆盖
+    范围内，会穿透到 bilibili_first_params 乃至适配器 search() 的构造阶段。根因
+    修复：非 str 输入应该跟其它畸形输入一样兜底成 None（不设限），而不是让整个
+    请求构造炸掉。"""
+    assert N.date_to_epoch(20260101) is None
+    p = N.bilibili_first_params("k", {"time_begin": 20260101, "time_end": 20260131})
     assert "pubtime_begin_s" not in p and "pubtime_end_s" not in p
 
 

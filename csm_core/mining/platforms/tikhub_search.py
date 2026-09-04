@@ -8,15 +8,22 @@
 
 - 免登录、无并发风控限速（这正是切换的动机）；
 - 失败**不回退**浏览器（spec D5）；
-- 每页失败**重试 ≤ PAGE_RETRIES 次**（官方标注搜索端点偶发失败，且该类失败不计费）；
-  402 余额耗尽**不重试**，并走进程级余额闩本轮短路；
+- 每页失败**重试 ≤ PAGE_RETRIES 次**，且只重试「服务端没出货」的失败（网络未连上 /
+  HTTP 5xx / 429，见 ``_retryable``）；已出货响应（HTTP 200 + body code≠200，含
+  body 429 / 读超时等"请求已发出"类网络错误）一律不重试，避免重复计费；402 余额耗尽
+  **不重试**，并触发进程级余额闩（闩本身带 TTL 兜底，见
+  ``monitor.tikhub.client.BALANCE_LATCH_TTL_S``；本适配器不再做「开搜前全局预检」——
+  job 级短路由 runner 负责，一次 402 仍会在请求中途通过 client 触发闩）；
 - 终止判据（成本护栏，按触发顺序）：达 target / 整页都是重复卡（cards 非空且 0 张新卡，
-  游标疑似卡住）/ 无下一页 / MAX_PAGES 硬闸。整页被本地过滤为空**不**停（快手日期区间靠
-  翻页补偿）；
+  游标疑似卡住）/ 连续 ``_MAX_EMPTY_PAGES`` 页无有效结果 / 无下一页 / MAX_PAGES 硬闸。
+  单页被本地过滤为空但未连续达到止损阈值**不**停（快手日期区间靠翻页补偿）；未达 target
+  就提前停止时，note 里写明具体停止原因，方便诊断；
 - 页级错误语义：**首页**失败（重试耗尽 / 解析异常）→ ``failed``；**已发出 ≥1 张卡后**的
   后续页失败 → ``done`` + note（已入库的候选不能因翻页失败被记成失败——runner 只对
   ``done`` 跑品牌预筛）；
-- 适配器层永不异常穿透：normalize / next_request 的任何异常都按页级错误处理。
+- 适配器层永不异常穿透：normalize / next_request 的任何异常都按页级错误处理，且日志/
+  note 绝不 ``repr()`` 第三方异常（R7 安全红线——某些异常的 repr 会带出触发它的完整
+  原始字符串，例如含非 ASCII 字符的 key 编码失败时的 UnicodeEncodeError），只记类型名。
 """
 from __future__ import annotations
 
@@ -28,7 +35,7 @@ from typing import Any, Callable
 from csm_core.mining.models import Platform, ProgressUpdate, SearchOutcome, VideoCard
 from csm_core.mining.platforms import tikhub_normalize as N
 from csm_core.mining.platforms._common import OnCard, OnProgress
-from csm_core.monitor.tikhub.client import TikHubClient, balance_exhausted
+from csm_core.monitor.tikhub.client import TikHubClient
 from csm_core.monitor.tikhub.errors import TikHubBalanceExhausted, TikHubError
 
 logger = logging.getLogger(__name__)
@@ -40,19 +47,26 @@ MAX_PAGES = 12
 PAGE_RETRIES = 3       # 每页最多尝试次数（官方：搜索偶发失败，同参重试 1–3 次）
 _RETRY_SLEEP_S = 1.0   # 重试间隔（测试里 monkeypatch 成 0）
 _CURSOR_KEYS = ("cursor", "page", "pcursor")
+_MAX_EMPTY_PAGES = 3   # 连续几页 0 张有效卡就止损（C3）：本地过滤/风控软限流常见表现，
+                       # 靠 MAX_PAGES 硬闸兜底代价太大（每页仍是一次计费请求）。
 
 
 def _retryable(e: TikHubError) -> bool:
-    """只重试「服务端没出货」的失败：网络错误（code None）/ HTTP 5xx / 429 限流。
-    429 是纯粹的限流，不管是 HTTP 429 还是 HTTP 200 + body code=429，服务端都没有
-    真正出货，可以退避重试。401/403（key 无效，重试无意义）、其它 4xx、以及
-    HTTP 200 + body code≠200 且不是 429（服务端已返回内容，可能已计费）都不重试。"""
-    code = e.code
-    if code == 429:                     # 限流：HTTP 429 或 body 429 都没出货，可退避重试
-        return True
+    """只重试「服务端没出货」的失败。判据优先级：
+    1) e.retryable 显式声明（由 client.get()/post() 在请求发送阶段的三类失败上
+       显式置位：连接未建立=可重试；已发出但读超时等=不可重试；发送前构造失败=
+       不可重试）—— 有显式声明就直接采信，不再靠 code/from_body 推导。
+    2) from_body=True：HTTP 200 + body code≠200，服务端已出货（可能已计费），
+       即使 body code 恰好是 429 也不重试——这是"服务端已经处理并回了限流提示"，
+       跟"请求根本没被处理"的真限流是两回事，必须先判 from_body 再看 429。
+    3) 真正没出货的限流/瞬时故障：网络错误（code None）/ HTTP 5xx / HTTP 429。
+    401/403（key 无效，重试无意义）、其它 4xx 都不重试。"""
+    if e.retryable is not None:
+        return e.retryable
     if getattr(e, "from_body", False):  # HTTP 200 + body code≠200：服务端已出货，可能已计费
         return False
-    return code is None or (isinstance(code, int) and 500 <= code < 600)
+    code = e.code
+    return code is None or code == 429 or (isinstance(code, int) and 500 <= code < 600)
 
 
 def _retry_delay(code: int | None, attempt: int) -> float:
@@ -149,8 +163,13 @@ class TikHubSearchAdapter:
             raise _PageError(e.reason) from e
         except Exception as e:  # noqa: BLE001 — 适配器层永不异常穿透：覆盖 httpx.InvalidURL /
             # UnicodeEncodeError / transport 插件 bug 等不是 TikHubError 的异常（I1）。
-            logger.warning("[tikhub-search] %s request error: %r", self.platform, e, exc_info=True)
-            raise _PageError(f"请求失败：{e!r}"[:160]) from e
+            # S1 安全红线：绝不能用 %r/repr(e) —— UnicodeEncodeError 等异常的 repr() 会
+            # 带出触发编码失败的整个原始字符串（含 "Bearer <key>" 全文）；str(e)/traceback
+            # 本身是安全的（只含编解码位置信息，不含原串），但只记类型名更省心也更保险。
+            logger.warning(
+                "[tikhub-search] %s request error: %s", self.platform, type(e).__name__, exc_info=True,
+            )
+            raise _PageError(f"请求失败：{type(e).__name__}"[:160]) from e
         try:
             cards = self.spec.normalize(raw, plat_filters)
             # 具体化 + 校验必须在 try 内完成：normalize 可能返回一个惰性生成器，
@@ -159,9 +178,11 @@ class TikHubSearchAdapter:
             # 防止归一化实现返回脏数据时下游属性访问穿透。
             cards = [c for c in (cards or []) if isinstance(c, VideoCard)]
             nxt = self.spec.next_request(req, raw)
-        except Exception as e:  # noqa: BLE001 — 适配器层永不异常穿透
-            logger.warning("[tikhub-search] %s parse error: %r", self.platform, e, exc_info=True)
-            raise _PageError(f"响应解析失败：{e!r}"[:160]) from e
+        except Exception as e:  # noqa: BLE001 — 适配器层永不异常穿透；同上不 repr(e)（S1）
+            logger.warning(
+                "[tikhub-search] %s parse error: %s", self.platform, type(e).__name__, exc_info=True,
+            )
+            raise _PageError(f"响应解析失败：{type(e).__name__}"[:160]) from e
         return cards, nxt
 
     # ── SearchAdapter Protocol ─────────────────────────────────────────
@@ -202,21 +223,28 @@ class TikHubSearchAdapter:
                 platform=self.platform, status="done", cards_emitted=emitted, error_message=note,
             )
 
-        if balance_exhausted():
-            return _failed("TikHub 余额不足（本轮短路，未发请求）", 0)
+        # 不再在这里做「开搜前全局余额预检」——job 级短路移交 runner（另一 agent）；
+        # 一次 402 仍会在下面的请求中途通过 client._fail() 触发进程级闩，只是不再
+        # 由本适配器在发第一个请求之前就抢先短路整个 job。
         try:
             client = self._cf()
         except Exception as e:                           # 缺 key / 配置损坏 → 记失败，不抛
-            return _failed(str(getattr(e, "reason", e)), 0)
+            # S1：不 str(e) 兜底——任意第三方异常的 str() 都可能带出敏感上下文；
+            # 优先信任 TikHubError.reason（我们自己写的、已知安全的中文原因），
+            # 否则只报类型名。
+            reason = getattr(e, "reason", None) or f"客户端构建失败：{type(e).__name__}"
+            return _failed(reason, 0)
 
         _progress("scrolling", 0)
         emitted = 0
         pages = 0
+        empty_streak = 0
+        stop_reason = ""
         seen: set[str] = set()
         try:
             req = self.spec.first_request(keyword, plat_filters)
-        except Exception as e:  # noqa: BLE001 — 筛选值类型错等，记失败不穿透
-            return _failed(f"请求构造失败：{e!r}"[:160], 0)
+        except Exception as e:  # noqa: BLE001 — 筛选值类型错等，记失败不穿透；S1 不 repr(e)
+            return _failed(f"请求构造失败：{type(e).__name__}", 0)
         while emitted < target and pages < max_pages:
             if cancel_event.is_set():
                 return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
@@ -252,21 +280,49 @@ class TikHubSearchAdapter:
                 self.platform, pages, _cursor_of(req), len(cards), new_this_page, emitted, target,
             )
             _progress("scrolling", emitted)
+            # C3：连续 N 页 0 张有效卡就止损——单独一页被本地过滤为空不停（快手日期
+            # 区间靠翻页补偿），但连续多页都是空的多半是风控软限流/查询本身无结果，
+            # 靠 MAX_PAGES 硬闸兜底代价太大（每页仍是一次计费请求）。
+            if cards:
+                empty_streak = 0
+            else:
+                empty_streak += 1
+                if empty_streak >= _MAX_EMPTY_PAGES:
+                    stop_reason = f"连续 {empty_streak} 页无有效结果"
+                    break
             if cards and new_this_page == 0:
                 logger.info("[tikhub-search] %s page %d was all duplicates; stopping", self.platform, pages)
+                stop_reason = "整页均为重复卡（游标疑似未推进）"
                 break
             if nxt is None:
+                if emitted < target:
+                    stop_reason = "服务端无下一页"
                 break
             req = nxt
+
+        # D3：pages 达到硬闸而不是因为 target 已凑够退出循环——上面几种 break 都会
+        # 显式写好 stop_reason，只有"自然跑满 max_pages"这一种退出方式没有单独的
+        # break 语句可挂，在这里补上。
+        if not stop_reason and pages >= max_pages and emitted < target:
+            stop_reason = f"达到翻页上限 {max_pages} 页"
 
         # 循环退出后取消事件已置位：只有还没达标时才算真正的"用户取消打断"；已经
         # 凑够 target 条的话，循环是因为 emitted>=target 正常退出的，不应把已经
         # 入库的候选降级成 cancelled 而丢弃。
         if cancel_event.is_set() and emitted < target:
             return SearchOutcome(platform=self.platform, status="cancelled", cards_emitted=emitted)
+        # D3：早停时把具体原因写进 note，方便诊断"为什么没凑够 target"。
         # 翻了页却一条都没命中：多半是筛选条件过严/关键词冷门，不是采集本身出了问题——
-        # 给用户一个可诊断的提示,而不是静默的"done, 0 条"。
-        note = f"已翻 {pages} 页，0 条命中（筛选条件可能过严或无结果）" if emitted == 0 and pages > 0 else ""
+        # 给用户一个可诊断的提示,而不是静默的"done, 0 条"（0 命中诊断优先，止损原因追加
+        # 在后面，两者不互斥——0 命中本身也是止损触发的结果）。
+        if emitted == 0 and pages > 0:
+            note = f"已翻 {pages} 页，0 条命中（筛选条件可能过严或无结果）"
+            if stop_reason:
+                note += f"；{stop_reason}"
+        elif emitted < target and stop_reason:
+            note = f"提前停止：{stop_reason}（{emitted}/{target}）"
+        else:
+            note = ""
         return _done(emitted, note)
 
 
