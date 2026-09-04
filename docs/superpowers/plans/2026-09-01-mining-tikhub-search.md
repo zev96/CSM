@@ -1876,3 +1876,12 @@ git commit -m "docs(changelog): 采集走 TikHub 搜索 + 腾讯文档惯例对�
 1. `get_adapter(platform, mode=None)`：`mode is None` 时内部调 `_data_source_mode()`；`run()` 仍调 `get_adapter(platform)`（既有 `test_mining_runner.py` 七处单参 fake 不动）。
 2. `csm_core.config.get_config()` 读 `default_config_path()`，**不受** `settings_path` fixture 影响 → Task 7 的 `_data_source_mode` 测试与分派测试改为 monkeypatch `csm_core.config.get_config`（runner 在函数内 import，patch 模块属性即生效），不再用 `config_service.patch`。
 3. `run()` 里 adapter 抛异常的兜底：用 `_on_card` 计数报告已入库条数，不再写死 `got=0`。
+
+### 修订 D（Task 14 终审后，2026-09-04；以此为准）
+1. **重试谓词**：`TikHubError.retryable` 显式优先；`from_body`（HTTP 200 + body code≠200、非法 JSON、**含 body 429**）一律不重试；ConnectError/ConnectTimeout 可重试，ReadTimeout/RemoteProtocolError（请求已发出、可能已计费）不重试；发送前失败（如 key 含非 ASCII）不重试。
+2. **止损**：连续 3 页无有效结果即停（快手窄日期区间不再烧满 12 页）；提前停止原因（整页重复 / 无下一页 / 翻页上限 / 连续空页）在 `emitted<target` 时写入 note。
+3. **余额闩**：客户端闩加 300s TTL（monitor loop 未启动也能自愈）；适配器不再全局预检；runner 做**任务级**短路（首平台探测、后续平台不发请求），陈旧的监控 402 不再阻断手动采集。
+4. **runner**：TikHub 模式有效 target=min(用户值, 80) 写入所有进度；note 仅 TikHub 路径落库（浏览器路径与基线逐字节一致）；`StartJobRequest.platforms` 去重 + ≤3。
+5. **安全**：对外文案禁止第三方异常 repr（key 泄漏）；keyring 保存路由校验 ASCII/控制字符；keyring 状态口径与 `read_api_key` 一致（含 api_keys 明文兜底）。
+6. **腾讯文档**：评论列字母收窄 `A–E`；贴图列缺失**不**把标记并入正文，改计 `images_dropped` + 测试连接回 `image_cols_missing`；去重分支同样统计 `skipped_extra_tiers`；tools/list 截断去控制字符；服务端文本进 reason 前脱敏 token。
+7. **前端**：TikHub 模式滑条钳到 80、预估不虚报；同步 toast 报超层评论与未标注挂图；测试连接显示「最深到第 N 层」与缺贴图列。

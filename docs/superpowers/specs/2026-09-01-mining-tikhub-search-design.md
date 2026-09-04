@@ -122,3 +122,13 @@
 - 不做 TikHub 用户/直播/音乐搜索。
 - 快手不强求服务端筛选（本地后过滤足够）。
 - 不删浏览器采集代码（留作兜底）。
+
+## 9. 终审修订（2026-09-04，Task 14 多视角对抗审查后；与 §5 冲突时以此为准）
+
+- §5.2/§5.3 重试：只重试「服务端没出货」的失败（连接类错误 / HTTP 5xx / HTTP 429）；HTTP 200 的一切（含 body code≠200、body 429、非法 JSON）与读超时都视为可能已计费，不重试。
+- §5.3 终止：新增「连续 3 页无有效结果即停」；提前停止原因写入 note。首页失败=failed、后页失败=done+note 不变。
+- §5.4 成本：单平台硬上界仍 ≤ MAX_PAGES(12)×PAGE_RETRIES(3)=36 次请求，但已出货响应不重试后现实上界 12 次 ≈ $0.12；`platforms` 去重限长堵住重复平台放大。
+- 余额闩：TTL 300s + 任务级短路（runner），适配器不全局预检。
+- 安全：对外文案禁止第三方异常 repr；GET/POST 日志只记键名；keyring 保存校验 ASCII。
+- 腾讯文档：评论列 `A–E`；贴图缺列不并入正文（`images_dropped`）；`tiers_detected` 为最深层号，另回 `tier_gaps`/`optional_missing`/`image_cols_missing`。
+- 产品决策保留：`mining_data_source_mode` 默认 `tikhub_api`（见 R7）；未配置 Key 时 UI 明示且不可开始，不静默回退浏览器。
