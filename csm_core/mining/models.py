@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 Platform = Literal["douyin", "bilibili", "kuaishou"]
@@ -141,7 +141,21 @@ class SearchFilters(BaseModel):
 
 class StartJobRequest(BaseModel):
     keyword: str = Field(min_length=1, max_length=80)
-    platforms: list[Platform] = Field(default_factory=lambda: ["douyin", "bilibili", "kuaishou"])
+    platforms: list[Platform] = Field(
+        default_factory=lambda: ["douyin", "bilibili", "kuaishou"],
+        min_length=1, max_length=3,
+    )
     target_per_platform: int = Field(default=50, ge=10, le=200)
     brand_keywords: list[str] = Field(default_factory=list)
     filters: SearchFilters = Field(default_factory=SearchFilters)
+
+    @field_validator("platforms", mode="before")
+    @classmethod
+    def _dedupe_platforms(cls, v: Any) -> Any:
+        """C1: 去重必须在 min_length/max_length 之前生效——否则重复的平台名
+        （如恶意/误传 ["douyin"]*500）会先被塞进一个巨大的原始列表，逐条打
+        TikHub 付费搜索请求，是一个现成的计费放大器。dict.fromkeys 保序去重，
+        非 list 输入原样透传交给下一步的类型校验去报错。"""
+        if isinstance(v, list):
+            return list(dict.fromkeys(v))
+        return v

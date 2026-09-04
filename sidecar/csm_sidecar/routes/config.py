@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from csm_core.config import AppConfig, delete_secret, get_secret, set_secret
+from csm_core.config import AppConfig, delete_secret, get_secret, read_api_key, set_secret
 
 from ..auth import RequireToken
 from ..services import config_service
@@ -82,14 +82,36 @@ class KeyringSet(BaseModel):
 
 @router.get("/api/keyring/{provider}", response_model=KeyringStatus)
 def keyring_status(provider: str) -> KeyringStatus:
-    """Report whether a key is set for ``provider``. Never returns the value."""
-    return KeyringStatus(provider=provider, has_key=get_secret(provider) is not None)
+    """Report whether a key is set for ``provider``. Never returns the value.
+
+    I7: must use the SAME resolution the backend consumer (``read_api_key``)
+    uses — ``get_secret(provider) is not None`` alone misses users whose OS
+    keyring backend is unavailable (or absent, e.g. a Linux box without a
+    working secret-service) and who therefore still have their key sitting
+    in the ``AppConfig.api_keys`` plaintext fallback: they'd see "no key"
+    here while the actual API calls succeed, or vice versa.
+    """
+    cfg = config_service.load()
+    has_key = bool((read_api_key(provider, cfg) or "").strip())
+    return KeyringStatus(provider=provider, has_key=has_key)
 
 
 @router.post("/api/keyring/{provider}", response_model=KeyringStatus)
 def keyring_set(provider: str, body: KeyringSet) -> KeyringStatus:
     """Persist an API key for ``provider`` in the OS credential store."""
-    ok = set_secret(provider, body.value)
+    value = body.value
+    # S1: reject non-ASCII / control characters up front. These almost
+    # always come from a full-width paste or an invisible character
+    # (zero-width space, curly quotes, a copied-in newline) riding along
+    # with the key — the resulting string LOOKS right in the UI but fails
+    # every downstream API call with an opaque auth error. Catch it here,
+    # at save time, with an actionable message instead.
+    if not value.isascii() or any(ord(c) < 32 for c in value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Key 含非 ASCII 或控制字符（常见于全角字符 / 不可见空格），请检查后重新粘贴",
+        )
+    ok = set_secret(provider, value)
     if not ok:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

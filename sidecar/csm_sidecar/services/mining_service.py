@@ -60,6 +60,12 @@ def submit_job(
     global _active_job_id
     if _executor is None or _runner is None:
         raise RuntimeError("mining_service not initialized")
+    # C1 defense-in-depth: the HTTP route already dedupes via
+    # StartJobRequest's field_validator before platforms ever reaches here,
+    # but submit_job is a public service boundary — dedupe again so a
+    # duplicate-laden list from any other caller can't turn into repeated
+    # paid TikHub search requests per platform.
+    platforms = list(dict.fromkeys(platforms))
     # Reserve the slot atomically with the check. Create the DB row first
     # (cheap) so the reservation refers to a real job_id.
     job_id = mining_storage.create_job(

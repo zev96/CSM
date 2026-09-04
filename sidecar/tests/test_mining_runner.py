@@ -285,7 +285,9 @@ def test_runner_cancel_mid_job(db, monkeypatch):
 
 
 def test_done_outcome_note_is_persisted(db, monkeypatch):
-    """适配器以 done + error_message（如「第 2 页失败已停止」）收尾 → note 落到 progress，不被最终写抹掉。"""
+    """适配器以 done + error_message（如「第 2 页失败已停止」）收尾，TikHub 模式下
+    → note 落到 progress，不被最终写抹掉（R7：TikHub 的 error_message 是面向用户
+    的中文提示，允许落库；显式钉死 tikhub_api 模式，不依赖本机真实 settings.json）。"""
 
     class NotingAdapter:
         platform = "bilibili"
@@ -296,6 +298,10 @@ def test_done_outcome_note_is_persisted(db, monkeypatch):
             return SearchOutcome(platform="bilibili", status="done", cards_emitted=1,
                                  error_message="第 2 页失败已停止：TikHub 限流")
 
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="tikhub_api"),
+    )
     monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: NotingAdapter())
     runner = MiningRunner(publish=lambda kind, payload: None)
     jid = ms.create_job("k", ["bilibili"], 50)
@@ -303,6 +309,36 @@ def test_done_outcome_note_is_persisted(db, monkeypatch):
     prog = ms.get_job(jid)["progress"]["bilibili"]
     assert prog["phase"] == "done" and prog["got"] == 1
     assert "第 2 页失败已停止" in (prog.get("note") or "")
+
+
+def test_local_mode_never_persists_adapter_note(db, monkeypatch):
+    """R7：本地（浏览器）路径的 error_message 是面向日志的英文内部诊断（如
+    「no SESSDATA in bilibili profile」/ 带 URL+keyword 的异常文本），绝不能
+    落到 progress.note 被 UI/DB 看见——local 模式下 note 必须是空字符串，
+    与改动前的 base 行为逐字节一致。"""
+
+    class NotingAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            on_card(VideoCard(platform="bilibili", platform_video_id="B1", url="u1", title="t1"))
+            return SearchOutcome(platform="bilibili", status="done", cards_emitted=1,
+                                 error_message="no SESSDATA in bilibili profile")
+
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="local"),
+    )
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: NotingAdapter())
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    jid = ms.create_job("k", ["bilibili"], 50)
+    runner.run(jid)
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert prog["phase"] == "done" and prog["got"] == 1
+    assert prog.get("note") == "", (
+        f"local-mode adapter note must never be persisted, got {prog.get('note')!r}"
+    )
 
 
 def test_adapter_exception_reports_cards_already_emitted(db, monkeypatch):
@@ -581,3 +617,196 @@ def test_final_done_note_truncated_to_200_chars(db, monkeypatch):
 
     prog = ms.get_job(jid)["progress"]["bilibili"]
     assert len(prog.get("note") or "") <= 200
+
+
+# ── D1: effective target must respect the TikHub per-platform hard cap ─────
+
+def test_effective_target_capped_under_tikhub_mode(db, monkeypatch):
+    """job target=200 但数据源是 tikhub_api → 适配器实际只应该收到 HARD_CAP(80)，
+    最终 progress.target 也必须是 80，否则一个已经拿满 80 条、真正跑完的 job
+    在 UI 进度条上会停在 80/200=40%，看起来像卡住/失败。"""
+    from csm_core.mining.platforms.tikhub_search import HARD_CAP
+
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="tikhub_api"),
+    )
+    received: dict = {}
+
+    class CapReportingAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            received["target_count"] = target_count
+            return SearchOutcome(platform=self.platform, status="done", cards_emitted=0)
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: CapReportingAdapter())
+    jid = ms.create_job("k", ["bilibili"], 200)
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    runner.run(jid)
+
+    assert received["target_count"] == HARD_CAP == 80
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert prog["target"] == 80
+
+
+def test_effective_target_uncapped_under_local_mode(db, monkeypatch):
+    """本地（浏览器）路径没有 TikHub 硬顶——job target=200 应原样传给适配器，
+    最终 progress.target 也应是 200。"""
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="local"),
+    )
+    received: dict = {}
+
+    class CapReportingAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            received["target_count"] = target_count
+            return SearchOutcome(platform=self.platform, status="done", cards_emitted=0)
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: CapReportingAdapter())
+    jid = ms.create_job("k", ["bilibili"], 200)
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    runner.run(jid)
+
+    assert received["target_count"] == 200
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert prog["target"] == 200
+
+
+# ── L1: job-local balance short-circuit ─────────────────────────────────────
+
+@pytest.fixture
+def reset_tikhub_latch():
+    """进程级余额闩是全局单例——测试前后都清一次，防串到其它测试。"""
+    from csm_core.monitor.tikhub.client import reset_balance_latch
+    reset_balance_latch()
+    yield
+    reset_balance_latch()
+
+
+def test_balance_402_on_platform1_short_circuits_platform_2_and_3(db, monkeypatch, reset_tikhub_latch):
+    """platform 1 撞 402（自己置进程级闩）并以 failed 收尾 → platform 2/3 的
+    适配器一次都不应该被调用（未发请求），progress 直接写 failed + 短路 note。"""
+    from csm_core.monitor.tikhub.client import _trip_balance_latch
+
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="tikhub_api"),
+    )
+    called: list[str] = []
+
+    class TrippingAdapter:
+        def __init__(self, platform):
+            self.platform = platform
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            called.append(self.platform)
+            _trip_balance_latch()
+            return SearchOutcome(platform=self.platform, status="failed", cards_emitted=0,
+                                 error_message="TikHub 余额不足")
+
+    class NeverCalledAdapter:
+        def __init__(self, platform):
+            self.platform = platform
+
+        def search(self, *a, **kw):
+            called.append(self.platform)
+            raise AssertionError(f"{self.platform} adapter must never be called after latch trips")
+
+    adapters = {
+        "bilibili": TrippingAdapter("bilibili"),
+        "kuaishou": NeverCalledAdapter("kuaishou"),
+        "douyin": NeverCalledAdapter("douyin"),
+    }
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: adapters[p])
+
+    jid = ms.create_job("k", ["bilibili", "kuaishou", "douyin"], 50)
+    events = []
+    runner = MiningRunner(publish=lambda kind, payload: events.append((kind, payload)))
+    runner.run(jid)
+
+    assert called == ["bilibili"], f"only bilibili's adapter should ever run, got {called}"
+
+    progress = ms.get_job(jid)["progress"]
+    for p in ("kuaishou", "douyin"):
+        assert progress[p]["phase"] == "failed"
+        assert progress[p]["got"] == 0
+        assert "短路" in (progress[p].get("note") or ""), progress[p]
+
+    short_circuit_events = [
+        e for e in events
+        if e[0] == "job.platform_done" and e[1]["platform"] in ("kuaishou", "douyin")
+    ]
+    assert len(short_circuit_events) == 2
+    for _, payload in short_circuit_events:
+        assert payload["status"] == "failed"
+        assert payload["count"] == 0
+
+
+def test_stale_process_latch_does_not_block_a_fresh_job(db, monkeypatch, reset_tikhub_latch):
+    """进程级闩在任务开始之前就已经是 True（模拟：monitor 调度器 60s 前留下的一次
+    陈旧 402，还没到下一次重置窗口）——这个新任务的 platform 1 仍然必须真正发起
+    请求：job_latched 是任务本地状态，循环开始时永远是 False，不看进场时的
+    进程闩状态。"""
+    from csm_core.monitor.tikhub.client import _trip_balance_latch
+
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="tikhub_api"),
+    )
+    _trip_balance_latch()  # simulate a stale monitor-side 402 latched before this job started
+
+    called: list[str] = []
+
+    class CalledAdapter:
+        platform = "bilibili"
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            called.append(self.platform)
+            return SearchOutcome(platform=self.platform, status="done", cards_emitted=0)
+
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: CalledAdapter())
+    jid = ms.create_job("k", ["bilibili"], 50)
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    runner.run(jid)
+
+    assert called == ["bilibili"], "platform 1's adapter must still be called despite a stale pre-existing latch"
+
+
+def test_local_mode_ignores_balance_latch_entirely(db, monkeypatch, reset_tikhub_latch):
+    """local（浏览器）模式下，即便进程级余额闩被置位，也完全不应该短路——余额闩
+    是 TikHub 付费路径专属概念，跟本地浏览器采集无关。"""
+    from csm_core.monitor.tikhub.client import _trip_balance_latch
+
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="local"),
+    )
+    _trip_balance_latch()
+
+    called: list[str] = []
+
+    class CalledAdapter:
+        def __init__(self, platform):
+            self.platform = platform
+
+        def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+                   max_attempts=None, filters=None):
+            called.append(self.platform)
+            return SearchOutcome(platform=self.platform, status="done", cards_emitted=0)
+
+    adapters = {"bilibili": CalledAdapter("bilibili"), "kuaishou": CalledAdapter("kuaishou")}
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: adapters[p])
+
+    jid = ms.create_job("k", ["bilibili", "kuaishou"], 50)
+    runner = MiningRunner(publish=lambda kind, payload: None)
+    runner.run(jid)
+
+    assert called == ["bilibili", "kuaishou"], f"local mode must ignore the balance latch entirely, got {called}"

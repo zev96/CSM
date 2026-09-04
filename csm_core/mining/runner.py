@@ -22,6 +22,7 @@ from csm_core.mining.platforms._common import SearchAdapter
 from csm_core.mining.platforms.bilibili_search import BilibiliSearchAdapter
 from csm_core.mining.platforms.douyin_search import DouyinSearchAdapter
 from csm_core.mining.platforms.kuaishou_search import KuaishouSearchAdapter
+from csm_core.monitor.tikhub.client import balance_exhausted
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +159,46 @@ class MiningRunner:
 
         data_source_mode = _data_source_mode(cfg)
 
+        # D1: TikHub 每平台单次采集有硬顶（HARD_CAP=80，见 tikhub_search.py）——
+        # 用户在 UI 上选的 target_per_platform 可以到 200，但 tikhub_api 模式下
+        # 适配器内部会自己把它砍到 80。如果 runner 这里继续把 200 当"满进度"的
+        # 分母写进 progress，一个已经跑完、拿到 80 条的 job 在进度条上会停在
+        # 80/200=40%,看起来像卡住/失败,而不是"已完成"。eff_target 就是这个
+        # 任务在当前数据源模式下真正能达到的分母,job 内三平台同一数据源
+        # （data_source_mode 只读一次），所以 eff_target 只需算一次。
+        job_target = int(job["target_per_platform"])
+        if data_source_mode == "tikhub_api":
+            from csm_core.mining.platforms.tikhub_search import HARD_CAP
+            eff_target = min(job_target, HARD_CAP)
+        else:
+            eff_target = job_target
+
+        # L1: 任务级余额短路——进程级闩（client.balance_exhausted）每 60s 被
+        # monitor 调度器重置一次,不能拿它本身当"这个任务该不该继续"的判据
+        # （一个陈旧的、已经过期的 402 不该拦住全新任务；但同一个任务内,
+        # platform 1 撞了 402 之后,platform 2/3 应该立刻短路,不管 60s 重置
+        # 会不会在两个平台之间发生）。job_latched 是这个 job 自己的本地状态：
+        # 循环开始时永远是 False（不看进场时进程闩是什么状态),只在"这个任务
+        # 自己的某次 adapter.search() 调用之后发现闩被置位了"才置 True。
+        job_latched = False
+
         for platform in job["platforms"]:
             if cancel_event.is_set():
                 mining_storage.update_platform_progress(
-                    job_id, platform, got=0, target=job["target_per_platform"], phase="cancelled",
+                    job_id, platform, got=0, target=eff_target, phase="cancelled",
                 )
+                continue
+
+            if job_latched:
+                mining_storage.update_platform_progress(
+                    job_id, platform, got=0, target=eff_target,
+                    phase="failed", note="TikHub 余额不足（本任务后续平台短路，未发请求）",
+                )
+                self.publish("job.platform_done", {
+                    "job_id": job_id, "platform": platform,
+                    "status": "failed", "count": 0,
+                    "error": "TikHub 余额不足（本任务短路）",
+                })
                 continue
 
             adapter = get_adapter(platform, data_source_mode)
@@ -235,7 +271,7 @@ class MiningRunner:
             try:
                 outcome: SearchOutcome = adapter.search(
                     keyword=job["keyword"],
-                    target_count=job["target_per_platform"],
+                    target_count=eff_target,
                     on_card=_on_card,
                     on_progress=_on_progress,
                     cancel_event=cancel_event,
@@ -245,13 +281,15 @@ class MiningRunner:
                 logger.exception("adapter %s threw — recording as failed", platform)
                 mining_storage.update_platform_progress(
                     job_id, platform,
-                    got=emitted[0], target=job["target_per_platform"],
+                    got=emitted[0], target=eff_target,
                     phase="failed", note=str(e)[:200],
                 )
                 self.publish("job.platform_done", {
                     "job_id": job_id, "platform": platform,
                     "status": "failed", "count": emitted[0], "error": str(e)[:200],
                 })
+                if data_source_mode == "tikhub_api" and balance_exhausted():
+                    job_latched = True
                 continue
 
             # Brand pre-filter pass — only when the search completed successfully
@@ -308,18 +346,27 @@ class MiningRunner:
             # Final platform progress with outcome status.
             # For status=="done" this always writes phase="done", which
             # overwrites any transient "prefilter" phase written above.
+            # R7: outcome.error_message is an adapter-internal diagnostic —
+            # on the local (browser) path it's raw English text meant for
+            # logs (e.g. "no SESSDATA in bilibili profile", "search GET
+            # failed: <exception incl. URL+keyword>") and must never reach
+            # the UI/DB; only the TikHub path's messages are user-facing
+            # Chinese strings safe to persist.
             mining_storage.update_platform_progress(
                 job_id, platform,
                 got=outcome.cards_emitted,
-                target=job["target_per_platform"],
+                target=eff_target,
                 phase=outcome.status if outcome.status != "done" else "done",
-                note=(outcome.error_message or "")[:200],
+                note=(outcome.error_message or "")[:200] if data_source_mode == "tikhub_api" else "",
             )
             self.publish("job.platform_done", {
                 "job_id": job_id, "platform": platform,
                 "status": outcome.status, "count": outcome.cards_emitted,
                 "error": outcome.error_message,
             })
+
+            if data_source_mode == "tikhub_api" and balance_exhausted():
+                job_latched = True
 
         try:
             summary = mining_storage.finalize_job(job_id)
