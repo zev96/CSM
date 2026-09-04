@@ -190,7 +190,7 @@ export interface SyncToDocsResult {
   synced_comments: number
   /** 表格「链接」列已有该视频 → 跳过写入、本地补标 synced（防双写）。 */
   skipped_in_doc: number
-  /** 超出表格三层结构的楼层数（留在 app 内，保持 approved）。 */
+  /** 超出目标子表实际评论列层数（上限 5，以表头「评论X」列数为准）的楼层数（留在 app 内，保持 approved）。 */
   skipped_extra_tiers: number
   /** 每个平台写入了哪张子表的哪个行区间（0-based）。 */
   batches: {

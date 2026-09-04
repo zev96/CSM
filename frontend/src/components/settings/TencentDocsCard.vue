@@ -40,6 +40,9 @@ interface TestResultSheet {
   sheet_name: string;
   matched_by_name: boolean;
   missing: string[];
+  optional_missing?: string[];   // 可选列（如序号/日期/贴图二）未找到，非阻塞
+  tier_gaps?: number[];          // 断层的楼层号（如有评论A/评论C但无评论B → [2]）
+  tiers_detected?: number;       // 该子表能承载几层评论列（0=未识别到）
 }
 
 interface TestResult {
@@ -48,6 +51,7 @@ interface TestResult {
   header?: string[];
   sheets?: TestResultSheet[];   // 每平台路由到哪张子表 + 缺列情况
   missing?: string[];
+  optional_missing?: string[];
   detail?: string;   // 错误路径（400/502 结构化错误）
 }
 const testResult = ref<TestResult | null>(null);
@@ -249,6 +253,18 @@ async function onTest() {
               <template v-if="!s.matched_by_name">（未找到同名子表，回落到此表）</template>
               <template v-if="s.missing.length">
                 · <b style="color: var(--red);">缺列：{{ s.missing.join("、") }}</b>
+              </template>
+              <template v-if="s.tiers_detected === 0">
+                · <b style="color: var(--red);">未识别到评论列（需要「评论A」）</b>
+              </template>
+              <template v-else-if="s.tiers_detected != null">
+                · 识别到 {{ s.tiers_detected }} 层评论列
+              </template>
+              <template v-if="s.tier_gaps?.length">
+                · <b :style="{ color: 'var(--yellow-deep)' }">评论列不连续，缺第 {{ s.tier_gaps.join("、") }} 层</b>
+              </template>
+              <template v-if="s.optional_missing?.length">
+                · <span :style="{ color: 'var(--ink-3)' }">可选列未找到：{{ s.optional_missing.join("、") }}</span>
               </template>
             </div>
             <div v-if="!testResult.ok" class="mt-1" :style="{ color: 'var(--ink-3)' }">
