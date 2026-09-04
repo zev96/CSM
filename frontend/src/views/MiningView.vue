@@ -44,6 +44,7 @@ import { useMiningStore, type Platform, type SearchFilters } from "@/stores/mini
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
+import { keyringStatus } from "@/api/client";
 
 const store = useMiningStore();
 const cfg = useConfig();
@@ -51,6 +52,9 @@ const cfg = useConfig();
 const tikhubMode = computed(
   () => ((cfg.data as any)?.mining_data_source_mode ?? "tikhub_api") === "tikhub_api",
 );
+// 乐观默认 true：避免 keyringStatus 请求返回前 UI 先闪一下红。
+const tikhubHasKey = ref(true);
+const tikhubKeyMissing = computed(() => tikhubMode.value && !tikhubHasKey.value);
 const toast = useToast();
 const route = useRoute();
 
@@ -375,6 +379,12 @@ function openSyncModal(job: { id: number; keyword: string }) {
 
 onMounted(async () => {
   if (!cfg.data) void cfg.load();
+  try {
+    const s = await keyringStatus("tikhub");
+    tikhubHasKey.value = Boolean(s?.has_key);
+  } catch {
+    tikhubHasKey.value = false;
+  }
   await Promise.all([
     store.refreshLoginStatus(),
     store.loadJobs(),
@@ -699,6 +709,7 @@ onMounted(async () => {
       :open="showNewTask"
       :login-status="store.loginStatus"
       :tikhub-mode="tikhubMode"
+      :tikhub-key-missing="tikhubKeyMissing"
       :prefill-keyword="prefillKeyword"
       :prefill-source="prefillSource"
       @update:open="(v: boolean) => { showNewTask = v; if (!v) { prefillKeyword = ''; prefillSource = ''; } }"

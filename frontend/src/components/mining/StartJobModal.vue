@@ -16,6 +16,8 @@ const props = defineProps<{
   prefillSource?: string;
   /** 采集走 TikHub：三平台默认全选，不看登录态。 */
   tikhubMode?: boolean;
+  /** TikHub 模式且未配置 Key —— 不自动勾选、不可开始。 */
+  tikhubKeyMissing?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -31,9 +33,9 @@ const kw = ref("");
 const brandKw = ref("");
 // Auto-pick all logged-in platforms by default（TikHub 模式下三平台恒全选，不看登录态）。
 const pickAll = () => ({
-  bilibili: props.tikhubMode || !!props.loginStatus.bilibili,
-  douyin: props.tikhubMode || !!props.loginStatus.douyin,
-  kuaishou: props.tikhubMode || !!props.loginStatus.kuaishou,
+  bilibili: (props.tikhubMode && !props.tikhubKeyMissing) || !!props.loginStatus.bilibili,
+  douyin: (props.tikhubMode && !props.tikhubKeyMissing) || !!props.loginStatus.douyin,
+  kuaishou: (props.tikhubMode && !props.tikhubKeyMissing) || !!props.loginStatus.kuaishou,
 });
 const picked = ref<Record<Platform, boolean>>(pickAll());
 const cap = ref(50);
@@ -224,9 +226,13 @@ function onSubmit() {
               :picked="!!picked[p]"
               :logged-in="!!loginStatus[p]"
               :tikhub-mode="!!tikhubMode"
+              :tikhub-key-missing="!!tikhubKeyMissing"
               @toggle="togglePlatform(p)"
               @login="$emit('update:open', false)"
             />
+          </div>
+          <div v-if="tikhubMode && tikhubKeyMissing" class="mt-2 text-[11px]" style="color: var(--red);">
+            采集已设为走 TikHub，但尚未配置 TikHub API Key —— 请到「设置 › 监测 › 抓取数据源」粘贴 Key，或把「采集走 TikHub」关掉改用浏览器采集。
           </div>
         </div>
 

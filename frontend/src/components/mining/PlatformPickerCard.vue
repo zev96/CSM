@@ -8,6 +8,8 @@ const props = defineProps<{
   loggedIn: boolean;
   /** 采集走 TikHub 付费搜索：不需要登录，卡片恒可选、状态行显示「TikHub 就绪」。 */
   tikhubMode?: boolean;
+  /** TikHub 模式下未配置 API Key：卡片不可选，状态行提示去设置页。 */
+  tikhubKeyMissing?: boolean;
 }>();
 
 defineEmits<{
@@ -22,12 +24,13 @@ const META: Record<Platform, { l: string; letter: string; color: string }> = {
 };
 
 const meta = () => META[props.platform];
-const usable = () => props.tikhubMode || props.loggedIn;
+const keyMissing = () => !!props.tikhubMode && !!props.tikhubKeyMissing;
+const usable = () => (keyMissing() ? false : props.tikhubMode || props.loggedIn);
 </script>
 
 <template>
   <button
-    @click="usable() ? $emit('toggle') : $emit('login')"
+    @click="usable() ? $emit('toggle') : (tikhubMode ? undefined : $emit('login'))"
     :style="{
       position: 'relative',
       textAlign: 'left',
@@ -66,7 +69,10 @@ const usable = () => props.tikhubMode || props.loggedIn;
       class="text-[10.5px] mt-2 flex items-center gap-1"
       :style="{ color: usable() ? 'var(--green-deep)' : 'var(--red)' }"
     >
-      <template v-if="tikhubMode">
+      <template v-if="keyMissing()">
+        <Icon name="lock" :size="10"/> 未配置 TikHub Key
+      </template>
+      <template v-else-if="tikhubMode">
         <Icon name="check" :size="10"/> TikHub 就绪
       </template>
       <template v-else-if="loggedIn">
