@@ -113,6 +113,7 @@
 - **R3 TikHub 单点故障**：宕机=三平台同黑（D5 不回退）；缓解=一键切回浏览器兜底（D2 强调该出口）。
 - **R4 成本失控**：靠 §5.4 每平台上限 + max_pages + 频率提示 + 402 余额闩共同兜底。
 - **R5 快手 mixFeeds 噪音**：`itemType!=5` 的相关搜索/运营卡需过滤（§4.2 已确认判据）。
+- **R7 默认即付费的升级影响**：`mining_data_source_mode` 默认 `tikhub_api`，老用户升级后采集即走付费 API；未配置 Key 时 UI 显示「未配置 TikHub Key」且不可选、不自动勾选，后端记失败「未配置 TikHub API Key」。CHANGELOG 已标注。
 - **R6 快手翻页语义未真机验证**：实现期 TikHub 快手端点处于临时故障（连首页都 400「Request failed. Please retry … won't be charged」，同 `feedback_tikhub_transient_400_outage_diagnosis` 签名），无法验证 `pcursor="1"` 能否取到第 2 页。已按最安全口径实现（pcursor 主判据 + 游标不动点闸 + 后页失败降 done）：最坏情况是第 2 页白请求一次（该类失败不计费），而 recoPcursor 主判据的最坏情况是永久单页且完全静默。首次真机采集后看日志里每页 pcursor 是否 "1"→"2" 推进即可确认。
 
 ## 8. 不做（YAGNI）
