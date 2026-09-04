@@ -14,6 +14,26 @@ def _load(name: str) -> dict:
     return json.loads((FIX / name).read_text(encoding="utf-8"))
 
 
+# ── 共享小工具 ──────────────────────────────────────────────────────────
+
+def test_first_cover_rejects_nested_list():
+    """嵌套 list（如 [["x"]]）之前会被 str() 硬转成 "['x']" 这种明显不是 URL 的
+    垃圾字符串落库；只应接受 str 或带 url 的 dict，其余一律回退空字符串。"""
+    assert N._first_cover([["x"]]) == ""
+
+
+def test_first_cover_accepts_dict_with_url():
+    assert N._first_cover([{"cdn": "a", "url": "https://u"}]) == "https://u"
+
+
+def test_first_cover_accepts_bare_str():
+    assert N._first_cover(["https://s"]) == "https://s"
+
+
+def test_first_cover_rejects_non_str_non_dict_element():
+    assert N._first_cover([42]) == ""
+
+
 # ── 抖音 ────────────────────────────────────────────────────────────────
 
 def test_douyin_first_body_pushes_filters_down():
@@ -147,16 +167,26 @@ def test_douyin_normalize_logs_inner_error_code(caplog):
         cards = N.normalize_douyin_search({"data": {"status_code": 8, "business_data": []}}, {})
     assert cards == []
     assert "8" in caplog.text
+    # 光有 "8" 不够辨识度——必须是"douyin 平台的这条告警"，而不是巧合命中别处的
+    # 数字 8（比如某条无关日志里的行号/计数）。同一条 warning 记录里必须同时出现
+    # 平台名和错误码。
+    assert len(caplog.records) == 1
+    assert "douyin" in caplog.records[0].getMessage()
+    assert "8" in caplog.records[0].getMessage()
 
 
 def test_inner_error_log_preview_never_raises_on_unserializable_raw(caplog):
     """日志预览用 json.dumps 失败(比如 dict 键是 tuple,不是合法 JSON key)不能反过来
-    把归一化本身打崩 —— 必须兜底成 repr,而不是让 TypeError 穿透。"""
+    把归一化本身打崩 —— 必须兜底成 repr,而不是让 TypeError 穿透。这里直接断言告警
+    文本里出现该 tuple 键的 repr 片段("(1, 2)"),而不只是断言不抛异常——否则测试
+    通过与否跟 repr 兜底是否真的被走到毫无关系(哪怕 _preview 直接返回空字符串,
+    只要不抛异常这条测试照样通过)。"""
     raw = {"data": {"status_code": 8, (1, 2): "x"}}
     with caplog.at_level(logging.WARNING):
         cards = N.normalize_douyin_search(raw, {})
     assert cards == []
     assert "8" in caplog.text
+    assert "(1, 2)" in caplog.text
 
 
 # ── B站 ─────────────────────────────────────────────────────────────────
@@ -287,6 +317,9 @@ def test_bilibili_normalize_logs_inner_error_code(caplog):
         cards = N.normalize_bilibili_search({"data": {"code": -412, "data": {"result": []}}}, {})
     assert cards == []
     assert "-412" in caplog.text
+    assert len(caplog.records) == 1
+    assert "bilibili" in caplog.records[0].getMessage()
+    assert "-412" in caplog.records[0].getMessage()
 
 
 # ── 快手 ────────────────────────────────────────────────────────────────
@@ -309,6 +342,41 @@ def test_kuaishou_normalize_real_fixture_skips_non_video_items():
     assert c.play_count == 141046 and c.like_count == 832
     assert c.duration_sec == 64                        # 64500ms → 64s
     assert c.published_at == "2021-12-27T11:11:59Z"    # 1640603519820ms
+
+
+def test_kuaishou_normalize_duration_rounds_down_and_zeroes_to_none():
+    """dur_ms // 1000 or None:500ms 整除后是 0,0 是 falsy → 必须归一成 None(不足
+    1 秒不能报成"0 秒"，语义上应视为时长未知)；64500ms 整除后是 64，非零原样保留。"""
+    raw = {"data": {"mixFeeds": [
+        {"itemType": 5, "feed": {
+            "photo_id": "1", "caption": "c", "user_name": "u", "user_id": "1",
+            "duration": 500, "timestamp": 1640603519820,
+        }},
+        {"itemType": 5, "feed": {
+            "photo_id": "2", "caption": "c", "user_name": "u", "user_id": "1",
+            "duration": 64500, "timestamp": 1640603519820,
+        }},
+    ]}}
+    cards = N.normalize_kuaishou_search(raw, {})
+    by_id = {c.platform_video_id: c for c in cards}
+    assert by_id["1"].duration_sec is None
+    assert by_id["2"].duration_sec == 64
+
+
+def test_kuaishou_normalize_raw_drops_stream_and_media_blobs():
+    """raw 存整段 feed 会把 streamManifest/main_mv_urls/ff_cover_thumbnail_urls 这类
+    体积巨大的流媒体清单一并落库（纯粹的存储膨胀，归一化后的卡片不消费它们）——
+    必须在落 raw 前剔除，同时保留 photo_id/caption/user_name 等实际会用到的字段。"""
+    raw = _load("tikhub_search_kuaishou.json")
+    cards = N.normalize_kuaishou_search(raw, {})
+    assert len(cards) == 3
+    for c in cards:
+        assert "streamManifest" not in c.raw
+        assert "main_mv_urls" not in c.raw
+        assert "ff_cover_thumbnail_urls" not in c.raw
+        assert "photo_id" in c.raw
+        assert "caption" in c.raw
+        assert "user_name" in c.raw
 
 
 def test_kuaishou_normalize_count_string_fallback():
@@ -384,6 +452,9 @@ def test_kuaishou_normalize_logs_inner_error_code(caplog):
         cards = N.normalize_kuaishou_search({"data": {"responseCode": 109, "mixFeeds": []}}, {})
     assert cards == []
     assert "109" in caplog.text
+    assert len(caplog.records) == 1
+    assert "kuaishou" in caplog.records[0].getMessage()
+    assert "109" in caplog.records[0].getMessage()
 
 
 # ── 快乐路径不产生告警 ────────────────────────────────────────────────────

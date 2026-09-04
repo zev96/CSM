@@ -179,3 +179,20 @@ def test_bool_body_code_does_not_raise():
     # bool 是 int 子类(True == 1) —— 不能被误判成业务码 1(!= 200)而错误报错。
     c = _client(lambda req: httpx.Response(200, json={"code": True, "data": {"x": 1}}))
     assert c.get("/p", {})["data"] == {"x": 1}
+
+
+def test_superscript_digit_body_code_does_not_raise_as_python_error():
+    # '²'.isdigit() 是 True 但 int('²') 抛 ValueError —— isdigit() 误判成"这是数字
+    # 字符串"会让 int() 转换炸出 ValueError,以非 TikHubError 形态击穿上层。必须用
+    # isdecimal() 才能正确识别"这不是可转 int 的十进制数字"从而保留原样透传。
+    c = _client(lambda req: httpx.Response(200, json={"code": "²", "data": {"x": 1}}))
+    assert c.get("/p", {})["data"] == {"x": 1}
+
+
+def test_fullwidth_digit_body_code_still_trips_balance_latch():
+    # 全角数字(如 "４０２")isdigit()/isdecimal() 都认,且 int() 能正确转换 ——
+    # 确认改用 isdecimal() 不会漏识别这类合法但非 ASCII 的数字业务码。
+    c = _client(lambda req: httpx.Response(200, json={"code": "４０２", "message": "no balance"}))
+    with pytest.raises(TikHubBalanceExhausted):
+        c.get("/p", {})
+    assert balance_exhausted() is True

@@ -68,11 +68,14 @@ def _count(v: Any) -> int | None:
 
 
 def _first_cover(v: Any) -> str:
+    """封面 URL 只认 str 或带 url 的 dict——其余类型（嵌套 list、int 等）一律回退
+    空字符串，不能被 str() 硬转成 "['x']" 这类明显不是 URL 的垃圾字符串落库。"""
     if isinstance(v, list) and v:
         first = v[0]
         if isinstance(first, dict):
             return str(first.get("url") or "")
-        return str(first or "")
+        if isinstance(first, str):
+            return first
     return ""
 
 
@@ -267,6 +270,11 @@ def normalize_bilibili_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
 
 # ── 快手 ────────────────────────────────────────────────────────────────
 
+# raw 落库前剔除的流媒体/清单类大字段——归一化后的卡片不消费它们，整段存进
+# raw 纯粹是存储膨胀。
+_KS_RAW_DROP = frozenset({"streamManifest", "main_mv_urls", "ff_cover_thumbnail_urls"})
+
+
 def kuaishou_first_params(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
     """快手 search_video_v2 无服务端筛选 —— 时间区间在 normalize 里本地后过滤。"""
     return {"keyword": keyword, "pcursor": ""}
@@ -327,11 +335,13 @@ def normalize_kuaishou_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
                 author_name=str(feed.get("user_name") or "").strip(),
                 author_id=str(feed.get("user_id") or ""),
                 cover_url=_first_cover(feed.get("cover_thumbnail_urls")),
-                duration_sec=int(dur_ms / 1000) if dur_ms else None,
+                # dur_ms // 1000 or None:不足 1 秒(整除得 0)也归一成 None，语义上
+                # 视为"时长未知"，不能报成"0 秒"。
+                duration_sec=(dur_ms // 1000) or None if dur_ms else None,
                 play_count=_count(feed.get("view_count")),
                 like_count=_count(feed.get("like_count")),
                 published_at=_ts_ms_to_iso(ts_ms) if ts_ms else None,
-                raw=feed,
+                raw={k: v for k, v in feed.items() if k not in _KS_RAW_DROP},
             )
             if not iso_within_epoch_range(card.published_at, begin, end):
                 continue

@@ -1,17 +1,21 @@
-"""TikHub 付费 API 的 HTTP client 基座:鉴权 GET + 错误映射 + 进程级 402 余额闩。
+"""TikHub 付费 API 的 HTTP client 基座:鉴权 GET/POST + 错误映射 + 进程级 402 余额闩。
 
 设计依据: docs/superpowers/specs/2026-07-06-tikhub-api-scraping-mode-design.md §9
 - 每次请求带 `Authorization: Bearer <key>`。
 - HTTP 非 200 **或** 响应体 `code != 200`(聚合 API 常用 HTTP 200 + body code 表业务错误)
-  都映射成中文 TikHubError(见 errors.map_error)。
+  都映射成中文 TikHubError(见 errors.map_error)。触发时 `err.from_body` 标记该错误是
+  否来自"HTTP 200 但服务端已出货"(见下)。
 - 见到任一 402 立即置进程级闩(跨平台生效,因为余额是账户级而非平台级);
   分派层据此在本轮短路剩余任务,避免通知洪水 + 继续烧费。
-- 响应非法 JSON 也统一成 TikHubError,不让 json.JSONDecodeError 击穿上层
-  适配器的 `except TikHubError`。
+- HTTP 200 + body code≠200:服务端已出货(可能已计费)—— `from_body=True`,上层
+  不应把它当"没出货"重试造成重复计费。HTTP 层错误(非 200 状态码)或网络错误则
+  `from_body=False`,可安全重试。
+- 响应非法 JSON 在 HTTP 200 时同样标记 `from_body=True` 统一成 TikHubError,不让
+  json.JSONDecodeError 击穿上层适配器的 `except TikHubError`。
 - 日志绝不写 Authorization 头或 key(R7 安全红线):只记录 path/params 与状态码;
   记录响应体前先 `_redact()` 抹掉 key —— 防网关/CDN 把请求头回显进错误体导致泄漏。
-- 不做自动重试(§9:重试可能重复计费)。
-- 本模块只负责单次 GET;自适应翻页属于 Task 3(paginate()),此处不实现。
+- 不做自动重试(§9:重试可能重复计费);GET/POST 均如此。
+- 本模块只负责单次 GET/POST;自适应翻页属于 Task 3(paginate()),此处不实现。
 """
 
 from __future__ import annotations
@@ -109,7 +113,7 @@ class TikHubClient:
         biz_code = data.get("code") if isinstance(data, dict) else None
         if isinstance(biz_code, bool):                      # bool 是 int 子类，不当作业务码
             biz_code = None
-        elif isinstance(biz_code, str) and biz_code.strip().isdigit():
+        elif isinstance(biz_code, str) and biz_code.strip().isdecimal():
             biz_code = int(biz_code.strip())
         if isinstance(biz_code, int) and biz_code != 200:
             self._fail(biz_code, 200, path, r.text)

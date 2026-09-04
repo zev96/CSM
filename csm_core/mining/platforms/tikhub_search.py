@@ -270,7 +270,9 @@ class TikHubSearchAdapter:
         return _done(emitted, note)
 
 
-def build_tikhub_search_adapters(get_config, key_reader) -> dict[str, TikHubSearchAdapter]:
+def build_tikhub_search_adapters(
+    get_config: Callable[[], Any], key_reader: Callable[[str, Any], str | None],
+) -> dict[str, TikHubSearchAdapter]:
     """构造 {platform: adapter}。与 monitor.tikhub.build_api_adapters 同款注入方式：
     get_config() -> AppConfig（取 monitor.tikhub_base_url）；key_reader("tikhub", cfg) -> key。
     key 为空时 factory 抛 TikHubError，适配器捕获后记 failed（永不异常穿透）。"""
