@@ -39,6 +39,12 @@ const pickAll = () => ({
 });
 const picked = ref<Record<Platform, boolean>>(pickAll());
 const cap = ref(50);
+// TikHub 模式下单平台每页约 6–14 条、$0.01/页 —— 后端 runner 会把有效目标
+// 钳到 min(用户目标, 80)，滑条本身也钳到 80，避免用户以为能拉满 200 条。
+const capMax = computed(() => (props.tikhubMode ? 80 : 200));
+watch(capMax, (m) => {
+  if (cap.value > m) cap.value = m;
+});
 // 按平台分组的筛选条件 —— 每个平台只展示它真实支持的档位：
 // 抖音只有时间档位（无任意区间）、B 站支持任意日期区间、快手只能本地后过滤。
 const filters = ref<SearchFilters>(defaultSearchFilters());
@@ -56,7 +62,7 @@ function toggleDouyinType(t: "video" | "note") {
 }
 
 const total = computed(() =>
-  Object.values(picked.value).filter(Boolean).length * cap.value
+  Object.values(picked.value).filter(Boolean).length * Math.min(cap.value, capMax.value)
 );
 
 // 品牌词输入 → 去重后的 list[str]。逗号(中/英)、顿号、空白都当分隔符。
@@ -90,7 +96,7 @@ watch(
     kw.value = "";
     brandKw.value = "";
     picked.value = pickAll();
-    cap.value = 50;
+    cap.value = Math.min(50, capMax.value);
     filters.value = defaultSearchFilters();
     // 预填关键词（来自 GEO 闭环跳转）—— 只在 kw 刚被清空时填，不覆盖用户已输入的内容。
     if (props.prefillKeyword) {
@@ -347,15 +353,18 @@ function onSubmit() {
           </div>
           <div style="position: relative; padding: 10px 0;">
             <div style="height: 6px; background: var(--card-2); border-radius: 999px; position: relative; border: 1px solid var(--line);">
-              <div :style="{ height: '100%', width: (cap / 200 * 100) + '%', background: 'var(--primary)', borderRadius: '999px' }"/>
+              <div :style="{ height: '100%', width: (cap / capMax * 100) + '%', background: 'var(--primary)', borderRadius: '999px' }"/>
             </div>
             <input
-              type="range" min="10" max="200" step="10" v-model.number="cap"
+              type="range" min="10" :max="capMax" step="10" v-model.number="cap"
               style="position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer;"
             />
             <div class="flex justify-between mt-1.5 font-mono text-[10px]" style="color: var(--ink-4)">
-              <span>10</span><span>50</span><span>100</span><span>200</span>
+              <span v-for="t in (tikhubMode ? [10, 40, 80] : [10, 50, 100, 200])" :key="t">{{ t }}</span>
             </div>
+          </div>
+          <div v-if="tikhubMode" class="mt-1.5 text-[11px]" style="color: var(--ink-3);">
+            TikHub 模式：单平台每次最多 80 条（每页约 6–14 条，$0.01/页）
           </div>
         </div>
 

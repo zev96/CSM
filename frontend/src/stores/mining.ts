@@ -192,6 +192,8 @@ export interface SyncToDocsResult {
   skipped_in_doc: number
   /** 超出目标子表实际评论列层数（上限 5，以表头「评论X」列数为准）的楼层数（留在 app 内，保持 approved）。 */
   skipped_extra_tiers: number
+  /** 挂图因该层表头无「评论X的图片」列而未写入/未标注的条数。 */
+  images_dropped: number
   /** 每个平台写入了哪张子表的哪个行区间（0-based）。 */
   batches: {
     platform: Platform

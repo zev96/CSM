@@ -221,7 +221,11 @@ async function onSyncToDocs() {
     let msg = `已同步 ${r.synced_videos} 条视频（${r.synced_comments} 条评论）到腾讯文档`;
     if (sheetNames) msg += `「${sheetNames}」`;
     if (r.skipped_in_doc) msg += `，${r.skipped_in_doc} 条已在表格中跳过`;
-    toast.success(msg);
+    if (r.skipped_extra_tiers) msg += `；${r.skipped_extra_tiers} 条评论超出表头评论列未写入（补列后再次同步）`;
+    if (r.images_dropped) msg += `；${r.images_dropped} 条挂图因表头无对应贴图列未标注`;
+    const hasWarning = !!r.skipped_extra_tiers || !!r.images_dropped;
+    if (hasWarning) toast.warn(msg);
+    else toast.success(msg);
   } catch (e: any) {
     const data = e?.response?.data;
     if (data?.code === "tencent_docs_disabled" || data?.code === "tencent_docs_token") {
