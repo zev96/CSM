@@ -99,10 +99,18 @@ class TikHubClient:
             logger.warning(
                 "[tikhub] %s http=200 非法JSON first200=%s", path, self._redact(r.text)[:200]
             )
-            raise TikHubError("TikHub 响应不是合法 JSON") from e
+            # HTTP 200 意味着服务端已经出货(可能已计费)——不能让上层适配器把非法
+            # JSON 误判为"服务端没出货"而重试,造成重复计费。
+            err = TikHubError("TikHub 响应不是合法 JSON")
+            err.from_body = True
+            raise err from e
 
         # 3) 业务层错误:HTTP 200 但 body.code != 200(聚合 API 常见做法)
         biz_code = data.get("code") if isinstance(data, dict) else None
+        if isinstance(biz_code, bool):                      # bool 是 int 子类，不当作业务码
+            biz_code = None
+        elif isinstance(biz_code, str) and biz_code.strip().isdigit():
+            biz_code = int(biz_code.strip())
         if isinstance(biz_code, int) and biz_code != 200:
             self._fail(biz_code, 200, path, r.text)
 

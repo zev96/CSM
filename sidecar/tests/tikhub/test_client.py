@@ -67,9 +67,13 @@ def test_body_code_200_returns_full_wrapper():
 
 def test_non_json_response_raises_tikhub_error():
     # 网关错误页 / 截断响应 -> 统一成 TikHubError,不让 JSONDecodeError 击穿上层。
+    # HTTP 200 意味着服务端已经出货(可能已计费),所以 from_body 必须为 True,
+    # 不应被上层适配器判定为可重试。
     c = _client(lambda req: httpx.Response(200, text="<html>gateway error</html>"))
-    with pytest.raises(TikHubError):
+    with pytest.raises(TikHubError) as e:
         c.get("/p", {})
+    assert e.value.from_body is True
+    assert e.value.code is None
 
 
 def test_log_redacts_key_from_echoed_error_body(caplog):
@@ -155,3 +159,23 @@ def test_from_body_false_on_network_error():
         c.get("/p", {})
     assert ei.value.from_body is False
     assert ei.value.code is None
+
+
+def test_string_body_code_402_trips_latch_and_from_body_true():
+    # 聚合 API 有时把 code 编码成字符串而不是 int —— "402" 也必须识别为业务错误。
+    c = _client(lambda req: httpx.Response(200, json={"code": "402", "message": "no balance"}))
+    with pytest.raises(TikHubBalanceExhausted) as ei:
+        c.get("/p", {})
+    assert balance_exhausted() is True
+    assert ei.value.from_body is True
+
+
+def test_string_body_code_200_returns_data():
+    c = _client(lambda req: httpx.Response(200, json={"code": "200", "data": {}}))
+    assert c.get("/p", {}) == {"code": "200", "data": {}}
+
+
+def test_bool_body_code_does_not_raise():
+    # bool 是 int 子类(True == 1) —— 不能被误判成业务码 1(!= 200)而错误报错。
+    c = _client(lambda req: httpx.Response(200, json={"code": True, "data": {"x": 1}}))
+    assert c.get("/p", {})["data"] == {"x": 1}
