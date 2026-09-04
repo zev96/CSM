@@ -578,7 +578,7 @@ class GenerateBatchRequest(BaseModel):
     """POST body for /api/mining/generate_batch."""
 
     video_ids: list[int] = Field(..., min_length=1, max_length=200)
-    tiers_per_video: int = Field(1, ge=1, le=3)   # 上限 3 = 腾讯文档三层结构
+    tiers_per_video: int = Field(1, ge=1, le=5)   # 上限 5 = 评论A–E
     template_ids: list[int] = Field(default_factory=list)  # 空 = 模板库自动轮换
     tone_hint: str = Field("", max_length=100)
 

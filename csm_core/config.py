@@ -310,6 +310,12 @@ class AppConfig(BaseModel):
     mining_prefilter_top_n: int = Field(default=20, ge=1, le=100)
     mining_prefilter_threshold: int = Field(default=1, ge=1, le=20)
 
+    # ── Mining 采集数据源（2026-09-01 拍板：默认走 TikHub 付费搜索）────────
+    # tikhub_api = 三平台关键词搜索走 TikHub（免登录、免并发风控，$0.01/次）；
+    # local      = 本地浏览器采集（手动兜底：TikHub 宕机 / 额度耗尽时切回）。
+    # 复用 monitor.tikhub_base_url + keyring provider="tikhub"，不单独配。
+    mining_data_source_mode: Literal["tikhub_api", "local"] = "tikhub_api"
+
     # ── XHS editor AI prompts (P4) ──────────────────────────────────────────
     # 空字符串 = 用 xhs_ai_service 内置默认 prompt（DEFAULT_GENERATE_SYSTEM /
     # DEFAULT_POLISH_SYSTEM）。用户在设置页改了之后，下次 AI 生成/润色优先用这里。

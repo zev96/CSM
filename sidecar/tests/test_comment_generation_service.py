@@ -218,3 +218,41 @@ def test_resolve_templates_auto_requires_nonempty_library(monitor_db: Path):
         gen._resolve_templates(None)
     _seed_template()
     assert len(gen._resolve_templates(None)) == 1
+
+
+def test_submit_batch_clamps_tiers_to_five(monitor_db: Path, quiet_bus, monkeypatch):
+    """T4：submit_batch(tiers_per_video=99) 必须被钳制到 _MAX_TIERS(=5) ——
+    端到端跑真实的后台 executor（不是只断言常量），用生成出的评论最高层数
+    验证钳制真的生效了，而不是钳制逻辑被悄悄改掉也测不出来。"""
+    import time as _time
+
+    monkeypatch.setattr(gen.llm_factory, "build_client", lambda **kw: FakeClient())
+    vid = _insert_video()
+    _seed_template()
+
+    # 复用 test_mining_service.py 的模式：清掉模块级单例、init、跑完后 shutdown。
+    gen._executor = None
+    gen._active_batch_id = None
+    gen._cancel_events.clear()
+    gen.init()
+    try:
+        gen.submit_batch([vid], tiers_per_video=99)
+        for _ in range(50):
+            if gen.active_batch_id() is None:
+                break
+            _time.sleep(0.1)
+        assert gen.active_batch_id() is None, "batch did not finish in time"
+    finally:
+        gen.shutdown()
+
+    tiers = sorted(c["tier"] for c in ms.list_comments(vid))
+    assert tiers == list(range(1, 6)), f"expected tiers clamped to 5, got {tiers}"
+
+
+def test_generate_batch_route_rejects_tiers_above_five(client):
+    """路由层的 Field(le=5) 应该在进 submit_batch 之前就把超限请求挡在 422。"""
+    r = client.post(
+        "/api/mining/generate_batch",
+        json={"video_ids": [1], "tiers_per_video": 6},
+    )
+    assert r.status_code == 422

@@ -41,10 +41,20 @@ import TaskListPanel from "@/components/mining/TaskListPanel.vue";
 import SubtaskListPanel from "@/components/mining/SubtaskListPanel.vue";
 import VideoDetailPanel from "@/components/mining/VideoDetailPanel.vue";
 import { useMiningStore, type Platform, type SearchFilters } from "@/stores/mining";
+import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
+import { keyringStatus } from "@/api/client";
 
 const store = useMiningStore();
+const cfg = useConfig();
+// 采集数据源：默认 TikHub 付费搜索（免登录）；设置页可切回浏览器兜底
+const tikhubMode = computed(
+  () => ((cfg.data as any)?.mining_data_source_mode ?? "tikhub_api") === "tikhub_api",
+);
+// 乐观默认 true：避免 keyringStatus 请求返回前 UI 先闪一下红。
+const tikhubHasKey = ref(true);
+const tikhubKeyMissing = computed(() => tikhubMode.value && !tikhubHasKey.value);
 const toast = useToast();
 const route = useRoute();
 
@@ -211,7 +221,11 @@ async function onSyncToDocs() {
     let msg = `已同步 ${r.synced_videos} 条视频（${r.synced_comments} 条评论）到腾讯文档`;
     if (sheetNames) msg += `「${sheetNames}」`;
     if (r.skipped_in_doc) msg += `，${r.skipped_in_doc} 条已在表格中跳过`;
-    toast.success(msg);
+    if (r.skipped_extra_tiers) msg += `；${r.skipped_extra_tiers} 条评论超出表头评论列未写入（补列后再次同步）`;
+    if (r.images_dropped) msg += `；${r.images_dropped} 条挂图因表头无对应贴图列未标注`;
+    const hasWarning = !!r.skipped_extra_tiers || !!r.images_dropped;
+    if (hasWarning) toast.warn(msg);
+    else toast.success(msg);
   } catch (e: any) {
     const data = e?.response?.data;
     if (data?.code === "tencent_docs_disabled" || data?.code === "tencent_docs_token") {
@@ -368,6 +382,13 @@ function openSyncModal(job: { id: number; keyword: string }) {
 }
 
 onMounted(async () => {
+  if (!cfg.data) void cfg.load();
+  try {
+    const s = await keyringStatus("tikhub");
+    tikhubHasKey.value = Boolean(s?.has_key);
+  } catch {
+    tikhubHasKey.value = false;
+  }
   await Promise.all([
     store.refreshLoginStatus(),
     store.loadJobs(),
@@ -691,6 +712,8 @@ onMounted(async () => {
     <StartJobModal
       :open="showNewTask"
       :login-status="store.loginStatus"
+      :tikhub-mode="tikhubMode"
+      :tikhub-key-missing="tikhubKeyMissing"
       :prefill-keyword="prefillKeyword"
       :prefill-source="prefillSource"
       @update:open="(v: boolean) => { showNewTask = v; if (!v) { prefillKeyword = ''; prefillSource = ''; } }"

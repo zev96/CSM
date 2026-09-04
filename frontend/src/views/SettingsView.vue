@@ -1451,7 +1451,16 @@ async function saveAccountEdit() {
                 @update:model-value="(v) => setField('monitor.data_source_mode', v ? 'tikhub_api' : 'local')"
               />
             </SettingsRow>
-            <template v-if="get('monitor.data_source_mode') === 'tikhub_api'">
+            <SettingsRow
+              label="采集（找视频）走 TikHub 付费搜索"
+              hint="开 = 关键词搜视频三平台走 TikHub（免登录、免并发风控，$0.01/次，每次约 6–14 条，单平台上限 80 条/次）；关 = 本地浏览器采集（需登录，作兜底）"
+            >
+              <FormToggle
+                :model-value="(get('mining_data_source_mode') ?? 'tikhub_api') === 'tikhub_api'"
+                @update:model-value="(v) => setField('mining_data_source_mode', v ? 'tikhub_api' : 'local')"
+              />
+            </SettingsRow>
+            <template v-if="get('monitor.data_source_mode') === 'tikhub_api' || (get('mining_data_source_mode') ?? 'tikhub_api') === 'tikhub_api'">
               <SettingsRow
                 label="TikHub API Key"
                 hint="到 tikhub.io 控制台获取。按次计费，需先在 TikHub 账户充值。"

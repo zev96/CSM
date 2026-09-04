@@ -2,8 +2,9 @@
 /**
  * 批量 AI 生成评论 —— 参数弹窗。
  *
- * 勾选视频后从中栏浮动工具条唤起。参数只有两个：每视频楼层数（1-3，
- * 上限对齐腾讯文档表格的三层结构）+ 语气提示（选填）。模板不在这里选 ——
+ * 勾选视频后从中栏浮动工具条唤起。参数只有两个：每视频楼层数（1-5，
+ * 上限对齐评论工作流的楼层结构；同步到腾讯文档时实际写入层数以该表表头
+ * 有几列「评论X」为准，与此处设置的层数无关）+ 语气提示（选填）。模板不在这里选 ——
  * 后端自动从模板库轮换（星标/常用优先），避免同一模板高频重复出现；
  * 想控制模板池就去模板库里星标/隐藏。
  */
@@ -68,7 +69,7 @@ function onSubmit() {
       <label class="text-[11.5px] font-semibold mb-1.5 block">每视频楼层数</label>
       <div class="flex" style="background: var(--card-2); border-radius: 999px; padding: 3px; border: 1px solid var(--line); max-width: 220px;">
         <button
-          v-for="n in [1, 2, 3]" :key="n"
+          v-for="n in [1, 2, 3, 4, 5]" :key="n"
           @click="tiers = n"
           :style="{
             flex: 1, height: '28px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 500,
@@ -79,7 +80,7 @@ function onSubmit() {
         >{{ n }} 层</button>
       </div>
       <div class="mt-1.5 text-[11px]" style="color: var(--ink-3);">
-        第 2、3 层是盖楼跟评（与前层形成对话感）。上限 3 层对齐兼职表格结构。
+        第 2 层起是盖楼跟评（与前层形成对话感）。上限 5 层，实际写入层数由腾讯文档表头的「评论X」列数决定。
       </div>
     </div>
 

@@ -240,6 +240,60 @@ def test_douyin_falls_back_to_local_without_key(monkeypatch):
 # Regression: _PREFILTER_PLACEHOLDER must pass build_match_result's guard
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# A3: TikHub 余额闩置位期间跳过抖音评论抓取（fail-open，不解析适配器）
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def _reset_tikhub_latch():
+    from csm_core.monitor.tikhub.client import reset_balance_latch
+
+    reset_balance_latch()
+    yield
+    reset_balance_latch()
+
+
+def test_douyin_skipped_when_tikhub_balance_exhausted(monkeypatch, _reset_tikhub_latch):
+    """余额闩已置位时,抖音评论预筛必须直接短路返回 [],绝不能再去 resolve
+    adapter(会再发一次注定 402 的请求,浪费一次已知会失败的调用)。
+
+    注意:_resolve_adapter 若被调用并抛出 AssertionError,会被
+    fetch_video_comments 外层的 broad except Exception 悄悄吞掉、同样返回 []
+    —— 仅断言返回值无法区分"提前短路"与"调用了但失败了"两种情况,所以额外用
+    calls 列表显式断言 _resolve_adapter 确实一次都没被调用。"""
+    from csm_core.mining import comment_prefilter as mod
+    from csm_core.monitor.tikhub.client import _trip_balance_latch
+
+    _trip_balance_latch()
+
+    calls = []
+
+    def must_not_resolve(ctype, platform):
+        calls.append((ctype, platform))
+        raise AssertionError("must not resolve adapter when balance exhausted")
+
+    monkeypatch.setattr(mod, "_resolve_adapter", must_not_resolve)
+
+    result = mod.fetch_video_comments("douyin", "https://www.douyin.com/video/1")
+    assert result == []
+    assert calls == [], "_resolve_adapter must not be called when tikhub balance is exhausted"
+
+
+def test_bilibili_unaffected_by_tikhub_balance_latch(monkeypatch, _reset_tikhub_latch):
+    """余额闩只影响抖音的 TikHub 调用路径,B 站预筛照常走本地适配器。"""
+    from csm_core.mining import comment_prefilter as mod
+    from csm_core.monitor.tikhub.client import _trip_balance_latch
+
+    _trip_balance_latch()
+
+    fake_adapter = MagicMock()
+    fake_adapter.fetch.return_value = _make_ok_result(["via local bilibili"])
+    monkeypatch.setattr(mod, "_resolve_adapter", lambda ctype, platform: fake_adapter)
+
+    result = mod.fetch_video_comments("bilibili", "https://b.bilibili.com/fake")
+    assert [c["text"] for c in result] == ["via local bilibili"]
+
+
 def test_prefilter_placeholder_passes_build_match_guard():
     # 确保占位 my_comment_text strip 后非空 —— 否则 build_match_result 返回 failed，
     # fetch_video_comment_texts 永远返回 []（mock fetch 的测试发现不了）。

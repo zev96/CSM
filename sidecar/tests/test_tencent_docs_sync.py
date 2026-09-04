@@ -23,6 +23,7 @@ from csm_core.sync.tencent_docs.sheet import (
     SheetTarget,
     append_rows_csv,
     find_last_used_row,
+    max_tier,
     read_row_texts,
     resolve_sheet,
 )
@@ -87,6 +88,86 @@ def test_build_column_map_whitespace_tolerant_and_missing():
     assert cmap.missing == ["tier1"]
 
 
+from csm_core.sync.tencent_docs import build_column_map_auto
+
+
+def test_column_map_auto_detects_comment_letters_dynamic_tiers():
+    header = ["视频链接", "评论A", "评论A的图片", "评论B", "评论C", "评论D", "评论D的图片"]
+    cmap = build_column_map_auto(header, _COL_NAMES)
+    assert cmap.col("url") == 0                 # 别名：视频链接
+    assert cmap.col("tier1") == 1 and cmap.col("img1") == 2
+    assert cmap.col("tier2") == 3 and cmap.col("tier3") == 4
+    assert cmap.col("tier4") == 5 and cmap.col("img4") == 6     # 层数由表头决定，不硬顶 3
+    assert cmap.missing == []
+
+
+def test_column_map_auto_tolerates_whitespace_and_lowercase():
+    header = ["链接", "评论 a", "评论a图片"]
+    cmap = build_column_map_auto(header, _COL_NAMES)
+    assert cmap.col("tier1") == 1 and cmap.col("img1") == 2
+
+
+def test_column_map_auto_legacy_header_still_exact_matches():
+    cmap = build_column_map_auto(_USER_HEADER, _COL_NAMES)
+    assert cmap.col("tier1") == 2 and cmap.col("img1") == 3 and cmap.col("tier3") == 6
+    assert cmap.missing == []
+
+
+def test_column_map_auto_missing_reports_only_required():
+    cmap = build_column_map_auto(["发布类型", "平台", "文章标题"], _COL_NAMES)
+    assert cmap.missing == ["url", "tier1"]
+    cmap2 = build_column_map_auto(["文章链接"], _COL_NAMES)
+    assert cmap2.col("url") == 0 and cmap2.missing == ["tier1"]
+
+
+def test_column_map_auto_exact_match_wins_over_convention():
+    """配置列名精确匹配（内容一）优先于表头惯例发现（评论A），不被后者覆盖。"""
+    cmap = build_column_map_auto(["链接", "内容一", "评论A"], _COL_NAMES)
+    assert cmap.col("tier1") == 1
+
+
+def test_column_map_auto_alias_priority_prefers_higher_priority_name():
+    """url 的别名 (链接, 视频链接, 文章链接) 按 tuple 顺序定优先级，不是按
+    表头出现顺序——「链接」排第一，即使「视频链接」在表头里更靠前也不选它。
+
+    col_names 里不配 "url" 精确匹配目标，逼着走纯别名解析路径（否则
+    build_column_map 的精确匹配会先一步命中，测不出别名优先级排序本身）。"""
+    cmap = build_column_map_auto(["视频链接", "链接"], {"tier1": "内容一"})
+    assert cmap.col("url") == 1
+
+
+def test_column_map_auto_nfkc_normalizes_fullwidth_letters():
+    """全角字母 评论Ａ 经 NFKC 规整后等价于半角 评论A，命中 tier1。"""
+    cmap = build_column_map_auto(["链接", "评论Ａ"], _COL_NAMES)
+    assert cmap.col("tier1") == 1
+
+
+def test_column_map_auto_reports_optional_missing_and_tier_gaps():
+    """T2：可选列缺失 (optional_missing) 与表头断层 (tier_gaps) 都要能报出来
+    （不阻断，只用于「测试连接」告警展示）。"""
+    legacy_header_no_tier2 = ["序号", "链接", "内容一", "贴图一", "盖楼内容三", "贴图三", "日期"]
+    cmap = build_column_map_auto(legacy_header_no_tier2, _COL_NAMES)
+    assert cmap.missing == []
+    assert "tier2" in cmap.optional_missing and "img2" in cmap.optional_missing
+
+    gap_cmap = build_column_map_auto(["链接", "评论A", "评论C"], _COL_NAMES)
+    assert gap_cmap.tier_gaps == [2]
+
+    full_cmap = build_column_map_auto(_USER_HEADER, _COL_NAMES)
+    assert full_cmap.optional_missing == []
+    assert full_cmap.tier_gaps == []
+
+
+def test_column_map_auto_ignores_letters_beyond_e():
+    """R6：评论字母上限收窄到 A-E（对齐生成端 5 层评论上限）。超出范围的
+    字母（含占位符文案「评论X」）不会被当成 tier 列，不会把 max_tier
+    误撑到 24 这种不存在的深层。"""
+    header = ["链接", "评论A", "评论B", "评论X"]
+    cmap = build_column_map_auto(header, _COL_NAMES)
+    assert max_tier(cmap) == 2
+    assert cmap.tier_gaps == []
+
+
 # ── MCP client（httpx.MockTransport）──────────────────────────────────
 
 def _jsonrpc_result(result: dict) -> dict:
@@ -121,7 +202,7 @@ def test_client_call_tool_json_path():
         }))
 
     with _mk_client(handler) as client:
-        out = client.call_tool("sheet.get_sheet_info", {"file_id": "D1"})
+        out = client.call_tool("get_sheet_info", {"file_id": "D1"})
     assert out == {"sheets": [{"sheet_id": "S1"}]}
     assert [p.get("method") for p in seen] == [
         "initialize", "notifications/initialized", "tools/call",
@@ -143,7 +224,7 @@ def test_client_call_tool_sse_and_structured():
                               headers={"Content-Type": "text/event-stream"})
 
     with _mk_client(handler) as client:
-        out = client.call_tool("sheet.get_cell_data", {})
+        out = client.call_tool("get_cell_data", {})
     assert out == {"ok": 1}
 
 
@@ -159,7 +240,7 @@ def test_client_maps_token_error():
 
     with _mk_client(handler) as client:
         with pytest.raises(TokenInvalidError):
-            client.call_tool("sheet.get_sheet_info", {})
+            client.call_tool("get_sheet_info", {})
 
 
 def test_client_http_401_maps_token_error():
@@ -168,7 +249,106 @@ def test_client_http_401_maps_token_error():
 
     with _mk_client(handler) as client:
         with pytest.raises(TokenInvalidError):
-            client.call_tool("sheet.get_sheet_info", {})
+            client.call_tool("get_sheet_info", {})
+
+
+def test_client_list_tools_enumerates_names():
+    """tools/list 诊断：initialize 后枚举服务端注册的工具名。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}") if request.content else {}
+        method = payload.get("method")
+        if method == "initialize":
+            return httpx.Response(200, json=_jsonrpc_result({"serverInfo": {}}),
+                                  headers={"Mcp-Session-Id": "s"})
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            return httpx.Response(200, json=_jsonrpc_result({"tools": [
+                {"name": "smartsheet.list_tables", "description": "列出工作表"},
+                {"name": "smartsheet.add_records"},
+                {"bad": "no name → 跳过"},
+            ]}))
+        raise AssertionError(f"unexpected method {method}")
+
+    with _mk_client(handler) as client:
+        assert client.list_tools() == ["smartsheet.list_tables", "smartsheet.add_records"]
+
+
+def test_client_list_tools_follows_cursor():
+    """tools/list 分页：nextCursor 存在时续拉，直到无游标。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}") if request.content else {}
+        method = payload.get("method")
+        if method == "initialize":
+            return httpx.Response(200, json=_jsonrpc_result({}),
+                                  headers={"Mcp-Session-Id": "s"})
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            cursor = (payload.get("params") or {}).get("cursor")
+            if not cursor:
+                return httpx.Response(200, json=_jsonrpc_result({
+                    "tools": [{"name": "a"}], "nextCursor": "c2"}))
+            return httpx.Response(200, json=_jsonrpc_result({"tools": [{"name": "b"}]}))
+        raise AssertionError(f"unexpected method {method}")
+
+    with _mk_client(handler) as client:
+        assert client.list_tools() == ["a", "b"]
+
+
+def test_client_list_tools_sanitizes_and_caps():
+    """I5：list_tools 清单会原样拼进错误文案给用户看——服务端名字不可信,
+    需要去控制字符、单条截断、总数封顶。"""
+    tools = [{"name": f"tool{i}"} for i in range(298)]
+    tools.append({"name": "evil\nFAKE"})
+    tools.append({"name": "x" * 500})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}") if request.content else {}
+        method = payload.get("method")
+        if method == "initialize":
+            return httpx.Response(200, json=_jsonrpc_result({}),
+                                  headers={"Mcp-Session-Id": "s"})
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            return httpx.Response(200, json=_jsonrpc_result({"tools": tools}))
+        raise AssertionError(f"unexpected method {method}")
+
+    with _mk_client(handler) as client:
+        names = client.list_tools()
+    assert len(names) <= 200
+    assert all("\n" not in n for n in names)
+    assert all(len(n) <= 80 for n in names)
+
+
+def test_client_redacts_token_from_http_error_text():
+    """S3：网关拒绝消息常回显 token——绝不能原样落进 reason（会展示给用户/写进日志）。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="denied for token tok-123 by gateway")
+
+    with _mk_client(handler) as client:
+        with pytest.raises(TencentDocsError) as ei:
+            client.call_tool("get_sheet_info", {})
+    assert "tok-123" not in ei.value.reason
+    assert "***" in ei.value.reason
+
+
+def test_client_redacts_token_from_tool_error_text():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}") if request.content else {}
+        if payload.get("method") != "tools/call":
+            return httpx.Response(202)
+        return httpx.Response(200, json=_jsonrpc_result({
+            "isError": True,
+            "content": [{"type": "text", "text": "internal error for tok-123, retry"}],
+        }))
+
+    with _mk_client(handler) as client:
+        with pytest.raises(TencentDocsError) as ei:
+            client.call_tool("get_sheet_info", {})
+    assert "tok-123" not in ei.value.reason
+    assert "***" in ei.value.reason
 
 
 # ── Sheet helpers（假 client）──────────────────────────────────────────
@@ -194,6 +374,9 @@ class FakeSheetClient:
     def rows_of(self, sheet_id: str) -> list[list[str]]:
         return self.rows_by_sheet.setdefault(sheet_id, [])
 
+    def list_tools(self) -> list[str]:
+        return ["get_sheet_info", "get_cell_data", "set_range_value_by_csv"]
+
     def close(self):
         pass
 
@@ -204,13 +387,13 @@ class FakeSheetClient:
         pass
 
     def call_tool(self, name, arguments):
-        if name == "sheet.get_sheet_info":
+        if name == "get_sheet_info":
             return {"sheets": self.sheets}
-        if name == "sheet.set_cell_style":
+        if name == "set_cell_style":
             self.style_calls.append(arguments)
             return {}
         rows = self.rows_of(arguments["sheet_id"])
-        if name == "sheet.get_cell_data":
+        if name == "get_cell_data":
             cells = []
             for r in range(arguments["start_row"], arguments["end_row"] + 1):
                 if r >= len(rows):
@@ -221,7 +404,7 @@ class FakeSheetClient:
                                       "value_type": "STRING",
                                       "string_value": rows[r][c]})
             return {"cells": cells}
-        if name == "sheet.set_range_value_by_csv":
+        if name == "set_range_value_by_csv":
             self.csv_writes.append(arguments)
             # 回放进内存表格，方便断言后续读
             import csv as _csv
@@ -357,6 +540,206 @@ def test_sync_approved_writes_rows_and_marks_synced(tdocs_env: FakeSheetClient):
     assert batch["row_start"] == 1 and batch["row_end"] == 2
 
 
+_CONVENTION_HEADER = ["视频链接", "评论A", "评论A的图片", "评论B", "评论C", "评论D"]
+
+
+def test_sync_convention_header_writes_four_tiers(monitor_db, settings_path, monkeypatch):
+    """用户表头惯例：视频链接 + 评论A..D（无 序号/日期）→ 四层全写入，不再截到 3 层。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([list(_CONVENTION_HEADER)])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111",
+                              ["一楼", "二楼", "三楼", "四楼"], images_on={1})
+
+    result = tds.sync_approved()
+    assert result["synced_videos"] == 1
+    assert result["synced_comments"] == 4
+    assert result["skipped_extra_tiers"] == 0
+    row = fake.rows[1]
+    assert row[0] == "标题1 https://www.douyin.com/video/111"   # 视频链接（别名）
+    assert row[1] == "一楼" and row[2] == "有图，另发"
+    assert row[3] == "二楼" and row[4] == "三楼" and row[5] == "四楼"
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_skips_tiers_deeper_than_header(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论B"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼", "三楼"])
+
+    result = tds.sync_approved()
+    assert result["skipped_extra_tiers"] == 1          # 第 3 层没列，留在 app 内
+    assert result["synced_comments"] == 2
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_gap_header_skips_missing_middle_tier(monitor_db, settings_path, monkeypatch):
+    """T1：表头断层（评论A/评论C 之间没有评论B）不能再用「表头最大层号」判断
+    某一层能不能写——按该层的列是否真实存在决定。断层的那层留在 app 内
+    （保持 approved，不假标 synced），已有列的层照常写、照常标 synced。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论C"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼", "三楼"])
+
+    result = tds.sync_approved()
+    assert result["synced_comments"] == 2
+    assert result["skipped_extra_tiers"] == 1
+    row = fake.rows[1]
+    assert row[1] == "一楼"     # tier1 → 评论A 列
+    assert row[2] == "三楼"     # tier3 → 评论C 列
+    assert "二楼" not in row    # tier2 没有列，没有被误写进任何位置
+
+    comments_by_tier = {c["tier"]: c for c in ms.list_comments(1)}
+    assert comments_by_tier[1]["review_status"] == "synced"
+    assert comments_by_tier[2]["review_status"] == "approved"   # 断层层：留在 app 内
+    assert comments_by_tier[3]["review_status"] == "synced"
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_literal_comment_x_header_is_harmless(monitor_db, settings_path, monkeypatch):
+    """R6：字母上限收窄到 A-E 后，表头里字面出现的「评论X」（占位符文案，
+    不是惯例里具体的字母）根本不会被解析成任何 tier 列——tier2 仍然没有
+    列可写，照常留在 app 内（不被误标 synced），tiers_detected 不受影响。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论X"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼"])
+
+    result = tds.sync_approved()
+    assert result["skipped_extra_tiers"] == 1
+    row = fake.rows[1]
+    assert row[1] == "一楼"
+
+    tier2 = next(c for c in ms.list_comments(1) if c["tier"] == 2)
+    assert tier2["review_status"] == "approved"    # 没有列可写，没有被假标 synced
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_drops_image_marker_when_tier_has_no_image_column(monitor_db, settings_path, monkeypatch):
+    """R4：兼职是原样复制评论正文去公开发布的——「有图，另发」这种内部指示语
+    绝不能混进正文（会被公开贴出去）。某层有图但表头没有对应的「评论X的
+    图片」列时，正文保持干净，只计数 images_dropped；有图片列的层照常走列。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论A的图片", "评论B"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111",
+                              ["一楼", "二楼"], images_on={1, 2})
+
+    result = tds.sync_approved()
+    assert result["images_dropped"] == 1
+    row = fake.rows[1]
+    assert row[2] == "有图，另发"      # tier1 有图片列 → 走列
+    assert row[3] == "二楼"            # tier2 没有图片列 → 干净正文，不混入指示语
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_reports_tiers_detected(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([list(_CONVENTION_HEADER)])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert out["ok"] is True and out["missing"] == []
+    assert all(p["tiers_detected"] == 4 for p in out["sheets"])
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_missing_required_uses_friendly_labels(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["发布类型", "平台", "文章标题"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert out["ok"] is False
+    assert any("视频链接" in m for m in out["missing"])
+    assert any("评论A" in m for m in out["missing"])
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_reports_optional_missing_columns(monitor_db, settings_path, monkeypatch):
+    """T2：可选列（非 url/tier1）配置了但表头里没有 → optional_missing 报出来，
+    但不算错（ok 仍为 True，missing 仍为空）。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    legacy_header_no_tier2 = ["序号", "链接", "内容一", "贴图一", "盖楼内容三", "贴图三", "日期"]
+    fake = FakeSheetClient([legacy_header_no_tier2])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert out["ok"] is True
+    assert out["missing"] == []
+    assert "盖楼内容二" in out["optional_missing"]
+    assert "贴图二" in out["optional_missing"]
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_reports_tier_gaps(monitor_db, settings_path, monkeypatch):
+    """T2：表头断层（评论A/评论C 之间缺评论B）要能报出 tier_gaps，供前端提醒。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论C"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert all(p["tier_gaps"] == [2] for p in out["sheets"])
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_reports_image_cols_missing(monitor_db, settings_path, monkeypatch):
+    """R4：贴图列缺失的层号要在「测试连接」里报出来，让用户提前配好列，
+    而不是等到同步时才发现图片信息被静默丢弃。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论A的图片", "评论B", "评论C"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert all(p["image_cols_missing"] == [2, 3] for p in out["sheets"])
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_full_header_no_optional_missing_no_gaps(tdocs_env: FakeSheetClient):
+    """T2 反面：表头齐全（_USER_HEADER）时 optional_missing / tier_gaps 都该是空。"""
+    out = tds.test_connection()
+    assert all(p["optional_missing"] == [] for p in out["sheets"])
+    assert all(p["tier_gaps"] == [] for p in out["sheets"])
+    assert out["optional_missing"] == []
+
+
 def test_sync_approved_dedups_by_url_column(tdocs_env: FakeSheetClient):
     """表格里已有该视频链接 → 跳过写入、本地补标 synced（防双写）。"""
     tdocs_env.rows.append(["1", "旧行 https://www.douyin.com/video/111", "旧评论"])
@@ -368,6 +751,36 @@ def test_sync_approved_dedups_by_url_column(tdocs_env: FakeSheetClient):
     assert result["synced_comments"] == 1   # 本地仍标 synced
     assert all(c["review_status"] == "synced" for c in ms.list_comments(1))
     assert len(tdocs_env.rows) == 2         # 没有新行
+
+
+def test_sync_dedup_skip_counts_skipped_extra_tiers(monitor_db, settings_path, monkeypatch):
+    """R5：去重分支（该视频链接已在文档里）也要统计超出表头层数的评论——
+    这些层留在 app 内（保持 approved），不能被 skipped_extra_tiers 漏计,
+    否则「这批还剩几层没进表格」的统计在去重路径上会悄悄失真。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([
+        ["链接", "评论A", "评论B", "评论C"],
+        ["旧行 https://www.douyin.com/video/111", "旧评论"],
+    ])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111",
+                              ["一楼", "二楼", "三楼", "四楼", "五楼"])
+
+    result = tds.sync_approved()
+    assert result["skipped_in_doc"] == 1
+    assert result["skipped_extra_tiers"] == 2
+    assert result["synced_comments"] == 3
+
+    comments_by_tier = {c["tier"]: c for c in ms.list_comments(1)}
+    assert comments_by_tier[1]["review_status"] == "synced"
+    assert comments_by_tier[3]["review_status"] == "synced"
+    assert comments_by_tier[4]["review_status"] == "approved"
+    assert comments_by_tier[5]["review_status"] == "approved"
+    monkeypatch.setattr(tds, "_client_factory", None)
 
 
 def test_sync_approved_leaves_separator_row_after_existing_rows(tdocs_env: FakeSheetClient):
@@ -476,10 +889,55 @@ def test_test_connection_reports_mapping(tdocs_env: FakeSheetClient):
     assert out["sheet_name"] == "工作表1"
     assert out["missing"] == []
     assert "链接" in out["header"]
+    # 诊断字段：无论成败都带上服务端真实工具清单（tools/list）
+    assert out["available_tools"] == [
+        "get_sheet_info", "get_cell_data", "set_range_value_by_csv",
+    ]
     # 平台路由报告：单表用例三个平台都回落到兜底子表（非按名命中）
     assert [p["platform"] for p in out["sheets"]] == ["douyin", "bilibili", "kuaishou"]
     assert all(p["sheet_name"] == "工作表1" for p in out["sheets"])
     assert all(p["matched_by_name"] is False for p in out["sheets"])
+
+
+class _ToolNotFoundClient:
+    """模拟真服务：sheet.* 一律 tool not found，但 tools/list 能列出真实工具。"""
+
+    tools = ["smartsheet.list_tables", "smartsheet.list_records", "smartsheet.add_records"]
+
+    def list_tools(self):
+        return list(self.tools)
+
+    def call_tool(self, name, arguments):
+        raise TencentDocsError(
+            f"腾讯文档服务报错：tool not found: {name}, trace_id:deadbeef")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_test_connection_surfaces_available_tools_on_tool_not_found(
+    monitor_db, settings_path, monkeypatch,
+):
+    """sheet.get_sheet_info 不存在时，错误里挂上 tools/list 真实清单（诊断）。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    monkeypatch.setattr(tds, "_client_factory", lambda token: _ToolNotFoundClient())
+    with pytest.raises(TencentDocsError) as ei:
+        tds.test_connection()
+    reason = ei.value.reason
+    assert "tool not found" in reason
+    assert "smartsheet.list_tables" in reason           # 诊断清单已挂上
+    assert "smartsheet.add_records" in reason
+    monkeypatch.setattr(tds, "_client_factory", None)
 
 
 def test_test_connection_reports_named_sheets(monitor_db, settings_path, monkeypatch):

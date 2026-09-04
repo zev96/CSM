@@ -113,6 +113,18 @@ def fetch_video_comments(
     if ctype is None:
         return []
 
+    if platform == "douyin":
+        from csm_core.monitor.tikhub.client import balance_exhausted
+
+        if balance_exhausted():
+            # 余额闩已置位:抖音评论预筛走的是 TikHub API(见 _resolve_adapter),
+            # 再发请求注定 402。提前短路,不浪费一次已知会失败的调用,也避免
+            # 在余额耗尽期间刷一堆重复的失败日志。fail-open:不排除该视频。
+            logger.info(
+                "[prefilter] tikhub balance exhausted; skip douyin comment fetch (fail-open)"
+            )
+            return []
+
     try:
         from csm_core.monitor.base import MonitorTask
 

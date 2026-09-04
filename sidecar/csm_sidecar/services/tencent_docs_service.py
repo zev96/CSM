@@ -17,10 +17,12 @@
      （防「写成功但响应丢失」后重试的双写）；
   3. 对账表 —— sync_batches 记录每批写入的子表与行区间。
 
-行结构（按列名映射，不假设位置）：
-  序号(每批每平台从 1 重排) | 链接(标题+规范链接) | 内容一/盖楼内容二/三 |
-  贴图一/二/三(该层挂图时写「有图，另发」) | 日期(2026年9月1日)
-  截图1-3 由兼职回填，不写。
+行结构（按列名映射，不假设位置；配置列名精确匹配优先，其余按
+``评论A/评论B/…``「评论X的图片」表头惯例自动发现，见
+``build_column_map_auto``）：
+  序号(每批每平台从 1 重排) | 链接(标题+规范链接) | 评论A/评论B/… |
+  评论A的图片/… (该层挂图时写「有图，另发」) | 日期(2026年9月1日)
+  截图列由兼职回填，不写。层数 = 表头里 评论X 列的数量（不再硬顶 3 层）。
 """
 from __future__ import annotations
 
@@ -38,8 +40,9 @@ from csm_core.sync.tencent_docs import (
     TencentDocsMCPClient,
     TokenInvalidError,
     append_rows_csv,
-    build_column_map,
+    build_column_map_auto,
     list_sheets,
+    max_tier,
     paint_row_background,
     parse_doc_url,
     pick_fallback_sheet,
@@ -54,7 +57,11 @@ logger = logging.getLogger(__name__)
 
 KEYRING_PROVIDER = "tencent_docs"
 _IMG_MARKER = "有图，另发"
-_MAX_TIERS = 3
+# 必需列缺失时给用户看的名字（同时列出旧惯例与新惯例）
+_REQUIRED_LABELS = {
+    "url": "链接（或 视频链接 / 文章链接）",
+    "tier1": "评论A（或 内容一）",
+}
 _PLATFORM_ORDER = ("douyin", "bilibili", "kuaishou")
 _PLATFORM_LABEL = {"douyin": "抖音", "bilibili": "B站", "kuaishou": "快手"}
 
@@ -104,14 +111,10 @@ def _load_sheet_state(
     client: TencentDocsMCPClient, target: SheetTarget, col_names: dict[str, str],
 ) -> _SheetState:
     header = read_row_texts(client, target, 0)
-    cmap = build_column_map(header, col_names)
-    required_missing = [k for k in ("url", "tier1") if cmap.col(k) is None]
-    if required_missing:
-        names = "、".join(col_names.get(k, k) for k in required_missing)
-        raise TencentDocsError(
-            f"子表「{target.sheet_name}」里找不到必需列：{names}"
-            "（检查表头或设置页的列名映射）"
-        )
+    cmap = build_column_map_auto(header, col_names)
+    if cmap.missing:
+        names = "、".join(_REQUIRED_LABELS.get(k, k) for k in cmap.missing)
+        raise TencentDocsError(f"子表「{target.sheet_name}」里找不到必需列：{names}")
     existing = read_column_texts(client, target, cmap.col("url"))
     last_used = max(existing.keys()) if existing else 0  # 表头行兜底
     return _SheetState(
@@ -123,40 +126,82 @@ def _load_sheet_state(
     )
 
 
+def _discover_tools(client: TencentDocsMCPClient) -> list[str]:
+    """best-effort 枚举服务端工具（tools/list）。token 失效照抛，其余吞掉。"""
+    try:
+        return client.list_tools()
+    except TokenInvalidError:
+        raise
+    except TencentDocsError:
+        logger.info("[tdocs] tools/list 诊断探测失败，忽略", exc_info=True)
+        return []
+
+
+def _augment_with_tools(e: TencentDocsError, tools: list[str]) -> TencentDocsError:
+    """把 tools/list 清单挂到错误 reason 上（诊断），保留原异常子类型。"""
+    if tools:
+        e.reason = (
+            f"{e.reason}\n\n【诊断】服务端实际暴露的 MCP 工具（tools/list）：\n"
+            f"{'、'.join(tools)}"
+        )
+        e.args = (e.reason,)
+    return e
+
+
 def test_connection() -> dict[str, Any]:
-    """读表头验证连接 + 平台子表路由 + 列映射。失败抛 TencentDocsError。"""
+    """读表头验证连接 + 平台子表路由 + 列映射。失败抛 TencentDocsError。
+
+    诊断：先用 MCP ``tools/list`` 枚举服务端真实工具；若后续 ``sheet.*`` 调用
+    因「tool not found」失败，把真实工具清单挂到错误里，便于据实定方案。
+    """
     cfg = config_service.load()
     td = cfg.tencent_docs
     if not td.doc_url.strip():
         raise TencentDocsError("请先粘贴表格链接")
     with _build_client() as client:
-        file_id, url_tab = parse_doc_url(td.doc_url)
-        sheets = list_sheets(client, file_id)
-        fallback = pick_fallback_sheet(sheets, url_tab)
+        available_tools = _discover_tools(client)
+        try:
+            file_id, url_tab = parse_doc_url(td.doc_url)
+            sheets = list_sheets(client, file_id)
+            fallback = pick_fallback_sheet(sheets, url_tab)
 
-        header_cache: dict[str, tuple[list[str], ColumnMap]] = {}
+            header_cache: dict[str, tuple[list[str], ColumnMap]] = {}
 
-        def _check(target: SheetTarget) -> tuple[list[str], ColumnMap]:
-            if target.sheet_id not in header_cache:
-                header = read_row_texts(client, target, 0)
-                header_cache[target.sheet_id] = (
-                    header, build_column_map(header, td.col_map),
-                )
-            return header_cache[target.sheet_id]
+            def _check(target: SheetTarget) -> tuple[list[str], ColumnMap]:
+                if target.sheet_id not in header_cache:
+                    header = read_row_texts(client, target, 0)
+                    header_cache[target.sheet_id] = (
+                        header, build_column_map_auto(header, td.col_map),
+                    )
+                return header_cache[target.sheet_id]
 
-        per_platform: list[dict[str, Any]] = []
-        for platform in _PLATFORM_ORDER:
-            wanted = td.sheet_map.get(platform, "")
-            named = pick_sheet_by_name(sheets, wanted)
-            target = named or fallback
-            header, cmap = _check(target)
-            per_platform.append({
-                "platform": platform,
-                "platform_label": _PLATFORM_LABEL[platform],
-                "sheet_name": target.sheet_name,
-                "matched_by_name": named is not None,
-                "missing": [td.col_map.get(k, k) for k in cmap.missing],
-            })
+            per_platform: list[dict[str, Any]] = []
+            for platform in _PLATFORM_ORDER:
+                wanted = td.sheet_map.get(platform, "")
+                named = pick_sheet_by_name(sheets, wanted)
+                target = named or fallback
+                header, cmap = _check(target)
+                per_platform.append({
+                    "platform": platform,
+                    "platform_label": _PLATFORM_LABEL[platform],
+                    "sheet_name": target.sheet_name,
+                    "matched_by_name": named is not None,
+                    "missing": [_REQUIRED_LABELS.get(k, k) for k in cmap.missing],
+                    "optional_missing": [td.col_map.get(k, k) for k in cmap.optional_missing],
+                    "tier_gaps": cmap.tier_gaps,
+                    "tiers_detected": max_tier(cmap),
+                    # 有评论层列但没有对应贴图列的层号——同步时会静默丢图
+                    # （不再污染正文），先在「测试连接」里报出来让用户提前配。
+                    "image_cols_missing": [
+                        n for n in range(1, max_tier(cmap) + 1)
+                        if cmap.col(f"tier{n}") is not None and cmap.col(f"img{n}") is None
+                    ],
+                })
+        except TokenInvalidError:
+            raise
+        except TencentDocsError as e:
+            _augment_with_tools(e, available_tools)
+            raise
 
     ok = all(not p["missing"] for p in per_platform)
     return {
@@ -168,6 +213,9 @@ def test_connection() -> dict[str, Any]:
         "header": [h for h in header_cache[fallback.sheet_id][0] if h]
         if fallback.sheet_id in header_cache else [],
         "missing": sorted({m for p in per_platform for m in p["missing"]}),
+        "optional_missing": sorted({m for p in per_platform for m in p["optional_missing"]}),
+        # 诊断字段：服务端 tools/list 真实工具清单（据实定方案用）
+        "available_tools": available_tools,
     }
 
 
@@ -196,7 +244,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
     if not items:
         return {
             "synced_videos": 0, "synced_comments": 0,
-            "skipped_in_doc": 0, "skipped_extra_tiers": 0,
+            "skipped_in_doc": 0, "skipped_extra_tiers": 0, "images_dropped": 0,
             "batches": [], "batch_id": None,
         }
 
@@ -207,6 +255,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
     synced_comment_ids: list[int] = []
     skipped_in_doc = 0
     skipped_extra_tiers = 0
+    images_dropped = 0
     batches: list[dict[str, Any]] = []
     date_str = _date_str()
 
@@ -236,7 +285,15 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 if item["url"] and item["url"] in state.existing_blob:
                     skipped_in_doc += 1
                     synced_comment_ids.extend(
-                        c["id"] for c in item["comments"] if c["tier"] <= _MAX_TIERS
+                        c["id"] for c in item["comments"]
+                        if cmap.col(f"tier{c['tier']}") is not None
+                    )
+                    # 超出表头层数的评论在这条分支里也留在 app 内（不标
+                    # synced）——同样要计进 skipped_extra_tiers，不然「这批
+                    # 还剩几层没进表格」的统计在去重路径上会悄悄漏掉。
+                    skipped_extra_tiers += sum(
+                        1 for c in item["comments"]
+                        if cmap.col(f"tier{c['tier']}") is None
                     )
                     continue
 
@@ -251,13 +308,24 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 _put("url", f"{item['title']} {item['url']}".strip())
                 _put("date", date_str)
                 for c in item["comments"]:
-                    if c["tier"] > _MAX_TIERS:
-                        # 表格只有三层结构；更深楼层留在 app 内（保持 approved）。
+                    col = cmap.col(f"tier{c['tier']}")
+                    if col is None:
+                        # 表头没有这一层的「评论X」列（超出层数或表头断层）；
+                        # 留在 app 内（保持 approved），不按「最大层号」误判可写。
                         skipped_extra_tiers += 1
                         continue
-                    _put(f"tier{c['tier']}", c["text"])
+                    row[col] = c["text"]
                     if c["image_ids"]:
-                        _put(f"img{c['tier']}", _IMG_MARKER)
+                        img_col = cmap.col(f"img{c['tier']}")
+                        if img_col is not None:
+                            row[img_col] = _IMG_MARKER
+                        else:
+                            # 该层没有贴图列：绝不把内部指示语（「有图，另发」）
+                            # 混进评论正文——兼职是原样复制评论文本去发布的，
+                            # 混进去的指示语会被公开贴出去。正文保持干净，
+                            # 只计数，缺列本身在「测试连接」的
+                            # image_cols_missing 里提前提示用户去补配。
+                            images_dropped += 1
                     block_comment_ids.append(c["id"])
                 rows.append(row)
                 block_video_ids.append(item["id"])
@@ -314,6 +382,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
         "synced_comments": marked,
         "skipped_in_doc": skipped_in_doc,
         "skipped_extra_tiers": skipped_extra_tiers,
+        "images_dropped": images_dropped,
         "batches": batches,
         "batch_id": batch_row_ids[0] if batch_row_ids else None,
     }

@@ -67,7 +67,11 @@ def date_to_epoch(date_str: str | None, *, end_of_day: bool = False) -> int | No
         return None
     try:
         dt = datetime.strptime(date_str.strip(), "%Y-%m-%d")
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
+        # AttributeError：date_str 不是 str（比如上游误把日期传成 int/date 对象），
+        # .strip() 直接不存在——不是 ValueError/TypeError，原本的元组接不住，会让
+        # 畸形筛选值（如 UI bug 把 time_begin 传成整数）以未捕获异常的形态穿透
+        # 到调用方（bilibili_first_params 等）乃至适配器 search() 的构造阶段。
         return None
     if end_of_day:
         dt = dt.replace(hour=23, minute=59, second=59)
