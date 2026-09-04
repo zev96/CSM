@@ -436,6 +436,77 @@ def test_sync_approved_writes_rows_and_marks_synced(tdocs_env: FakeSheetClient):
     assert batch["row_start"] == 1 and batch["row_end"] == 2
 
 
+_CONVENTION_HEADER = ["视频链接", "评论A", "评论A的图片", "评论B", "评论C", "评论D"]
+
+
+def test_sync_convention_header_writes_four_tiers(monitor_db, settings_path, monkeypatch):
+    """用户表头惯例：视频链接 + 评论A..D（无 序号/日期）→ 四层全写入，不再截到 3 层。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([list(_CONVENTION_HEADER)])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111",
+                              ["一楼", "二楼", "三楼", "四楼"], images_on={1})
+
+    result = tds.sync_approved()
+    assert result["synced_videos"] == 1
+    assert result["synced_comments"] == 4
+    assert result["skipped_extra_tiers"] == 0
+    row = fake.rows[1]
+    assert row[0] == "标题1 https://www.douyin.com/video/111"   # 视频链接（别名）
+    assert row[1] == "一楼" and row[2] == "有图，另发"
+    assert row[3] == "二楼" and row[4] == "三楼" and row[5] == "四楼"
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_skips_tiers_deeper_than_header(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["链接", "评论A", "评论B"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼", "三楼"])
+
+    result = tds.sync_approved()
+    assert result["skipped_extra_tiers"] == 1          # 第 3 层没列，留在 app 内
+    assert result["synced_comments"] == 2
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_reports_tiers_detected(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([list(_CONVENTION_HEADER)])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert out["ok"] is True and out["missing"] == []
+    assert all(p["tiers_detected"] == 4 for p in out["sheets"])
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_test_connection_missing_required_uses_friendly_labels(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([["发布类型", "平台", "文章标题"]])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.test_connection()
+    assert out["ok"] is False
+    assert any("视频链接" in m for m in out["missing"])
+    assert any("评论A" in m for m in out["missing"])
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
 def test_sync_approved_dedups_by_url_column(tdocs_env: FakeSheetClient):
     """表格里已有该视频链接 → 跳过写入、本地补标 synced（防双写）。"""
     tdocs_env.rows.append(["1", "旧行 https://www.douyin.com/video/111", "旧评论"])

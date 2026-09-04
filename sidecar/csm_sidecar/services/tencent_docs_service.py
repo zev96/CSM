@@ -17,10 +17,12 @@
      （防「写成功但响应丢失」后重试的双写）；
   3. 对账表 —— sync_batches 记录每批写入的子表与行区间。
 
-行结构（按列名映射，不假设位置）：
-  序号(每批每平台从 1 重排) | 链接(标题+规范链接) | 内容一/盖楼内容二/三 |
-  贴图一/二/三(该层挂图时写「有图，另发」) | 日期(2026年9月1日)
-  截图1-3 由兼职回填，不写。
+行结构（按列名映射，不假设位置；配置列名精确匹配优先，其余按
+``评论A/评论B/…``「评论X的图片」表头惯例自动发现，见
+``build_column_map_auto``）：
+  序号(每批每平台从 1 重排) | 链接(标题+规范链接) | 评论A/评论B/… |
+  评论A的图片/… (该层挂图时写「有图，另发」) | 日期(2026年9月1日)
+  截图列由兼职回填，不写。层数 = 表头里 评论X 列的数量（不再硬顶 3 层）。
 """
 from __future__ import annotations
 
@@ -38,8 +40,9 @@ from csm_core.sync.tencent_docs import (
     TencentDocsMCPClient,
     TokenInvalidError,
     append_rows_csv,
-    build_column_map,
+    build_column_map_auto,
     list_sheets,
+    max_tier,
     paint_row_background,
     parse_doc_url,
     pick_fallback_sheet,
@@ -54,7 +57,11 @@ logger = logging.getLogger(__name__)
 
 KEYRING_PROVIDER = "tencent_docs"
 _IMG_MARKER = "有图，另发"
-_MAX_TIERS = 3
+# 必需列缺失时给用户看的名字（同时列出旧惯例与新惯例）
+_REQUIRED_LABELS = {
+    "url": "链接（或 视频链接 / 文章链接）",
+    "tier1": "评论A（或 内容一）",
+}
 _PLATFORM_ORDER = ("douyin", "bilibili", "kuaishou")
 _PLATFORM_LABEL = {"douyin": "抖音", "bilibili": "B站", "kuaishou": "快手"}
 
@@ -104,13 +111,12 @@ def _load_sheet_state(
     client: TencentDocsMCPClient, target: SheetTarget, col_names: dict[str, str],
 ) -> _SheetState:
     header = read_row_texts(client, target, 0)
-    cmap = build_column_map(header, col_names)
-    required_missing = [k for k in ("url", "tier1") if cmap.col(k) is None]
-    if required_missing:
-        names = "、".join(col_names.get(k, k) for k in required_missing)
+    cmap = build_column_map_auto(header, col_names)
+    if cmap.missing:
+        names = "、".join(_REQUIRED_LABELS.get(k, k) for k in cmap.missing)
         raise TencentDocsError(
             f"子表「{target.sheet_name}」里找不到必需列：{names}"
-            "（检查表头或设置页的列名映射）"
+            "（检查表头：需要 链接 列和 评论A 列）"
         )
     existing = read_column_texts(client, target, cmap.col("url"))
     last_used = max(existing.keys()) if existing else 0  # 表头行兜底
@@ -168,7 +174,7 @@ def test_connection() -> dict[str, Any]:
                 if target.sheet_id not in header_cache:
                     header = read_row_texts(client, target, 0)
                     header_cache[target.sheet_id] = (
-                        header, build_column_map(header, td.col_map),
+                        header, build_column_map_auto(header, td.col_map),
                     )
                 return header_cache[target.sheet_id]
 
@@ -183,7 +189,8 @@ def test_connection() -> dict[str, Any]:
                     "platform_label": _PLATFORM_LABEL[platform],
                     "sheet_name": target.sheet_name,
                     "matched_by_name": named is not None,
-                    "missing": [td.col_map.get(k, k) for k in cmap.missing],
+                    "missing": [_REQUIRED_LABELS.get(k, k) for k in cmap.missing],
+                    "tiers_detected": max_tier(cmap),
                 })
         except TokenInvalidError:
             raise
@@ -260,6 +267,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 state = _load_sheet_state(client, target, td.col_map)
                 states[target.sheet_id] = state
             cmap = state.cmap
+            tiers_available = max_tier(cmap)
             width = max(cmap.by_key.values()) + 1
 
             rows: list[list[str]] = []
@@ -270,7 +278,7 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 if item["url"] and item["url"] in state.existing_blob:
                     skipped_in_doc += 1
                     synced_comment_ids.extend(
-                        c["id"] for c in item["comments"] if c["tier"] <= _MAX_TIERS
+                        c["id"] for c in item["comments"] if c["tier"] <= tiers_available
                     )
                     continue
 
@@ -285,8 +293,8 @@ def sync_approved(video_ids: list[int] | None = None) -> dict[str, Any]:
                 _put("url", f"{item['title']} {item['url']}".strip())
                 _put("date", date_str)
                 for c in item["comments"]:
-                    if c["tier"] > _MAX_TIERS:
-                        # 表格只有三层结构；更深楼层留在 app 内（保持 approved）。
+                    if c["tier"] > tiers_available:
+                        # 表头没有这一层的「评论X」列；更深楼层留在 app 内（保持 approved）。
                         skipped_extra_tiers += 1
                         continue
                     _put(f"tier{c['tier']}", c["text"])
