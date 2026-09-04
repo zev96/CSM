@@ -315,3 +315,11 @@ def test_balance_latch_does_not_clear_before_ttl(monkeypatch):
     real_now = tclient.time.monotonic()
     monkeypatch.setattr(tclient.time, "monotonic", lambda: real_now + 1.0)
     assert tclient.balance_exhausted() is True
+
+
+def test_negative_string_body_code_is_an_error_not_success():
+    # "-1" 这类带负号的字符串业务码之前会被当成功放行（isdecimal 不认负号）
+    c = _client(lambda req: httpx.Response(200, json={"code": "-1", "message": "x"}))
+    with pytest.raises(TikHubError) as e:
+        c.get("/p", {})
+    assert e.value.code == -1 and e.value.from_body is True

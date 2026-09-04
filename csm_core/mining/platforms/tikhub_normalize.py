@@ -198,7 +198,7 @@ def normalize_douyin_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vide
         try:
             cards.extend(_DY._extract_cards({"data": [it]}, allowed_types=allowed))
         except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
-            logger.warning("[tikhub-normalize] douyin card skipped: %r", e)
+            logger.warning("[tikhub-normalize] douyin card skipped: %s", type(e).__name__)
     return cards
 
 
@@ -279,7 +279,7 @@ def normalize_bilibili_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
                 raw=it,
             ))
         except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
-            logger.warning("[tikhub-normalize] bilibili card skipped: %r", e)
+            logger.warning("[tikhub-normalize] bilibili card skipped: %s", type(e).__name__)
             continue
     return cards
 
@@ -363,6 +363,6 @@ def normalize_kuaishou_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
                 continue
             cards.append(card)
         except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
-            logger.warning("[tikhub-normalize] kuaishou card skipped: %r", e)
+            logger.warning("[tikhub-normalize] kuaishou card skipped: %s", type(e).__name__)
             continue
     return cards

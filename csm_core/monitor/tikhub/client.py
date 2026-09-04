@@ -131,7 +131,7 @@ class TikHubClient:
         biz_code = data.get("code") if isinstance(data, dict) else None
         if isinstance(biz_code, bool):                      # bool 是 int 子类,但要先于
             biz_code = 200 if biz_code else 0                # int 分支拦下来单独按真假值编码
-        elif isinstance(biz_code, str) and biz_code.strip().isdecimal():
+        elif isinstance(biz_code, str) and biz_code.strip().lstrip("-").isdecimal():
             # isdecimal() 为真不代表 int() 一定能转换成功:超长数字字符串(数千位)
             # 会撞 Python 的整数字符串转换长度上限抛 ValueError,不能让它以非
             # TikHubError 的形态击穿上层——按业务错误(0)处理,而不是让请求假装成功。
