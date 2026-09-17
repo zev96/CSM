@@ -57,6 +57,7 @@ vi.mock("@/stores/materials", () => ({
 }));
 
 import ArticleView from "@/views/ArticleView.vue";
+import { useArticle } from "@/stores/article";
 
 function setupLookups() {
   getMock.mockImplementation((url: string) => {
@@ -93,5 +94,49 @@ describe("ArticleView — 横评 init 分支", () => {
     await flushPromises();
     const call = postMock.mock.calls.find((c) => c[0] === "/api/generate/comparison");
     expect(call).toBeFalsy();
+  });
+});
+
+// 终审 P1：闭环最后一跳 —— store 已有成稿（done）时「重新生成」/home 起飞进来，
+// 自动起飞守卫（status==='idle'）被挡死。修法=带 takeoff 意图的 query 进来先 reset
+// 非运行态 store。现有测试全用全新 store，测不到 warm-store 路径。
+describe("ArticleView — warm-store 重新生成闭环（终审 P1 回归）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    postMock.mockReset();
+    postMock.mockResolvedValue({ data: { job_id: "jc" } });
+    getMock.mockReset();
+    setupLookups();
+    routeQuery = {};
+  });
+
+  it("done 成稿 + 横评 query → 仍触发 submitComparison（不再静默失效）", async () => {
+    const a = useArticle();
+    a.status = "done";
+    a.finalText = "上一篇的成稿正文";
+    routeQuery = { keyword: "怎么选", mode: "comparison", models: "A,B", tone: "口语" };
+    mount(ArticleView, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    expect(postMock.mock.calls.find((c) => c[0] === "/api/generate/comparison")).toBeTruthy();
+  });
+
+  it("done 成稿 + 常规 query → 仍触发 submit", async () => {
+    const a = useArticle();
+    a.status = "done";
+    a.finalText = "上一篇的成稿正文";
+    routeQuery = { keyword: "无线吸尘器", template_id: "tpl-a" };
+    mount(ArticleView, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    expect(postMock.mock.calls.find((c) => c[0] === "/api/generate")).toBeTruthy();
+  });
+
+  it("running 生成中 + query → 不 reset、不抢跑（保护进行中的生成）", async () => {
+    const a = useArticle();
+    a.status = "running";
+    routeQuery = { keyword: "k", template_id: "tpl-a" };
+    mount(ArticleView, { global: { stubs: { teleport: true } } });
+    await flushPromises();
+    expect(postMock.mock.calls.find((c) => c[0] === "/api/generate")).toBeFalsy();
+    expect(a.status).toBe("running");
   });
 });
