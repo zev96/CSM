@@ -5,6 +5,7 @@ Registry confirmed:
     "bilibili_comment" → BILIBILI ADAPTER
     "douyin_comment"   → DOUYIN ADAPTER
     "kuaishou_comment" → KUAISHOU ADAPTER
+    "xiaohongshu_comment" → 占位(真实抓取固定走 TikHub,见 _resolve_adapter)
 
 hot_comments key confirmed in _comment_common.build_match_result line 99:
     metric["hot_comments"] = hot_slice  (list of {rank, text, author, likes, ...})
@@ -31,7 +32,13 @@ _PLATFORM_COMMENT_TYPE = {
     "douyin": "douyin_comment",
     "bilibili": "bilibili_comment",
     "kuaishou": "kuaishou_comment",
+    "xiaohongshu": "xiaohongshu_comment",
 }
+
+# 只有 TikHub 路径的平台:没有本地免费实现,缺 key 就直接放弃(fail-open,不排除视频)。
+_TIKHUB_ONLY_PLATFORMS = frozenset({"xiaohongshu"})
+# 优先走 TikHub 的平台(有 key 就用;缺 key / 构建失败回落本地):抖音本地 X-Bogus 是假桩。
+_TIKHUB_PREFERRED_PLATFORMS = frozenset({"douyin"}) | _TIKHUB_ONLY_PLATFORMS
 
 
 def count_brand_hits(texts: list[str], brands: list[str]) -> int:
@@ -67,7 +74,7 @@ def _resolve_adapter(ctype: str, platform: str):
     B 站 / 快手本地路径免费可用，留在本地省 TikHub 额度。TikHub 构建
     失败（缺依赖 / 配置损坏）时回落本地，与整体 fail-open 口径一致。
     """
-    if platform == "douyin":
+    if platform in _TIKHUB_PREFERRED_PLATFORMS:
         try:
             from csm_core.config import get_config, read_api_key
 
@@ -78,9 +85,14 @@ def _resolve_adapter(ctype: str, platform: str):
                 return build_api_adapters(get_config, read_api_key)[ctype]
         except Exception:
             logger.info(
-                "[prefilter] tikhub adapter unavailable for douyin, falling back to local",
-                exc_info=True,
+                "[prefilter] tikhub adapter unavailable for %s, falling back to local",
+                platform, exc_info=True,
             )
+        if platform in _TIKHUB_ONLY_PLATFORMS:
+            # 小红书没有本地评论路径:缺 key 就跳过预筛(fail-open),不能拿注册表里的
+            # 占位适配器去"抓"——它只会返回 failed。
+            logger.info("[prefilter] %s has no local comment path and no tikhub key; skip", platform)
+            return None
     from csm_core.monitor.platforms import ALL as _ADAPTERS  # registry confirmed
     return _ADAPTERS.get(ctype)
 
@@ -100,7 +112,7 @@ def fetch_video_comments(
     raw ``hot_comments`` list, not rank / match results.
 
     Args:
-        platform:  One of "douyin", "bilibili", "kuaishou".
+        platform:  One of "douyin", "bilibili", "kuaishou", "xiaohongshu".
         video_url: Full URL of the target video / item.
         limit:     Approximate number of comments to fetch (maps to scrape_top_n).
 
@@ -113,15 +125,15 @@ def fetch_video_comments(
     if ctype is None:
         return []
 
-    if platform == "douyin":
+    if platform in _TIKHUB_PREFERRED_PLATFORMS:
         from csm_core.monitor.tikhub.client import balance_exhausted
 
         if balance_exhausted():
-            # 余额闩已置位:抖音评论预筛走的是 TikHub API(见 _resolve_adapter),
+            # 余额闩已置位:抖音 / 小红书评论预筛走的是 TikHub API(见 _resolve_adapter),
             # 再发请求注定 402。提前短路,不浪费一次已知会失败的调用,也避免
             # 在余额耗尽期间刷一堆重复的失败日志。fail-open:不排除该视频。
             logger.info(
-                "[prefilter] tikhub balance exhausted; skip douyin comment fetch (fail-open)"
+                "[prefilter] tikhub balance exhausted; skip %s comment fetch (fail-open)", platform,
             )
             return []
 

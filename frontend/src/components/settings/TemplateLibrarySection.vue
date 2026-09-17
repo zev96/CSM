@@ -171,6 +171,7 @@ function toggleTag(tag: string) {
           { label: '抖音', value: 'douyin' },
           { label: '快手', value: 'kuaishou' },
           { label: 'B 站', value: 'bilibili' },
+          { label: '小红书', value: 'xiaohongshu' },
         ]"
         @update:model-value="(v) => (platform = String(v))"
       />

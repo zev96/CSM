@@ -21,16 +21,19 @@ const META: Record<Platform, { l: string; letter: string; color: string }> = {
   bilibili: { l: "B 站", letter: "B", color: "#fb7299" },
   douyin: { l: "抖音", letter: "D", color: "#1c1a17" },
   kuaishou: { l: "快手", letter: "K", color: "#ff6633" },
+  xiaohongshu: { l: "小红书", letter: "X", color: "#ff2442" },
 };
 
 const meta = () => META[props.platform];
 const keyMissing = () => !!props.tikhubMode && !!props.tikhubKeyMissing;
-const usable = () => (keyMissing() ? false : props.tikhubMode || props.loggedIn);
+// 只有 TikHub 路径的平台（小红书）：浏览器模式下不可选，也没有"去登录"可点。
+const apiOnly = () => props.platform === "xiaohongshu";
+const usable = () => (keyMissing() ? false : props.tikhubMode || (!apiOnly() && props.loggedIn));
 </script>
 
 <template>
   <button
-    @click="usable() ? $emit('toggle') : (tikhubMode ? undefined : $emit('login'))"
+    @click="usable() ? $emit('toggle') : (tikhubMode || apiOnly() ? undefined : $emit('login'))"
     :style="{
       position: 'relative',
       textAlign: 'left',
@@ -74,6 +77,9 @@ const usable = () => (keyMissing() ? false : props.tikhubMode || props.loggedIn)
       </template>
       <template v-else-if="tikhubMode">
         <Icon name="check" :size="10"/> TikHub 就绪
+      </template>
+      <template v-else-if="apiOnly()">
+        <Icon name="lock" :size="10"/> 仅支持 TikHub 采集
       </template>
       <template v-else-if="loggedIn">
         <Icon name="check" :size="10"/> 已登录

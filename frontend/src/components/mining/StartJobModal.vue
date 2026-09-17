@@ -36,6 +36,8 @@ const pickAll = () => ({
   bilibili: (props.tikhubMode && !props.tikhubKeyMissing) || !!props.loginStatus.bilibili,
   douyin: (props.tikhubMode && !props.tikhubKeyMissing) || !!props.loginStatus.douyin,
   kuaishou: (props.tikhubMode && !props.tikhubKeyMissing) || !!props.loginStatus.kuaishou,
+  // 小红书只有 TikHub 路径：浏览器模式下不可选。
+  xiaohongshu: !!props.tikhubMode && !props.tikhubKeyMissing,
 });
 const picked = ref<Record<Platform, boolean>>(pickAll());
 const cap = ref(50);
@@ -117,7 +119,7 @@ function onSubmit() {
   if (!canSubmit.value) return;
   emit("submit", {
     keyword: kw.value.trim(),
-    platforms: (["bilibili", "douyin", "kuaishou"] as Platform[]).filter(p => picked.value[p]),
+    platforms: (["bilibili", "douyin", "kuaishou", "xiaohongshu"] as Platform[]).filter(p => picked.value[p]),
     target: cap.value,
     brandKeywords: brandList.value,
     filters: JSON.parse(JSON.stringify(filters.value)),
@@ -224,9 +226,9 @@ function onSubmit() {
             <!-- "未登录的去监控中心扫码" 副标按用户要求移除 —— 卡片自身的
                  「未登录 / 已登录」状态已说明，旁标是冗余引导。 -->
           </div>
-          <div class="grid grid-cols-3 gap-2">
+          <div class="grid grid-cols-4 gap-2">
             <PlatformPickerCard
-              v-for="p in (['bilibili', 'douyin', 'kuaishou'] as Platform[])"
+              v-for="p in (['bilibili', 'douyin', 'kuaishou', 'xiaohongshu'] as Platform[])"
               :key="p"
               :platform="p"
               :picked="!!picked[p]"
@@ -338,6 +340,57 @@ function onSubmit() {
               <span class="text-[11px]" style="color: var(--ink-3);">至</span>
               <input type="date" class="date-input" :value="filters.kuaishou.time_end ?? ''"
                      @input="filters.kuaishou.time_end = ($event.target as HTMLInputElement).value || null"/>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="picked.xiaohongshu" class="filter-block mt-3">
+          <div class="mb-2 flex items-baseline gap-1.5">
+            <label class="text-[11.5px] font-semibold">小红书筛选</label>
+            <span class="text-[11px]" style="color: var(--ink-3);">仅 TikHub 采集 · 类型 / 排序 / 时间均由服务端筛选</span>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="filter-sub-label">发布时间</div>
+              <div class="chip-row">
+                <button
+                  v-for="opt in [
+                    { v: '0', label: '不限' }, { v: '1', label: '一天内' },
+                    { v: '7', label: '一周内' }, { v: '182', label: '半年内' },
+                  ]" :key="opt.v"
+                  class="chip-btn"
+                  :class="{ 'chip-btn--on': filters.xiaohongshu.time_filter === opt.v }"
+                  @click="filters.xiaohongshu.time_filter = opt.v as any"
+                >{{ opt.label }}</button>
+              </div>
+            </div>
+            <div>
+              <div class="filter-sub-label">笔记类型</div>
+              <div class="chip-row">
+                <button
+                  v-for="opt in [
+                    { v: 'all', label: '不限' }, { v: 'video', label: '视频' }, { v: 'image', label: '图文' },
+                  ]" :key="opt.v"
+                  class="chip-btn"
+                  :class="{ 'chip-btn--on': filters.xiaohongshu.note_type === opt.v }"
+                  @click="filters.xiaohongshu.note_type = opt.v as any"
+                >{{ opt.label }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="mt-2.5">
+            <div class="filter-sub-label">排序</div>
+            <div class="chip-row" style="max-width: 420px;">
+              <button
+                v-for="opt in [
+                  { v: 'general', label: '综合' }, { v: 'popularity_descending', label: '最多点赞' },
+                  { v: 'comment_descending', label: '最多评论' }, { v: 'collect_descending', label: '最多收藏' },
+                  { v: 'time_descending', label: '最新' },
+                ]" :key="opt.v"
+                class="chip-btn"
+                :class="{ 'chip-btn--on': filters.xiaohongshu.sort_type === opt.v }"
+                @click="filters.xiaohongshu.sort_type = opt.v as any"
+              >{{ opt.label }}</button>
             </div>
           </div>
         </div>

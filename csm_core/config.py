@@ -207,6 +207,18 @@ class FeedbackConfig(BaseModel):
     alpha: float = Field(default=0.5, ge=0.0, le=2.0)
 
 
+class SheetColumnOverride(BaseModel):
+    """一张子表的手动列映射（设置页「识别表头」面板里改过的结果）。
+
+    mapping：{角色: 0-based 列号 | None}，角色 = seq / url / date / tier1..5 / img1..5，
+    None = 该角色忽略（即使自动识别到了也不写）。header：保存时的表头快照——同步
+    前逐列校验，被指定的列表头文本一旦对不上（列挪位 / 改名 / 删列）整份作废，
+    退回自动识别并在同步结果里提醒重新确认，绝不把评论写进已经不是那一列的格子。
+    """
+    mapping: dict[str, int | None] = Field(default_factory=dict)
+    header: list[str] = Field(default_factory=list)
+
+
 class TencentDocsConfig(BaseModel):
     """settings.tencent_docs.* —— 评论工作流 P3：同步到共享腾讯文档表格。
 
@@ -217,6 +229,10 @@ class TencentDocsConfig(BaseModel):
     """
     enabled: bool = False
     doc_url: str = ""    # 在线表格链接（?tab= 作为找不到平台子表时的兜底）
+    # 评论挂图直接插进表格的贴图列（sheet-mcp ``insert_image``，base64 直传）。服务端
+    # 不支持该工具、或某张插入失败时，该格回落写「有图，另发」标记（图走手机直发）。
+    # 关掉 = 始终只写标记，不传图。
+    sync_images: bool = True
     col_map: dict[str, str] = Field(default_factory=lambda: {
         "seq": "序号", "url": "链接",
         "tier1": "内容一", "img1": "贴图一",
@@ -227,8 +243,11 @@ class TencentDocsConfig(BaseModel):
     # 平台 → 子表名：同步时按名字路由到对应子表（去空白匹配，「B站」==「B 站」）。
     # 找不到同名子表 → 回落 URL tab 指定的子表 / 第一张子表。
     sheet_map: dict[str, str] = Field(default_factory=lambda: {
-        "douyin": "抖音", "bilibili": "B站", "kuaishou": "快手",
+        "douyin": "抖音", "bilibili": "B站", "kuaishou": "快手", "xiaohongshu": "小红书",
     })
+    # 手动列映射：key = "{file_id}:{sheet_id}"（同一份表格里子表 id 唯一；换了表格链接
+    # 旧 key 自然失效）。没有条目 = 全靠自动识别。
+    sheet_col_overrides: dict[str, SheetColumnOverride] = Field(default_factory=dict)
 
 
 class AppConfig(BaseModel):

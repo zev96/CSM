@@ -594,6 +594,13 @@ _VIDEO_ID_PATTERNS: dict[str, list[_re.Pattern[str]]] = {
         _re.compile(r"photoId=([0-9a-zA-Z]+)"),
         _re.compile(r"/profile/[^/]+/photo/([0-9a-zA-Z]+)"),
     ],
+    # 小红书笔记 ID 固定 24 位十六进制；explore / discovery/item 两种长链 + note_id 参数。
+    "xiaohongshu": [
+        _re.compile(r"/explore/([0-9a-fA-F]{24})"),
+        _re.compile(r"/discovery/item/([0-9a-fA-F]{24})"),
+        _re.compile(r"/item/([0-9a-fA-F]{24})"),
+        _re.compile(r"note_id=([0-9a-fA-F]{24})"),
+    ],
 }
 
 
@@ -610,6 +617,7 @@ _PLATFORM_TO_MONITOR_TYPE = {
     "douyin": "douyin_comment",
     "bilibili": "bilibili_comment",
     "kuaishou": "kuaishou_comment",
+    "xiaohongshu": "xiaohongshu_comment",
 }
 
 

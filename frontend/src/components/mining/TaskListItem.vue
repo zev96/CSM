@@ -112,6 +112,7 @@ const PLATFORM_META: Record<Platform, { letter: string; color: string }> = {
   bilibili: { letter: "B", color: "#fb7299" },
   douyin: { letter: "D", color: "#1c1a17" },
   kuaishou: { letter: "K", color: "#ff6633" },
+  xiaohongshu: { letter: "X", color: "#ff2442" },
 };
 
 // ── 状态语义（用户重构 2026-05）────────────────────────────────

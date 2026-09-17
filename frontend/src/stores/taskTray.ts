@@ -63,6 +63,7 @@ export const MONITOR_TYPE_META: Record<string, { group: string; tab: string }> =
   bilibili_comment: { group: "评论留存监测", tab: "comment" },
   douyin_comment: { group: "评论留存监测", tab: "comment" },
   kuaishou_comment: { group: "评论留存监测", tab: "comment" },
+  xiaohongshu_comment: { group: "评论留存监测", tab: "comment" },
   baidu_keyword: { group: "百度排名监测", tab: "baidu" },
   geo_query: { group: "AI 卡位监测", tab: "geo" },
 };
@@ -78,6 +79,7 @@ const PLATFORM_LABEL: Record<Platform, string> = {
   douyin: "抖音",
   bilibili: "B站",
   kuaishou: "快手",
+  xiaohongshu: "小红书",
 };
 
 const MAX_FINISHED = 3;

@@ -8,10 +8,15 @@
         --zhihu 23640683 `
         --douyin  "<抖音视频链接或 aweme_id>" `
         --kuaishou "<快手视频链接或 photo_id>" `
-        --bilibili "<B站视频链接或 BV 号>"
+        --bilibili "<B站视频链接或 BV 号>" `
+        --xhs "<小红书笔记链接 / xhslink 短链 / 24 位笔记 ID>" `
+        --xhs-search "<关键词>"
 
 各参数可传完整视频链接(自动抽 ID)或直接传 ID。B站请挑一条**有 UP 置顶评论**的视频,
 以便验证 normalizer 的“置顶→rank1”。生成的 JSON 落到 sidecar/tests/tikhub/fixtures/。
+小红书两个端点(评论 / 搜索)尚未用真实 token 实测过字段路径,首跑务必各抓一份 fixture,
+对照 csm_core/monitor/tikhub/normalize.py 与 csm_core/mining/platforms/tikhub_normalize.py
+的小红书归一化函数校正。
 """
 
 from __future__ import annotations
@@ -57,7 +62,8 @@ def _extract(kind: str, raw: str) -> str:
         return raw
     # 分享短链先展开成长链再抽 ID
     if raw.startswith("http") and any(
-        s in raw for s in ("v.douyin.com", "v.kuaishou.com", "kuaishou.com/f/", "b23.tv")
+        s in raw for s in ("v.douyin.com", "v.kuaishou.com", "kuaishou.com/f/", "b23.tv",
+                           "xhslink.com", "xhslink.cn")
     ):
         raw = _resolve(raw)
     if kind == "zhihu":
@@ -71,6 +77,10 @@ def _extract(kind: str, raw: str) -> str:
         return m.group(1) if m else raw
     if kind == "bilibili":
         m = re.search(r"(BV[0-9A-Za-z]+)", raw)
+        return m.group(1) if m else raw
+    if kind == "xhs":
+        m = (re.search(r"/(?:explore|discovery/item|item)/([0-9a-fA-F]{24})", raw)
+             or re.search(r"\b([0-9a-fA-F]{24})\b", raw))
         return m.group(1) if m else raw
     return raw
 
@@ -88,8 +98,9 @@ def main() -> None:
     if not KEY:
         sys.exit("先设环境变量 TIKHUB_API_KEY")
     ap = argparse.ArgumentParser()
-    for p in ("zhihu", "douyin", "kuaishou", "bilibili"):
+    for p in ("zhihu", "douyin", "kuaishou", "bilibili", "xhs"):
         ap.add_argument(f"--{p}")
+    ap.add_argument("--xhs-search", dest="xhs_search", help="小红书关键词搜索(app_v2/search_notes)")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -106,6 +117,12 @@ def main() -> None:
     if a.bilibili:
         jobs.append(("bilibili_comments", "/api/v1/bilibili/app/fetch_video_comments",
                      {"bv_id": _extract("bilibili", a.bilibili), "mode": 3, "next_offset": 1}))
+    if a.xhs:
+        jobs.append(("xiaohongshu_comments", "/api/v1/xiaohongshu/app_v2/get_note_comments",
+                     {"note_id": _extract("xhs", a.xhs), "sort_strategy": "like_count"}))
+    if a.xhs_search:
+        jobs.append(("search_xiaohongshu", "/api/v1/xiaohongshu/app_v2/search_notes",
+                     {"keyword": a.xhs_search, "page": 1}))
     if not jobs:
         sys.exit("至少给一个平台参数,如 --douyin <链接>")
 

@@ -5,7 +5,7 @@ import StartJobModal from "../StartJobModal.vue";
 // Dialog 内部用 <Teleport to="body">，@vue/test-utils 的 find 不会穿进
 // teleport 目标 —— stub teleport 让内容就地渲染，方便断言滑条 / 文案。
 const mountOpts = (props: Record<string, unknown>) => ({
-  props: { open: true, loginStatus: { bilibili: true, douyin: true, kuaishou: true }, ...props },
+  props: { open: true, loginStatus: { bilibili: true, douyin: true, kuaishou: true, xiaohongshu: false }, ...props },
   global: { stubs: { teleport: true } },
 });
 

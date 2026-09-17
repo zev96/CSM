@@ -36,6 +36,7 @@ PLATFORM_TYPES: tuple[TaskType, ...] = (
     "bilibili_comment",
     "douyin_comment",
     "kuaishou_comment",
+    "xiaohongshu_comment",
     "geo_query",
 )
 

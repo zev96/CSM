@@ -354,7 +354,10 @@ def test_client_redacts_token_from_tool_error_text():
 # ── Sheet helpers（假 client）──────────────────────────────────────────
 
 class FakeSheetClient:
-    """内存表格（可多子表）：rows_of(sheet_id)[r][c] = str。记录 CSV/样式调用。"""
+    """内存表格（可多子表）：rows_of(sheet_id)[r][c] = str。记录 CSV/样式/插图调用。"""
+
+    # 默认不含 insert_image（旧服务形态）；插图用例把它加进 tools。
+    DEFAULT_TOOLS = ["get_sheet_info", "get_cell_data", "set_range_value_by_csv"]
 
     def __init__(self, rows: list[list[str]] | None = None, *, sheets: list[dict] | None = None):
         self.sheets = sheets or [
@@ -365,6 +368,9 @@ class FakeSheetClient:
         self.rows_by_sheet: dict[str, list[list[str]]] = {first_id: rows if rows is not None else []}
         self.csv_writes: list[dict] = []
         self.style_calls: list[dict] = []
+        self.image_calls: list[dict] = []
+        self.tools = list(self.DEFAULT_TOOLS)
+        self.fail_insert = False
 
     @property
     def rows(self) -> list[list[str]]:
@@ -375,7 +381,7 @@ class FakeSheetClient:
         return self.rows_by_sheet.setdefault(sheet_id, [])
 
     def list_tools(self) -> list[str]:
-        return ["get_sheet_info", "get_cell_data", "set_range_value_by_csv"]
+        return list(self.tools)
 
     def close(self):
         pass
@@ -391,6 +397,11 @@ class FakeSheetClient:
             return {"sheets": self.sheets}
         if name == "set_cell_style":
             self.style_calls.append(arguments)
+            return {}
+        if name == "insert_image":
+            if self.fail_insert:
+                raise TencentDocsError("腾讯文档服务报错：image too large")
+            self.image_calls.append(arguments)
             return {}
         rows = self.rows_of(arguments["sheet_id"])
         if name == "get_cell_data":
@@ -894,7 +905,7 @@ def test_test_connection_reports_mapping(tdocs_env: FakeSheetClient):
         "get_sheet_info", "get_cell_data", "set_range_value_by_csv",
     ]
     # 平台路由报告：单表用例三个平台都回落到兜底子表（非按名命中）
-    assert [p["platform"] for p in out["sheets"]] == ["douyin", "bilibili", "kuaishou"]
+    assert [p["platform"] for p in out["sheets"]] == ["douyin", "bilibili", "kuaishou", "xiaohongshu"]
     assert all(p["sheet_name"] == "工作表1" for p in out["sheets"])
     assert all(p["matched_by_name"] is False for p in out["sheets"])
 
@@ -982,3 +993,367 @@ def test_sync_route_disabled_returns_code(client, monitor_db, monkeypatch):
     r = client.post("/api/mining/sync_to_docs", json={})
     assert r.status_code == 400
     assert r.json()["code"] == "tencent_docs_disabled"
+
+
+# ── 评论楼层图片直接插进表格（insert_image）────────────────────────────────
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+@pytest.fixture
+def fake_images(tmp_path: Path, monkeypatch):
+    """img-x / img-y 落成真实文件；其余 image_id 视为缺失。"""
+    files = {}
+    for iid in ("img-x", "img-y"):
+        p = tmp_path / f"{iid}.png"
+        p.write_bytes(_PNG)
+        files[iid] = p
+    monkeypatch.setattr(tds.mining_images_service, "get_image_path", lambda iid: files.get(iid))
+    return files
+
+
+def test_sync_inserts_images_into_image_column(tdocs_env: FakeSheetClient, fake_images):
+    import base64
+    tdocs_env.tools.append("insert_image")
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼"], images_on={1})
+
+    result = tds.sync_approved()
+
+    assert result["images_inserted"] == 1
+    assert result["images_failed"] == 0 and result["images_unsupported"] == 0
+    assert tdocs_env.image_calls == [{
+        "file_id": "D123", "sheet_id": "BB08J2",
+        "row_index": 1, "col_index": 3,                      # 第一条数据行 × 「贴图一」列
+        "content": base64.b64encode(_PNG).decode("ascii"),
+    }]
+    assert tdocs_env.rows[1][3] == ""                         # 有图本体就不写文字标记
+    assert tdocs_env.rows[1][2] == "一楼"
+    assert all(c["review_status"] == "synced" for c in ms.list_comments(1))
+
+
+def test_sync_inserts_every_image_of_a_tier_into_same_cell(tdocs_env: FakeSheetClient, fake_images):
+    tdocs_env.tools.append("insert_image")
+    conn = monitor_storage.get_conn()
+    conn.execute("INSERT INTO videos(id, platform, platform_video_id, url, title) VALUES(1,'douyin','d1','https://www.douyin.com/video/1','t')")
+    cid = ms.upsert_ai_comment(1, 1, "一楼")
+    ms.update_comment(cid, image_ids=["img-x", "img-y"])
+    ms.approve_comment(cid)
+
+    result = tds.sync_approved()
+    assert result["images_inserted"] == 2
+    assert [(c["row_index"], c["col_index"]) for c in tdocs_env.image_calls] == [(1, 3), (1, 3)]
+
+
+def test_sync_falls_back_to_marker_when_tool_missing(tdocs_env: FakeSheetClient, fake_images):
+    """服务端没有 insert_image → 旧行为：贴图列写「有图，另发」。"""
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼"], images_on={1})
+    result = tds.sync_approved()
+    assert result["images_unsupported"] == 1 and result["images_inserted"] == 0
+    assert tdocs_env.image_calls == []
+    assert tdocs_env.rows[1][3] == "有图，另发"
+
+
+def test_sync_respects_sync_images_switch(tdocs_env: FakeSheetClient, fake_images):
+    tdocs_env.tools.append("insert_image")
+    config_service.patch({"tencent_docs": {"sync_images": False}})
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼"], images_on={1})
+    result = tds.sync_approved()
+    assert result["images_unsupported"] == 1 and tdocs_env.image_calls == []
+    assert tdocs_env.rows[1][3] == "有图，另发"
+
+
+def test_sync_insert_failure_counts_and_writes_marker(tdocs_env: FakeSheetClient, fake_images):
+    """单张插入失败：计 images_failed，该格补写标记，评论仍标 synced（文本已写入表格）。"""
+    tdocs_env.tools.append("insert_image")
+    tdocs_env.fail_insert = True
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼"], images_on={1})
+    result = tds.sync_approved()
+    assert result["images_failed"] == 1 and result["images_inserted"] == 0
+    assert tdocs_env.rows[1][3] == "有图，另发"
+    assert all(c["review_status"] == "synced" for c in ms.list_comments(1))
+
+
+def test_sync_missing_image_file_counts_failed(tdocs_env: FakeSheetClient, fake_images):
+    tdocs_env.tools.append("insert_image")
+    conn = monitor_storage.get_conn()
+    conn.execute("INSERT INTO videos(id, platform, platform_video_id, url, title) VALUES(1,'douyin','d1','https://www.douyin.com/video/1','t')")
+    cid = ms.upsert_ai_comment(1, 1, "一楼")
+    ms.update_comment(cid, image_ids=["img-gone"])
+    ms.approve_comment(cid)
+    result = tds.sync_approved()
+    assert result["images_failed"] == 1 and tdocs_env.image_calls == []
+    assert tdocs_env.rows[1][3] == "有图，另发"
+
+
+def test_sync_image_without_column_still_dropped(tdocs_env: FakeSheetClient, fake_images, monkeypatch):
+    """表头没有该层贴图列 → 图无处可放：images_dropped，不插图、不写标记、正文干净。"""
+    fake = FakeSheetClient([["链接", "评论A", "评论B"]])
+    fake.tools.append("insert_image")
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼"], images_on={2})
+    result = tds.sync_approved()
+    assert result["images_dropped"] == 1 and result["images_inserted"] == 0
+    assert fake.image_calls == [] and fake.rows[1][2] == "二楼"
+
+
+def test_test_connection_reports_insert_image_support(tdocs_env: FakeSheetClient):
+    out = tds.test_connection()
+    assert out["insert_image_supported"] is False and out["sync_images"] is True
+    tdocs_env.tools.append("insert_image")
+    assert tds.test_connection()["insert_image_supported"] is True
+    # 四平台都出现在路由报告里（小红书 tab 默认名「小红书」）
+    assert [p["platform"] for p in out["sheets"]] == ["douyin", "bilibili", "kuaishou", "xiaohongshu"]
+    assert out["sheets"][-1]["platform_label"] == "小红书"
+
+
+def test_sync_routes_xiaohongshu_to_its_named_sheet(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True,
+        "doc_url": "https://docs.qq.com/sheet/D123?tab=DYTAB",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient(sheets=[
+        {"sheet_id": "DYTAB", "sheet_name": "抖音", "sheet_type": "worksheet", "row_count": 200, "col_count": 20},
+        {"sheet_id": "XHSTAB", "sheet_name": "小红书", "sheet_type": "worksheet", "row_count": 200, "col_count": 20},
+    ])
+    for sid in ("DYTAB", "XHSTAB"):
+        fake.rows_of(sid).append(list(_USER_HEADER))
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    conn = monitor_storage.get_conn()
+    conn.execute(
+        "INSERT INTO videos(id, platform, platform_video_id, url, title) VALUES(1,'xiaohongshu','64f1c2a3000000001e03ab12','https://www.xiaohongshu.com/explore/64f1c2a3000000001e03ab12','笔记')")
+    cid = ms.upsert_ai_comment(1, 1, "小红书评论")
+    ms.approve_comment(cid)
+
+    result = tds.sync_approved()
+    assert result["synced_videos"] == 1
+    assert result["batches"][0]["platform"] == "xiaohongshu"
+    assert result["batches"][0]["sheet_name"] == "小红书"
+    assert fake.rows_of("XHSTAB")[1][2] == "小红书评论"
+    assert fake.rows_of("DYTAB") == [list(_USER_HEADER)]
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+# ── 表头识别（放宽惯例）+ 手动列映射 ─────────────────────────────────────
+
+from csm_core.sync.tencent_docs import (  # noqa: E402
+    apply_column_overrides, classify_header, col_letter, describe_columns,
+)
+
+
+@pytest.mark.parametrize("header,role", [
+    ("评论A", "tier1"), ("评论 b", "tier2"), ("评论1", "tier1"), ("评论三", "tier3"),
+    ("一楼", "tier1"), ("2楼评论", "tier2"), ("第三层评论", "tier3"), ("楼层4", "tier4"),
+    ("内容一", "tier1"), ("盖楼内容二", "tier2"), ("主评", "tier1"), ("评论A（必填）", "tier1"),
+    ("评论A的图片", "img1"), ("评论2图片", "img2"), ("一楼图片", "img1"), ("贴图三", "img3"),
+    ("图片1", "img1"), ("第2层图片", "img2"), ("配图五", "img5"), ("评论①", "tier1"),
+    ("截图1", None), ("评论返图", None), ("执行状态", None), ("备注", None),
+    ("评论X", None), ("评论6", None), ("评论Ⅰ", None), ("", None), (None, None),
+    ("链接", "url"), ("视频链接", "url"), ("笔记链接", "url"), ("抖音链接", "url"), ("URL", "url"),
+    ("序号", "seq"), ("编号", "seq"), ("日期", "date"), ("任务日期", "date"),
+])
+def test_classify_header_conventions(header, role):
+    assert classify_header(header) == role
+
+
+def test_column_map_auto_non_adjacent_columns_and_three_tiers():
+    """评论列与图片列不相邻、只有 3 层、夹着日期和截图列 —— 按名字全部对上。"""
+    header = ["序号", "链接", "评论1", "评论2", "评论3", "日期", "图片1", "图片2", "图片3", "截图1", "截图2"]
+    cmap = build_column_map_auto(header, {})
+    assert cmap.col("tier1") == 2 and cmap.col("tier3") == 4
+    assert cmap.col("img1") == 6 and cmap.col("img3") == 8
+    assert cmap.col("seq") == 0 and cmap.col("url") == 1 and cmap.col("date") == 5
+    assert max_tier(cmap) == 3 and cmap.tier_gaps == [] and cmap.missing == []
+    assert all(cmap.source[k] == "auto" for k in cmap.by_key)
+    assert not {9, 10} & set(cmap.by_key.values())          # 截图列不是任何角色
+
+
+def test_column_map_auto_mixed_conventions_and_first_wins():
+    header = ["笔记链接", "一楼", "一楼图片", "二楼", "二楼图片", "三楼", "评论1"]
+    cmap = build_column_map_auto(header, {})
+    assert cmap.col("url") == 0
+    assert cmap.col("tier1") == 1 and cmap.col("tier2") == 3 and cmap.col("tier3") == 5
+    assert cmap.col("img1") == 2 and cmap.col("img2") == 4
+    # 「评论1」也是 tier1，但靠前的「一楼」已占位 → 取靠前
+    assert 6 not in cmap.by_key.values()
+
+
+def test_apply_column_overrides_moves_roles_and_ignores():
+    header = ["链接", "评论A", "备注", "评论B", "评论A的图片"]
+    cmap = build_column_map_auto(header, {})
+    assert cmap.col("tier2") == 3 and cmap.col("img1") == 4
+    apply_column_overrides(cmap, header, {}, {"tier2": 2, "img1": None, "img2": 4}, header)
+    assert cmap.col("tier2") == 2 and cmap.source["tier2"] == "override"
+    assert cmap.col("img1") is None                       # 显式忽略
+    assert cmap.col("img2") == 4 and cmap.col("tier1") == 1
+    assert cmap.override_stale is False and cmap.tier_gaps == [] and cmap.missing == []
+
+
+def test_apply_column_overrides_displaces_conflicting_auto_role():
+    header = ["链接", "评论A", "评论B"]
+    cmap = build_column_map_auto(header, {})
+    apply_column_overrides(cmap, header, {}, {"img1": 2}, header)   # 把「评论B」列改成第 1 层图片
+    assert cmap.col("img1") == 2 and cmap.col("tier2") is None and max_tier(cmap) == 1
+
+
+def test_apply_column_overrides_stale_when_header_changed():
+    saved = ["链接", "评论A", "评论B"]
+    now = ["链接", "评论B", "评论A"]                      # 两列互换
+    cmap = build_column_map_auto(now, {})
+    apply_column_overrides(cmap, now, {}, {"tier1": 1}, saved)
+    assert cmap.override_stale is True and cmap.col("tier1") == 2   # 沿用自动识别
+    cmap2 = build_column_map_auto(now, {})
+    apply_column_overrides(cmap2, now, {}, {"tier1": 9}, now)       # 列号越界
+    assert cmap2.override_stale is True
+
+
+def test_describe_columns_and_letters():
+    assert col_letter(0) == "A" and col_letter(25) == "Z" and col_letter(26) == "AA"
+    header = ["链接", "评论A", ""]
+    cols = describe_columns(header, build_column_map_auto(header, {}))
+    assert cols[0] == {"col": 0, "letter": "A", "header": "链接", "role": "url",
+                       "role_label": "链接", "source": "auto"}
+    assert cols[1]["role_label"] == "第 1 层评论"
+    assert cols[2]["role"] is None and cols[2]["header"] == "" and cols[2]["source"] is None
+
+
+def _sheet(sid, name):
+    return {"sheet_id": sid, "sheet_name": name, "sheet_type": "worksheet", "row_count": 200, "col_count": 20}
+
+
+def test_inspect_reports_every_sheet_with_columns_and_routing(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True, "doc_url": "https://docs.qq.com/sheet/D123?tab=DYTAB",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient(sheets=[_sheet("DYTAB", "抖音"), _sheet("XHSTAB", "小红书"), _sheet("MISC", "说明")])
+    fake.rows_of("DYTAB").append(["序号", "链接", "评论1", "评论2", "评论3", "日期", "图片1", "图片2", "图片3", "截图1"])
+    fake.rows_of("XHSTAB").append(["笔记链接", "一楼", "一楼图片", "二楼"])
+    fake.rows_of("MISC").append(["随便", "写点啥"])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+
+    out = tds.inspect()
+    assert out["ok"] is True and out["file_id"] == "D123" and out["doc_url"].startswith("https://docs.qq.com/sheet/D123")
+    by = {s["sheet_name"]: s for s in out["sheets"]}
+    # 抖音：同名命中；B站 / 快手没有同名子表 → 兜底到 URL tab（也是这张）
+    assert by["抖音"]["platforms"] == ["douyin", "bilibili", "kuaishou"] and by["抖音"]["is_fallback"] is True
+    assert by["小红书"]["platforms"] == ["xiaohongshu"]
+    assert by["说明"]["platforms"] == [] and by["说明"]["missing"]        # 闲置子表缺列不算错
+    dy = by["抖音"]
+    assert dy["tiers_detected"] == 3 and dy["mapping"]["img3"] == 8 and dy["image_cols_missing"] == []
+    assert [c["role"] for c in dy["columns"]][:3] == ["seq", "url", "tier1"]
+    assert dy["columns"][9]["role"] is None and dy["columns"][9]["letter"] == "J"
+    assert dy["has_override"] is False and dy["override_stale"] is False
+    xhs = by["小红书"]
+    assert xhs["mapping"] == {"url": 0, "tier1": 1, "img1": 2, "tier2": 3}
+    assert xhs["image_cols_missing"] == [2]
+    assert out["matched_by_name"] == {"douyin": True, "bilibili": False, "kuaishou": False, "xiaohongshu": True}
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_inspect_accepts_explicit_url_without_saving_it(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {"enabled": True, "doc_url": ""}})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([list(_USER_HEADER)])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    out = tds.inspect("https://docs.qq.com/sheet/DNEW?tab=BB08J2")
+    assert out["file_id"] == "DNEW" and out["ok"] is True
+    assert config_service.load().tencent_docs.doc_url == ""      # 只识别，不改配置
+    with pytest.raises(TencentDocsError, match="粘贴表格链接"):
+        tds.inspect()
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_save_mapping_then_sync_and_inspect_use_it(monitor_db, settings_path, monkeypatch):
+    """自动识别认不出「楼中楼 / 补充 / 配图」→ 用户手动指定 → 同步按指定列写，识别面板标 override。"""
+    config_service.patch({"tencent_docs": {
+        "enabled": True, "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    header = ["链接", "主评", "楼中楼", "补充", "配图"]
+    fake = FakeSheetClient([list(header)])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+
+    before = tds.inspect()["sheets"][0]
+    assert before["tiers_detected"] == 1 and before["mapping"] == {"url": 0, "tier1": 1}
+
+    saved = tds.save_mapping("D123", "BB08J2", {"tier2": 2, "tier3": 3, "img1": 4}, header)
+    assert saved["ok"] is True
+    ov = config_service.load().tencent_docs.sheet_col_overrides["D123:BB08J2"]
+    assert ov.mapping == {"tier2": 2, "tier3": 3, "img1": 4} and ov.header == header
+
+    after = tds.inspect()["sheets"][0]
+    assert after["has_override"] is True and after["override_stale"] is False
+    assert after["tiers_detected"] == 3 and after["mapping"]["img1"] == 4
+    assert after["columns"][2]["source"] == "override" and after["columns"][1]["source"] == "auto"
+
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼", "三楼"], images_on={1})
+    result = tds.sync_approved()
+    assert result["synced_comments"] == 3 and result["skipped_extra_tiers"] == 0
+    assert result["mapping_stale"] == []
+    row = fake.rows[1]
+    assert row[1] == "一楼" and row[2] == "二楼" and row[3] == "三楼"
+    assert row[4] == "有图，另发"                              # 图走 img1 → 「配图」列（无 insert_image 工具）
+
+    assert tds.clear_mapping("D123", "BB08J2")["removed"] is True
+    assert tds.inspect()["sheets"][0]["has_override"] is False
+    assert tds.clear_mapping("D123", "BB08J2")["removed"] is False
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_sync_reports_stale_mapping_when_header_moved(monitor_db, settings_path, monkeypatch):
+    config_service.patch({"tencent_docs": {
+        "enabled": True, "doc_url": "https://docs.qq.com/sheet/D123?tab=BB08J2",
+    }})
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    tds.save_mapping("D123", "BB08J2", {"tier2": 2}, ["链接", "主评", "楼中楼"])
+    fake = FakeSheetClient([["链接", "主评", "备注", "楼中楼"]])     # 用户后来插了一列
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+    _seed_video_with_comments(1, "https://www.douyin.com/video/111", ["一楼", "二楼"])
+
+    result = tds.sync_approved()
+    assert result["mapping_stale"] == ["工作表1"]
+    assert result["skipped_extra_tiers"] == 1                  # 退回自动识别：楼中楼认不出 → 第 2 层留在 app
+    assert fake.rows[1][1] == "一楼" and "二楼" not in fake.rows[1]
+    assert tds.inspect()["sheets"][0]["override_stale"] is True
+    monkeypatch.setattr(tds, "_client_factory", None)
+
+
+def test_save_mapping_rejects_bad_input(monitor_db, settings_path):
+    with pytest.raises(ValueError, match="未知角色"):
+        tds.save_mapping("D1", "S1", {"tier9": 0}, ["a"])
+    with pytest.raises(ValueError, match="同一列"):
+        tds.save_mapping("D1", "S1", {"tier1": 0, "img1": 0}, ["a"])
+    with pytest.raises(ValueError, match="超出"):
+        tds.save_mapping("D1", "S1", {"tier1": 3}, ["a", "b"])
+    with pytest.raises(ValueError, match="非法"):
+        tds.save_mapping("D1", "S1", {"tier1": True}, ["a"])
+    assert config_service.load().tencent_docs.sheet_col_overrides == {}
+
+
+def test_inspect_and_mapping_routes(client, monitor_db, monkeypatch):
+    monkeypatch.setattr(tds, "read_api_key", lambda p, c=None: "tok")
+    fake = FakeSheetClient([list(_USER_HEADER)])
+    monkeypatch.setattr(tds, "_client_factory", lambda token: fake)
+
+    r = client.post("/api/mining/tencent_docs/inspect", json={"doc_url": "https://docs.qq.com/sheet/D9?tab=BB08J2"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["file_id"] == "D9" and body["sheets"][0]["tiers_detected"] == 3
+    assert body["sheets"][0]["columns"][3]["role"] == "img1"
+
+    bad = client.put("/api/mining/tencent_docs/mapping", json={
+        "file_id": "D9", "sheet_id": "BB08J2", "mapping": {"nope": 1}, "header": _USER_HEADER,
+    })
+    assert bad.status_code == 400 and "未知角色" in bad.json()["detail"]
+
+    ok = client.put("/api/mining/tencent_docs/mapping", json={
+        "file_id": "D9", "sheet_id": "BB08J2", "mapping": {"img2": None, "tier2": 4}, "header": _USER_HEADER,
+    })
+    assert ok.status_code == 200 and ok.json()["mapping"] == {"img2": None, "tier2": 4}
+    again = client.post("/api/mining/tencent_docs/inspect", json={"doc_url": "https://docs.qq.com/sheet/D9?tab=BB08J2"}).json()
+    assert again["sheets"][0]["has_override"] is True and "img2" not in again["sheets"][0]["mapping"]
+
+    gone = client.delete("/api/mining/tencent_docs/mapping/D9/BB08J2")
+    assert gone.status_code == 200 and gone.json()["removed"] is True
+    monkeypatch.setattr(tds, "_client_factory", None)

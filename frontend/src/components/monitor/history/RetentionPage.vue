@@ -13,7 +13,7 @@ import { useSidecarReady } from "@/composables/useSidecarReady";
 import LineChart from "./LineChart.vue";
 
 type Range = "1d" | "7d" | "30d";
-type PlatformKey = "bilibili_comment" | "douyin_comment" | "kuaishou_comment";
+type PlatformKey = "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "xiaohongshu_comment";
 
 interface PlatformView {
   label: string;
@@ -59,16 +59,19 @@ const PLATFORM_COLOR: Record<PlatformKey, string> = {
   bilibili_comment: "#ee6a2a",
   douyin_comment: "var(--ink)", // 抖音黑：走 ink token，暗色翻白避免折线/图例点隐形
   kuaishou_comment: "#f5c042",
+  xiaohongshu_comment: "#ff2442",
 };
 const PLATFORM_CHIP_BG: Record<PlatformKey, string> = {
   bilibili_comment: "rgba(238,106,42,0.15)",
   douyin_comment: "rgba(var(--ink-rgb),0.10)",
   kuaishou_comment: "rgba(245,192,66,0.18)",
+  xiaohongshu_comment: "rgba(255,36,66,0.12)",
 };
 const PLATFORM_CHIP_FG: Record<PlatformKey, string> = {
   bilibili_comment: "var(--primary-deep)",
   douyin_comment: "var(--ink)",
   kuaishou_comment: "var(--yellow-deep)",
+  xiaohongshu_comment: "#c8102e",
 };
 
 async function load() {
@@ -88,7 +91,7 @@ watch(range, load);
 
 const platformList = computed(() => {
   if (!data.value) return [];
-  return (["bilibili_comment", "douyin_comment", "kuaishou_comment"] as PlatformKey[]).map((k) => ({
+  return (["bilibili_comment", "douyin_comment", "kuaishou_comment", "xiaohongshu_comment"] as PlatformKey[]).map((k) => ({
     key: k,
     color: PLATFORM_COLOR[k],
     ...data.value!.platforms[k],
@@ -227,7 +230,7 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
         </div>
         <div class="inline-flex gap-1 p-1 rounded-full" :style="{ background: 'var(--card-2)' }">
           <button
-            v-for="f in (['all','bilibili_comment','douyin_comment','kuaishou_comment'] as const)" :key="f"
+            v-for="f in (['all','bilibili_comment','douyin_comment','kuaishou_comment','xiaohongshu_comment'] as const)" :key="f"
             @click="eventFilter = f"
             class="px-3 py-1 rounded-full text-[11.5px] font-medium"
             :style="{
@@ -235,7 +238,7 @@ function fmtDelta(curr: number, prev: number): { text: string; tone: "up" | "dow
               color: eventFilter === f ? 'var(--card)' : 'var(--ink-3)',
             }"
           >
-            {{ f === "all" ? "全部" : f === "bilibili_comment" ? "B 站" : f === "douyin_comment" ? "抖音" : "快手" }}
+            {{ f === "all" ? "全部" : f === "bilibili_comment" ? "B 站" : f === "douyin_comment" ? "抖音" : f === "kuaishou_comment" ? "快手" : "小红书" }}
           </button>
         </div>
       </div>

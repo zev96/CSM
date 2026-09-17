@@ -55,6 +55,11 @@ _TYPE_LABEL_MAP: dict[str, TaskType] = {
     "快手": "kuaishou_comment",
     "kuaishou": "kuaishou_comment",
     "kuaishou_comment": "kuaishou_comment",
+    "小红书评论": "xiaohongshu_comment",
+    "小红书": "xiaohongshu_comment",
+    "xiaohongshu": "xiaohongshu_comment",
+    "xhs": "xiaohongshu_comment",
+    "xiaohongshu_comment": "xiaohongshu_comment",
     "百度关键词": "baidu_keyword",
     "百度": "baidu_keyword",
     "baidu": "baidu_keyword",
@@ -82,6 +87,7 @@ TEMPLATE_SAMPLES = [
     ["B站评论", "B站-某视频评论留存", "https://www.bilibili.com/video/BV1xxxxx", "你这个测评太真实了", 20, "manual"],
     ["抖音评论", "抖音-某视频评论留存", "https://www.douyin.com/video/7300000000000000000", "支持博主", 10, "manual"],
     ["快手评论", "快手-某视频评论留存", "https://www.kuaishou.com/short-video/3xxxxxxxx", "已加购物车", 10, "manual"],
+    ["小红书评论", "小红书-某笔记评论留存", "https://www.xiaohongshu.com/explore/64f1c2a3000000001e03xxxx", "收藏了下次买", 10, "manual"],
     ["百度关键词", "百度-Claude教程", "search:Claude Code 教程|Claude API 使用|Anthropic 工具", "Claude", 10, "09:00"],
 ]
 
@@ -343,6 +349,7 @@ def _default_name(ttype: TaskType, url: str) -> str:
         "bilibili_comment": "B站评论",
         "douyin_comment": "抖音评论",
         "kuaishou_comment": "快手评论",
+        "xiaohongshu_comment": "小红书评论",
     }.get(ttype, ttype)
     # Trim the URL to a recognizable suffix (last 24 chars).
     tail = url[-24:] if len(url) > 24 else url

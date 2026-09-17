@@ -49,12 +49,14 @@ def _seed_result(task_id: int, *, checked_at: datetime, matched: bool, status: s
 
 
 def test_comment_retention_empty_db_returns_zero_platforms(client: TestClient, monitor_db: Path):
-    """空 DB 时三个平台都返回 0/0，不挂。"""
+    """空 DB 时四个评论平台都返回 0/0，不挂。"""
     resp = client.get("/api/monitor/history/comment-retention?range=7d")
     assert resp.status_code == 200
     body = resp.json()
     assert body["range"] == "7d"
-    assert set(body["platforms"].keys()) == {"bilibili_comment", "douyin_comment", "kuaishou_comment"}
+    assert set(body["platforms"].keys()) == {
+        "bilibili_comment", "douyin_comment", "kuaishou_comment", "xiaohongshu_comment",
+    }
     for p in body["platforms"].values():
         assert p["current_total"] == 0
         assert p["current_retained"] == 0

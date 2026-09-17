@@ -12,7 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
-Platform = Literal["douyin", "bilibili", "kuaishou"]
+Platform = Literal["douyin", "bilibili", "kuaishou", "xiaohongshu"]
 
 MiningStatus = Literal[
     "pending", "running", "done", "partial_done",
@@ -133,17 +133,32 @@ class KuaishouFilters(BaseModel):
     time_end: str | None = None
 
 
+class XiaohongshuFilters(BaseModel):
+    """小红书搜索(TikHub ``app_v2/search_notes``)筛选 —— 全部服务端下推。
+    sort_type:general=综合 time_descending=最新 popularity_descending=最多点赞
+    comment_descending=最多评论 collect_descending=最多收藏;
+    note_type:all=不限 video=视频笔记 image=图文笔记(adapter 转成接口的中文档位);
+    time_filter 档位与抖音同形:0=不限 1=一天内 7=一周内 182=半年内。"""
+    sort_type: Literal[
+        "general", "time_descending", "popularity_descending",
+        "comment_descending", "collect_descending",
+    ] = "general"
+    note_type: Literal["all", "video", "image"] = "all"
+    time_filter: Literal["0", "1", "7", "182"] = "0"
+
+
 class SearchFilters(BaseModel):
     douyin: DouyinFilters = Field(default_factory=DouyinFilters)
     bilibili: BilibiliFilters = Field(default_factory=BilibiliFilters)
     kuaishou: KuaishouFilters = Field(default_factory=KuaishouFilters)
+    xiaohongshu: XiaohongshuFilters = Field(default_factory=XiaohongshuFilters)
 
 
 class StartJobRequest(BaseModel):
     keyword: str = Field(min_length=1, max_length=80)
     platforms: list[Platform] = Field(
         default_factory=lambda: ["douyin", "bilibili", "kuaishou"],
-        min_length=1, max_length=3,
+        min_length=1, max_length=4,
     )
     target_per_platform: int = Field(default=50, ge=10, le=200)
     brand_keywords: list[str] = Field(default_factory=list)

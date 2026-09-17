@@ -256,6 +256,7 @@ def export_csv(
         "bilibili": "B 站",
         "douyin": "抖音",
         "kuaishou": "快手",
+        "xiaohongshu": "小红书",
         "zhihu": "知乎",
     }
 
@@ -350,6 +351,9 @@ def login_start(platform: Platform) -> dict[str, Any]:
     platform's login is in progress (that's a real conflict — patchright
     serializes one Chromium at a time).
     """
+    if platform not in _login_specs:
+        # 小红书等只有 TikHub 路径的平台没有浏览器登录（也不需要 cookie）。
+        raise HTTPException(status_code=400, detail=f"{platform} 不支持浏览器登录（仅 TikHub 采集）")
     import threading
     state = _login_state
     with state.lock:
@@ -682,6 +686,43 @@ def tencent_docs_test() -> Any:
         return tencent_docs_service.test_connection()
     except (TencentDocsError, tencent_docs_service.TencentDocsDisabledError) as e:
         return _tdocs_error_response(e)
+
+
+class InspectDocsRequest(BaseModel):
+    """POST body for /api/mining/tencent_docs/inspect。doc_url 缺省 = 用设置里的链接。"""
+
+    doc_url: str | None = None
+
+
+@router.post("/api/mining/tencent_docs/inspect")
+def tencent_docs_inspect(body: InspectDocsRequest) -> Any:
+    """识别表头：读每张子表首行 → 逐列角色（评论层 / 图片 / 链接 / 序号 / 日期）+ 平台路由。"""
+    try:
+        return tencent_docs_service.inspect(body.doc_url)
+    except (TencentDocsError, tencent_docs_service.TencentDocsDisabledError) as e:
+        return _tdocs_error_response(e)
+
+
+class SheetMappingBody(BaseModel):
+    """PUT body for /api/mining/tencent_docs/mapping：一张子表的手动列映射（整份替换）。"""
+
+    file_id: str = Field(min_length=1)
+    sheet_id: str = Field(min_length=1)
+    mapping: dict[str, int | None] = Field(default_factory=dict)
+    header: list[str] = Field(default_factory=list)
+
+
+@router.put("/api/mining/tencent_docs/mapping")
+def tencent_docs_save_mapping(body: SheetMappingBody) -> dict[str, Any]:
+    try:
+        return tencent_docs_service.save_mapping(body.file_id, body.sheet_id, body.mapping, body.header)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/api/mining/tencent_docs/mapping/{file_id}/{sheet_id}")
+def tencent_docs_clear_mapping(file_id: str, sheet_id: str) -> dict[str, Any]:
+    return tencent_docs_service.clear_mapping(file_id, sheet_id)
 
 
 class SyncToDocsRequest(BaseModel):

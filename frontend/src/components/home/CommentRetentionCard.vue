@@ -39,6 +39,7 @@ const ORDER: [string, string][] = [
   ["bilibili_comment", "B 站"],
   ["kuaishou_comment", "快手"],
   ["douyin_comment", "抖音"],
+  ["xiaohongshu_comment", "小红书"],
 ];
 const activeKey = ref<string | null>(null); // null = 聚合
 

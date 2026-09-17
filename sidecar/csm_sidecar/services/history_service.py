@@ -27,11 +27,12 @@ def _utc_to_local_naive(dt: "datetime | None") -> "datetime | None":
     return dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
 
-COMMENT_PLATFORMS = ("bilibili_comment", "douyin_comment", "kuaishou_comment")
+COMMENT_PLATFORMS = ("bilibili_comment", "douyin_comment", "kuaishou_comment", "xiaohongshu_comment")
 PLATFORM_LABELS = {
     "bilibili_comment": "B 站",
     "douyin_comment": "抖音",
     "kuaishou_comment": "快手",
+    "xiaohongshu_comment": "小红书",
 }
 
 
@@ -71,7 +72,7 @@ def get_comment_retention_history(range_str: str) -> dict[str, Any]:
                t.type AS task_type, t.name AS task_name
         FROM monitor_results r
         JOIN monitor_tasks t ON t.id = r.task_id
-        WHERE t.type IN ('bilibili_comment','douyin_comment','kuaishou_comment')
+        WHERE t.type IN ('bilibili_comment','douyin_comment','kuaishou_comment','xiaohongshu_comment')
           AND r.checked_at >= ?
         ORDER BY r.checked_at ASC
         """,

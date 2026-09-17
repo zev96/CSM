@@ -26,7 +26,7 @@ export interface Task {
   config?: Record<string, any>;
 }
 
-export type CommentPlatform = "bilibili" | "douyin" | "kuaishou";
+export type CommentPlatform = "bilibili" | "douyin" | "kuaishou" | "xiaohongshu";
 
 export interface SampleComment {
   id: string;
