@@ -73,7 +73,8 @@ function fmtMB(bytes: number): string {
 const fmtSize = computed(() => {
   const b = updateAlertState.info?.asset_size ?? 0;
   if (b <= 0) return "—";
-  return fmtMB(b);
+  // 增量包：sidecar 已把 asset_size 换成不含 Chromium 的包体积，标一下来源。
+  return updateAlertState.info?.lite ? `${fmtMB(b)}（增量包，复用已安装的浏览器内核）` : fmtMB(b);
 });
 
 const fmtPublished = computed(() => {

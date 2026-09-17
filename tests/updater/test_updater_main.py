@@ -188,3 +188,77 @@ def test_main_chdirs_to_temp_first_thing(monkeypatch, tmp_path):
     assert chdir_calls[0] == _tempfile.gettempdir(), (
         f"first chdir target was {chdir_calls[0]!r}, expected tempdir"
     )
+
+
+# ── 增量包：binaries/ms-playwright 从旧安装搬进新树 ───────────────────────────
+def _make_lite_zip(tmp_path: Path, name: str = "lite.upd") -> Path:
+    """增量包：没有 CSM/binaries/ms-playwright/ 任何条目。"""
+    z = tmp_path / name
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("CSM/CSM.exe", "new exe (lite)")
+        zf.writestr("CSM/binaries/updater.exe", "new updater")
+    return z
+
+
+def _seed_install_with_chromium(tmp_path: Path) -> Path:
+    target = tmp_path / "CSM"
+    chrome = target / "binaries" / "ms-playwright" / "chromium-1181"
+    chrome.mkdir(parents=True)
+    (chrome / "chrome.exe").write_text("chromium bytes", encoding="utf-8")
+    (target / "CSM.exe").write_text("OLD-CONTENT", encoding="utf-8")
+    return target
+
+
+def test_lite_zip_carries_chromium_from_old_install(tmp_path: Path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from updater.main import replace_directory
+
+    target = _seed_install_with_chromium(tmp_path)
+    replace_directory(target=target, zip_path=_make_lite_zip(tmp_path))
+
+    assert (target / "CSM.exe").read_text(encoding="utf-8") == "new exe (lite)"
+    assert (target / "binaries" / "updater.exe").read_text(encoding="utf-8") == "new updater"
+    chrome = target / "binaries" / "ms-playwright" / "chromium-1181" / "chrome.exe"
+    assert chrome.read_text(encoding="utf-8") == "chromium bytes"
+    assert not (tmp_path / "CSM.bak").exists()
+    assert not (tmp_path / ".CSM.upd").exists()
+
+
+def test_full_zip_replaces_chromium_instead_of_carrying(tmp_path: Path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from updater.main import replace_directory
+
+    target = _seed_install_with_chromium(tmp_path)
+    z = tmp_path / "full.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("CSM/CSM.exe", "new exe (full)")
+        zf.writestr("CSM/binaries/ms-playwright/chromium-1200/chrome.exe", "newer chromium")
+    replace_directory(target=target, zip_path=z)
+
+    pw = target / "binaries" / "ms-playwright"
+    assert (pw / "chromium-1200" / "chrome.exe").read_text(encoding="utf-8") == "newer chromium"
+    assert not (pw / "chromium-1181").exists()  # 完整包以自己的为准，旧内核不保留
+
+
+def test_lite_rollback_puts_chromium_back(tmp_path: Path, monkeypatch):
+    """最后一步 extracted → target 改名失败：回滚后旧安装完整，包括已经搬走的 Chromium。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from updater import main as updater_main
+
+    target = _seed_install_with_chromium(tmp_path)
+    resolved_target = target.resolve()
+    real_rename = updater_main._rename_retry
+
+    def flaky_rename(src, dst, **kw):
+        if Path(dst) == resolved_target and Path(src).name != "CSM.bak":
+            raise OSError("simulated: target locked")
+        return real_rename(src, dst, **kw)
+
+    monkeypatch.setattr(updater_main, "_rename_retry", flaky_rename)
+    with pytest.raises(OSError):
+        updater_main.replace_directory(target=target, zip_path=_make_lite_zip(tmp_path))
+
+    assert (target / "CSM.exe").read_text(encoding="utf-8") == "OLD-CONTENT"
+    chrome = target / "binaries" / "ms-playwright" / "chromium-1181" / "chrome.exe"
+    assert chrome.read_text(encoding="utf-8") == "chromium bytes"
+    assert not (tmp_path / "CSM.bak").exists()

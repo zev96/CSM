@@ -157,3 +157,60 @@ def test_download_success_publishes_done(client: TestClient, monkeypatch, tmp_pa
     assert terminal["kind"] == "done"
     assert terminal["sha256"] == "a" * 64
     assert terminal["target"].endswith("asset.zip")
+
+
+# ── 增量包选择（lite）────────────────────────────────────────────────────────
+def _lite_info():
+    from csm_core.updater_client.manifest import UpdateInfo
+    return UpdateInfo(
+        version="9.9.9", tag_name="v9.9.9",
+        zip_url="https://example.com/full.zip",
+        manifest_url="https://example.com/m.json",
+        changelog="all-new", published_at="2026-05-09T00:00:00Z",
+        asset_size=318_000_000,
+        lite_url="https://example.com/lite.upd", lite_size=140_000_000,
+    )
+
+
+_MANIFEST_WITH_LITE = {
+    "sha256": "a" * 64,
+    "lite": {"sha256": "b" * 64, "asset_size": 140_000_000, "chromium_dirs": ["chromium-1181"]},
+}
+
+
+def _prime_lite(monkeypatch, root):
+    from csm_core.updater_client.checker import CheckResult
+    from csm_sidecar.services import updater_service
+
+    monkeypatch.setattr(updater_service, "check_for_update",
+                        lambda **kw: CheckResult(True, _lite_info(), None))
+    monkeypatch.setattr(updater_service, "_try_fetch_manifest", lambda url: dict(_MANIFEST_WITH_LITE))
+    monkeypatch.setattr(updater_service, "install_root", lambda: root)
+
+
+def test_check_prefers_lite_when_local_chromium_matches(client: TestClient, monkeypatch, tmp_path):
+    (tmp_path / "binaries" / "ms-playwright" / "chromium-1181").mkdir(parents=True)
+    _prime_lite(monkeypatch, tmp_path)
+    info = client.get("/api/updater/check").json()["info"]
+    assert info["lite"] is True
+    assert info["zip_url"] == "https://example.com/lite.upd"
+    assert info["asset_size"] == 140_000_000
+    assert info["expected_sha256"] == "b" * 64
+
+
+def test_check_falls_back_to_full_when_local_chromium_missing(client: TestClient, monkeypatch, tmp_path):
+    (tmp_path / "binaries" / "ms-playwright" / "chromium-1000").mkdir(parents=True)  # 版本不同
+    _prime_lite(monkeypatch, tmp_path)
+    info = client.get("/api/updater/check").json()["info"]
+    assert info["lite"] is False
+    assert info["zip_url"] == "https://example.com/full.zip"
+    assert info["asset_size"] == 318_000_000
+    assert info["expected_sha256"] == "a" * 64
+
+
+def test_check_falls_back_to_full_outside_frozen_install(client: TestClient, monkeypatch, tmp_path):
+    """dev（非 PyInstaller）没有安装根目录 → 永远走完整包。"""
+    _prime_lite(monkeypatch, None)
+    info = client.get("/api/updater/check").json()["info"]
+    assert info["lite"] is False
+    assert info["zip_url"] == "https://example.com/full.zip"

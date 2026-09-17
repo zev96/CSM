@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
@@ -97,8 +98,21 @@ def check() -> dict[str, Any]:
         info_dict = asdict(result.info)
         # 拉一次 manifest.json 拿 sha256，让前端 modal 的「更新」按钮能
         # 直接走 /api/updater/download（download body 必须带 64 字符 sha）。
-        sha = _try_fetch_sha256(result.info.manifest_url)
-        info_dict["expected_sha256"] = sha or ""
+        manifest = _try_fetch_manifest(result.info.manifest_url) or {}
+        info_dict["expected_sha256"] = _valid_sha(manifest.get("sha256")) or ""
+        info_dict["lite"] = False
+        # 增量包：release 挂了 *-lite.upd（不含 Chromium）且本机已装的
+        # binaries/ms-playwright/chromium-XXXX 与 manifest 登记的一致 → 用它
+        # 替换 zip_url / 体积 / sha，前端与下载路由零改动。任一条件不满足
+        # 就退回完整包（与 ≤0.8.3 行为完全一致）。
+        lite = manifest.get("lite")
+        if isinstance(lite, dict) and result.info.lite_url:
+            lite_sha = _valid_sha(lite.get("sha256"))
+            if lite_sha and _lite_applicable(lite.get("chromium_dirs")):
+                info_dict["zip_url"] = result.info.lite_url
+                info_dict["asset_size"] = int(lite.get("asset_size") or result.info.lite_size or 0)
+                info_dict["expected_sha256"] = lite_sha
+                info_dict["lite"] = True
     return {
         "has_update": result.has_update,
         "info": info_dict,
@@ -107,8 +121,38 @@ def check() -> dict[str, Any]:
     }
 
 
-def _try_fetch_sha256(manifest_url: str) -> str | None:
-    """Fetch a release asset's manifest.json and return its ``sha256`` field.
+def _valid_sha(value: Any) -> str | None:
+    return value if isinstance(value, str) and len(value) == 64 else None
+
+
+def install_root() -> Path | None:
+    """打包运行时的安装根目录（csm-sidecar.exe 所在目录，与
+    ``binaries/ms-playwright`` 同级，同 browser_infra.patchright_pool 的约定）。
+    dev（非 frozen）下返回 None —— 增量包只对真实安装有意义。"""
+    if not getattr(sys, "frozen", False):
+        return None
+    return Path(sys.executable).resolve().parent
+
+
+def _lite_applicable(chromium_dirs: Any) -> bool:
+    """manifest 登记的每个 chromium-XXXX 目录都已存在于本机安装 → 可用增量包。"""
+    if not isinstance(chromium_dirs, list) or not chromium_dirs:
+        return False
+    root = install_root()
+    if root is None:
+        return False
+    base = root / "binaries" / "ms-playwright"
+    for name in chromium_dirs:
+        if not isinstance(name, str) or not name or "/" in name or "\\" in name:
+            return False
+        if not (base / name).is_dir():
+            logger.info("lite update not applicable: %s missing under %s", name, base)
+            return False
+    return True
+
+
+def _try_fetch_manifest(manifest_url: str) -> dict[str, Any] | None:
+    """Fetch a release asset's manifest.json and return the parsed dict.
 
     Returns None (without raising) on any failure — manifest unavailable
     shouldn't break the update-check UX, just disable the download path.
@@ -132,14 +176,21 @@ def _try_fetch_sha256(manifest_url: str) -> str | None:
             )
             return None
         payload = json.loads(resp.text)
-        sha = payload.get("sha256", "")
-        if isinstance(sha, str) and len(sha) == 64:
-            return sha
-        logger.warning("manifest.json has missing/invalid sha256")
-        return None
+        return payload if isinstance(payload, dict) else None
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
         logger.warning("manifest fetch failed: %s", e)
         return None
+
+
+def _try_fetch_sha256(manifest_url: str) -> str | None:
+    """完整包的 sha256（manifest 顶层 ``sha256``）；缺失 / 非法 → None。"""
+    payload = _try_fetch_manifest(manifest_url)
+    if payload is None:
+        return None
+    sha = _valid_sha(payload.get("sha256"))
+    if sha is None:
+        logger.warning("manifest.json has missing/invalid sha256")
+    return sha
 
 
 def _fetch_asset(url: str, tok: str) -> httpx.Response:

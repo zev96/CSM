@@ -175,8 +175,37 @@ jobs:
           $size = (Get-Item "CSM-${{ github.ref_name }}.zip").Length
           Write-Host "zip size: $($size / 1MB | ForEach-Object { '{0:N1}' -f $_ }) MB"
 
+      # 增量热更新包 = 完整安装布局去掉 binaries\ms-playwright。Chromium 约
+      # 400 MB、只有升级 patchright 时才变，却占了完整 zip 的大头。新客户端
+      # （≥0.8.4）在本机已装同名 chromium-XXXX 目录时优先下载增量包，
+      # updater.exe 换目录时把旧目录里的 ms-playwright 原样搬进新目录
+      # （见 updater/main.py PRESERVE_DIRS）。后缀用 .upd 而不是 .zip：
+      # ≤0.8.3 的老客户端按「第一个 .zip 资产」选包，绝不能让它们误拿到这个
+      # 不带浏览器内核的包。
+      - name: Package lite hot-update (without Chromium)
+        shell: pwsh
+        run: |
+          $stage = "D:\stage\CSM"
+          $liteRoot = "D:\stage-lite"
+          $lite = "$liteRoot\CSM"
+          if (Test-Path $liteRoot) { Remove-Item -Recurse -Force $liteRoot }
+          New-Item -ItemType Directory -Force -Path $lite | Out-Null
+          robocopy $stage $lite /E /XD "$stage\binaries\ms-playwright" /NFL /NDL /NJH /NJS | Out-Null
+          if ($LASTEXITCODE -ge 8) { Write-Error "robocopy failed ($LASTEXITCODE)"; exit 1 }
+          if (Test-Path "$lite\binaries\ms-playwright") { Write-Error "lite stage still contains ms-playwright"; exit 1 }
+          if (-not (Test-Path "$lite\csm-tauri.exe")) { Write-Error "lite stage missing csm-tauri.exe"; exit 1 }
+          $dirs = (Get-ChildItem "$stage\binaries\ms-playwright" -Directory -Filter "chromium-*" | ForEach-Object { $_.Name }) -join ","
+          if (-not $dirs) { Write-Error "no chromium-XXXX dir to record for the lite manifest"; exit 1 }
+          "CHROMIUM_DIRS=$dirs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $zip = "CSM-${{ github.ref_name }}-lite.zip"
+          $upd = "CSM-${{ github.ref_name }}-lite.upd"
+          Compress-Archive -Path $lite -DestinationPath $zip -Force
+          Move-Item -Force $zip $upd
+          $size = (Get-Item $upd).Length
+          Write-Host ("lite size: {0:N1} MB (chromium dirs: {1})" -f ($size / 1MB), $dirs)
+
       - name: Generate manifest.json
-        run: python scripts/build_manifest.py --version "${{ github.ref_name }}" --zip "CSM-${{ github.ref_name }}.zip" --out manifest.json
+        run: python scripts/build_manifest.py --version "${{ github.ref_name }}" --zip "CSM-${{ github.ref_name }}.zip" --out manifest.json --lite-zip "CSM-${{ github.ref_name }}-lite.upd" --chromium-dirs "$env:CHROMIUM_DIRS"
 
       - name: Extract CHANGELOG section
         id: changelog
@@ -213,6 +242,7 @@ jobs:
           body: ${{ steps.changelog.outputs.body }}
           files: |
             CSM-${{ github.ref_name }}.zip
+            CSM-${{ github.ref_name }}-lite.upd
             manifest.json
             ${{ steps.nsis.outputs.path }}
         env:

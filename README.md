@@ -140,13 +140,14 @@ Tauri 2 + Vue 3 前端 + Python FastAPI sidecar，Windows 单文件 NSIS 安装�
 
 - 自动写 Windows 注册表 + 卸载条目 + Start Menu / 桌面快捷方式
 - 单实例锁，不会重复启动
-- 安装包 ~450MB（其中 ~408MB 是 Patchright Chromium，所有评论 / 登录弹窗 / 百度排名都靠它跑）
+- 安装包 ~260MB（v0.8.3 实测 259MB；解压后 ~408MB 是 Patchright Chromium，所有评论 / 登录弹窗 / 百度排名都靠它跑）
 
 ### 应用内热更新
 
 设置 → 关于 → 检查更新：
 
 - 命中新版本会弹窗显示 版本号 + changelog + 文件大小 + SHA256
+- 每个 release 挂两个热更新包：完整包 `CSM-vX.Y.Z.zip`（含 Chromium）和增量包 `CSM-vX.Y.Z-lite.upd`（不含 `binaries/ms-playwright`，体积约为完整包的一半）。客户端在本机已装的 `chromium-XXXX` 目录与 `manifest.json` 登记一致时自动选增量包，`updater.exe` 换目录时把旧安装里的 Chromium 原样搬进新目录；不一致（升级了 patchright）就退回完整包。≤0.8.3 的老客户端只认 `.zip`，看不到增量包
 - 流式下载（可取消，断点不接续），下载完后台校验
 - 一键关主程序 → 独立 `updater.exe` 替换安装目录 → 自动重启
 - 失败静默回滚旧版（日志在 `%TEMP%\csm_update\updater.log`）

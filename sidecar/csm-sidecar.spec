@@ -96,6 +96,7 @@ hiddenimports: list[str] = [
     "csm_core.dedup.index",
     "csm_core.dedup.analyzer",
     "csm_core.dedup.report",
+    "csm_core.dedup._scipy_stub",
     "csm_core.export",
     "csm_core.export.markdown",
     "csm_core.keyword",
@@ -299,7 +300,9 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    # scipy 已排除（下面 excludes）：datasketch 顶层 import 需要的 integrate.quad
+    # 由这个 hook 在入口脚本之前装上替身（csm_core/dedup/_scipy_stub.py）。
+    runtime_hooks=["pyi_rth_scipy_stub.py"],
     excludes=[
         # Sidecar is Qt-free; exclude every GUI lib so the bundle stays small.
         "tkinter",
@@ -312,6 +315,12 @@ a = Analysis(
         "pytest",
         "_pytest",
         "pytest_asyncio",
+        # scipy 只被 datasketch 的 __init__ 链带进来，运行期唯一用到的
+        # integrate.quad 由 runtime hook 的替身提供（见 runtime_hooks）。
+        # Windows 上省约 13 MB 压缩后体积。
+        "scipy",
+        # pygments 无任何模块 import，纯粹被依赖元数据带进图里。
+        "pygments",
     ],
     noarchive=False,
     optimize=0,

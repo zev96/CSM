@@ -99,3 +99,28 @@ def test_update_info_handles_v_prefix():
         changelog="cl", published_at="t", asset_size=1,
     )
     assert info.is_newer_than("v0.1.0") is True
+
+
+# ── 增量热更新包（*-lite.upd）────────────────────────────────────────────────
+def _lite_asset(version="0.2.0"):
+    return {
+        "name": f"CSM-v{version}-lite.upd",
+        "size": 140_000_000,
+        "url": "https://api.github.com/repos/x/y/releases/assets/300",
+        "browser_download_url": f"https://example.com/CSM-v{version}-lite.upd",
+    }
+
+
+def test_parse_release_picks_up_lite_asset():
+    payload = _release_json()
+    payload["assets"].insert(0, _lite_asset())  # 排在 zip 前面也不能被当成完整包
+    info = parse_release_json(payload)
+    assert info.zip_url.endswith("/assets/100")          # 完整包仍是 .zip
+    assert info.lite_url == "https://api.github.com/repos/x/y/releases/assets/300"
+    assert info.lite_size == 140_000_000
+
+
+def test_parse_release_without_lite_asset_leaves_defaults():
+    info = parse_release_json(_release_json())
+    assert info.lite_url is None
+    assert info.lite_size == 0

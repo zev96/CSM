@@ -158,6 +158,11 @@ export interface UpdaterCheckResult {
      * 这里是空字符串 —— 下载入口需先检测，否则 download 路由会 422 拒绝。
      */
     expected_sha256: string;
+    /**
+     * true = 本次下载的是增量包（不含浏览器内核，复用本机已装的 Chromium）；
+     * zip_url / asset_size / expected_sha256 已由 sidecar 换成增量包的值。
+     */
+    lite?: boolean;
   } | null;
 }
 

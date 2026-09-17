@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 # the system (don't kill other Tauri/Electron apps).
 CSM_TAURI_IDENTIFIER = "com.csm.app"
 
+# 增量热更新包（``*-lite.upd``，见 release.yml）不带这些目录：换目录时从旧安装
+# 原样搬进新目录（同卷 rename，秒级），免得每次升级都重新下载 ~400 MB 的
+# Chromium。完整包自带这些目录时不搬 —— 以包里的为准（例如升级了 patchright）。
+PRESERVE_DIRS = ("binaries/ms-playwright",)
+
 
 def _setup_logging() -> Path | None:
     """Set up console + file logging. Log file goes next to the target so
@@ -210,6 +215,28 @@ def _rename_retry(src: Path, dst: Path,
         raise last_exc
 
 
+def _carry_back(carry: list[str], extracted_inner: Path, backup: Path) -> None:
+    """回滚辅助：把已经搬进新树的保留目录搬回 backup（backup 随后会被改名回 target）。"""
+    for rel in carry:
+        src, dst = extracted_inner / rel, backup / rel
+        if src.exists() and not dst.exists():
+            try:
+                _rename_retry(src, dst)
+            except OSError as e:
+                logger.error("carry-back of %s failed: %s", rel, e)
+
+
+def _restore_backup(backup: Path, target: Path) -> None:
+    """回滚辅助：丢掉半成品 target，把 backup 改名回 target。"""
+    if target.exists():
+        _rmtree_retry(target)
+    if backup.exists():
+        try:
+            os.rename(str(backup), str(target))
+        except OSError:
+            logger.error("rollback rename failed — install may be inconsistent")
+
+
 def replace_directory(*, target: Path, zip_path: Path) -> None:
     """Swap the install directory with the contents of ``zip_path``.
 
@@ -218,11 +245,14 @@ def replace_directory(*, target: Path, zip_path: Path) -> None:
            Failures here don't touch the live install.
         2. Verify extracted dir has expected top-level layout.
         3. Rename target → target.bak (atomic on same volume).
+        3b. If the zip is a lite package (no ``binaries/ms-playwright``),
+           move that dir from the .bak into the extracted tree (rename).
         4. Rename extracted/<top> → target (atomic).
         5. Remove tmp + backup with retry (Windows file-lock tolerance).
 
-    Rollback semantics: any failure during steps 3-4 restores the .bak.
-    Failures in steps 1-2 leave the live install untouched.
+    Rollback semantics: any failure during steps 3-4 restores the .bak
+    (carried dirs are moved back first). Failures in steps 1-2 leave the
+    live install untouched.
     """
     target = Path(target).resolve()
     zip_path = Path(zip_path).resolve()
@@ -257,6 +287,14 @@ def replace_directory(*, target: Path, zip_path: Path) -> None:
             f"expected {extracted_inner} to exist after extract"
         )
 
+    # 1b. 增量包缺的保留目录（Chromium）→ 记下来，target 改名成 backup 后再搬。
+    carry = [
+        rel for rel in PRESERVE_DIRS
+        if not (extracted_inner / rel).exists() and (target / rel).is_dir()
+    ]
+    if carry:
+        logger.info("zip lacks %s — will carry over from current install", carry)
+
     # 2. Move target → backup (with retry on locked DLLs).
     if target.exists():
         try:
@@ -266,21 +304,30 @@ def replace_directory(*, target: Path, zip_path: Path) -> None:
             _rmtree_retry(tmp_extract)
             raise
 
+    # 2b. Carry preserved dirs from the backup into the new tree. 搬不动
+    #     （目录被占用等）→ 整体回滚：没有浏览器内核的新树等于装了个废包。
+    for rel in carry:
+        src, dst = backup / rel, extracted_inner / rel
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            _rename_retry(src, dst)
+            logger.info("carried %s from old install into new tree", rel)
+        except OSError as e:
+            logger.error("could not carry %s into new tree: %s — rolling back", rel, e)
+            _carry_back(carry, extracted_inner, backup)
+            _restore_backup(backup, target)
+            _rmtree_retry(tmp_extract)
+            raise
+
     # 3. Move extracted/<top> → target (atomic on same volume).
     try:
         _rename_retry(extracted_inner, target)
     except Exception:
         logger.exception("move new → target failed; rolling back")
-        # Live install was already moved to backup; restore it.
-        if target.exists():
-            _rmtree_retry(target)
-        if backup.exists():
-            try:
-                os.rename(str(backup), str(target))
-            except OSError:
-                logger.error(
-                    "rollback rename failed — install may be inconsistent"
-                )
+        # Live install was already moved to backup; restore it — and put the
+        # carried dirs back first, or they'd vanish with tmp_extract.
+        _carry_back(carry, extracted_inner, backup)
+        _restore_backup(backup, target)
         _rmtree_retry(tmp_extract)
         raise
 
