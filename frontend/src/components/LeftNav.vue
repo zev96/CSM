@@ -66,6 +66,7 @@ const NAV_TOP = [
   { key: "home", icon: "home", label: "工作台" },
   { key: "article", icon: "edit", label: "创作区" },
   { key: "monitor", icon: "radar", label: "监测中心" },
+  { key: "data-center", icon: "fileText", label: "数据中心" },
   { key: "mining", icon: "search", label: "引流" },
   { key: "templates", icon: "library", label: "模板库" },
   { key: "materials", icon: "stack", label: "素材库" },

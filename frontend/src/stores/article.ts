@@ -155,8 +155,8 @@ const STAGES = [
 interface ArticleState {
   jobId: string | null;
   // Job_id of the *most recently submitted* generate. Survives across
-  // teardown so finalize() can reopen the same job's SSE stream after
-  // the takeoff stream has closed.
+  // teardown so the per-pick reroll endpoint can find the cached plan
+  // even after the SSE stream has closed.
   lastJobId: string | null;
   // SSE teardown — populated while a job is live.
   stop: (() => void) | null;
@@ -170,6 +170,11 @@ interface ArticleState {
   draftText: string;
   title: string;
   plan: Record<string, any> | null;
+  // 当前 plan 对应的 template 详情（blocks 列表 + 各块 label）。
+  // 组装 tab 的左侧 slot 列表渲染需要它 —— plan.results 里只有 block_id
+  // 和 kind，section 的中文名（"开篇·痛点 / 选购维度 / 主推款"）住在
+  // template.blocks[*].label / .text / .title 上。takeoff 时并行拉一次。
+  template: Record<string, any> | null;
   error: string | null;
   // Last submitted request — kept around so UI can re-run with tweaks.
   lastRequest: GenerateRequest | null;
@@ -228,6 +233,7 @@ export const useArticle = defineStore("article", {
     draftText: "",
     title: "",
     plan: null,
+    template: null,
     error: null,
     lastRequest: null,
     titleCandidates: [],
@@ -331,6 +337,7 @@ export const useArticle = defineStore("article", {
       // 导出文档的标题都退化成关键词 —— 首页选的标题在稿子里根本看不见。
       this.title = (req.title ?? "").trim() || req.keyword;
       this.plan = null;
+      this.template = null;
       this.factcheck = null;
       this.passes = [];
       this.cost = null; // 起新链 —— 清掉上一轮成本摘要
@@ -348,6 +355,13 @@ export const useArticle = defineStore("article", {
         this.error = e?.response?.data?.detail ?? e?.message ?? String(e);
         return;
       }
+
+      // 并行拉 template 详情，给组装 tab 的左侧 slot 列表用。失败不阻塞
+      // SSE 流 —— 拿不到 template 时 UI 会 fallback 到 kind 名做 label。
+      sidecar.client
+        .get(`/api/templates/${encodeURIComponent(req.template_id)}`)
+        .then((r) => { this.template = r.data; })
+        .catch(() => { this.template = null; });
 
       this._subscribe(this.jobId!);
     },
@@ -379,6 +393,7 @@ export const useArticle = defineStore("article", {
       // 与 submit 同口径：给了标题就用标题，没给才退回 keyword。
       this.title = (req.title ?? "").trim() || req.keyword || "型号对比";
       this.plan = null;
+      this.template = null;
       this.factcheck = null;
       this.passes = [];
       this.cost = null;
@@ -617,6 +632,71 @@ export const useArticle = defineStore("article", {
       } catch {
         this.keywordDensity = null;
       }
+    },
+    /** Re-sample one pick inside the current plan (no LLM rerun).
+     *
+     * The sidecar caches plans by job_id; after a fresh generate the
+     * cache holds this article's plan. We POST the pick coordinates and
+     * receive the updated plan + recomputed draft. ``finalText`` is
+     * left untouched — user must explicitly re-polish to replay the LLM.
+     */
+    async rerollPick(blockId: string, pickIndex: number): Promise<boolean> {
+      if (!this.lastJobId) return false;
+      const sidecar = useSidecar();
+      try {
+        const resp = await sidecar.client.post("/api/assembler/reroll", {
+          job_id: this.lastJobId,
+          block_id: blockId,
+          pick_index: pickIndex,
+        });
+        this.plan = resp.data.plan ?? this.plan;
+        this.draftText = resp.data.draft ?? this.draftText;
+        return true;
+      } catch (e: any) {
+        const detail = e?.response?.data?.detail ?? e?.message ?? String(e);
+        // Surface the original error so the caller can toast it cleanly.
+        throw new Error(detail);
+      }
+    },
+    /**
+     * 把一个 slot（block）里所有 picks 整体重新随机。后端只提供单
+     * pick 粒度的 reroll，所以这里串行调 N 次 —— numbered_list 这种
+     * 3 picks 的 block 会有 3 次往返，但 UX 上"重随这个 slot"是一个
+     * 原子操作，loading 在外层组件统一管。
+     *
+     * 找不到 block 或 block 没有可重随的 picks（文字块）时返回 false，
+     * 调用方应当先用 isRerollableKind() 过滤按钮显示。
+     */
+    async rerollSlot(blockId: string): Promise<boolean> {
+      if (!this.lastJobId || !this.plan) return false;
+      // 在 plan.results 里递归找到对应 block，拿 picks 长度
+      const findBlock = (rs: any[]): any | null => {
+        for (const r of rs) {
+          if (r.block_id === blockId) return r;
+          if (Array.isArray(r.children) && r.children.length) {
+            const found = findBlock(r.children);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      const block = findBlock(this.plan.results ?? []);
+      const pickCount = Array.isArray(block?.picks) ? block.picks.length : 0;
+      if (pickCount === 0) return false;
+      // 循环串行重随；只要任何一次成功就算成功。NoCandidates（409）的
+      // 单 pick 失败不阻断后续 picks —— 池子枯竭是常态，能换几个换几个。
+      let anyOk = false;
+      let lastErr: Error | null = null;
+      for (let i = 0; i < pickCount; i++) {
+        try {
+          const ok = await this.rerollPick(blockId, i);
+          if (ok) anyOk = true;
+        } catch (e: any) {
+          lastErr = e instanceof Error ? e : new Error(String(e));
+        }
+      }
+      if (!anyOk && lastErr) throw lastErr;
+      return anyOk;
     },
     /** 整篇润色 = 在用户审过的初稿（draftText）上跑「注入+角度+链」成稿。
      * 复用 takeoff 的 lastJobId 重开同 id 的 SSE 流（链状态/factcheck/重跑此
