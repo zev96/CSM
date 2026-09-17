@@ -2,7 +2,7 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.8.3] - 2026-09-17
 
 ### 新增
 - **评论留存监测新增小红书平台**：监测中心「评论留存」平台下拉、新建任务 / 批量导入、首页评论留存卡、数据中心留存趋势与被删评论表都多了「小红书」。链接支持笔记长链（explore / discovery/item）、`xhslink.com` / `xhslink.cn` 分享短链，或直接粘贴整段 App 分享文案。小红书网页接口全程签名 + xsec_token，没有可用的本地免费路径，因此**固定走 TikHub 付费 API**（`app_v2/get_note_comments`，按点赞热门序扫前 100 条），不受「抓取数据源」全局开关影响；未配置 TikHub Key 时任务直接报失败并提示去设置页。
