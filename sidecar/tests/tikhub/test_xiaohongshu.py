@@ -333,14 +333,11 @@ def test_prefilter_xiaohongshu_without_key_skips_not_local(monkeypatch):
 # ── 各处平台枚举都带上小红书 ─────────────────────────────────────────────
 
 def test_platform_enums_include_xiaohongshu():
-    from csm_core.monitor.excel_import import _TYPE_LABEL_MAP, _default_name
     from csm_core.monitor.platforms import ALL
     from csm_sidecar.services import history_service, monitor_service
     assert "xiaohongshu_comment" in monitor_service.PLATFORM_TYPES
     assert "xiaohongshu_comment" in history_service.COMMENT_PLATFORMS
     assert history_service.PLATFORM_LABELS["xiaohongshu_comment"] == "小红书"
-    assert _TYPE_LABEL_MAP["小红书"] == _TYPE_LABEL_MAP["xhs"] == "xiaohongshu_comment"
-    assert _default_name("xiaohongshu_comment", "https://x/abc").startswith("小红书评论")
     assert ALL["xiaohongshu_comment"] is XHS_LOCAL
 
 

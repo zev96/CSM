@@ -85,12 +85,6 @@ const router = createRouter({
       component: () => import("@/views/SettingsView.vue"),
       meta: { label: "设置" },
     },
-    {
-      path: "/states",
-      name: "states",
-      component: () => import("@/views/StatesView.vue"),
-      meta: { label: "状态预览" },
-    },
   ],
 });
 

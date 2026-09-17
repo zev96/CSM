@@ -89,7 +89,6 @@ hiddenimports: list[str] = [
     "csm_core.assembler.reroll",
     "csm_core.assembler.sampler",
     "csm_core.batch",
-    "csm_core.batch.runner",
     "csm_core.batch.report",
     "csm_core.dedup",
     "csm_core.dedup.shingles",
@@ -126,7 +125,6 @@ hiddenimports: list[str] = [
     "csm_core.monitor.notify",
     "csm_core.monitor.rate_limit",
     "csm_core.monitor.text_match",
-    "csm_core.monitor.excel_import",
     # Platform adapters — same import-by-string pattern via platforms.ALL
     "csm_core.monitor.platforms",
     "csm_core.monitor.platforms.zhihu_question",
@@ -135,7 +133,7 @@ hiddenimports: list[str] = [
     "csm_core.monitor.platforms.kuaishou_comment",
     "csm_core.monitor.platforms.baidu_keyword",
     "csm_core.monitor.platforms.geo_query",
-    # GEO 卡位监控子包。providers.base.get_provider 里 api_tongyi/api_kimi 是
+    # GEO 卡位监控子包。providers.base.get_provider 里 api_tongyi/api_doubao 是
     # **懒加载**（函数内 import），PyInstaller 静态分析看不到 → 必须显式列，
     # 否则 release bundle 漏包、运行时 get_provider 报 ImportError。其余模块
     # 虽被 platforms/__init__ → geo_query 静态链引入，仍一并列出防御。
@@ -148,7 +146,6 @@ hiddenimports: list[str] = [
     "csm_core.monitor.geo.providers",
     "csm_core.monitor.geo.providers.base",
     "csm_core.monitor.geo.providers.api_tongyi",
-    "csm_core.monitor.geo.providers.api_kimi",
     "csm_core.monitor.geo.providers.api_doubao",
     "csm_core.monitor.geo.providers.rpa",
     "csm_core.monitor.geo.providers.rpa._flow",
@@ -160,8 +157,6 @@ hiddenimports: list[str] = [
     # Drivers (cookie store + http session + browser engines)
     "csm_core.monitor.drivers",
     "csm_core.monitor.drivers.cookie_store",
-    "csm_core.monitor.drivers.http",
-    "csm_core.monitor.drivers.browser",
     "csm_core.monitor.drivers.browser_driver",
     "csm_core.monitor.drivers.patchright_pool",
     "csm_core.monitor.drivers.patchright_driver",
