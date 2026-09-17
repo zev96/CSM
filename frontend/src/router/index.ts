@@ -32,15 +32,6 @@ const router = createRouter({
       meta: { label: "监测中心" },
     },
     {
-      // 数据中心 —— 从原 MonitorView 的 "report" tab 抽出来的独立 view，
-      // LeftNav 单独项；内部仍沿用 RetentionPage / ZhihuRankingPage /
-      // BaiduSEOAnalytics 三个 history sub-page，结构跟旧 tab 一致。
-      path: "/data-center",
-      name: "data-center",
-      component: () => import("@/views/DataCenterView.vue"),
-      meta: { label: "数据中心" },
-    },
-    {
       path: "/mining",
       name: "mining",
       component: () => import("@/views/MiningView.vue"),

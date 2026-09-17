@@ -7,9 +7,9 @@
  *
  * 主内容行（flex-1）：
  *   左侧编辑卡（flex-1）：
- *     - tab bar：左 section 标签 + 右 segmented pill toggle（组装/初稿/成稿）
+ *     - tab bar：左 section 标签 + 右 segmented pill toggle（初稿/成稿）
  *     - 整篇润色进度条（运行时）
- *     - 内容区：组装预览 / 初稿编辑器 / 成稿编辑器
+ *     - 内容区：初稿编辑器 / 成稿编辑器
  *   右侧检查面板（300px）：
  *     - 质检报告卡（盾牌 icon + 标题 + 质检大卡（重复率/密度/禁区）+ 底部三按钮）
  *     - AI 润色 Skill 下拉
@@ -167,153 +167,6 @@ async function loadLookups() {
   }
 }
 
-// V1 设计稿示例 articleBlocks / assembledBlocks / SampleBlock interface 都已
-// 清空 —— 模板没选时显示「选择模板后这里会显示组装预览」，选了模板还没采
-// 样时显示「点击开始采样填充内容」，等真实 plan.results 回来再渲染。
-
-// kind → icon name + display label + accent color。V1 的 KIND_META。
-const KIND_META: Record<string, { i: string; l: string; c: string }> = {
-  heading: { i: "tag" as any, l: "标题", c: "var(--ink)" },
-  paragraph: { i: "fileText", l: "段落", c: "var(--ink-2)" },
-  numbered_list: { i: "sliders", l: "编号清单", c: "var(--ink-2)" },
-  hero_brand: { i: "skills", l: "主推款", c: "var(--primary)" },
-  competitor_pool: { i: "library", l: "产品池", c: "var(--primary)" },
-  literal: { i: "copy", l: "原文照写", c: "var(--ink-2)" },
-  test_framework: { i: "library", l: "测评框架", c: "var(--green-deep)" },
-};
-
-// 选中的左侧 slot
-const selectedSlot = ref<string>("");
-
-// ── 真实 plan + template 组合成"V1 双栏"渲染所需的行数据 ────────────
-// 形状刻意对齐 SampleBlock，这样下面 v-for 模板可以原样复用，无需为
-// 真实数据另写一份。label 从 template.blocks 按 block_id join 取；
-// template 还没加载完时回退到 KIND_META 的 kind 名，保证至少能渲染。
-interface AssemblyRow {
-  id: string;
-  kind: string;
-  label: string;
-  hint: string;
-  status: "polished" | "draft" | "empty";
-  words: number;
-  content?: string;
-  draft?: string;
-  rerollable: boolean;
-}
-
-// 哪些 kind 是可重新随机的（与 csm_core.assembler.reroll 的 source map
-// 保持一致：只有从 vault 采样的 kind 才有候选池可换；heading/literal/
-// hero_brand/test_framework 是模板/数据库里硬编码的，重随无意义）。
-const REROLLABLE_KINDS = new Set<string>([
-  "paragraph",
-  "numbered_list",
-  "competitor_pool",
-]);
-
-const assemblyRows = computed<AssemblyRow[]>(() => {
-  const results = (article.plan?.results ?? []) as any[];
-  if (!Array.isArray(results) || results.length === 0) return [];
-
-  // template.blocks 按 id 索引出 label（递归进 children）。
-  const labelById = new Map<string, string>();
-  function indexTplBlocks(blocks: any[]): void {
-    for (const b of blocks) {
-      // ParagraphBlock/NumberedListBlock/CompetitorPoolBlock/TestFrameworkBlock
-      // 有 label；HeadingBlock 用 text；HeroBrandBlock 用 title；LiteralBlock 用 text。
-      const l = b.label || b.text || b.title || "";
-      if (b.id) labelById.set(b.id, l);
-      if (Array.isArray(b.children)) indexTplBlocks(b.children);
-    }
-  }
-  indexTplBlocks((article.template?.blocks ?? []) as any[]);
-
-  // plan.results 扁平化（含 children），保持顺序。
-  function flatten(rs: any[]): any[] {
-    const out: any[] = [];
-    for (const r of rs) {
-      out.push(r);
-      if (Array.isArray(r.children) && r.children.length) {
-        out.push(...flatten(r.children));
-      }
-    }
-    return out;
-  }
-
-  return flatten(results).map((r) => {
-    let content = "";
-    if (typeof r.text === "string" && r.text) {
-      content = r.text;
-    } else if (Array.isArray(r.picks) && r.picks.length) {
-      content = r.picks
-        .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
-        .filter(Boolean)
-        .join("\n\n");
-    }
-    const words = content.length;
-    const status: AssemblyRow["status"] = content ? "draft" : "empty";
-    const fallbackLabel = KIND_META[r.kind]?.l ?? r.kind;
-    return {
-      id: r.block_id,
-      kind: r.kind,
-      label: labelById.get(r.block_id) || fallbackLabel,
-      hint: "尚未采样",
-      status,
-      words,
-      content,
-      draft: content,
-      rerollable: REROLLABLE_KINDS.has(r.kind),
-    };
-  });
-});
-
-// 当前正在重随的 slot id —— 用于按钮 loading 态 + 全局互斥（同一时间
-// 只允许一个 slot 在重随，避免后端 plan 状态被并发覆盖）。
-const rerollingSlot = ref<string | null>(null);
-
-async function rerollSlot(blockId: string) {
-  if (rerollingSlot.value) return;  // 互斥
-  rerollingSlot.value = blockId;
-  try {
-    const ok = await article.rerollSlot(blockId);
-    if (ok) {
-      toast.success("已重随这一段");
-    } else {
-      toast.warn("没有可重随的候选");
-    }
-  } catch (e: any) {
-    const msg = String(e?.message ?? e);
-    if (msg.includes("exhausted") || msg.includes("no more candidates")) {
-      toast.warn("候选池已抽干 — 没有更多变体可换");
-    } else if (msg.includes("unknown job_id")) {
-      toast.warn("生成记录已过期 — 请先重新起飞");
-    } else {
-      toast.error(`重随失败：${msg}`);
-    }
-  } finally {
-    rerollingSlot.value = null;
-  }
-}
-
-// 已采样个数（status !== empty）—— 头部 "x/y 已采样"
-const sampledCount = computed(
-  () => assemblyRows.value.filter((b) => b.status !== "empty").length,
-);
-
-// selectedSlot 自动跟随 —— assemblyRows 第一次有数据 / 当前选中失效时，
-// 默认选第一行的第一个非 heading slot（heading 在右侧预览里被 filter
-// 掉，选中它没意义）。
-watch(
-  () => assemblyRows.value.map((r) => r.id).join("|"),
-  (joinedIds) => {
-    const ids = joinedIds ? joinedIds.split("|") : [];
-    if (ids.length === 0) return;
-    if (ids.includes(selectedSlot.value)) return;
-    const firstNonHeading = assemblyRows.value.find((r) => r.kind !== "heading");
-    selectedSlot.value = firstNonHeading?.id ?? ids[0];
-  },
-  { immediate: true },
-);
-
 // SAMPLE_BLOCKS 已清空：原本由 SAMPLE_BLOCKS 拼出的 SAMPLE_DRAFT_TEXT /
 // SAMPLE_FINAL_TEXT 都是空串，直接删掉；占位标题给一个通用值即可。
 const SAMPLE_TITLE = "未命名文章";
@@ -351,9 +204,9 @@ const SAMPLE_DEDUP_REPORT = {
 
 const SAMPLE_DENSITY = { count: 0, density: 0 };
 
-// V1 顺序：组装 → 初稿 → 成稿。和 V1 的 segmented control 一致。
-type Tab = "assembly" | "draft" | "final";
-const activeTab = ref<Tab>("assembly");
+// 初稿 → 成稿。组装预览 tab 已下线（2026-09）：起飞后直接落在初稿。
+type Tab = "draft" | "final";
+const activeTab = ref<Tab>("draft");
 
 async function takeoff() {
   if (!keyword.value.trim()) return;
@@ -388,14 +241,6 @@ async function takeoff() {
 // 演示行为：填示例数据 / 跑假进度 / 切示例文本。
 const isDemoMode = computed(() => !article.lastRequest);
 const sampleIndex = ref(0);
-
-/** 本次抽中的结构版本（模板没有版本组时为空）。 */
-const versionChoices = computed(() =>
-  Object.entries(article.plan?.version_choices ?? {}).map(([group, option]) => ({
-    group,
-    option: String(option),
-  })),
-);
 
 /** 采样告警 —— 竞品缺料清单、素材不足这类「补料工作清单」。 */
 const planWarnings = computed<string[]>(() => article.plan?.warnings ?? []);
@@ -1110,14 +955,12 @@ watch(
 );
 
 const TAB_DEFS: Array<{ id: Tab; label: string; icon: string }> = [
-  { id: "assembly", label: "组装", icon: "library" },
   { id: "draft", label: "初稿", icon: "edit" },
   { id: "final", label: "成稿", icon: "wand" },
 ];
 
 const tabSectionLabel = computed(() => {
   // tab section label 简化为单词（用户反馈 "· 框架 + 采样" 类副词太繁琐）
-  if (activeTab.value === "assembly") return "组装";
   if (activeTab.value === "draft") return "初稿";
   return "成稿";
 });
@@ -1235,7 +1078,7 @@ const tabSectionLabel = computed(() => {
           >
             {{ tabSectionLabel }}
           </div>
-          <!-- segmented pill：组装 / 初稿 / 成稿 -->
+          <!-- segmented pill：初稿 / 成稿 -->
           <div
             class="flex items-center"
             :style="{
@@ -1281,299 +1124,8 @@ const tabSectionLabel = computed(() => {
 
         <!-- 内容区 —— 占满剩余高度 -->
         <div class="flex min-h-0 flex-1 flex-col">
-          <!-- ── 组装预览 ────────────────────────────────────────
-            真实 plan 存在时（已起飞）→ 直接走 AssemblyTree（带重随）。
-            否则走 V1 设计稿样的两栏示例：左侧模板框架 slot 列表 + 右侧
-            组装预览块卡片，让用户在起飞前就能看到成品形态。
-          -->
-          <div v-if="activeTab === 'assembly'" class="flex min-h-0 flex-1">
-            <!--
-              真实 plan 存在 → 复用下面的 V1 双栏样式（左 slot 列表 + 右组装预览）。
-              数据来自 assemblyRows（已把 plan.results 和 template.blocks 关联好）。
-              旧的简化版 AssemblyTree 已下线，AssemblyTree.vue 组件保留供其他视图
-              使用，本视图不再引用。
-            -->
-            <template v-if="assemblyRows.length === 0">
-              <div
-                class="flex min-h-0 flex-1 flex-col items-center justify-center text-center"
-                :style="{ padding: '40px 24px', color: 'var(--ink-3)' }"
-              >
-                <!--
-                  正在跑 vault scan + assemble_plan（耗时 5-10s 不等）：显示
-                  loading 而不是"点击开始采样填充内容"的占位文案。否则用户点完
-                  "开始生成"会以为按钮没响应。
-                -->
-                <template v-if="article.isRunning">
-                  <Spinner />
-                  <div class="mt-3 font-display text-[14px] font-semibold" :style="{ color: 'var(--ink)' }">
-                    {{ article.currentStage ?? "正在采样组装…" }}
-                  </div>
-                  <div class="mt-1 max-w-[420px] text-[12.5px]">
-                    扫描资料库 → 加载模板 → 采样 blocks → 组装预览。完成后这里会展示组装结果。
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="font-display text-[16px] font-semibold" :style="{ color: 'var(--ink)' }">
-                    {{ templateId ? "点击开始采样填充内容" : "选择模板后这里会显示组装预览" }}
-                  </div>
-                  <div class="mt-2 max-w-[420px] text-[12.5px]">
-                    在顶部输入关键词并选择模板/Skill，点击「开始生成」后会在这里逐块展示组装预览。
-                  </div>
-                </template>
-              </div>
-            </template>
-            <template v-else>
-              <!-- LEFT: 模板框架 slots，300px 固定 -->
-              <div
-                class="flex-shrink-0 overflow-y-auto"
-                :style="{
-                  width: '260px',
-                  borderRight: '1px solid var(--line)',
-                  padding: '16px',
-                }"
-              >
-                <div
-                  class="text-[10.5px] uppercase mb-2"
-                  :style="{ color: 'var(--ink-3)', letterSpacing: '1.5px' }"
-                >
-                  模板框架
-                </div>
-                <!--
-                  templateName Pill + "X 个槽位" 子标删除（用户反馈这里
-                  跟 header 顶部的模板 chip 重复，不需要再显示一次）。
-                -->
-                <div class="mb-3" />
-                <!--
-                  Slot 行：不再渲染圆角小方块图标 —— 设计稿要求只保留
-                  序号、双行标题（label + sublabel）和右侧状态色点。
-                -->
-                <div class="flex flex-col gap-1">
-                  <button
-                    v-for="(b, i) in assemblyRows"
-                    :key="b.id"
-                    type="button"
-                    class="text-left flex items-center gap-2 transition"
-                    :style="{
-                      padding: '8px',
-                      borderRadius: '10px',
-                      background: selectedSlot === b.id ? 'var(--primary-soft)' : 'transparent',
-                      border: selectedSlot === b.id ? '1px solid rgba(238,106,42,0.25)' : '1px solid transparent',
-                    }"
-                    @click="selectedSlot = b.id"
-                  >
-                    <span
-                      class="font-mono text-[10px]"
-                      :style="{ color: 'var(--ink-3)', width: '16px' }"
-                    >{{ String(i + 1).padStart(2, "0") }}</span>
-                    <div class="flex-1 min-w-0">
-                      <div class="text-[11.5px] font-semibold truncate">{{ b.label }}</div>
-                      <div class="text-[10px] truncate" :style="{ color: 'var(--ink-3)' }">
-                        {{ KIND_META[b.kind].l }}
-                      </div>
-                    </div>
-                    <span
-                      class="flex-shrink-0"
-                      :style="{
-                        width: '5px',
-                        height: '5px',
-                        borderRadius: '50%',
-                        background:
-                          b.status === 'polished' ? 'var(--green)' :
-                          b.status === 'draft' ? 'var(--yellow)' :
-                          'var(--line-2)',
-                      }"
-                    />
-                  </button>
-                </div>
-              </div>
-              <!-- RIGHT: 组装预览块 -->
-              <div
-                class="flex min-w-0 flex-1 flex-col overflow-hidden"
-                :style="{ padding: '20px 20px 0' }"
-              >
-                <div class="flex flex-shrink-0 items-center justify-between mb-4">
-                  <div>
-                    <div
-                      class="text-[10.5px] uppercase"
-                      :style="{ color: 'var(--ink-3)', letterSpacing: '1.5px' }"
-                    >
-                      组装预览
-                    </div>
-                    <div class="text-[12px] mt-0.5" :style="{ color: 'var(--ink-2)' }">
-                      {{ sampledCount }}/{{ assemblyRows.length }} 已采样 · 点击各段可润色或重随
-                    </div>
-                    <!-- 本次抽中的结构版本 + 锁结构入口 -->
-                    <div v-if="versionChoices.length" class="mt-1 flex flex-wrap items-center gap-1.5">
-                      <span
-                        v-for="vc in versionChoices"
-                        :key="vc.group"
-                        class="rounded px-1.5 py-0.5 text-[11px]"
-                        :style="{ background: 'var(--card-2)', color: 'var(--ink-2)' }"
-                        title="本篇抽中的结构版本；「全部重采」会在各版本间自由重抽"
-                      >
-                        结构：{{ vc.option }}
-                      </span>
-                      <!--
-                        「全部重采」现在会自由换版本（用户要的）。这个链接反过来
-                        给「想保留当前结构、只换文字」的场景：把当前版本回传当锁。
-                      -->
-                      <button
-                        type="button"
-                        class="text-[11px] underline"
-                        :style="{ color: 'var(--ink-3)' }"
-                        :disabled="article.isRunning"
-                        title="锁住当前结构版本，只重抽文字素材"
-                        @click="article.rerun(article.plan?.version_choices ?? undefined)"
-                      >
-                        只换文字·锁结构
-                      </button>
-                    </div>
-                  </div>
-                  <!--
-                    "全部重采"：换一套全新组装，不带 seed 重走 /api/generate（后端
-                    滚新随机种子），并在各结构版本间**自由重抽**（rerun(null) 显式
-                    放开版本锁）。运行中或正在 reroll 单个 slot 时禁用，避免并发
-                    覆盖 plan。
-                  -->
-                  <Btn
-                    variant="ghost"
-                    small
-                    :disabled="article.isRunning || rerollingSlot !== null"
-                    @click="article.rerun(null)"
-                  >
-                    <Icon name="refresh" :size="11" />
-                    全部重采
-                  </Btn>
-                </div>
-                <div
-                  v-if="planWarnings.length"
-                  class="mb-3 flex-shrink-0 space-y-1 overflow-y-auto"
-                  :style="{ maxHeight: '92px' }"
-                >
-                  <div
-                    v-for="(w, wi) in planWarnings"
-                    :key="wi"
-                    class="rounded px-2 py-1 text-[11px]"
-                    :style="{ background: 'var(--card-2)', color: 'var(--ink-2)', borderLeft: '2px solid var(--amber)' }"
-                  >
-                    {{ w }}
-                  </div>
-                </div>
-                <div class="min-h-0 flex-1 overflow-y-auto" :style="{ paddingBottom: '20px', paddingRight: '4px' }">
-                  <!--
-                    Heading 类型的"标题"块在设计稿里不再以独立预览卡呈现
-                    （工作台/header 已经显示了文章标题，这里再搞一张
-                    巨大 H1 卡片是冗余）。filter 掉它，只保留段落/编号
-                    /产品池等真正需要采样的 slot。
-                  -->
-                  <div class="flex flex-col gap-3">
-                    <!--
-                      段落卡视觉：背景/边框/阴影/hover/选中全部走 scoped
-                      class（assembly-block + selected），inline :style 没
-                      办法定义 :hover 状态。选中态在 scoped CSS 里加浅橙
-                      底 + 橙色光晕，hover 用普通软阴影。
-                    -->
-                    <div
-                      v-for="b in assemblyRows.filter((x) => x.kind !== 'heading')"
-                      :key="b.id"
-                      :class="['assembly-block', { selected: selectedSlot === b.id }]"
-                      @click="selectedSlot = b.id"
-                    >
-                      <!--
-                        block header：
-                          [kind chip] [label] | flex spacer | [润色 btn] [重随 btn]
-                        kind chip 占据原图标位置（最左），下面正文与之
-                        左对齐。原右侧的 "220 字" 字数统计去掉，换成
-                        润色 + 重随两个 icon 按钮。空块（status=empty）
-                        没生成内容，按钮也没意义，不渲染。
-                      -->
-                      <div class="flex items-center gap-2 mb-2">
-                        <span
-                          class="inline-flex items-center text-[10px] uppercase font-medium"
-                          :style="{
-                            background: 'var(--card-white)',
-                            color: KIND_META[b.kind].c,
-                            border: '1px solid var(--line)',
-                            padding: '3px 7px',
-                            borderRadius: '6px',
-                            letterSpacing: '1px',
-                          }"
-                        >{{ KIND_META[b.kind].l }}</span>
-                        <span class="text-[11.5px] font-semibold">{{ b.label }}</span>
-                        <span class="flex-1" />
-                        <div v-if="b.status !== 'empty'" class="flex items-center gap-1">
-                          <button
-                            type="button"
-                            title="AI 润色"
-                            class="inline-flex items-center justify-center transition hover:brightness-95"
-                            :style="{
-                              width: '26px',
-                              height: '26px',
-                              borderRadius: '7px',
-                              background: 'var(--primary-soft)',
-                              color: 'var(--primary-deep)',
-                              border: '1px solid rgba(238,106,42,0.2)',
-                            }"
-                            @click.stop
-                          >
-                            <Icon name="wand" :size="12" />
-                          </button>
-                          <button
-                            v-if="b.rerollable"
-                            type="button"
-                            :title="rerollingSlot === b.id ? '正在重随…' : '重随'"
-                            :disabled="rerollingSlot !== null"
-                            class="inline-flex items-center justify-center transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
-                            :style="{
-                              width: '26px',
-                              height: '26px',
-                              borderRadius: '7px',
-                              background: 'var(--card-white)',
-                              color: 'var(--ink-2)',
-                              border: '1px solid var(--line)',
-                            }"
-                            @click.stop="rerollSlot(b.id)"
-                          >
-                            <Spinner v-if="rerollingSlot === b.id" :size="11" />
-                            <Icon v-else name="refresh" :size="12" />
-                          </button>
-                        </div>
-                      </div>
-                      <!-- block content -->
-                      <div v-if="b.status === 'empty'"
-                        class="flex items-center gap-2"
-                        :style="{
-                          padding: '14px 12px',
-                          borderRadius: '10px',
-                          background: 'var(--card-2)',
-                          border: '1px dashed var(--line-2)',
-                        }"
-                      >
-                        <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">{{ b.hint }}</span>
-                        <span class="flex-1" />
-                        <span
-                          class="text-[11px] font-medium"
-                          :style="{ color: 'var(--primary-deep)' }"
-                        >生成 →</span>
-                      </div>
-                      <!--
-                        正文 inline 在段落卡背景上 —— 不加独立白底 box，
-                        不加 border。用户最终设计：卡内统一一致背景，
-                        正文只靠 font-serif-cn + 字色营造质感。
-                      -->
-                      <div v-else
-                        class="font-serif-cn"
-                        :style="{ fontSize: '13.5px', lineHeight: 1.85, color: 'var(--ink-2)' }"
-                      >{{ b.draft || b.content }}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
-
           <!-- ── 初稿编辑 ─────────────────────────────────────── -->
-          <div v-else-if="activeTab === 'draft'" data-tab-pane="draft" class="flex min-h-0 flex-1 flex-col">
+          <div v-if="activeTab === 'draft'" data-tab-pane="draft" class="flex min-h-0 flex-1 flex-col">
             <div :style="{ padding: '18px 24px 14px' }">
               <div class="flex items-center gap-2 mb-2">
                 <span
@@ -1603,6 +1155,21 @@ const tabSectionLabel = computed(() => {
               <!-- 初稿 tab 只显示"初稿 X 字"（用户反馈：成稿字数 + 阅读时间这里冗余） -->
               <div class="flex items-center gap-3 text-[11px]" :style="{ color: 'var(--ink-3)' }">
                 <span>初稿 {{ (article.draftText || SAMPLE_VARIATIONS[sampleIndex].draft).length }} 字</span>
+              </div>
+              <!-- 采样告警（竞品缺料 / 素材不足）—— 原组装预览页顶部的补料清单，组装页下线后挪到初稿头部 -->
+              <div
+                v-if="planWarnings.length"
+                class="mt-2 space-y-1 overflow-y-auto"
+                :style="{ maxHeight: '92px' }"
+              >
+                <div
+                  v-for="(w, wi) in planWarnings"
+                  :key="wi"
+                  class="rounded px-2 py-1 text-[11px]"
+                  :style="{ background: 'var(--card-2)', color: 'var(--ink-2)', borderLeft: '2px solid var(--amber)' }"
+                >
+                  {{ w }}
+                </div>
               </div>
               <div class="mt-3" :style="{ height: '1px', background: 'var(--line)' }" />
             </div>
@@ -2942,52 +2509,6 @@ const tabSectionLabel = computed(() => {
     inset 0 1px 0 var(--edge-hi),
     0 8px 20px -4px rgba(var(--shadow-rgb), 0.10),
     0 4px 8px rgba(var(--shadow-rgb), 0.05);
-}
-
-/*
- * 组装预览段落卡（中间内容区）—— 默认白底 + 普通边框；hover 微上浮
- * + 软阴影；选中态浅橙底 + 橙色光晕阴影（参考用户设计：选中明显浮起）。
- * 之前用 inline :style 切换 background/border，没办法定义 :hover；
- * 现在 class-driven 让 hover/selected 都走 scoped CSS。
- */
-.assembly-block {
-  background: var(--card-warm);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 14px;
-  /* 默认就有轻微阴影 —— 让段落卡跟外层组装预览容器有视觉分层 */
-  box-shadow:
-    0 2px 6px -1px rgba(var(--shadow-rgb), 0.05),
-    0 1px 3px rgba(var(--shadow-rgb), 0.04);
-  transition:
-    background-color 0.14s ease,
-    border-color 0.14s ease,
-    box-shadow 0.14s ease,
-    transform 0.14s ease;
-  cursor: pointer;
-}
-.assembly-block:hover {
-  /* hover 明显浮起 —— 阴影加大 + 上移 2px */
-  box-shadow:
-    0 10px 24px -4px rgba(var(--shadow-rgb), 0.14),
-    0 4px 10px rgba(var(--shadow-rgb), 0.06);
-  transform: translateY(-2px);
-}
-.assembly-block.selected {
-  /*
-   * 选中态：纯白底 + 橙色边 + 轻量橙色光晕。background 切到
-   * var(--card-white) (#ffffff)，跟其他卡 #fbfaf6 暖奶白形成对比，
-   * 一眼就能看出"当前选中是哪张"。
-   */
-  background: var(--card-white);
-  border-color: rgba(238, 106, 42, 0.45);
-  box-shadow:
-    0 4px 14px -2px rgba(238, 106, 42, 0.20),
-    0 1px 4px rgba(var(--shadow-rgb), 0.04);
-}
-/* selected 状态下 hover 不再额外 translate，避免重复浮起抖动 */
-.assembly-block.selected:hover {
-  transform: none;
 }
 
 /*
