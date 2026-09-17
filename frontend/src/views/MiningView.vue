@@ -330,18 +330,16 @@ async function onTaskExport(jobId: number) {
 // /api/mining/jobs/{id}/cancel。后端给当前 job 的 cancel_event 置位，
 // adapter 在下一个可中断检查点退出。已抓的视频保留。
 async function onTaskCancel(jobId: number) {
-  // 只能取消当前 active job（mining 单 executor，同时间只跑一个）
-  if (store.activeJob?.id !== jobId) {
-    toast.warn("该任务不在运行中");
-    return;
-  }
   const ok = await confirmDialog(
     "停止当前抓取任务？已抓的视频会保留；适配器会在最近的检查点退出（一般 5-15 秒）。",
     { title: "停止抓取", okLabel: "停止" },
   );
   if (!ok) return;
   try {
-    await store.cancelActive();
+    // 按 id 取消而不是只认 activeJob：页面刷新后 activeJob 可能为空，但列表里
+    // 这条 job 仍是 running（sidecar 还在跑）—— 以前这里直接 toast「不在运行中」
+    // 拒绝，用户根本停不掉。后端 409（已经结束）由 store 内部对账处理。
+    await store.cancelJob(jobId);
     toast.info("已发送停止信号，正在等待 adapter 退出…");
   } catch (e: any) {
     toast.error(`停止失败：${e?.response?.data?.detail ?? e?.message ?? e}`);
@@ -482,7 +480,7 @@ onMounted(async () => {
       <TaskListPanel
         :jobs="store.jobs"
         :current-job-id="store.currentJobId"
-        :running-job-id="store.activeJob?.id ?? null"
+        :running-job-id="store.hasRunningJob ? store.activeJob!.id : null"
         :has-running-job="store.hasRunningJob"
         @select="onSelectJob"
         @new="showNewTask = true"

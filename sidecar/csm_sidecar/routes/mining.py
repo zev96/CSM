@@ -134,7 +134,17 @@ async def stream_events(job_id: int):
 
     async def event_gen():
         async for event in event_bus.stream(queue_key):
-            yield {"event": event.get("kind", "message"), "data": _json(event)}
+            # 前端 mining store 的每个 handler 都按 ``d.job_id`` 跟 activeJob 对账。
+            # 但 EventBus.publish(job_id, kind, **data) 的位置参数就叫 job_id，
+            # mining_service._publish_to_bus 只能把 payload 里的 job_id 剥掉再
+            # 入队（否则 TypeError）—— 于是事件体里一直没有 job_id，前端所有
+            # progress / platform_done / finished 全部失配：任务永远停在
+            # 「抓取中」、托盘常驻「加载中」、停止按钮打 409 没反应。
+            # 一条流只属于一个 job，这里按路径参数把 job_id 补回去。
+            yield {
+                "event": event.get("kind", "message"),
+                "data": _json({**event, "job_id": job_id}),
+            }
 
     return EventSourceResponse(event_gen())
 
