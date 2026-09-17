@@ -9,11 +9,12 @@ from __future__ import annotations
 from .client import TikHubClient
 from .zhihu_adapter import ZhihuQuestionApiAdapter
 from .comment_adapter import (
-    CommentApiAdapter, DOUYIN_SPEC, BILIBILI_SPEC, KUAISHOU_SPEC,
+    CommentApiAdapter, DOUYIN_SPEC, BILIBILI_SPEC, KUAISHOU_SPEC, XIAOHONGSHU_SPEC,
 )
 from csm_core.monitor.platforms.douyin_comment import DouyinCommentAdapter
 from csm_core.monitor.platforms.kuaishou_comment import KuaishouCommentAdapter
 from csm_core.monitor.platforms.bilibili_comment import BilibiliCommentAdapter
+from csm_core.monitor.platforms.xiaohongshu_comment import XiaohongshuCommentAdapter
 
 
 def _cffi_session():
@@ -41,9 +42,14 @@ def build_api_adapters(get_config, key_reader):
         res = BilibiliCommentAdapter._extract_video_id(url)   # 纯正则,返回 (vid,id_type)|None
         return res if res else (None, "")
 
+    def _xhs(url):
+        return XiaohongshuCommentAdapter._extract_note_id(_cffi_session(), url)
+
     return {
         "zhihu_question": ZhihuQuestionApiAdapter(client_factory),
         "douyin_comment": CommentApiAdapter(DOUYIN_SPEC, client_factory, _dy),
         "bilibili_comment": CommentApiAdapter(BILIBILI_SPEC, client_factory, _bl),
         "kuaishou_comment": CommentApiAdapter(KUAISHOU_SPEC, client_factory, _ks),
+        # 小红书只有 TikHub 路径(无本地免费实现),monitor_loop 对它忽略数据源开关。
+        "xiaohongshu_comment": CommentApiAdapter(XIAOHONGSHU_SPEC, client_factory, _xhs),
     }

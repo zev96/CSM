@@ -41,7 +41,7 @@ import { useSidecar } from "@/stores/sidecar";
 import { useToast } from "@/composables/useToast";
 import { uniqueSearchTargetUrl } from "@/utils/taskTargetUrl";
 
-type Platform = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword";
+type Platform = "zhihu_question" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "xiaohongshu_comment" | "baidu_keyword";
 
 const props = defineProps<{
   open: boolean;
@@ -60,6 +60,7 @@ const TYPES: Array<{ value: Platform; label: string }> = [
   { value: "bilibili_comment", label: "B 站评论留存" },
   { value: "douyin_comment", label: "抖音评论留存" },
   { value: "kuaishou_comment", label: "快手评论留存" },
+  { value: "xiaohongshu_comment", label: "小红书评论留存" },
   { value: "baidu_keyword", label: "百度关键词排名" },
 ];
 

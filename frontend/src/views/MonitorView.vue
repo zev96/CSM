@@ -89,6 +89,7 @@ const PLATFORM_TYPE: Record<CommentPlatform, string> = {
   bilibili: "bilibili_comment",
   douyin: "douyin_comment",
   kuaishou: "kuaishou_comment",
+  xiaohongshu: "xiaohongshu_comment",
 };
 const commentSubtab = ref<CommentPlatform>("bilibili");
 
@@ -856,11 +857,7 @@ const TAB_META: Array<{ k: Tab; l: string }> = [
             ? 'zhihu_search'
             : activeTab === 'baidu'
               ? 'baidu_keyword'
-              : commentSubtab === 'bilibili'
-                ? 'bilibili_comment'
-                : commentSubtab === 'douyin'
-                  ? 'douyin_comment'
-                  : 'kuaishou_comment'
+              : (PLATFORM_TYPE[commentSubtab] as any)
       "
       @update:open="(v) => { showAddTask = v; clearEditOnClose(); }"
       @created="onTaskMutatedReload"

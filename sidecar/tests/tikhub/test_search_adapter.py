@@ -366,12 +366,13 @@ def test_bilibili_spec_uses_get_with_query_params():
     assert out.status == "done" and cards[0].platform_video_id == "BV1"
 
 
-def test_build_factory_returns_three_platform_adapters():
+def test_build_factory_returns_four_platform_adapters():
     from unittest.mock import MagicMock
     ad = S.build_tikhub_search_adapters(lambda: MagicMock(), lambda p, c=None: "k")
-    assert set(ad) == {"douyin", "bilibili", "kuaishou"}
+    assert set(ad) == {"douyin", "bilibili", "kuaishou", "xiaohongshu"}
     assert all(isinstance(a, S.TikHubSearchAdapter) for a in ad.values())
     assert ad["kuaishou"].platform == "kuaishou"
+    assert ad["xiaohongshu"].platform == "xiaohongshu"
 
 
 def test_page_log_records_cursor_but_not_keyword(caplog):

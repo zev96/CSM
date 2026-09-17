@@ -32,6 +32,7 @@ const PLATFORM_META: Record<Platform, { letter: string; color: string; name: str
   bilibili: { letter: "B", color: "#fb7299", name: "B 站" },
   douyin: { letter: "D", color: "#1c1a17", name: "抖音" },
   kuaishou: { letter: "K", color: "#ff6633", name: "快手" },
+  xiaohongshu: { letter: "X", color: "#ff2442", name: "小红书" },
 };
 
 const props = defineProps<{
@@ -94,6 +95,7 @@ const PLATFORM_OPTIONS = [
   { label: "B 站", value: "bilibili" },
   { label: "抖音", value: "douyin" },
   { label: "快手", value: "kuaishou" },
+  { label: "小红书", value: "xiaohongshu" },
 ] as const;
 
 const totalCount = computed(() => props.videos.length);

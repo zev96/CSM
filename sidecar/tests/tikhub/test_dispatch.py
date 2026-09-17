@@ -26,9 +26,28 @@ def test_api_mode_out_of_scope_falls_back_local():
     assert loop._select_adapter("baidu_keyword") is loop._adapters.get("baidu_keyword")
 
 
-def test_build_api_adapters_has_four_types():
+def test_build_api_adapters_has_five_types():
     ad = build_api_adapters(lambda: MagicMock(), lambda p, c=None: "k")
-    assert set(ad) == {"zhihu_question", "douyin_comment", "bilibili_comment", "kuaishou_comment"}
+    assert set(ad) == {"zhihu_question", "douyin_comment", "bilibili_comment",
+                       "kuaishou_comment", "xiaohongshu_comment"}
+
+
+def test_local_mode_still_routes_api_only_type_to_api_adapter():
+    """小红书评论留存没有本地路径:即使全局开关是 local,也走 TikHub 适配器。"""
+    api = object()
+    loop = _loop("local", api_adapters={"xiaohongshu_comment": api, "douyin_comment": object()})
+    assert loop._select_adapter("xiaohongshu_comment") is api
+    assert loop._uses_api("xiaohongshu_comment") is True
+    # 其它类型仍严格按开关:local 下抖音走本地
+    assert loop._select_adapter("douyin_comment") is loop._adapters.get("douyin_comment")
+    assert loop._uses_api("douyin_comment") is False
+
+
+def test_api_only_type_without_api_adapter_falls_back_to_placeholder():
+    """API 适配器缺席(未注入)时回落注册表占位适配器,而不是 None(unknown task type)。"""
+    loop = _loop("local", api_adapters={})
+    assert loop._select_adapter("xiaohongshu_comment") is loop._adapters.get("xiaohongshu_comment")
+    assert loop._uses_api("xiaohongshu_comment") is False
 
 
 def test_api_mode_balance_exhausted_short_circuits():

@@ -91,6 +91,27 @@ def _data_source_mode(cfg=None) -> str:
         return "tikhub_api"
 
 
+# 只有 TikHub 路径的平台:没有浏览器采集实现。local 模式下返回占位适配器(立刻记 failed
+# 并提示切到 TikHub),而不是抛 ValueError —— 抛出去会让整个 job 线程崩掉,其它平台也没结果。
+_TIKHUB_ONLY_PLATFORMS = frozenset({"xiaohongshu"})
+
+
+class UnsupportedLocalSearchAdapter:
+    """local(浏览器)模式下没有实现的平台的占位适配器:不发任何请求,直接 failed。"""
+
+    def __init__(self, platform: Platform) -> None:
+        self.platform: Platform = platform
+
+    def search(self, keyword, target_count, on_card, on_progress, cancel_event,
+               max_attempts=None, filters=None) -> SearchOutcome:
+        reason = "小红书暂不支持浏览器采集，请在「设置 › 监测 › 抓取数据源」开启 TikHub 采集"
+        on_progress(ProgressUpdate(
+            platform=self.platform, phase="failed", got=0, target=int(target_count), note=reason[:120],
+        ))
+        return SearchOutcome(platform=self.platform, status="failed", cards_emitted=0,
+                             error_message=reason)
+
+
 def get_adapter(platform: Platform, mode: str | None = None) -> SearchAdapter:
     """按数据源模式选适配器：tikhub_api → TikHub 付费搜索（免登录、免并发风控）；
     local → 浏览器（手动兜底）。mode=None 时现读 AppConfig.mining_data_source_mode。
@@ -105,6 +126,8 @@ def get_adapter(platform: Platform, mode: str | None = None) -> SearchAdapter:
         if platform in adapters:
             return adapters[platform]
         raise ValueError(f"unknown platform: {platform}")
+    if platform in _TIKHUB_ONLY_PLATFORMS:
+        return UnsupportedLocalSearchAdapter(platform)
     if platform == "bilibili":
         return BilibiliSearchAdapter()
     if platform == "kuaishou":
@@ -201,7 +224,19 @@ class MiningRunner:
                 })
                 continue
 
-            adapter = get_adapter(platform, data_source_mode)
+            try:
+                adapter = get_adapter(platform, data_source_mode)
+            except Exception as e:  # noqa: BLE001 — 未知平台/构建失败只记该平台 failed,不崩整个 job
+                logger.exception("get_adapter(%s, %s) failed", platform, data_source_mode)
+                reason = f"平台适配器构建失败：{type(e).__name__}"
+                mining_storage.update_platform_progress(
+                    job_id, platform, got=0, target=eff_target, phase="failed", note=reason,
+                )
+                self.publish("job.platform_done", {
+                    "job_id": job_id, "platform": platform,
+                    "status": "failed", "count": 0, "error": reason,
+                })
+                continue
             emitted = [0]
             # 每张卡的发布节流状态,平台之间必须重置——否则第二个平台会带着
             # 第一个平台"已经发布过"的计数/时间戳基线起步,导致它自己的早期
@@ -357,7 +392,8 @@ class MiningRunner:
                 got=outcome.cards_emitted,
                 target=eff_target,
                 phase=outcome.status if outcome.status != "done" else "done",
-                note=(outcome.error_message or "")[:200] if data_source_mode == "tikhub_api" else "",
+                note=(outcome.error_message or "")[:200]
+                if (data_source_mode == "tikhub_api" or platform in _TIKHUB_ONLY_PLATFORMS) else "",
             )
             self.publish("job.platform_done", {
                 "job_id": job_id, "platform": platform,

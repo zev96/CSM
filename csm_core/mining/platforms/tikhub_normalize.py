@@ -12,6 +12,12 @@
     视频：``data.mixFeeds[itemType==5].feed``（flat 字段）；
     翻页：``data.pcursor`` 是搜索翻页的主判据 —— ``recoPcursor`` 是推荐流（相关搜索
     卡）的游标，与本次搜索翻页无关，**不是**终止信号（曾误用，见审查修复记录）。
+- 小红书 ``GET /api/v1/xiaohongshu/app_v2/search_notes``（⚠️ 尚未用真实 token 实测，
+    按小红书 App 搜索接口的公开形态写并逐层兜底）
+    笔记：``data(.data).items[model_type=="note"].note``（或字段摊平的笔记）；
+    翻页：``page+1`` + 首页回传的 ``search_id`` / ``search_session_id``；``has_more`` 显式
+    为假或本页无 items 即停。首跑请用 ``sidecar/scripts/tikhub_probe.py --xhs-search``
+    落 fixture 校正字段路径。
 
 约定：``*_first_*(keyword, plat_filters)`` 造首页请求；``*_next_*(prev, raw)`` 从上一页
 响应造下一页请求，返回 None = 没有下一页；``normalize_*(raw, plat_filters)`` 出卡片。
@@ -22,6 +28,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 from csm_core.mining.models import VideoCard
@@ -364,5 +372,190 @@ def normalize_kuaishou_search(raw: dict[str, Any], f: dict[str, Any]) -> list[Vi
             cards.append(card)
         except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
             logger.warning("[tikhub-normalize] kuaishou card skipped: %s", type(e).__name__)
+            continue
+    return cards
+
+
+# ── 小红书 ──────────────────────────────────────────────────────────────
+
+_XHS_SORT_TYPES = frozenset({
+    "general", "time_descending", "popularity_descending",
+    "comment_descending", "collect_descending",
+})
+# UI 档位 → TikHub 接口的中文档位（接口只认中文取值）
+_XHS_NOTE_TYPE = {"all": "不限", "video": "视频笔记", "image": "普通笔记"}
+_XHS_TIME_FILTER = {"0": "不限", "1": "一天内", "7": "一周内", "182": "半年内"}
+# raw 落库前剔除的媒体大字段——卡片只消费封面 URL / 时长，整段存进 raw 纯粹是存储膨胀。
+_XHS_RAW_DROP = frozenset({
+    "video_info_v2", "video_info", "video", "images_list", "image_list",
+    "widgets_context", "share_info",
+})
+_XHS_NOTE_ID_RE = re.compile(r"^[0-9a-fA-F]{24}$")
+
+
+def xiaohongshu_first_params(keyword: str, f: dict[str, Any]) -> dict[str, Any]:
+    """小红书首页 GET 参数：排序 / 笔记类型 / 发布时间全部下推（白名单之外一律兜底默认档）。"""
+    f = _dict(f)
+    sort_type = str(f.get("sort_type") or "general")
+    return {
+        "keyword": keyword,
+        "page": 1,
+        "sort_type": sort_type if sort_type in _XHS_SORT_TYPES else "general",
+        "note_type": _XHS_NOTE_TYPE.get(str(f.get("note_type") or "all"), "不限"),
+        "time_filter": _XHS_TIME_FILTER.get(str(f.get("time_filter") or "0"), "不限"),
+    }
+
+
+def _xhs_search_page(raw: Any) -> dict[str, Any]:
+    """搜索真数据层：raw.data（TikHub 外层）→ 若含小红书信封 data.data 且带 items，取内层。"""
+    data = _dict(_dict(raw).get("data"))
+    inner = data.get("data")
+    if isinstance(inner, dict) and ("items" in inner or "notes" in inner):
+        return inner
+    return data
+
+
+def _xhs_items(page: dict[str, Any]) -> list[Any]:
+    items = page.get("items")
+    if not isinstance(items, list):
+        items = page.get("notes")
+    return items if isinstance(items, list) else []
+
+
+def xiaohongshu_next_params(prev: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any] | None:
+    """翻页 = page+1，并带上首页回传的 search_id / search_session_id（缺失就沿用上一页的）。
+    本页无 items 或 has_more 显式为假 → 没有下一页。"""
+    page = _xhs_search_page(raw)
+    if not _xhs_items(page):
+        return None
+    if page.get("has_more") in (0, "0", False, "false", "False"):
+        return None
+    data = _dict(_dict(raw).get("data"))
+    search_id = page.get("search_id") or data.get("search_id") or prev.get("search_id") or ""
+    session_id = (
+        page.get("search_session_id") or data.get("search_session_id")
+        or page.get("session_id") or prev.get("search_session_id") or ""
+    )
+    params = dict(prev)
+    params["page"] = (_to_int(prev.get("page")) or 1) + 1
+    if search_id:
+        params["search_id"] = str(search_id)
+    if session_id:
+        params["search_session_id"] = str(session_id)
+    return params
+
+
+def _xhs_note(it: Any) -> dict[str, Any]:
+    """一条搜索结果 → 笔记 dict。形态 A：{model_type:"note", note:{...}}；形态 B：笔记字段摊平。
+    非笔记卡（广告 / 用户 / 话题等 model_type）→ {}。"""
+    it = _dict(it)
+    mt = it.get("model_type")
+    if mt not in (None, "note", "note_card", "normal", "video"):
+        return {}
+    note = it.get("note") or it.get("note_card")
+    if isinstance(note, dict):
+        return {**note, "_xsec_token": it.get("xsec_token") or note.get("xsec_token")}
+    if it.get("id") or it.get("note_id"):
+        return {**it, "_xsec_token": it.get("xsec_token")}
+    return {}
+
+
+def _xhs_ts_to_iso(v: Any) -> str | None:
+    """time / timestamp（秒或毫秒）→ ISO UTC；非法 → None。"""
+    n = _to_int(v)
+    if n <= 0:
+        return None
+    if n > 10**11:          # 毫秒
+        n //= 1000
+    try:
+        return datetime.fromtimestamp(n, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _xhs_cover(note: dict[str, Any]) -> str:
+    for key in ("images_list", "image_list"):
+        v = note.get(key)
+        if isinstance(v, list) and v:
+            first = v[0]
+            if isinstance(first, dict):
+                u = first.get("url") or first.get("url_default") or first.get("url_pre")
+                return str(u) if u else ""
+            if isinstance(first, str):
+                return first
+    cover = note.get("cover")
+    if isinstance(cover, dict):
+        return str(cover.get("url") or cover.get("url_default") or "")
+    if isinstance(cover, str):
+        return cover
+    return ""
+
+
+def _xhs_duration(note: dict[str, Any]) -> int | None:
+    """视频笔记时长（秒）；图文笔记 None。实测前兼容 video_info.duration /
+    video_info_v2.capa.duration / video.media.video.duration 三种落点，毫秒自动折算。"""
+    for key in ("video_info", "video_info_v2", "video"):
+        v = note.get(key)
+        if not isinstance(v, dict):
+            continue
+        d = v.get("duration")
+        if d is None:
+            d = _dict(v.get("capa")).get("duration")
+        if d is None:
+            d = _dict(_dict(v.get("media")).get("video")).get("duration")
+        n = _to_int(d)
+        if n > 0:
+            return n // 1000 if n > 36_000 else n
+    return None
+
+
+def normalize_xiaohongshu_search(raw: dict[str, Any], f: dict[str, Any]) -> list[VideoCard]:
+    """搜索结果 → VideoCard。规范链接 ``xiaohongshu.com/explore/{note_id}``，结果里带
+    ``xsec_token`` 时追加 ``?xsec_token=…&xsec_source=pc_search``（网页端没有它打不开笔记；
+    App 内两种都能打开）。播放数小红书不回，恒 None；点赞数兼容 "1.2万" 展示态。"""
+    data = _dict(_dict(raw).get("data"))
+    code = data.get("code")
+    if data.get("success") is False or code not in (None, 0, "0", 200, "200"):
+        _log_inner_error("xiaohongshu", code, raw)
+    cards: list[VideoCard] = []
+    for it in _xhs_items(_xhs_search_page(raw)):
+        note = _xhs_note(it)
+        if not note:
+            continue
+        nid = str(note.get("id") or note.get("note_id") or "").strip()
+        if not nid:
+            continue
+        # 单卡容错：畸形叶子字段只丢这一张，不连累同页其余卡片。
+        try:
+            user = _dict(note.get("user"))
+            title = str(note.get("title") or note.get("display_title") or "").strip()
+            if not title:
+                desc = str(note.get("desc") or "").strip()
+                title = desc.splitlines()[0][:80] if desc else ""
+            interact = _dict(note.get("interact_info"))
+            xsec = note.get("_xsec_token")
+            url = f"https://www.xiaohongshu.com/explore/{nid}"
+            if isinstance(xsec, str) and xsec:
+                url += f"?xsec_token={xsec}&xsec_source=pc_search"
+            cards.append(VideoCard(
+                platform="xiaohongshu",
+                platform_video_id=nid,
+                url=url,
+                title=title,
+                author_name=str(user.get("nickname") or user.get("name") or "").strip(),
+                author_id=str(user.get("userid") or user.get("user_id") or user.get("id") or ""),
+                cover_url=_xhs_cover(note),
+                duration_sec=_xhs_duration(note),
+                play_count=_count(note.get("view_count") or interact.get("view_count")),
+                like_count=_count(
+                    note.get("liked_count") or note.get("likes") or interact.get("liked_count")
+                ),
+                published_at=_xhs_ts_to_iso(
+                    note.get("time") or note.get("timestamp") or note.get("create_time")
+                ),
+                raw={k: v for k, v in note.items() if k not in _XHS_RAW_DROP and not str(k).startswith("_")},
+            ))
+        except Exception as e:  # noqa: BLE001 — 单卡畸形不该打崩整页
+            logger.warning("[tikhub-normalize] xiaohongshu card skipped: %s", type(e).__name__)
             continue
     return cards

@@ -1444,7 +1444,7 @@ async function saveAccountEdit() {
             </div>
             <SettingsRow
               label="付费 API 抓取（TikHub）"
-              hint="开 = 知乎问题 + 抖音/B站/快手评论走 TikHub 付费 API；关 = 本地浏览器抓取"
+              hint="开 = 知乎问题 + 抖音/B站/快手评论走 TikHub 付费 API；关 = 本地浏览器抓取。小红书评论留存没有本地路径，始终走 TikHub"
             >
               <FormToggle
                 :model-value="(get('monitor.data_source_mode') ?? 'local') === 'tikhub_api'"
@@ -1453,7 +1453,7 @@ async function saveAccountEdit() {
             </SettingsRow>
             <SettingsRow
               label="采集（找视频）走 TikHub 付费搜索"
-              hint="开 = 关键词搜视频三平台走 TikHub（免登录、免并发风控，$0.01/次，每次约 6–14 条，单平台上限 80 条/次）；关 = 本地浏览器采集（需登录，作兜底）"
+              hint="开 = 关键词搜视频四平台走 TikHub（免登录、免并发风控，$0.01/次，每次约 6–14 条，单平台上限 80 条/次）；关 = 本地浏览器采集（需登录，作兜底；小红书无浏览器采集，只能走 TikHub）"
             >
               <FormToggle
                 :model-value="(get('mining_data_source_mode') ?? 'tikhub_api') === 'tikhub_api'"

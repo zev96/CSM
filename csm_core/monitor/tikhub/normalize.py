@@ -103,3 +103,65 @@ def normalize_kuaishou_comments(raw: dict) -> list[dict]:
             "likes": c.get("likedCount"),
         })
     return out
+
+
+# ── 小红书 ──────────────────────────────────────────────────────────────
+
+def _xhs_int(v) -> int | None:
+    """小红书计数字段既可能是 int 也可能是 "1.2万" 这类展示态字符串,兜底转 int。"""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    t = str(v).strip().replace(",", "")
+    if not t:
+        return None
+    try:
+        if t.endswith(("万", "w", "W")):
+            return int(float(t[:-1]) * 10_000)
+        if t.endswith("亿"):
+            return int(float(t[:-1]) * 100_000_000)
+        return int(float(t))
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def xiaohongshu_comment_page(raw: dict) -> dict:
+    """取小红书评论接口的真数据层。
+
+    TikHub 外层 ``raw.data`` 是小红书信封 ``{code, success, msg, data}``,评论列表与
+    翻页字段(cursor / index / pageArea / has_more)在 ``raw.data.data``(TikHub 文档:
+    「翻页所需字段通常位于响应的 $.data.data 对象中」)。若服务端把这一层摊平
+    (``raw.data`` 直接带 comments),也认。非 dict 一律兜底成 {}。
+    """
+    data = raw.get("data") if isinstance(raw, dict) else None
+    if not isinstance(data, dict):
+        return {}
+    inner = data.get("data")
+    if isinstance(inner, dict) and any(k in inner for k in ("comments", "cursor", "has_more")):
+        return inner
+    return data
+
+
+def normalize_xiaohongshu_comments(raw: dict) -> list[dict]:
+    """小红书 App 评论:``comments[]`` 每条 ``content`` / ``user.nickname`` / ``like_count``。
+
+    字段路径按小红书 App 评论接口的公开形态写(``content`` 正文、``user.nickname``
+    作者、``like_count`` 点赞),尚未像抖音/B站/快手那样用真实 token 落 fixture 实测;
+    首跑请用 ``sidecar/scripts/tikhub_probe.py --xhs`` 抓一份校正。
+    """
+    cs = xiaohongshu_comment_page(raw).get("comments") or []
+    if not isinstance(cs, list):
+        cs = []
+    out: list[dict] = []
+    for c in cs:
+        if not isinstance(c, dict):
+            continue
+        user = c.get("user") if isinstance(c.get("user"), dict) else {}
+        out.append({
+            "rank": len(out) + 1,
+            "text": str(c.get("content") or c.get("text") or ""),
+            "author": user.get("nickname") or user.get("name"),
+            "likes": _xhs_int(c.get("like_count", c.get("liked_count"))),
+        })
+    return out

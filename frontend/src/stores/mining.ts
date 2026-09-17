@@ -27,7 +27,7 @@ import { useSidecar } from "@/stores/sidecar"
 import { useStaleGuard } from "@/composables/useStaleGuard"
 import { useNotifications } from "@/composables/useNotifications"
 
-export type Platform = "douyin" | "bilibili" | "kuaishou"
+export type Platform = "douyin" | "bilibili" | "kuaishou" | "xiaohongshu"
 export type CommentedFilter = "0" | "1" | "all"
 
 // ── 搜索筛选（按平台分组，与后端 SearchFilters 模型一一对应）──────────
@@ -55,10 +55,21 @@ export interface KuaishouFilters {
   time_end: string | null
 }
 
+export interface XiaohongshuFilters {
+  /** general=综合 time_descending=最新 popularity_descending=最多点赞
+   *  comment_descending=最多评论 collect_descending=最多收藏（TikHub 服务端排序） */
+  sort_type: "general" | "time_descending" | "popularity_descending" | "comment_descending" | "collect_descending"
+  /** all=不限 video=视频笔记 image=图文笔记 */
+  note_type: "all" | "video" | "image"
+  /** 与抖音同形的档位：0=不限 1=一天内 7=一周内 182=半年内 */
+  time_filter: "0" | "1" | "7" | "182"
+}
+
 export interface SearchFilters {
   douyin: DouyinFilters
   bilibili: BilibiliFilters
   kuaishou: KuaishouFilters
+  xiaohongshu: XiaohongshuFilters
 }
 
 export function defaultSearchFilters(): SearchFilters {
@@ -66,6 +77,7 @@ export function defaultSearchFilters(): SearchFilters {
     douyin: { publish_time: "0", sort_type: "0", content_types: ["video"] },
     bilibili: { order: "totalrank", time_begin: null, time_end: null },
     kuaishou: { time_begin: null, time_end: null },
+    xiaohongshu: { sort_type: "general", note_type: "all", time_filter: "0" },
   }
 }
 
@@ -194,6 +206,14 @@ export interface SyncToDocsResult {
   skipped_extra_tiers: number
   /** 挂图因该层表头无「评论X的图片」列而未写入/未标注的条数。 */
   images_dropped: number
+  /** 直接插进表格贴图格的图片张数（insert_image）。 */
+  images_inserted: number
+  /** 插图失败（文件缺失 / 超大 / 服务端拒绝）的张数——该格已回落写「有图，另发」。 */
+  images_failed: number
+  /** 服务端无 insert_image 工具或已关闭直传 → 只写「有图，另发」标记的图片张数。 */
+  images_unsupported: number
+  /** 保存过手动列映射、但表头已变化（列挪位 / 改名）→ 本次退回自动识别的子表名。 */
+  mapping_stale: string[]
   /** 每个平台写入了哪张子表的哪个行区间（0-based）。 */
   batches: {
     platform: Platform
@@ -252,6 +272,8 @@ export const useMiningStore = defineStore("mining", () => {
   })
   const loginStatus = ref<Record<Platform, boolean>>({
     douyin: false, bilibili: false, kuaishou: false,
+    // 小红书没有浏览器采集路径，永远 false（只在 TikHub 模式可选）。
+    xiaohongshu: false,
   })
 
   // Phase 2/3 — keyed by video_id. Sorted by tier asc as returned by API.
@@ -484,7 +506,7 @@ export const useMiningStore = defineStore("mining", () => {
     const resp = await api().get<Record<Platform, { logged_in: boolean }>>(
       "/api/mining/login/status",
     )
-    for (const p of ["douyin", "bilibili", "kuaishou"] as Platform[]) {
+    for (const p of ["douyin", "bilibili", "kuaishou", "xiaohongshu"] as Platform[]) {
       loginStatus.value[p] = resp.data[p]?.logged_in ?? false
     }
   }

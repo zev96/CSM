@@ -38,16 +38,12 @@ const HISTORY_TABS: Array<{ k: HistorySubtab; l: string }> = [
 ];
 
 function goToCommentTask(payload: {
-  platform: "bilibili_comment" | "douyin_comment" | "kuaishou_comment";
+  platform: "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "xiaohongshu_comment";
   batchName: string;
   taskId: number;
 }) {
-  const platformSubtab =
-    payload.platform === "bilibili_comment"
-      ? "bilibili"
-      : payload.platform === "douyin_comment"
-        ? "douyin"
-        : "kuaishou";
+  // 评论 type → 监测中心 subtab：去掉 _comment 后缀即平台名（四平台同规则）。
+  const platformSubtab = payload.platform.replace(/_comment$/, "");
   router.push({
     name: "monitor",
     query: {

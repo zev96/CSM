@@ -223,7 +223,11 @@ async function onSyncToDocs() {
     if (r.skipped_in_doc) msg += `，${r.skipped_in_doc} 条已在表格中跳过`;
     if (r.skipped_extra_tiers) msg += `；${r.skipped_extra_tiers} 条评论超出表头评论列未写入（补列后再次同步）`;
     if (r.images_dropped) msg += `；${r.images_dropped} 条挂图因表头无对应贴图列未标注`;
-    const hasWarning = !!r.skipped_extra_tiers || !!r.images_dropped;
+    if (r.images_inserted) msg += `；已插入 ${r.images_inserted} 张评论图片`;
+    if (r.images_failed) msg += `；${r.images_failed} 张图片插入失败（该格已改标「有图，另发」）`;
+    if (r.images_unsupported) msg += `；${r.images_unsupported} 张图片只写了「有图，另发」（服务端不支持插图或已关闭直传）`;
+    if (r.mapping_stale?.length) msg += `；子表「${r.mapping_stale.join("/")}」的表头已变化，本次按自动识别写入，请到设置页重新确认列映射`;
+    const hasWarning = !!r.skipped_extra_tiers || !!r.images_dropped || !!r.images_failed || !!r.mapping_stale?.length;
     if (hasWarning) toast.warn(msg);
     else toast.success(msg);
   } catch (e: any) {

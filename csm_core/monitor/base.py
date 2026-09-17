@@ -61,6 +61,7 @@ TaskType = Literal[
     "bilibili_comment",
     "douyin_comment",
     "kuaishou_comment",
+    "xiaohongshu_comment",
     "baidu_keyword",
     "geo_query",
 ]

@@ -125,6 +125,7 @@ const PLATFORMS: Array<{ k: CommentPlatform; l: string; color: string; count: nu
   { k: "bilibili", l: "B 站", color: "#ee6a2a", count: 0 },
   { k: "douyin", l: "抖音", color: "var(--ink)", count: 0 },
   { k: "kuaishou", l: "快手", color: "#f5c042", count: 0 },
+  { k: "xiaohongshu", l: "小红书", color: "#ff2442", count: 0 },
 ];
 
 // LineChart 横轴 label —— 7 天 bucket（今天往回 6 天），日期 only ("10")，
@@ -146,6 +147,7 @@ const SAMPLE_COMMENTS: Record<CommentPlatform, SampleComment[]> = {
   bilibili: [],
   douyin: [],
   kuaishou: [],
+  xiaohongshu: [],
 };
 const SAMPLE_VIDEOS: Record<string, VideoEntry[]> = {};
 const SAMPLE_RETENTION: number[] = [];
@@ -485,7 +487,8 @@ function _buildCommentAlertData(batchName: string, alert: HeroAlert): CommentAle
   const platformLabel =
     childTasks[0].type === "bilibili_comment" ? "B 站"
     : childTasks[0].type === "douyin_comment" ? "抖音"
-    : childTasks[0].type === "kuaishou_comment" ? "快手" : "评论";
+    : childTasks[0].type === "kuaishou_comment" ? "快手"
+    : childTasks[0].type === "xiaohongshu_comment" ? "小红书" : "评论";
   return {
     title: `「${batchName}」评论留存告警`,
     subtitle: `${platformLabel} · ${alert.subtitle}`,
@@ -573,6 +576,7 @@ async function exportBatchRetention(batchName: string) {
     first?.type === "bilibili_comment" ? "B站"
     : first?.type === "douyin_comment" ? "抖音"
     : first?.type === "kuaishou_comment" ? "快手"
+    : first?.type === "xiaohongshu_comment" ? "小红书"
     : (PLATFORMS.find((p) => p.k === props.commentSubtab)?.l ?? "评论");
   // BOM 让 Excel 认出 UTF-8 —— 与 mining / 知乎导出保持一致
   const csv = "\ufeff" + buildRetentionCsv({ batchName, platformLabel, items });

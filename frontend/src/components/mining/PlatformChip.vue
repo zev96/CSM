@@ -10,6 +10,7 @@ const META: Record<Platform, { l: string; letter: string; color: string; dark: s
   bilibili: { l: "B 站", letter: "B", color: "#fb7299", dark: "#a13a5e" },
   douyin: { l: "抖音", letter: "D", color: "#1c1a17", dark: "#1c1a17" },
   kuaishou: { l: "快手", letter: "K", color: "#ff6633", dark: "#a13d1f" },
+  xiaohongshu: { l: "小红书", letter: "X", color: "#ff2442", dark: "#a3162b" },
 };
 
 const m = () => META[props.k];

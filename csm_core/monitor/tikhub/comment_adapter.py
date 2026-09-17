@@ -30,7 +30,8 @@ from csm_core.monitor.platforms._comment_shared import (
     CommentSnapshot, group_comment_texts, shared_store)
 from csm_core.monitor.text_match import find_best_match, DEFAULT_SIMILARITY_THRESHOLD
 from .normalize import (
-    normalize_douyin_comments, normalize_bilibili_comments, normalize_kuaishou_comments)
+    normalize_douyin_comments, normalize_bilibili_comments, normalize_kuaishou_comments,
+    normalize_xiaohongshu_comments, xiaohongshu_comment_page)
 from .client import paginate
 from .errors import TikHubError
 
@@ -108,6 +109,53 @@ def _ks_parse(raw, first_page):
 KUAISHOU_SPEC = PlatformSpec("kuaishou_comment", "/api/v1/kuaishou/app/fetch_video_comment",
                              default_depth=_COMMENT_SCAN_DEPTH, depth_cap=_COMMENT_SCAN_DEPTH,
                              build_params=_ks_params, parse_page=_ks_parse)
+
+
+# ── 小红书(TikHub 外层 data 是小红书信封 {code,success,msg,data};翻页游标是
+#    cursor + index + pageArea 三元组,打包成 dict 当 paginate() 的不透明 cursor)──
+# 排序用 like_count(热门):与其它三平台"热评序里的排名"口径一致。默认序 default 官方
+# 明说翻页会丢/重;latest_v2 是时间倒序,排名会随新评论涌入漂移,没有"热评排名"意义。
+XHS_SORT_STRATEGY = "like_count"
+_XHS_TRUE = (True, 1, "1", "true", "True")
+
+
+def _xhs_params(vid, id_type, cursor):
+    p = {"note_id": vid, "sort_strategy": XHS_SORT_STRATEGY}
+    if isinstance(cursor, dict):
+        if cursor.get("cursor"):
+            p["cursor"] = cursor["cursor"]
+        if cursor.get("index") is not None:
+            p["index"] = cursor["index"]
+        if cursor.get("pageArea"):
+            p["pageArea"] = cursor["pageArea"]
+    return p
+
+
+def _xhs_parse(raw, first_page):
+    env = raw.get("data") or {}
+    if isinstance(env, dict):
+        code = env.get("code")
+        # 小红书信封 success=false / code≠0 = 平台级失败(笔记不存在、限流等);TikHub
+        # 文档明说这种情况 HTTP 仍 200 且照常计费,绝不能当"空评论区"处理。
+        if env.get("success") is False or (code is not None and str(code) not in ("0", "200")):
+            raise TikHubError(f"小红书接口错误: {env.get('msg') or env.get('message') or code}")
+    items = normalize_xiaohongshu_comments(raw)
+    page = xiaohongshu_comment_page(raw)
+    cur = page.get("cursor")
+    nxt = None
+    if cur not in (None, ""):
+        nxt = {"cursor": cur, "index": page.get("index"),
+               "pageArea": page.get("pageArea") or page.get("page_area")}
+    if "has_more" in page:
+        has_more = page.get("has_more") in _XHS_TRUE
+    else:
+        has_more = nxt is not None
+    return items, nxt, bool(nxt) and has_more
+
+
+XIAOHONGSHU_SPEC = PlatformSpec("xiaohongshu_comment", "/api/v1/xiaohongshu/app_v2/get_note_comments",
+                                default_depth=_COMMENT_SCAN_DEPTH, depth_cap=_COMMENT_SCAN_DEPTH,
+                                build_params=_xhs_params, parse_page=_xhs_parse)
 
 
 class CommentApiAdapter:

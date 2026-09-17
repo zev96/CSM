@@ -44,6 +44,11 @@ from csm_core.monitor.rate_limit import slot
 from csm_core.monitor.scheduler import select_due
 from csm_core.monitor.tikhub.client import balance_exhausted, reset_balance_latch
 
+# 只有 TikHub 路径的任务类型:无论「抓取数据源」开关是本地还是 API,都走 API 适配器
+# (本地免费路径不存在,回落本地只会必然失败)。小红书 web 接口全程签名 + xsec_token,
+# 没有可用的本地实现;其余类型仍严格按开关分派。
+API_ONLY_TYPES = frozenset({"xiaohongshu_comment"})
+
 logger = logging.getLogger(__name__)
 
 
@@ -186,12 +191,18 @@ class MonitorLoop:
     def set_api_adapters(self, adapters: dict[str, Any]) -> None:
         self._api_adapters = dict(adapters or {})
 
+    def _uses_api(self, task_type: str) -> bool:
+        """该 type 本轮是否走 TikHub API 适配器:API 模式且有 API 适配器;或该 type 只有
+        API 路径(API_ONLY_TYPES,忽略开关)。"""
+        if task_type not in self._api_adapters:
+            return False
+        return self._data_source_mode == "tikhub_api" or task_type in API_ONLY_TYPES
+
     def _select_adapter(self, task_type: str):
-        """API 模式且该 type 有 API 适配器 → 用 API;否则(含 baidu/geo)回落本地。"""
-        if self._data_source_mode == "tikhub_api":
-            api = self._api_adapters.get(task_type)
-            if api is not None:
-                return api
+        """API 模式且该 type 有 API 适配器 → 用 API;API-only 类型恒走 API;
+        否则(含 baidu/geo)回落本地。"""
+        if self._uses_api(task_type):
+            return self._api_adapters[task_type]
         return self._adapters.get(task_type)
 
     # ── public lifecycle ────────────────────────────────────────────────
@@ -636,8 +647,7 @@ class MonitorLoop:
                         except TypeError:
                             return adapter.fetch(task)
 
-        _is_api = (self._data_source_mode == "tikhub_api"
-                   and task.type in self._api_adapters)
+        _is_api = self._uses_api(task.type)
         try:
             if _is_api:
                 # API 模式:①先查进程级余额闩,置位则本轮短路(不发请求、不刷屏)

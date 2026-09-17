@@ -159,6 +159,7 @@ class TestTemplateRoundTrip:
         write_template(target)
         assert target.exists()
         report = parse_excel(target)
-        # The template ships with 5 sample rows — all should parse.
-        assert report.ok_count == 5
+        # The template ships with 6 sample rows (知乎 / B站 / 抖音 / 快手 / 小红书 /
+        # 百度) — all should parse.
+        assert report.ok_count == 6
         assert report.error_count == 0

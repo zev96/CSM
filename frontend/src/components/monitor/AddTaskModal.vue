@@ -33,7 +33,7 @@ import { useToast } from "@/composables/useToast";
 import { GEO_PLATFORMS } from "@/utils/monitor-types";
 import { uniqueSearchTargetUrl, uniqueGeoTargetUrl } from "@/utils/taskTargetUrl";
 
-type TaskType = "zhihu_question" | "zhihu_search" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "baidu_keyword" | "geo_query";
+type TaskType = "zhihu_question" | "zhihu_search" | "bilibili_comment" | "douyin_comment" | "kuaishou_comment" | "xiaohongshu_comment" | "baidu_keyword" | "geo_query";
 
 interface EditingTask {
   id: number;
@@ -67,6 +67,7 @@ const TYPES = [
   { value: "bilibili_comment", label: "B 站评论留存" },
   { value: "douyin_comment", label: "抖音评论留存" },
   { value: "kuaishou_comment", label: "快手评论留存" },
+  { value: "xiaohongshu_comment", label: "小红书评论留存" },
   { value: "baidu_keyword", label: "百度关键词排名" },
   { value: "geo_query", label: "AI 卡位监控（GEO）" },
 ] as const;
@@ -720,6 +721,15 @@ async function submit() {
               <FormToggle v-model="zsMatchFullText" />
             </FormField>
           </template>
+
+          <div
+            v-if="type === 'xiaohongshu_comment'"
+            class="mb-3 text-[11px] leading-relaxed"
+            style="color: var(--ink-3);"
+          >
+            小红书评论留存固定走 TikHub 付费 API（无本地抓取路径），需先在「设置 › 监测 › 抓取数据源」配置 TikHub API Key。
+            链接支持笔记长链、xhslink 分享短链，或直接粘贴整段 App 分享文案。
+          </div>
 
           <FormField
             v-if="isComment"

@@ -96,6 +96,10 @@ KUAISHOU_SEARCH_SPEC = SearchSpec(
     "kuaishou", "GET", "/api/v1/kuaishou/app/search_video_v2",
     N.kuaishou_first_params, N.kuaishou_next_params, N.normalize_kuaishou_search,
 )
+XIAOHONGSHU_SEARCH_SPEC = SearchSpec(
+    "xiaohongshu", "GET", "/api/v1/xiaohongshu/app_v2/search_notes",
+    N.xiaohongshu_first_params, N.xiaohongshu_next_params, N.normalize_xiaohongshu_search,
+)
 
 
 def _cursor_of(req: dict[str, Any]) -> str:
@@ -343,4 +347,5 @@ def build_tikhub_search_adapters(
         "douyin": TikHubSearchAdapter(DOUYIN_SEARCH_SPEC, client_factory),
         "bilibili": TikHubSearchAdapter(BILIBILI_SEARCH_SPEC, client_factory),
         "kuaishou": TikHubSearchAdapter(KUAISHOU_SEARCH_SPEC, client_factory),
+        "xiaohongshu": TikHubSearchAdapter(XIAOHONGSHU_SEARCH_SPEC, client_factory),
     }
