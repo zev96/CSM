@@ -4,8 +4,7 @@
  *
  * 用户大改要求（替代旧 V1 设计稿同款"卡片 + 右侧预览"双栏）：
  *   1. 删 eyebrow + 副标段落，header 只剩 H1 标题 + 右侧 tab + 新建按钮
- *   2. 删右侧预览面板。原来"删除/编辑/用此模板"三个按钮收进每张卡的
- *      右上角 ⋯ 菜单（点击弹三按钮）
+ *   2. 删右侧预览面板。原来"删除/编辑"按钮收进每张卡的右上角 ⋯ 菜单
  *   3. 卡片信息加 tags + 使用次数（不再用预览面板交代细节）
  *   4. 点卡 = 跳详情/编辑页（/templates/edit/:id 或 /templates/skills/edit/:id），
  *      跟 Skill 编辑页同款 view-as-page 体验
@@ -114,9 +113,6 @@ async function loadSkills() {
 // ── 卡片操作 ──────────────────────────────────────────────
 function goEditTemplate(t: Template) {
   router.push({ name: "template-edit", params: { id: t.id } });
-}
-function useTemplate(t: Template) {
-  router.push({ name: "article", query: { template: t.id } });
 }
 async function deleteTemplate(t: Template) {
   if (!(await confirmDialog(`确定删除模板「${t.name}」？`, { title: "删除模板", okLabel: "删除" }))) return;
@@ -387,8 +383,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- skills 卡片网格（同款，但 ⋯ 菜单的 "用此模板" 项隐藏 —— Skill
-         不能像模板那样"用此 Skill → 进创作区"，那是模板的功能） -->
+    <!-- skills 卡片网格（同款） -->
     <div
       v-else
       class="grid auto-rows-min min-h-0 flex-1 overflow-y-auto pr-1"
@@ -527,20 +522,6 @@ onMounted(async () => {
         }"
         @click.stop
       >
-        <button
-          type="button"
-          class="flex w-full items-center gap-2 text-left"
-          :style="{
-            height: '30px', padding: '0 10px', borderRadius: '7px',
-            fontSize: '12px', color: 'var(--ink)', background: 'transparent', cursor: 'pointer',
-          }"
-          @mouseenter="($event.currentTarget as HTMLElement).style.background = 'var(--card-2)'"
-          @mouseleave="($event.currentTarget as HTMLElement).style.background = 'transparent'"
-          @click="() => { const t = templates.find((x) => x.id === menuOpenFor); if (t) { closeCardMenu(); useTemplate(t); } }"
-        >
-          <Icon name="play" :size="12" />
-          <span>用此模板</span>
-        </button>
         <button
           type="button"
           class="flex w-full items-center gap-2 text-left"

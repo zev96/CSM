@@ -1,19 +1,14 @@
 """Vault scanning + note query routes."""
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from csm_core.vault.brand_registry import build_brand_registry
-
 from ..auth import RequireToken
-from ..services import config_service, fact_service, vault_service
-
-logger = logging.getLogger(__name__)
+from ..services import config_service, vault_service
 
 router = APIRouter(tags=["vault"], dependencies=[RequireToken])
 
@@ -46,12 +41,6 @@ def scan_vault(body: VaultScanRequest) -> VaultScanResponse:
             detail=f"vault root not found: {root}",
         )
     index = vault_service.scan(root)
-    # 事实传导（§7.2）：重建索引后检测型号参数变更，入 pending 队列供前端拉
-    # /api/facts/changes → 通知。fail-safe：检测失败不影响扫描结果。
-    try:
-        fact_service.detect_changes(index, build_brand_registry(root))
-    except Exception:
-        logger.debug("vault scan fact detect failed", exc_info=True)
     return VaultScanResponse(**vault_service.index_summary(index))
 
 
@@ -314,7 +303,7 @@ def card_sections(body: CardSectionsRequest) -> dict[str, Any]:
     先有鸡先有蛋。这里反过来：只给目录 + 筛选，把 H2 摊开。
 
     篇数分两栏，**不能合并**：``note_count`` 是写了这个 H2 的篇数，
-    ``with_body`` 是 H2 底下真有正文的篇数。``section_body`` 要求正文非空，
+    ``with_body`` 是 H2 底下真有正文的篇数。``card_coverage`` 要求正文非空，
     空骨架笔记有 H2 也进不了名册 —— 只看 note_count 会以为素材齐了。
 
     排序取该 H2 在各篇里位置的**中位数**，不是字母序也不是词频：识别出来

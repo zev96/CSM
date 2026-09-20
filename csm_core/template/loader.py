@@ -14,10 +14,8 @@ def _migrate_competitor_pool_sources(data: dict[str, Any]) -> bool:
     """Auto-migrate competitor_pool blocks with non-notes_query source.
 
     Older versions of TemplateBuilder defaulted competitor_pool to
-    ``brand_pool`` source, but ``csm_core.assembler.sampler.sample_block``
-    asserts the source is ``notes_query``. Loading those templates would
-    blow up at generate time with ``AssertionError: competitor_pool block
-    'xxx' only supports notes_query source``.
+    ``brand_pool`` source, but the (since retired) assembler sampler only
+    accepted ``notes_query`` and the template lint still expects it.
 
     Rewriting the source on load (rather than failing) means old saved
     templates keep opening; user can then fill in the empty module/filter

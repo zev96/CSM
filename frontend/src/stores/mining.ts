@@ -339,7 +339,7 @@ export const useMiningStore = defineStore("mining", () => {
   function _settleFinished(status: string, keyword: string) {
     if (stopSse) { stopSse(); stopSse = null }
     if (status !== "cancelled") {
-      // 用户主动取消不推「完成」通知 —— 与 monitor/article 的取消静默一致
+      // 用户主动取消不推「完成」通知 —— 与 monitor 的取消静默一致
       const ok = status === "done" || status === "completed"
       bell.push("引流任务完成", {
         body: `「${keyword}」${ok ? "全部平台完成" : "部分平台未完成"}`,

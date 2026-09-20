@@ -2,7 +2,7 @@
 /**
  * TaskTray — 全局任务托盘聚合层（spec: 2026-06-10-global-task-tray-design）。
  *
- * 纯前端：把 4 个既有 store（monitorStatus / mining / batch / article）的
+ * 纯前端：把 2 个既有 store（monitorStatus / mining）的
  * 运行态用 computed 投影成统一 TrayTask[]，给 LeftNav 任务按钮 + 浮层渲染。
  * 不新建任何 SSE 连接 —— 事件流由各源 store 自己持有；本 store 只做投影
  * 与「最近完成」转移登记。将来若上后端统一任务注册表，只换这里的数据源，
@@ -12,19 +12,17 @@ import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import type { RouteLocationRaw } from "vue-router";
 
-import { useArticle } from "@/stores/article";
-import { useBatch } from "@/stores/batch";
 import { useMiningStore, type Platform, type PlatformProgress } from "@/stores/mining";
 import { useMonitorStatus } from "@/stores/monitorStatus";
 import { useSidecar } from "@/stores/sidecar";
 import { EtaEstimator } from "@/utils/trayEta";
 
-export type TrayKind = "monitor" | "mining" | "batch" | "article";
+export type TrayKind = "monitor" | "mining";
 export type TrayRunState = "running" | "waiting" | "captcha";
 export type TrayOutcome = "done" | "failed" | "cancelled";
 
 export interface TrayTask {
-  /** "monitor:<显示组>" | "mining:<id>" | "batch:<uuid>" | "article:<uuid>" */
+  /** "monitor:<显示组>" | "mining:<id>" */
   key: string;
   kind: TrayKind;
   icon: string;
@@ -71,8 +69,6 @@ export const MONITOR_TYPE_META: Record<string, { group: string; tab: string }> =
 const KIND_ICON: Record<TrayKind, string> = {
   monitor: "radar",
   mining: "video",
-  batch: "stack",
-  article: "edit",
 };
 
 const PLATFORM_LABEL: Record<Platform, string> = {
@@ -87,8 +83,6 @@ const MAX_FINISHED = 3;
 export const useTaskTray = defineStore("taskTray", () => {
   const monitor = useMonitorStatus();
   const mining = useMiningStore();
-  const batch = useBatch();
-  const article = useArticle();
 
   const eta = new EtaEstimator();
 
@@ -225,61 +219,9 @@ export const useTaskTray = defineStore("taskTray", () => {
     };
   });
 
-  // ── 批量生成 ─────────────────────────────────────────────────────
-  const batchCard = computed<TrayTask | null>(() => {
-    const jobId = batch.jobId;
-    if (batch.status !== "running" || !jobId) return null;
-    const runningItem = batch.items.find((i) => i.status === "running");
-    const doneCount = batch.items.filter(
-      (i) => i.status === "success" || i.status === "failed" || i.status === "cancelled",
-    ).length;
-    const key = `batch:${jobId}`;
-    const progress = batch.total > 0 ? batch.progress : null;
-    return {
-      key,
-      kind: "batch",
-      icon: KIND_ICON.batch,
-      title: `批量生成 · ${batch.total} 篇`,
-      subtitle: runningItem
-        ? `第 ${doneCount + 1}/${batch.total} 篇 ·「${runningItem.keyword}」`
-        : `已完成 ${doneCount}/${batch.total} 篇`,
-      progress,
-      state: "running",
-      etaText: progress == null ? null : eta.observe(key, progress, Date.now()),
-      cancellable: true,
-      route: { name: "batch" },
-      count: 1,
-    };
-  });
-
-  // ── 单篇生成 ─────────────────────────────────────────────────────
-  const articleCard = computed<TrayTask | null>(() => {
-    const jobId = article.jobId;
-    if (article.status !== "running" || !jobId) return null;
-    const key = `article:${jobId}`;
-    const progress = article.stageIndex >= 0 ? article.progress : null;
-    return {
-      key,
-      kind: "article",
-      icon: KIND_ICON.article,
-      title: `单篇生成 ·「${article.title || article.lastRequest?.keyword || ""}」`,
-      subtitle: article.currentStage
-        ? `${article.currentStage}（${article.stageIndex + 1}/${article.stages.length}）`
-        : "准备中…",
-      progress,
-      state: "running",
-      etaText: progress == null ? null : eta.observe(key, progress, Date.now()),
-      cancellable: true,
-      route: { name: "article" },
-      count: 1,
-    };
-  });
-
   const runningTasks = computed<TrayTask[]>(() => {
     const out: TrayTask[] = [...monitorCards.value];
     if (miningCard.value) out.push(miningCard.value);
-    if (batchCard.value) out.push(batchCard.value);
-    if (articleCard.value) out.push(articleCard.value);
     return out;
   });
 
@@ -299,16 +241,6 @@ export const useTaskTray = defineStore("taskTray", () => {
         if (st.includes("fail")) return "failed";
         if (st === "cancelled" || st === "interrupted") return "cancelled";
         return "done"; // done / completed / partial_done
-      }
-      case "batch": {
-        if (batch.status === "error") return "failed";
-        if (batch.status === "cancelled") return "cancelled";
-        return "done";
-      }
-      case "article": {
-        if (article.status === "error") return "failed";
-        if (article.status === "idle") return "cancelled"; // 运行中只会因取消回 idle
-        return "done";
       }
       case "monitor": {
         let outcome: TrayOutcome = "done";
@@ -330,8 +262,7 @@ export const useTaskTray = defineStore("taskTray", () => {
     for (const t of prev) {
       if (nowKeys.has(t.key)) continue;
       // 监测组卡因 meta 缓存补齐而改名（fallback「监测任务」→ 真实组名）时，
-      // 旧 key 消失但成员还在跑 —— 是改名不是完成，跳过登记（同 Task 4
-      // batch/article 幽灵条目的 monitor 变体）。
+      // 旧 key 消失但成员还在跑 —— 是改名不是完成，跳过登记。
       if (t.kind === "monitor" && (t.memberIds ?? []).some((id) => monitor.isRunning(id))) {
         eta.drop(t.key);
         continue;
@@ -375,12 +306,6 @@ export const useTaskTray = defineStore("taskTray", () => {
           return;
         case "mining":
           await mining.cancelActive();
-          return;
-        case "batch":
-          await batch.cancel();
-          return;
-        case "article":
-          await article.cancelJob();
           return;
       }
     } catch (e) {

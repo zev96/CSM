@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * Generic dialog primitive — backdrop + panel + esc/backdrop dismiss +
- * body-scroll lock. Matches the existing ConfirmModal / FailureAlertModal
+ * body-scroll lock. Matches the existing ConfirmModal
  * chrome (var(--radius-card), bg-bg-inner, anim-up) so a Dialog reads
  * visually identical to the hand-rolled modals already in the app.
  *

@@ -10,23 +10,21 @@
  * users who skipped the welcome step but still want to dismiss this on
  * future launches — without it, an empty name would re-trigger forever.
  *
- * State machine — `step` ∈ { "welcome" | "vault" | "model" | "skill" }:
+ * State machine — `step` ∈ { "welcome" | "vault" | "model" }:
  *
- *   welcome → vault → model → skill → done (→ home)
+ *   welcome → vault → model → done (→ home)
  *
  * Each step can also "skip" (advance without saving its inputs), and
- * vault/model/skill can also "back" (go to previous step). The first
+ * model can also "back" (go to previous step). The first
  * welcome screen is treated as gating — the user has to either type a
  * name + click → OR localStorage will keep showing this. Hard-skipping
  * welcome would defeat the point.
  *
  * Side effects on advance:
  *   - welcome: cfg.patch({ user_name, user_product })
- *   - vault:   cfg.patch({ vault_root })
+ *   - vault:   cfg.patch({ vault_root })  // 模板库编辑器的属性筛选扫描用
  *   - model:   keyringSet(provider, key) per filled provider
  *              + cfg.patch({ default_provider }) if exactly one was added
- *   - skill:   cfg.patch({ default_skill_preset })  // new field, server
- *              dict-merges, no migration needed.
  *
  * Done = emit("done") so the parent (App.vue) unmounts this overlay.
  */
@@ -61,7 +59,7 @@ onMounted(async () => {
 
 const STORAGE_KEY = "csm.onboarded.v1";
 
-type Step = "welcome" | "vault" | "model" | "skill";
+type Step = "welcome" | "vault" | "model";
 const step = ref<Step>("welcome");
 
 // ── Step state ──────────────────────────────────────────────────
@@ -83,22 +81,6 @@ const providers = reactive<ProviderEntry[]>([
   { key: "openai", label: "OpenAI", letter: "O", dot: "#7a9b5e", draftKey: "", saved: false },
 ]);
 const expandedProvider = ref<string | null>(null);
-
-// 4 个 Skill preset 选项 —— 这里写死，因为 onboarding 是 "出厂选项"，
-// 不该被用户自定义的 Skill 库影响（用户库可能空着）。下游用 cfg.patch
-// 把选中 key 写到 default_skill_preset，文章生成时优先读这个字段。
-interface SkillOption {
-  key: string;
-  label: string;
-  hint: string;
-}
-const skillOptions: SkillOption[] = [
-  { key: "kezhi", label: "克制·克制", hint: "去口语化、收口紧、避免感叹号" },
-  { key: "ceping", label: "测评·真心话", hint: "第一人称、长期视角、给反例" },
-  { key: "muying", label: "母婴·温柔", hint: "重视安全合规话术、案例化" },
-  { key: "jijian", label: "极简·短句", hint: "句子<18 字、动词开头、删形容词" },
-];
-const chosenSkill = ref<string>("");
 
 // 各步的处理逻辑 —— 都设计成失败不阻塞前进：网络抖一下不能让用户
 // 卡在 onboarding，永远进不来主界面。
@@ -186,17 +168,6 @@ async function submitModel() {
       /* swallow — non-critical, user can switch in Settings later */
     }
   }
-  step.value = "skill";
-}
-
-async function submitSkill() {
-  if (chosenSkill.value) {
-    try {
-      await cfg.patch({ default_skill_preset: chosenSkill.value });
-    } catch (e: any) {
-      toast.error(`保存失败：${e?.message ?? e}`);
-    }
-  }
   finish();
 }
 
@@ -207,13 +178,11 @@ function skip() {
     return;
   }
   if (step.value === "vault") step.value = "model";
-  else if (step.value === "model") step.value = "skill";
-  else if (step.value === "skill") finish();
+  else if (step.value === "model") finish();
 }
 
 function back() {
   if (step.value === "model") step.value = "vault";
-  else if (step.value === "skill") step.value = "model";
 }
 
 function finish() {
@@ -226,11 +195,10 @@ function finish() {
   emit("done");
 }
 
-// 用于步骤进度点：3 步骤总数（vault/model/skill 是 1/3、2/3、3/3）。
+// 用于步骤进度点：2 步骤总数（vault/model 是 1/2、2/2）。
 function stepIndex(): number {
   if (step.value === "vault") return 0;
   if (step.value === "model") return 1;
-  if (step.value === "skill") return 2;
   return -1;
 }
 </script>
@@ -328,7 +296,7 @@ function stepIndex(): number {
         </div>
       </div>
 
-      <!-- ── 步骤卡（vault / model / skill 共享外壳）─────────────── -->
+      <!-- ── 步骤卡（vault / model 共享外壳）─────────────── -->
       <div
         v-else
         class="relative flex w-full max-w-[680px] flex-col overflow-hidden"
@@ -357,10 +325,10 @@ function stepIndex(): number {
         />
 
         <div class="relative" :style="{ zIndex: 1 }">
-          <!-- 进度条 — 3 个段，当前段亮 primary、已过段也亮 primary 但更深 -->
+          <!-- 进度条 — 2 个段，当前段亮 primary、已过段也亮 primary 但更深 -->
           <div class="mb-6 flex items-center gap-2">
             <div
-              v-for="(_, i) in [0, 1, 2]"
+              v-for="(_, i) in [0, 1]"
               :key="i"
               :style="{
                 height: '4px',
@@ -378,7 +346,7 @@ function stepIndex(): number {
             <span
               class="ml-2 text-[11.5px]"
               :style="{ color: 'var(--ink-3)' }"
-            >第 {{ stepIndex() + 1 }} / 3 步</span>
+            >第 {{ stepIndex() + 1 }} / 2 步</span>
           </div>
 
           <div
@@ -394,13 +362,13 @@ function stepIndex(): number {
               class="font-display mt-2 font-bold"
               :style="{ fontSize: '24px', letterSpacing: '-0.5px' }"
             >
-              选择你的素材库
+              选择 Obsidian Vault（可选）
             </div>
             <div
               class="mt-2 text-[12.5px]"
               :style="{ color: 'var(--ink-3)' }"
             >
-              CSM 会从这个 Obsidian Vault 里读笔记，作为文章的素材源。
+              模板库编辑器的「属性筛选」会扫描这个 Vault 里笔记的 frontmatter 属性；不用模板库可直接跳过，之后可在设置里修改。
             </div>
 
             <div
@@ -431,7 +399,7 @@ function stepIndex(): number {
                   class="font-mono mt-0.5 truncate text-[11px]"
                   :style="{ color: 'var(--ink-3)' }"
                 >
-                  {{ vaultPath || "建议挑一个已有笔记 30+ 篇的 Vault 起步" }}
+                  {{ vaultPath || "没有 Vault 可先跳过，之后在设置 → 存储路径里补" }}
                 </div>
               </div>
               <Btn variant="ghost" small @click="pickVault">
@@ -444,7 +412,7 @@ function stepIndex(): number {
               <Btn variant="ghost" small @click="skip">跳过</Btn>
               <Btn variant="solid" small @click="submitVault">
                 <Icon name="arrowRight" :size="13" />
-                <span>选择 Vault 文件夹</span>
+                <span>下一步</span>
               </Btn>
             </div>
           </template>
@@ -570,84 +538,6 @@ function stepIndex(): number {
               <div class="flex gap-2">
                 <Btn variant="ghost" small @click="skip">跳过</Btn>
                 <Btn variant="solid" small @click="submitModel">
-                  <Icon name="arrowRight" :size="13" />
-                  <span>添加 API Key</span>
-                </Btn>
-              </div>
-            </div>
-          </template>
-
-          <!-- ── 步骤 3：写作风格 ──────────────────────── -->
-          <template v-else-if="step === 'skill'">
-            <div
-              class="font-display mt-2 font-bold"
-              :style="{ fontSize: '24px', letterSpacing: '-0.5px' }"
-            >
-              选一种写作风格
-            </div>
-            <div
-              class="mt-2 text-[12.5px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              Skill 决定语气与收口 —— 选一个起步，之后随时改。
-            </div>
-
-            <div
-              class="mt-6 grid grid-cols-3 gap-3 p-3"
-              :style="{
-                background: 'var(--card-white)',
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--radius-inner)',
-              }"
-            >
-              <button
-                v-for="s in skillOptions"
-                :key="s.key"
-                type="button"
-                class="text-left transition"
-                :style="{
-                  padding: '14px',
-                  borderRadius: '12px',
-                  background:
-                    chosenSkill === s.key ? 'var(--primary-soft)' : 'var(--card-2)',
-                  border:
-                    chosenSkill === s.key
-                      ? '2px solid var(--primary)'
-                      : '1px solid var(--line)',
-                  cursor: 'pointer',
-                }"
-                @click="chosenSkill = s.key"
-              >
-                <div
-                  class="text-[13px] font-bold"
-                  :style="{
-                    color:
-                      chosenSkill === s.key ? 'var(--primary-deep)' : 'var(--ink)',
-                  }"
-                >
-                  {{ s.label }}
-                </div>
-                <div
-                  class="mt-1.5 text-[11px] leading-relaxed"
-                  :style="{ color: 'var(--ink-3)' }"
-                >
-                  {{ s.hint }}
-                </div>
-              </button>
-            </div>
-
-            <div class="mt-8 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                class="text-[12px]"
-                :style="{ color: 'var(--ink-3)', background: 'transparent' }"
-                @click="back"
-              >
-                ← 上一步
-              </button>
-              <div class="flex gap-2">
-                <Btn variant="ghost" small @click="skip">跳过</Btn>
-                <Btn variant="solid" small @click="submitSkill">
                   <Icon name="arrowRight" :size="13" />
                   <span>完成设置</span>
                 </Btn>

@@ -177,7 +177,7 @@ jobs:
 
       # 增量热更新包 = 完整安装布局去掉 binaries\ms-playwright。Chromium 约
       # 400 MB、只有升级 patchright 时才变，却占了完整 zip 的大头。新客户端
-      # （≥0.8.4）在本机已装同名 chromium-XXXX 目录时优先下载增量包，
+      # （支持增量包的版本）在本机已装同名 chromium-XXXX 目录时优先下载增量包，
       # updater.exe 换目录时把旧目录里的 ms-playwright 原样搬进新目录
       # （见 updater/main.py PRESERVE_DIRS）。后缀用 .upd 而不是 .zip：
       # ≤0.8.3 的老客户端按「第一个 .zip 资产」选包，绝不能让它们误拿到这个

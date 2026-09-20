@@ -2,8 +2,9 @@
 
 csm_core has no SkillRegistry — skills are .md files under AppConfig.skill_dir,
 parsed at request time. Each .md's YAML frontmatter is the metadata; the
-body is the prompt fragment that the article pipeline injects via
-``GenerateRequest.user_skill_prompt``.
+body is the Markdown prompt text shown / edited in the 模板库「风格 Skill」
+editor (SkillEditView). This service is plain metadata + body CRUD — nothing
+injects the body into an LLM request any more.
 
 Expected frontmatter schema (best-effort — missing fields fall back gracefully):
 

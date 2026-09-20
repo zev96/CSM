@@ -245,7 +245,7 @@ function save() {
       >
         <div class="font-display text-[12.5px] font-semibold">Prompt 正文（Markdown）</div>
         <div class="text-[10.5px]" :style="{ color: 'var(--ink-4)' }">
-          这部分会拼到生成请求的 user_skill_prompt 里
+          保存为 Skills 目录下该 Skill .md 文件的正文
         </div>
       </div>
       <textarea

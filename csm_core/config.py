@@ -279,7 +279,8 @@ class AppConfig(BaseModel):
     concurrency: int = 3
     upload_training_hints: bool = False
     export_format: Literal["markdown", "docx"] = "markdown"
-    # 模型单价覆盖（¥/1M tokens）。空 = 用 csm_core.llm.pricing.DEFAULT_PRICES。
+    # 模型单价覆盖（¥/1M tokens）。历史字段：模型计价卡已随写稿功能下线，
+    # 保留只为兼容老 settings.json。
     # key=model 名，value={"input": float, "output": float}。设置页可改、深合并 patch。
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
     # 素材库增量索引：stat 巡走仅重解析变更文件；关 = 每次全量重扫（今天行为）。

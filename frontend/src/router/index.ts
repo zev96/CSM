@@ -14,18 +14,6 @@ const router = createRouter({
       meta: { label: "工作台" },
     },
     {
-      path: "/article",
-      name: "article",
-      component: () => import("@/views/ArticleView.vue"),
-      meta: { label: "创作区" },
-    },
-    {
-      path: "/batch",
-      name: "batch",
-      component: () => import("@/views/BatchView.vue"),
-      meta: { label: "批量生成" },
-    },
-    {
       path: "/monitor",
       name: "monitor",
       component: () => import("@/views/MonitorView.vue"),
@@ -51,12 +39,6 @@ const router = createRouter({
       name: "templates",
       component: () => import("@/views/TemplatesView.vue"),
       meta: { label: "模板库" },
-    },
-    {
-      path: "/materials",
-      name: "materials",
-      component: () => import("@/views/MaterialsView.vue"),
-      meta: { label: "素材库" },
     },
     {
       path: "/xhs",

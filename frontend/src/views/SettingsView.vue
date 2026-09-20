@@ -3,11 +3,11 @@
  * 设置页 —— 对齐 V1 设计稿 D:/CSM/CSM-RE1（V1）/src/screens/settings.jsx
  *
  *   - header: 设置 caption + 偏好 & 集成 大标题
- *   - 220px 左侧导航 (9 个 section) + 右侧面板
+ *   - 220px 左侧导航 (8 个 section) + 右侧面板
  *   - 面板 header：section 标题 + 副标题（无保存按钮 — autosave）
  *
  * 字段绑定到 AppConfig（csm_core/config.py）的策略：
- *   - 后端真有的字段（vault_root / out_dir / api_keys / timeout_seconds...）→
+ *   - 后端真有的字段（vault_root / api_keys / timeout_seconds...）→
  *     维护一份 draft，setField 每次调用立即 PATCH /api/config 对应顶层
  *     字段（嵌套字段也发整块 top-level，后端 dict-merge）
  *   - V1 设计稿里有但后端没的（主题色 / 字体 / 文件名模板 / Skill 滑杆…）→
@@ -29,10 +29,6 @@ import Spinner from "@/components/ui/Spinner.vue";
 import MiningPromptsCard from "@/components/settings/MiningPromptsCard.vue";
 import TencentDocsCard from "@/components/settings/TencentDocsCard.vue";
 import XhsPromptsCard from "@/components/settings/XhsPromptsCard.vue";
-import BrandMemoryCard from "@/components/settings/BrandMemoryCard.vue";
-import PricingCard from "@/components/settings/PricingCard.vue";
-import ContractCard from "@/components/settings/ContractCard.vue";
-import FeedbackCard from "@/components/settings/FeedbackCard.vue";
 import TemplateLibrarySection from "@/components/settings/TemplateLibrarySection.vue";
 import BaiduScrapeSettings from "@/components/settings/BaiduScrapeSettings.vue";
 import logoUrl from "@/assets/logo.png";
@@ -175,7 +171,7 @@ async function pickChromePath() {
 // ── 8 个 section + 三分组 ────────────────────────────────────
 // group 字段按用户重构方案分三段：
 //   basics   基础配置（通用 / 存储路径）—— 安装后基本不动的
-//   workflow 工作流相关（模型 / 历史查重 / 监测 / 评论模板库）—— 影响生成质量
+//   workflow 工作流相关（模型 / 监测 / 百度抓取 / 评论模板库）
 //   system   系统/元信息（账号 / 关于）—— 跟用户/版本相关
 // sidebar 模板按 group 分组渲染，组之间加灰色分隔 label。
 interface SectionDef {
@@ -186,11 +182,9 @@ interface SectionDef {
   group: "basics" | "workflow" | "system";
 }
 const SECTIONS: SectionDef[] = [
-  { k: "general", l: "通用", icon: "settings", sub: "外观 · 行为 · 通知 · 导出", group: "basics" },
-  { k: "paths", l: "存储路径", icon: "folder", sub: "Vault · 导出 · 模板 · Skills 目录", group: "basics" },
+  { k: "general", l: "通用", icon: "settings", sub: "外观 · 行为 · 通知", group: "basics" },
+  { k: "paths", l: "存储路径", icon: "folder", sub: "Vault · 模板 · Skills 目录", group: "basics" },
   { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL", group: "workflow" },
-  { k: "brand-memory", l: "品牌记忆", icon: "stack", sub: "型号注入 · 事实核对 · 自有品牌", group: "workflow" },
-  { k: "dedup", l: "历史查重", icon: "vault", sub: "历史 / vault 索引目录与重建", group: "workflow" },
   { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie", group: "workflow" },
   { k: "baidu-scrape", l: "百度抓取", icon: "radar", sub: "Native Chrome profile · 降低风控", group: "workflow" },
   { k: "templates", l: "评论模板库", icon: "bookmark", sub: "查看 · 编辑 · 批量导入 · 导出", group: "workflow" },
@@ -328,7 +322,6 @@ watch(
 const tweaks = useTweaks();
 const localUI = reactive({
   autoStart: false,
-  filenameTemplate: "{date}-{title}-{seq}",
 });
 
 // ── Provider 信息（前端展示用，对齐 csm_core providers）────────
@@ -492,14 +485,16 @@ async function saveTikhubSecret() {
   }
 }
 
+/**
+ * 测试连接 —— 按卡测试：POST /api/llm/ping { provider }，sidecar 用这张卡的
+ * Key / 模型 / Base URL 发一次最小请求。被测卡不必是默认 provider。
+ * （原先借用创作区的 /api/polish/block，该接口已随创作区下线。）
+ */
 async function testProvider(p: ProviderMeta) {
   providerTestState[p.key] = { state: "testing" };
   try {
-    const resp = await sidecar.client.post("/api/polish/block", {
-      text: "ping",
-      provider: p.key,
-    });
-    const ok = Boolean(resp.data?.text);
+    const resp = await sidecar.client.post("/api/llm/ping", { provider: p.key });
+    const ok = Boolean(resp.data?.ok);
     providerTestState[p.key] = { state: ok ? "ok" : "fail" };
     if (ok) {
       toast.success(`${p.name} 测试通过`);
@@ -507,7 +502,10 @@ async function testProvider(p: ProviderMeta) {
       toast.warn(`${p.name} 返回空响应`);
     }
   } catch (e: any) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    // 错误体是 {code, detail}（503 llm_not_configured / 502 llm_error），与 xhs / 引流 AI 路由同款
+    const d = e?.response?.data?.detail;
+    const detail =
+      (d && typeof d === "object" ? d.detail : d) || e?.message || String(e);
     providerTestState[p.key] = { state: "fail", detail };
     toast.error(`${p.name} 测试失败：${detail}`);
   }
@@ -543,52 +541,6 @@ const closeActionOptions = [
   { label: "最小化到托盘", value: "minimize_to_tray" },
   { label: "直接退出", value: "quit" },
 ];
-const exportFormatOptions = [
-  { label: "Markdown", value: "markdown" },
-  { label: "DOCX", value: "docx" },
-];
-// 文件名模板：从自由文本输入改为下拉预设。两个开箱即用的方案够覆盖
-// 90% 的人写文件名的习惯：要么按日期归档、要么纯标题。变量约定：
-//   {date}  → MM-DD（月份-日期，由导出端拼装）
-//   {title} → 文章标题
-//   {seq}   → 当日序号（避免同一天多稿撞名）
-const filenameTemplateOptions = [
-  {
-    label: "日期 + 标题 + 序号（如 05-11-文章标题-01）",
-    value: "{date}-{title}-{seq}",
-  },
-  { label: "仅文章标题（如 文章标题）", value: "{title}" },
-];
-
-// ── 重建索引 —— 实际调后端 POST /api/dedup/build-index ─────────
-// 之前这里只 toast「请到查重页操作」是错的：没有独立的查重页，本 section
-// 就是查重设置 + 入口。后端 dedup_service.submit_build() 早就支持 kind
-// = "history" | "vault" 异步建索引，前端只需要 POST 一下；progress 通过
-// SSE 流（这里暂不订阅，简单 toast 即可，建完用户下次跑文章的"质检报告
-// 重复率·历史"自然会看到对比结果）。
-const rebuildBusy = ref<{ history: boolean; vault: boolean }>({
-  history: false,
-  vault: false,
-});
-
-async function rebuildIndex(kind: "history" | "vault") {
-  if (rebuildBusy.value[kind]) return;
-  const label = kind === "history" ? "历史" : "Vault";
-  rebuildBusy.value[kind] = true;
-  try {
-    const r = await sidecar.client.post("/api/dedup/build-index", { kind });
-    if (r.status === 202) {
-      toast.success(`${label} 索引重建已启动，后台异步执行（job ${r.data?.job_id ?? "?"}）`);
-    } else {
-      toast.info(`${label} 索引重建返回 status=${r.status}`);
-    }
-  } catch (e: any) {
-    const detail = e?.response?.data?.detail ?? e?.message ?? String(e);
-    toast.error(`${label} 索引重建失败：${detail}`);
-  } finally {
-    rebuildBusy.value[kind] = false;
-  }
-}
 
 // ── 关于：版本号从 sidecar 实时读 ───────────────────────────────
 // 之前是硬编码常量 `const APP_VERSION = "0.4.0"`，跟 sidecar 实际报的
@@ -884,8 +836,6 @@ async function saveAccountEdit() {
           <!--
             说明：用户名移到「账号」section；语言、检查更新、字体、强调色
             都已移除（强调色的反向绑定一直没生效，宁可删掉也不留死按钮）。
-            导出相关的两项（默认格式 / 文件名模板）合并到这里，避免因为
-            只有两项还专门开一个 section。
           -->
           <template v-if="section === 'general'">
             <SettingsRow label="主题" hint="界面配色 — 跟随系统/明亮/暗色">
@@ -919,6 +869,7 @@ async function saveAccountEdit() {
             <SettingsRow
               label="通知"
               hint="右上角铃铛 — 总开关 + 点「设置」按分类配置"
+              last
             >
               <Btn variant="ghost" small @click="notifPrefsOpen = true">
                 <Icon name="settings" :size="13" />
@@ -927,25 +878,6 @@ async function saveAccountEdit() {
               <FormToggle
                 :model-value="notifs.enabled.value"
                 @update:model-value="(v) => notifs.setEnabled(v)"
-              />
-            </SettingsRow>
-            <SettingsRow label="导出格式" hint="导出文章时的默认格式">
-              <FormSelect
-                :model-value="get('export_format') ?? 'markdown'"
-                :options="exportFormatOptions"
-                width="140"
-                @update:model-value="(v) => setField('export_format', v)"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="导出文件名模板"
-              hint="预设两种命名方案，避免手写变量出错"
-              last
-            >
-              <FormSelect
-                v-model="localUI.filenameTemplate"
-                :options="filenameTemplateOptions"
-                width="260"
               />
             </SettingsRow>
           </template>
@@ -959,30 +891,13 @@ async function saveAccountEdit() {
           -->
           <template v-else-if="section === 'paths'">
             <SettingsRow
-              label="素材库 (Vault)"
-              hint="Obsidian Vault — 文章引用的素材源"
+              label="Obsidian Vault"
+              hint="模板库编辑器「属性筛选」扫描的笔记目录（frontmatter 属性来源）"
             >
               <PathField
                 :value="get('vault_root') ?? ''"
-                title="选择素材库 (Vault) 目录"
+                title="选择 Obsidian Vault 目录"
                 @update="(v) => setField('vault_root', v)"
-              />
-            </SettingsRow>
-            <SettingsRow label="导出目录" hint="Markdown / 报告 默认落地位置">
-              <PathField
-                :value="get('out_dir') ?? ''"
-                title="选择导出目录"
-                @update="(v) => setField('out_dir', v)"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="历史索引目录"
-              hint="成稿镜像 / 最近文档 / 查重历史 — 三合一目录，首次启动已自动建好"
-            >
-              <PathField
-                :value="get('dedup_history_dir') ?? ''"
-                title="选择历史索引目录"
-                @update="(v) => setField('dedup_history_dir', v)"
               />
             </SettingsRow>
             <SettingsRow label="默认模板目录" hint="模板 .json 所在文件夹 — 首次启动已自动建好，可改位置">
@@ -1012,7 +927,7 @@ async function saveAccountEdit() {
               · API Key  — 立刻通过 keyringSet 写系统钥匙串（不进 draft，
                 因为密钥不该混在普通 config diff 里上传）
               · Base URL (base_urls[provider]) — 走 cfg.patch 保存
-              · 测试连接  — POST /api/polish/block 用 ping，OK/失败两态
+              · 测试连接  — POST /api/llm/ping { provider }，按卡测试，OK/失败两态
                 Pill 直接显示在卡头。
           -->
           <template v-else-if="section === 'models'">
@@ -1216,6 +1131,7 @@ async function saveAccountEdit() {
               <SettingsRow
                 label="超时"
                 hint="单次请求等待上限，超过自动重试一次"
+                last
               >
                 <input
                   :value="get('timeout_seconds') ?? 180"
@@ -1230,37 +1146,6 @@ async function saveAccountEdit() {
                   @change="(e) => setField('timeout_seconds', Number((e.target as HTMLInputElement).value))"
                 />
                 <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">秒</span>
-              </SettingsRow>
-              <SettingsRow label="并发上限" hint="批量任务同时跑几条" last>
-                <div
-                  class="flex items-center"
-                  :style="{
-                    background: 'var(--card-white)',
-                    borderRadius: '999px',
-                    padding: '3px',
-                    border: '1px solid var(--line)',
-                  }"
-                >
-                  <button
-                    v-for="n in [1, 2, 4, 6, 8]"
-                    :key="n"
-                    type="button"
-                    class="inline-flex items-center font-medium"
-                    :style="{
-                      height: '24px',
-                      padding: '0 12px',
-                      borderRadius: '999px',
-                      fontSize: '11.5px',
-                      background:
-                        (get('concurrency') ?? 3) === n ? 'var(--dark)' : 'transparent',
-                      color: (get('concurrency') ?? 3) === n ? 'var(--card)' : 'var(--ink-3)',
-                      cursor: 'pointer',
-                    }"
-                    @click="setField('concurrency', n)"
-                  >
-                    {{ n }}
-                  </button>
-                </div>
               </SettingsRow>
             </div>
 
@@ -1283,142 +1168,6 @@ async function saveAccountEdit() {
               腾讯文档同步
             </div>
             <TencentDocsCard />
-          </template>
-
-          <!-- ━━━━━━━━ 品牌记忆 ━━━━━━━━ -->
-          <template v-else-if="section === 'brand-memory'">
-            <BrandMemoryCard />
-            <!-- 模型单价 —— 改 AppConfig.pricing.*，供成稿区「≈¥」成本估算用 -->
-            <div class="mt-4">
-              <PricingCard />
-            </div>
-            <!-- 生成契约 —— 改 AppConfig.contract.mode，控制保守/激进默认档 -->
-            <div class="mt-4">
-              <ContractCard />
-            </div>
-            <!-- 反馈学习 —— 改 AppConfig.feedback.*，导出后采集 + 可选采样反哺 -->
-            <div class="mt-4">
-              <FeedbackCard />
-            </div>
-          </template>
-
-          <!-- 导出 section 已合并到「通用」，「导出后操作」默认无动作。 -->
-
-          <!-- ━━━━━━━━ 历史查重 ━━━━━━━━ -->
-          <!--
-            两类索引各自需要先指定源文件夹：
-              - 历史索引 ← dedup_history_dir（历史成稿目录）
-              - Vault 索引 ← vault_root（与「存储路径」共用，避免双份配置）
-            没有源目录就没法重建，所以「选择文件夹 + 重建」并列展示。
-          -->
-          <template v-else-if="section === 'dedup'">
-            <div
-              class="flex items-center gap-3 p-4"
-              :style="{
-                background: 'var(--primary-soft)',
-                color: 'var(--primary-deep)',
-                borderRadius: '14px',
-              }"
-            >
-              <Icon name="vault" :size="16" />
-              <div class="flex-1 text-[12px]">
-                对比历史文章库和 vault 素材，识别撞稿与未消化原文。索引在后台异步重建。
-              </div>
-            </div>
-            <SettingsRow
-              label="历史索引目录"
-              hint="位置在「存储路径」section 修改"
-            >
-              <span
-                class="font-mono truncate text-[11px]"
-                :style="{
-                  color: 'var(--ink-3)',
-                  maxWidth: '340px',
-                  display: 'inline-block',
-                }"
-                :title="get('dedup_history_dir') ?? ''"
-              >
-                {{ get('dedup_history_dir') || '— 未设置 —' }}
-              </span>
-            </SettingsRow>
-            <SettingsRow
-              label="历史索引重建"
-              :hint="
-                get('dedup_history_last_built')
-                  ? `上次重建：${get('dedup_history_last_built')}`
-                  : '尚未建立'
-              "
-            >
-              <Btn
-                variant="ghost"
-                small
-                :disabled="rebuildBusy.history"
-                @click="rebuildIndex('history')"
-              >
-                <Spinner v-if="rebuildBusy.history" :size="12" />
-                <Icon v-else name="refresh" :size="13" />
-                <span>{{ rebuildBusy.history ? '重建中…' : '重建' }}</span>
-              </Btn>
-            </SettingsRow>
-            <SettingsRow
-              label="Vault 索引目录"
-              hint="与「存储路径」中的素材库 (Vault) 同步"
-            >
-              <PathField
-                :value="get('vault_root') ?? ''"
-                title="选择 Vault 目录"
-                @update="(v) => setField('vault_root', v)"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Vault 索引重建"
-              :hint="
-                get('dedup_vault_last_built')
-                  ? `上次重建：${get('dedup_vault_last_built')}`
-                  : '尚未建立'
-              "
-            >
-              <Btn
-                variant="ghost"
-                small
-                :disabled="rebuildBusy.vault"
-                @click="rebuildIndex('vault')"
-              >
-                <Spinner v-if="rebuildBusy.vault" :size="12" />
-                <Icon v-else name="refresh" :size="13" />
-                <span>{{ rebuildBusy.vault ? '重建中…' : '重建' }}</span>
-              </Btn>
-            </SettingsRow>
-            <SettingsRow label="重复率告警阈值" hint="超过则在检查面板告警">
-              <input
-                :value="get('dedup_threshold_yellow') ?? 30"
-                type="number"
-                class="bg-card-white px-3 text-[12.5px] outline-none"
-                :style="{
-                  width: '70px',
-                  height: '34px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--line)',
-                }"
-                @change="(e) => setField('dedup_threshold_yellow', Number((e.target as HTMLInputElement).value))"
-              />
-              <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">%</span>
-            </SettingsRow>
-            <SettingsRow label="安全阈值" hint="低于则视为通过" last>
-              <input
-                :value="get('dedup_threshold_green') ?? 15"
-                type="number"
-                class="bg-card-white px-3 text-[12.5px] outline-none"
-                :style="{
-                  width: '70px',
-                  height: '34px',
-                  borderRadius: '10px',
-                  border: '1px solid var(--line)',
-                }"
-                @change="(e) => setField('dedup_threshold_green', Number((e.target as HTMLInputElement).value))"
-              />
-              <span class="text-[11.5px]" :style="{ color: 'var(--ink-3)' }">%</span>
-            </SettingsRow>
           </template>
 
           <!-- ━━━━━━━━ 监测 ━━━━━━━━ -->
@@ -1578,7 +1327,7 @@ async function saveAccountEdit() {
             </SettingsRow>
             <!--
               通知开关已迁至「通用」section —— 监测告警只是通知的一类，
-              和「生成成功 / 排名异动 / 评论异动 / 导出完成」并列，集中
+              和「排名异动 / 评论异动 / 监测任务完成 / 引流任务完成」并列，集中
               在通用页配置更直观。
             -->
             <!--

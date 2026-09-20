@@ -1,16 +1,17 @@
 """In-process pub/sub for SSE streaming.
 
 The legacy GUI used QSignal to push pipeline progress; sidecar uses this
-bus instead. Each long-running job (article generate, batch run, dedup
-build) creates a queue keyed by ``job_id``; the worker thread publishes
-events into the queue, and the SSE endpoint drains it asynchronously.
+bus instead. Each long-running job (mining scrape, AI comment batch,
+updater download) creates a queue keyed by ``job_id``; the worker thread
+publishes events into the queue, and the SSE endpoint drains it
+asynchronously.
 
 Threading model
 ---------------
 The bus is **thread-safe by construction**: queue operations are atomic,
 and the SSE generator reads via ``asyncio.to_thread(queue.get, ...)`` so
 the FastAPI event loop never blocks on a slow worker. No asyncio.Queue —
-the worker is pure sync (csm_core.pipeline.* is blocking) and we want it
+the workers are pure sync (blocking scrapers / HTTP clients) and we want them
 to push without caring whether the SSE client is connected yet.
 
 Lifetime

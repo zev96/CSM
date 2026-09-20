@@ -1,7 +1,8 @@
-"""Random test-framework block — random N test items × per-brand fill-in.
+"""Brand-section parser for 竞品卡 notes.
 
-Public entry-point: :func:`sample_test_framework_block`. Used by the assembler
-when it encounters a ``TestFrameworkBlock`` in a template.
+The random test-framework sampler that used to live here went away with
+the article generator; :mod:`csm_core.assembler.cards` still relies on
+:func:`extract_brand_sections`.
 """
 from .section_parser import (
     NORMALIZED_PREFIXES,
@@ -10,14 +11,11 @@ from .section_parser import (
     find_section_for_topic,
     normalize_section_title,
 )
-from .sampler import TestFrameworkConfig, sample_test_framework_block
 
 __all__ = [
     "BrandSection",
     "NORMALIZED_PREFIXES",
-    "TestFrameworkConfig",
     "extract_brand_sections",
     "find_section_for_topic",
     "normalize_section_title",
-    "sample_test_framework_block",
 ]

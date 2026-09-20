@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from csm_core.config import AppConfig, delete_secret, get_secret, read_api_key, set_secret
 
 from ..auth import RequireToken
-from ..services import config_service
+from ..services import config_service, llm_factory
+from ..services.llm_factory import LLMConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -125,3 +126,43 @@ def keyring_delete(provider: str) -> KeyringStatus:
     """Remove the stored key. Idempotent — already-absent is success."""
     delete_secret(provider)
     return KeyringStatus(provider=provider, has_key=False)
+
+
+# ── LLM connectivity probe (设置 → 模型 →「测试连接」) ─────────────────────
+class LLMPingBody(BaseModel):
+    provider: str = Field(min_length=1, max_length=40)
+    model: str | None = Field(default=None, max_length=120)
+
+
+@router.post("/api/llm/ping")
+def llm_ping(body: LLMPingBody) -> dict[str, Any]:
+    """用指定 provider 的 Key / 模型 / Base URL 发一次最小请求，验证配置可用。
+
+    设置页每张 provider 卡都有「测试连接」。它原先借用创作区的
+    ``/api/polish/block``（带 provider 参数）；该路由随创作区下线后，这里提供
+    一个专用探针，不依赖任何业务功能，也不要求被测 provider 是默认 provider。
+
+    错误体与小红书 / 引流的 AI 路由同款：503 ``llm_not_configured``（没配
+    Key / 没选 provider）、502 ``llm_error``（请求发出去但失败）。
+    """
+    from ..services.llm_factory import LLMConfigError, build_client
+
+    try:
+        client = build_client(provider=body.provider, model=body.model or None)
+        reply = client.complete(
+            system="You are a connectivity probe. Reply with the single word: pong",
+            user="ping",
+        )
+    except LLMConfigError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "llm_not_configured", "detail": str(e)},
+        ) from e
+    except Exception as e:  # noqa: BLE001 —— LLM client 可能抛任何异常
+        logger.info("llm ping failed for provider=%s: %s", body.provider, type(e).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "llm_error", "detail": str(e) or e.__class__.__name__},
+        ) from e
+    text = (reply or "").strip()
+    return {"ok": bool(text), "provider": body.provider, "reply": text[:80]}

@@ -1,9 +1,7 @@
-"""成稿确定性评分：禁区 lint + AI 味启发式 + 核对信号 → 0-100。"""
-from .model import ScorePart, ScoreReport
+"""AI 味启发式评分 —— 引流 AI 评论生成用它给候选评论打分。"""
+from .model import ScorePart
 from .ai_flavor import AI_CONNECTIVES, ai_flavor_parts
-from .score import score_article
 
 __all__ = [
-    "ScorePart", "ScoreReport", "AI_CONNECTIVES", "ai_flavor_parts",
-    "score_article",
+    "ScorePart", "AI_CONNECTIVES", "ai_flavor_parts",
 ]

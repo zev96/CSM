@@ -16,15 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import auth, heartbeat, lifespan as _lifespan, logging_setup
 from .routes import aggregation as aggregation_routes
-from .routes import angle as angle_routes
-from .routes import article as article_routes
-from .routes import assembler as assembler_routes
-from .routes import batch as batch_routes
-from .routes import brand_memory as brand_memory_routes
-from .routes import chain as chain_routes
 from .routes import config as config_routes
-from .routes import dedup as dedup_routes
-from .routes import generate as generate_routes
 from .routes import mining as mining_routes
 from .routes import monitor as monitor_routes
 from .routes import skills as skills_routes
@@ -32,12 +24,7 @@ from .routes import system as system_routes
 from .routes import templates as templates_routes
 from .routes import updater as updater_routes
 from .routes import vault as vault_routes
-from .routes import vault_writer as vault_writer_routes
-from .routes import vault_atomize as vault_atomize_routes
-from .routes import lint as lint_routes
-from .routes import score as score_routes
 from .routes import xhs as xhs_routes
-from .routes import feedback as feedback_routes
 
 logger = logging.getLogger(__name__)
 
@@ -83,26 +70,13 @@ app.middleware("http")(heartbeat.heartbeat_middleware)
 app.include_router(system_routes.router)
 app.include_router(config_routes.router)
 app.include_router(vault_routes.router)
-app.include_router(vault_writer_routes.router)
-app.include_router(vault_atomize_routes.router)
-app.include_router(lint_routes.router)
-app.include_router(score_routes.router)
 app.include_router(skills_routes.router)
-app.include_router(brand_memory_routes.router)
 app.include_router(templates_routes.router)
-app.include_router(generate_routes.router)
-app.include_router(chain_routes.router)
-app.include_router(article_routes.router)
-app.include_router(batch_routes.router)
 app.include_router(monitor_routes.router)
 app.include_router(mining_routes.router)
-app.include_router(dedup_routes.router)
 app.include_router(updater_routes.router)
 app.include_router(aggregation_routes.router)
-app.include_router(assembler_routes.router)
-app.include_router(angle_routes.router)
 app.include_router(xhs_routes.router)
-app.include_router(feedback_routes.router)
 
 
 def run() -> None:
