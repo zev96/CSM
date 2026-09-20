@@ -327,17 +327,49 @@ export const useMiningStore = defineStore("mining", () => {
     if (idx !== -1) jobs.value[idx] = patch(jobs.value[idx])
   }
 
+  const RUNNING_STATUSES = ["pending", "running"]
+  const isRunningStatus = (s: unknown) => RUNNING_STATUSES.includes(String(s ?? ""))
+
+  /**
+   * 活跃任务「running → 终态」的统一收尾：推通知（取消静默）、关流、刷视频列表
+   * 和任务列表。三条路径（SSE job.finished / 断线快照 / loadJobs 对账）都走
+   * 这里；调用方负责只在真正发生状态转换时调用（wasRunning 判定），所以
+   * 不会重复推通知。
+   */
+  function _settleFinished(status: string, keyword: string) {
+    if (stopSse) { stopSse(); stopSse = null }
+    if (status !== "cancelled") {
+      // 用户主动取消不推「完成」通知 —— 与 monitor 的取消静默一致
+      const ok = status === "done" || status === "completed"
+      bell.push("引流任务完成", {
+        body: `「${keyword}」${ok ? "全部平台完成" : "部分平台未完成"}`,
+        tone: ok ? "success" : "warn",
+        category: "mining_done",
+      })
+    }
+    refreshVideos()
+    // Refresh the full jobs list to pick up any post-run server-side
+    // mutations (e.g. partial_done note updates) we may have missed.
+    loadJobs().catch(() => { /* non-fatal */ })
+  }
+
   function subscribeToJob(jobId: number) {
     if (stopSse) { stopSse(); stopSse = null }
+    // 一条事件流只属于一个 job。事件体里的 job_id 由 sidecar 的 SSE 路由补入
+    // （EventBus 层因参数名撞车会把它剥掉）；老版本 sidecar 没有这个字段时
+    // 退回本闭包的 jobId —— 之前所有 handler 都拿 undefined 去比 activeJob.id，
+    // 进度 / 完成 / 取消全部失配，任务永远停在「抓取中」。
+    const jid = (d: any): number => (typeof d?.job_id === "number" ? d.job_id : jobId)
+    const isActive = (d: any) => activeJob.value !== null && activeJob.value.id === jid(d)
     stopSse = subscribe(`/api/mining/jobs/${jobId}/events`, {
       "job.progress": (d: any) => {
-        if (activeJob.value && activeJob.value.id === d.job_id) {
-          activeJob.value.progress[d.platform as Platform] = {
+        if (isActive(d)) {
+          activeJob.value!.progress[d.platform as Platform] = {
             got: d.got, target: d.target, phase: d.phase, note: d.note,
           }
         }
         // Mirror into jobs[] so the left-column progress bar animates live.
-        _patchJobInList(d.job_id, j => ({
+        _patchJobInList(jid(d), j => ({
           ...j,
           progress: {
             ...j.progress,
@@ -346,15 +378,15 @@ export const useMiningStore = defineStore("mining", () => {
         }))
       },
       "job.platform_done": (d: any) => {
-        if (activeJob.value && activeJob.value.id === d.job_id) {
-          activeJob.value.progress[d.platform as Platform] = {
-            ...(activeJob.value.progress[d.platform as Platform] || { target: 50 }),
+        if (isActive(d)) {
+          activeJob.value!.progress[d.platform as Platform] = {
+            ...(activeJob.value!.progress[d.platform as Platform] || { target: 50 }),
             got: d.count,
             phase: d.status === "done" ? "done" : d.status,
             note: d.error || "",
           }
         }
-        _patchJobInList(d.job_id, j => ({
+        _patchJobInList(jid(d), j => ({
           ...j,
           progress: {
             ...j.progress,
@@ -368,40 +400,35 @@ export const useMiningStore = defineStore("mining", () => {
         }))
       },
       "job.finished": (d: any) => {
-        if (activeJob.value && activeJob.value.id === d.job_id) {
-          activeJob.value.status = d.summary?.status
-          activeJob.value.finished_at = new Date().toISOString()
+        const id = jid(d)
+        const st = String(d.summary?.status ?? "")
+        const wasRunning = isActive(d) && isRunningStatus(activeJob.value!.status)
+        if (isActive(d)) {
+          activeJob.value!.status = st
+          activeJob.value!.finished_at = new Date().toISOString()
         }
-        _patchJobInList(d.job_id, j => ({
+        _patchJobInList(id, j => ({
           ...j,
-          status: d.summary?.status,
+          status: st,
           finished_at: new Date().toISOString(),
         }))
-        const st = String(d.summary?.status ?? "")
-        if (st !== "cancelled") {
-          // 用户主动取消不推「完成」通知 —— 与 monitor/article 的取消静默一致
-          const ok = st === "done" || st === "completed"
-          const aj = activeJob.value
-          const kw = aj && aj.id === d.job_id
-            ? aj.keyword
-            : (jobs.value.find(j => j.id === d.job_id)?.keyword ?? "")
-          bell.push("引流任务完成", {
-            body: `「${kw}」${ok ? "全部平台完成" : "部分平台未完成"}`,
-            tone: ok ? "success" : "warn",
-            category: "mining_done",
-          })
+        const kw = activeJob.value && activeJob.value.id === id
+          ? activeJob.value.keyword
+          : (jobs.value.find(j => j.id === id)?.keyword ?? "")
+        if (wasRunning) {
+          _settleFinished(st, kw)
+        } else if (stopSse) {
+          stopSse(); stopSse = null
         }
-        if (stopSse) { stopSse(); stopSse = null }
-        refreshVideos()
-        // Refresh the full jobs list to pick up any post-run server-side
-        // mutations (e.g. partial_done note updates) we may have missed.
-        loadJobs().catch(() => { /* non-fatal */ })
       },
       "login.required": (d: any) => {
         loginStatus.value[d.platform as Platform] = false
       },
       done: () => {
         if (stopSse) { stopSse(); stopSse = null }
+        // 只收到 done 哨兵、没收到 job.finished（runner 线程异常、finalize 落库
+        // 失败等）→ 拉快照对账，否则 activeJob 永远停在 running。
+        if (hasRunningJob.value) void _refreshActiveJobSnapshot()
       },
     }, {
       onError: () => { void _refreshActiveJobSnapshot() },
@@ -409,18 +436,23 @@ export const useMiningStore = defineStore("mining", () => {
   }
 
   /**
-   * SSE 断线时的快照对账：拉一次 GET /api/mining/jobs/{id}（routes/mining.py
-   * get_job 直接返回 job dict），把断线期间错过的 progress/status 补回来。
-   * 注意：事件队列断线即被 sidecar 回收、错过的 job.finished 不会重放 ——
-   * 终态经快照得知时，这里是唯一恢复路径，要补齐 finished handler 的收尾。
+   * SSE 断线 / 服务端事件缺失时的快照对账：拉一次 GET /api/mining/jobs/{id}
+   * （routes/mining.py get_job 直接返回 job dict），把错过的 progress/status
+   * 补回来。事件队列断线即被 sidecar 回收、错过的 job.finished 不会重放 ——
+   * 终态经快照得知时，这里是恢复路径之一，要补齐 finished handler 的收尾。
+   * 单飞：EventSource 重连风暴下不会叠加发请求。
    */
+  let snapshotInFlight = false
   async function _refreshActiveJobSnapshot() {
     const job = activeJob.value
-    if (!job) return
+    if (!job || snapshotInFlight) return
+    snapshotInFlight = true
     try {
       const resp = await api().get<MiningJob>(`/api/mining/jobs/${job.id}`)
       const fresh = resp.data
       if (!fresh || typeof fresh.id !== "number") return
+      if (!activeJob.value || activeJob.value.id !== fresh.id) return // 期间换了任务
+      const wasRunning = isRunningStatus(activeJob.value.status)
       activeJob.value = fresh
       // get_job 不带 list_jobs 才有的聚合列（video_count/commented_count）——
       // 整体替换会把真实计数清零；保留列表里的旧值。
@@ -429,35 +461,34 @@ export const useMiningStore = defineStore("mining", () => {
         video_count: j.video_count,
         commented_count: j.commented_count,
       }))
-      if (!["pending", "running"].includes(fresh.status) && stopSse) {
-        stopSse()
-        stopSse = null
-        // 与 job.finished handler 同款收尾（互斥：finished 先到则 stopSse 已
-        // 为 null，不会走到这里 —— 无重复通知）。
-        if (fresh.status !== "cancelled") {
-          const ok = fresh.status === "done" || fresh.status === "completed"
-          bell.push("引流任务完成", {
-            body: `「${fresh.keyword}」${ok ? "全部平台完成" : "部分平台未完成"}`,
-            tone: ok ? "success" : "warn",
-            category: "mining_done",
-          })
-        }
-        refreshVideos()
-        loadJobs().catch(() => { /* non-fatal */ })
+      if (wasRunning && !isRunningStatus(fresh.status)) {
+        _settleFinished(fresh.status, fresh.keyword)
       }
     } catch {
       /* 瞬时网络问题 —— EventSource 自己会重连，下次事件兜底 */
+    } finally {
+      snapshotInFlight = false
+    }
+  }
+
+  /**
+   * 取消任意 job（POST /api/mining/jobs/{id}/cancel）。后端 409 表示任务已经
+   * 结束或根本不在跑 —— 此时前端状态已经落后，立刻对账拉快照 / 刷列表，别让
+   * 「抓取中」+ 停止按钮继续骗人。
+   */
+  async function cancelJob(jobId: number): Promise<void> {
+    try {
+      await api().post(`/api/mining/jobs/${jobId}/cancel`)
+    } catch (e: any) {
+      if (e?.response?.status !== 409) throw e
+      if (activeJob.value?.id === jobId) await _refreshActiveJobSnapshot()
+      else await loadJobs().catch(() => { /* non-fatal */ })
     }
   }
 
   async function cancelActive() {
     if (activeJob.value === null) return
-    try {
-      await api().post(`/api/mining/jobs/${activeJob.value.id}/cancel`)
-    } catch (e: any) {
-      // 409 = already finished. Silently swallow; UI will catch up on next refresh.
-      if (e?.response?.status !== 409) throw e
-    }
+    await cancelJob(activeJob.value.id)
   }
 
   // Limit bumped from 50 to 500 (max allowed by backend Query le=500 in
@@ -546,13 +577,34 @@ export const useMiningStore = defineStore("mining", () => {
     return deleted
   }
 
-  /** Fetch the recent jobs list for the left-column task panel. */
+  /**
+   * Fetch the recent jobs list for the left-column task panel.
+   *
+   * 顺手做两件对账（都是兜底，正常路径由 SSE 驱动）：
+   *   1. activeJob 还标着 running、列表里它已是终态 → 采用终态并收尾。
+   *   2. 前端没有活跃任务（页面刷新 / 重开后），但列表里有 running/pending 的
+   *      job（sidecar 单 worker，最多一个）→ 重新挂上 SSE，托盘和进度条恢复。
+   */
   async function loadJobs(limit = 50) {
     const resp = await api().get<{ count: number; jobs: MiningJob[] }>(
       "/api/mining/jobs",
       { params: { limit } },
     )
     jobs.value = resp.data.jobs
+    const aj = activeJob.value
+    if (aj && isRunningStatus(aj.status)) {
+      const fresh = jobs.value.find(j => j.id === aj.id)
+      if (fresh && !isRunningStatus(fresh.status)) {
+        activeJob.value = fresh
+        _settleFinished(fresh.status, fresh.keyword)
+      }
+    } else if (!hasRunningJob.value) {
+      const running = jobs.value.find(j => isRunningStatus(j.status))
+      if (running) {
+        activeJob.value = running
+        subscribeToJob(running.id)
+      }
+    }
   }
 
   /**
@@ -881,7 +933,7 @@ export const useMiningStore = defineStore("mining", () => {
     commentsByVideo, aiSummaryLoading, commentSavingByVideo,
     syncingJobId, syncResult, syncError,
     hasRunningJob,
-    startJob, cancelActive, refreshVideos,
+    startJob, cancelActive, cancelJob, refreshVideos,
     refreshLoginStatus, startLogin, confirmLogin,
     deleteVideo, bulkDeleteVideos, loadJobs, selectJob, exportUrl, deleteJob,
     loadComments, createComment, updateComment, deleteComment,

@@ -6,6 +6,9 @@ from typing import Any
 
 SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-[\w.]+)?$")
 
+# 增量热更新包的资产名后缀（release.yml 打包 / build_manifest.py 登记时同名）。
+LITE_ASSET_SUFFIX = "-lite.upd"
+
 
 class ManifestError(Exception):
     """Raised when the GitHub release JSON does not match what we expect."""
@@ -21,6 +24,12 @@ class UpdateInfo:
     changelog: str          # body markdown
     published_at: str       # ISO timestamp
     asset_size: int         # bytes of the zip
+    # 增量热更新包（``*-lite.upd``，不含 binaries/ms-playwright 的 Chromium）。
+    # 后缀故意不用 .zip：≤0.8.3 的老客户端按「第一个 .zip 资产」选包，看到
+    # 一个不带浏览器内核的 zip 会把它当完整包装上去、装完没有 Chromium。
+    # 是否真的用它由 sidecar updater_service 按本机已装的 chromium 目录决定。
+    lite_url: str | None = None
+    lite_size: int = 0
 
     def is_newer_than(self, other: str) -> bool:
         """Strict semver-tuple compare. v-prefix tolerated on input."""
@@ -63,6 +72,11 @@ def parse_release_json(payload: dict[str, Any]) -> UpdateInfo:
     if not manifest_asset:
         raise ManifestError("release has no manifest.json asset")
 
+    lite_asset = next(
+        (a for a in assets if a.get("name", "").endswith(LITE_ASSET_SUFFIX)),
+        None,
+    )
+
     # Prefer the API URL ("url" field) over browser_download_url. For PRIVATE
     # repos, browser_download_url 302-redirects to a signed S3 URL but our
     # Authorization: Bearer header carries through and breaks the S3 request.
@@ -77,4 +91,9 @@ def parse_release_json(payload: dict[str, Any]) -> UpdateInfo:
         changelog=body,
         published_at=published,
         asset_size=int(zip_asset.get("size", 0)),
+        lite_url=(
+            (lite_asset.get("url") or lite_asset.get("browser_download_url"))
+            if lite_asset else None
+        ),
+        lite_size=int(lite_asset.get("size", 0)) if lite_asset else 0,
     )

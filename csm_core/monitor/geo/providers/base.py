@@ -29,7 +29,7 @@ def get_provider(platform: str) -> GeoProvider:
         return TongyiProvider()
     if platform == "kimi":
         # 阶段 3：Kimi 改走 RPA（API 版 annotations 恒 0 拿不到信源）；
-        # api_kimi 模块保留供其单测直接 import，但 get_provider 不再走它。
+        # 旧 api_kimi 模块已删除。
         try:
             from .rpa.kimi import KimiProvider
         except ImportError as e:

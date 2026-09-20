@@ -18,7 +18,6 @@
  * 以及让父组件的 SSE finished 事件回调能通知模块刷新 taskResults。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
 
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
@@ -129,7 +128,6 @@ const emit = defineEmits<{
 
 const sidecar = useSidecar();
 const toast = useToast();
-const router = useRouter();
 
 // ── 当前选中任务 ───────────────────────────────────────────────────────
 // 详情卡跟着 selectedTaskId 切。父组件 goToZhihuTask 通过 defineExpose
@@ -874,19 +872,6 @@ defineExpose({ selectTask, onTaskFinished, handleTaskDeleted });
             >
               <Icon name="fileText" :size="14" />
               <span>查看报告</span>
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
-              :style="{
-                background: 'var(--primary)',
-                color: '#fff',
-                borderRadius: '999px',
-              }"
-              @click="router.push({ name: 'article' })"
-            >
-              <Icon name="edit" :size="14" />
-              <span>起一篇救场</span>
             </button>
           </div>
         </div>

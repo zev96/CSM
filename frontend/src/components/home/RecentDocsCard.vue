@@ -102,10 +102,7 @@ function toFileURL(p: string): string {
 }
 
 async function openDoc(d: Doc) {
-  if (!d.path) {
-    router.push({ name: "article" });
-    return;
-  }
+  if (!d.path) return;
   try {
     const isTauri =
       typeof window !== "undefined" &&
@@ -162,7 +159,7 @@ async function openDoc(d: Doc) {
       <Icon name="fileText" :size="22" :style="{ color: 'var(--ink-4)' }" />
       <div class="mt-2 text-[12.5px]">暂无文档</div>
       <div class="mt-1 text-[10.5px]" :style="{ color: 'var(--ink-4)' }">
-        起飞一篇试试 · 完成后会出现在这里
+        导出的文档会出现在这里
       </div>
     </div>
 

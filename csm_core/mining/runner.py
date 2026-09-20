@@ -210,6 +210,12 @@ class MiningRunner:
                 mining_storage.update_platform_progress(
                     job_id, platform, got=0, target=eff_target, phase="cancelled",
                 )
+                # 取消后被跳过的平台也要推 platform_done：前端 activeJob.progress
+                # 只靠事件更新，不推的话这些平台在托盘里会一直显示 "0/N 抓取中"。
+                self.publish("job.platform_done", {
+                    "job_id": job_id, "platform": platform,
+                    "status": "cancelled", "count": 0, "error": "",
+                })
                 continue
 
             if job_latched:
@@ -238,13 +244,20 @@ class MiningRunner:
                 })
                 continue
             emitted = [0]
+            # 被全局去重跳过的卡数（已在 videos 表 / 已是评论监控任务的视频）。
+            # 这些卡计入 emitted（进度按适配器交付数走，不会因去重卡在 7/10），
+            # 但不会入库——单独计数写进 note，用户才知道"设了 10 条为什么列表
+            # 里只有 7 条"。
+            skipped_dup = [0]
             # 每张卡的发布节流状态,平台之间必须重置——否则第二个平台会带着
             # 第一个平台"已经发布过"的计数/时间戳基线起步,导致它自己的早期
             # scrolling 进度被节流阈值吞掉,一条都发不出来。
             last_pub_time = [0.0]
             last_pub_count = [0]
 
-            def _on_card(card: VideoCard, platform=platform, emitted=emitted) -> None:
+            def _on_card(
+                card: VideoCard, platform=platform, emitted=emitted, skipped_dup=skipped_dup,
+            ) -> None:
                 # 先计数,再去重/入库:emitted 记录的是"适配器交给我们的卡数",
                 # 与 adapter 自身的 cards_emitted / 在制 got 同一语义——不管这张
                 # 卡最终有没有被去重跳过、有没有 upsert 成功都要计入,否则采集
@@ -258,6 +271,7 @@ class MiningRunner:
                 try:
                     conn = mining_storage.get_conn()
                     if mining_storage.is_video_tracked_anywhere(conn, card.platform, card.platform_video_id):
+                        skipped_dup[0] += 1
                         logger.info(
                             "[runner] skipped_dup platform=%s video_id=%s",
                             card.platform, card.platform_video_id,
@@ -387,13 +401,18 @@ class MiningRunner:
             # failed: <exception incl. URL+keyword>") and must never reach
             # the UI/DB; only the TikHub path's messages are user-facing
             # Chinese strings safe to persist.
+            note_parts: list[str] = []
+            if (data_source_mode == "tikhub_api" or platform in _TIKHUB_ONLY_PLATFORMS) and outcome.error_message:
+                note_parts.append(outcome.error_message)
+            if skipped_dup[0]:
+                # 我们自己的中文提示，两种数据源模式都可落库（不受 R7 限制）。
+                note_parts.append(f"{skipped_dup[0]} 条已在监控/已采集过，未重复入库")
             mining_storage.update_platform_progress(
                 job_id, platform,
                 got=outcome.cards_emitted,
                 target=eff_target,
                 phase=outcome.status if outcome.status != "done" else "done",
-                note=(outcome.error_message or "")[:200]
-                if (data_source_mode == "tikhub_api" or platform in _TIKHUB_ONLY_PLATFORMS) else "",
+                note="；".join(note_parts)[:200],
             )
             self.publish("job.platform_done", {
                 "job_id": job_id, "platform": platform,

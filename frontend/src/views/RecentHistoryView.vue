@@ -3,9 +3,9 @@
  * 最近文档完整历史页 —— HomeView 的 RecentDocsCard 是缩略版（10 条 +
  * 一个跳转按钮），这里是全量、可操作的视图：
  *
- *   - 列：图标 + 标题 + 模板 + 字数 + 修改时间 + [打开位置] + [打开文章]
+ *   - 列：图标 + 标题 + 模板 + 字数 + 修改时间 + [打开位置] + [用默认应用打开]
  *   - "打开位置" 调 Tauri shell.open(folder) 打开导出目录到 OS 文件
- *     管理器；"打开文章" 还是跳 ArticleView
+ *     管理器；"用默认应用打开" 调 shell.open(file)
  *   - 顶栏「清除记录」按钮 —— 把当前所有 path 加入本地隐藏集合
  *     (localStorage "csm.recent.hidden.v1")，下次进来过滤掉
  *     **不动磁盘文件**（清单页清的是"显示"，不是实际文档）
@@ -25,8 +25,7 @@ import Btn from "@/components/ui/Btn.vue";
 import Icon from "@/components/ui/Icon.vue";
 import Pill from "@/components/ui/Pill.vue";
 import Spinner from "@/components/ui/Spinner.vue";
-import { listRecent, factsDiff, type CreationRecordRef } from "@/api/client";
-import { buildRegenerateQuery } from "@/utils/regenerateQuery";
+import { listRecent } from "@/api/client";
 import { useSidecarReady } from "@/composables/useSidecarReady";
 import { useToast } from "@/composables/useToast";
 import { confirmDialog } from "@/composables/useConfirm";
@@ -43,38 +42,6 @@ interface Doc {
   words: number;
   modified_at: string;
   format: "markdown" | "docx";
-  // Phase 4+ §7.3：vault 参数变更后过期标记 + 一键重生成的原始参数。
-  facts_stale?: boolean;
-  stale_models?: string[];
-  record?: CreationRecordRef | null;
-}
-
-/** §7.3 一键重新生成：用记录参数预填 Hero/横评 query 跳创作流（key 对齐 ArticleView）。 */
-function regenerate(d: Doc) {
-  if (!d.record) return;
-  const r = buildRegenerateQuery(d.record);
-  if (!r.ok) {
-    toast.error(r.error);
-    return;
-  }
-  router.push({ name: "article", query: r.query });
-}
-
-/** §7.3 hover/点击：按需取「上次成稿快照 vs 当前 vault」字段级 diff，toast 展示。 */
-async function showFactsDiff(d: Doc) {
-  const models = d.stale_models ?? [];
-  if (!models.length) return;
-  try {
-    const parts: string[] = [];
-    for (const model of models) {
-      const r = await factsDiff(model);
-      const fields = r.changed.map((c) => `${c.field} ${c.old ?? "—"}→${c.new ?? "—"}`);
-      if (fields.length) parts.push(`${model}：${fields.join("；")}`);
-    }
-    toast.info(parts.length ? parts.join(" ｜ ") : "参数已更新（无字段级明细）", 8000);
-  } catch {
-    toast.error("获取变更详情失败");
-  }
 }
 
 const docs = ref<Doc[]>([]);
@@ -296,7 +263,7 @@ onMounted(reload);
           {{
             docs.length
               ? "如需恢复显示，请到 localStorage 删 csm.recent.hidden.v1"
-              : "回到工作台输入关键词起飞一篇试试"
+              : "导出文档后会出现在这里"
           }}
         </div>
       </div>
@@ -341,11 +308,6 @@ onMounted(reload);
               <Pill :tone="d.format === 'docx' ? 'primary' : 'info'">
                 {{ d.format === "docx" ? "DOCX" : "Markdown" }}
               </Pill>
-              <button v-if="d.facts_stale" type="button" class="cursor-pointer"
-                :title="`点击看变更详情 · 已变更型号：${(d.stale_models ?? []).join('、')}`"
-                @click="showFactsDiff(d)">
-                <Pill tone="warn">参数已变更</Pill>
-              </button>
               <span>{{ d.template_name ?? "—" }}</span>
               <span>·</span>
               <span>{{ d.words.toLocaleString() }} 字</span>
@@ -354,11 +316,6 @@ onMounted(reload);
             </div>
           </div>
           <div class="flex flex-shrink-0 items-center gap-2">
-            <Btn v-if="d.facts_stale && d.record" variant="ghost" small
-              :title="'用原参数重新生成，取当前最新型号参数'" @click="regenerate(d)">
-              <Icon name="refresh" :size="12" />
-              <span>重新生成</span>
-            </Btn>
             <Btn variant="ghost" small @click="openLocation(d)">
               <Icon name="folder" :size="12" />
               <span>打开位置</span>

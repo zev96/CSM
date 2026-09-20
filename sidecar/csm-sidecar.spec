@@ -19,7 +19,7 @@ Per the migration plan + memory's PyQt6/PyInstaller rules:
   * No PyQt6 hidden imports (sidecar is Qt-free).
   * Bundle every csm_core.llm.providers.* — make_client() resolves them
     by string and PyInstaller's static analyzer can't see those imports.
-  * curl_cffi / DrissionPage / anthropic / datasketch each ship native
+  * curl_cffi / DrissionPage / anthropic each ship native
     sub-modules that need ``collect_submodules`` / ``collect_data_files``
     to be picked up cleanly.
 
@@ -48,8 +48,6 @@ datas += collect_data_files("frontmatter")
 # include_py_files=False keeps the bundle slim — patchright's .py is already
 # picked up by collect_submodules below.
 datas += collect_data_files("patchright", include_py_files=False)
-# CSM Skill / template defaults shipped with the app (read-only).
-datas += [("../templates", "templates"), ("../examples", "examples")]
 # csm_core / csm_sidecar 树里**所有**非-py 数据文件 —— 包括将来添加的。
 # 历史教训 (v0.5.6 之前)：kuaishou_search.py 读 _vendor/mc_kuaishou_search.graphql
 # 这个 GraphQL 模板，但 spec 没列它 → PyInstaller bundle 漏包 → 运行时
@@ -78,32 +76,14 @@ datas += copy_metadata("keyring")
 hiddenimports: list[str] = [
     # csm_core core packages — direct imports above only catch the ones
     # actually referenced by sidecar code; PyInstaller still needs the
-    # full set because some submodules are imported lazily inside
-    # csm_core itself (assembler reroll, vault scanner edge cases, etc.).
+    # full set because some submodules are imported lazily.
     "csm_core",
     "csm_core.config",
-    "csm_core.assembler",
-    "csm_core.assembler.constraints",
-    "csm_core.assembler.plan",
-    "csm_core.assembler.render",
-    "csm_core.assembler.reroll",
-    "csm_core.assembler.sampler",
-    "csm_core.batch",
-    "csm_core.batch.runner",
-    "csm_core.batch.report",
-    "csm_core.dedup",
-    "csm_core.dedup.shingles",
-    "csm_core.dedup.corpus",
-    "csm_core.dedup.index",
-    "csm_core.dedup.analyzer",
-    "csm_core.dedup.report",
-    "csm_core.export",
-    "csm_core.export.markdown",
-    "csm_core.keyword",
-    "csm_core.keyword.extractor",
+    "csm_core.scoring",
+    "csm_core.scoring.ai_flavor",
+    "csm_core.scoring.model",
     "csm_core.llm",
     "csm_core.llm.client",
-    "csm_core.llm.prompts",
     # LLM providers are conditionally imported inside make_client();
     # list them so PyInstaller bundles every provider.
     "csm_core.llm.providers.mock",
@@ -126,7 +106,6 @@ hiddenimports: list[str] = [
     "csm_core.monitor.notify",
     "csm_core.monitor.rate_limit",
     "csm_core.monitor.text_match",
-    "csm_core.monitor.excel_import",
     # Platform adapters — same import-by-string pattern via platforms.ALL
     "csm_core.monitor.platforms",
     "csm_core.monitor.platforms.zhihu_question",
@@ -135,7 +114,7 @@ hiddenimports: list[str] = [
     "csm_core.monitor.platforms.kuaishou_comment",
     "csm_core.monitor.platforms.baidu_keyword",
     "csm_core.monitor.platforms.geo_query",
-    # GEO 卡位监控子包。providers.base.get_provider 里 api_tongyi/api_kimi 是
+    # GEO 卡位监控子包。providers.base.get_provider 里 api_tongyi/api_doubao 是
     # **懒加载**（函数内 import），PyInstaller 静态分析看不到 → 必须显式列，
     # 否则 release bundle 漏包、运行时 get_provider 报 ImportError。其余模块
     # 虽被 platforms/__init__ → geo_query 静态链引入，仍一并列出防御。
@@ -148,7 +127,6 @@ hiddenimports: list[str] = [
     "csm_core.monitor.geo.providers",
     "csm_core.monitor.geo.providers.base",
     "csm_core.monitor.geo.providers.api_tongyi",
-    "csm_core.monitor.geo.providers.api_kimi",
     "csm_core.monitor.geo.providers.api_doubao",
     "csm_core.monitor.geo.providers.rpa",
     "csm_core.monitor.geo.providers.rpa._flow",
@@ -160,25 +138,12 @@ hiddenimports: list[str] = [
     # Drivers (cookie store + http session + browser engines)
     "csm_core.monitor.drivers",
     "csm_core.monitor.drivers.cookie_store",
-    "csm_core.monitor.drivers.http",
-    "csm_core.monitor.drivers.browser",
     "csm_core.monitor.drivers.browser_driver",
     "csm_core.monitor.drivers.patchright_pool",
     "csm_core.monitor.drivers.patchright_driver",
     "csm_core.monitor.drivers.drission_pool",
     "csm_core.monitor.drivers.drission_driver",
     "csm_core.monitor.drivers.interactive_login",
-    # Template + vault
-    "csm_core.template",
-    "csm_core.template.loader",
-    "csm_core.template.schema",
-    "csm_core.title",
-    "csm_core.title.generator",
-    "csm_core.vault",
-    "csm_core.vault.scanner",
-    "csm_core.vault.note_parser",
-    "csm_core.vault.brand_registry",
-    "csm_core.vault.note_groups",
     # Updater client
     "csm_core.updater_client",
     "csm_core.updater_client.checker",
@@ -197,36 +162,20 @@ hiddenimports: list[str] = [
     # them via that import chain, but we list them too as defense.
     "csm_sidecar.routes",
     "csm_sidecar.routes.aggregation",
-    "csm_sidecar.routes.article",
-    "csm_sidecar.routes.batch",
     "csm_sidecar.routes.config",
-    "csm_sidecar.routes.dedup",
-    "csm_sidecar.routes.generate",
+    "csm_sidecar.routes.mining",
     "csm_sidecar.routes.monitor",
-    "csm_sidecar.routes.skills",
     "csm_sidecar.routes.system",
-    "csm_sidecar.routes.templates",
     "csm_sidecar.routes.updater",
-    "csm_sidecar.routes.vault",
     "csm_sidecar.routes.xhs",
     "csm_sidecar.services",
     "csm_sidecar.services.aggregation_service",
-    "csm_sidecar.services.batch_service",
     "csm_sidecar.services.config_service",
-    "csm_sidecar.services.dedup_service",
-    "csm_sidecar.services.export_service",
-    "csm_sidecar.services.generate_service",
-    "csm_sidecar.services.keyword_service",
     "csm_sidecar.services.llm_factory",
     "csm_sidecar.services.monitor_lifecycle",
     "csm_sidecar.services.monitor_loop",
     "csm_sidecar.services.monitor_service",
-    "csm_sidecar.services.polish_service",
-    "csm_sidecar.services.skills_service",
-    "csm_sidecar.services.templates_service",
-    "csm_sidecar.services.title_service",
     "csm_sidecar.services.updater_service",
-    "csm_sidecar.services.vault_service",
     "csm_sidecar.services.xhs_images_service",
     "csm_sidecar.services.xhs_ai_service",
     # Third-party — SDKs that resolve lazily.
@@ -235,10 +184,6 @@ hiddenimports: list[str] = [
     "httpx",
     "tenacity",
     "pydantic",
-    "click",
-    "datasketch",
-    "datasketch.minhash",
-    "datasketch.lsh",
     "curl_cffi",
     "curl_cffi.requests",
     "DrissionPage",
@@ -288,7 +233,6 @@ hiddenimports: list[str] = [
     "keyring.backends.Windows",
 ]
 hiddenimports += collect_submodules("anthropic")
-hiddenimports += collect_submodules("datasketch")
 hiddenimports += collect_submodules("curl_cffi")
 hiddenimports += collect_submodules("DrissionPage")
 hiddenimports += collect_submodules("uvicorn")
@@ -317,6 +261,14 @@ a = Analysis(
         "pytest",
         "_pytest",
         "pytest_asyncio",
+        # scipy / numpy 曾被 datasketch（查重，已下线）带进图里；现在没有任何
+        # 模块 import 它们。留在 excludes 里是防止构建机上恰好装着时被可选
+        # import 拖回来（openpyxl 的 compat 里有 ``try: import numpy``，装了就
+        # 会被 PyInstaller 顺藤摸瓜打进包，白占 ~3 MB）。
+        "scipy",
+        "numpy",
+        # pygments 无任何模块 import，纯粹被依赖元数据带进图里。
+        "pygments",
     ],
     noarchive=False,
     optimize=0,

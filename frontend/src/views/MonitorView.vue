@@ -22,7 +22,7 @@
  * 顶部 pivot 抢视线。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 
 import AddTaskModal from "@/components/monitor/AddTaskModal.vue";
 import AlertDetailModal from "@/components/monitor/AlertDetailModal.vue";
@@ -65,7 +65,6 @@ const sidecar = useSidecar();
 const cfg = useConfig();
 const toast = useToast();
 const route = useRoute();
-const router = useRouter();
 const { whenReady } = useSidecarReady();
 
 type Tab = "zhihu" | "zhihu_search" | "comment" | "baidu" | "geo";
@@ -413,11 +412,9 @@ function openCommentAlertFromModule(payload: { kind: "comment_alert"; data: Comm
   commentAlertData.value = payload.data;
   showAlertModal.value = true;
 }
-function onAlertAction(a: "rescue" | "repost" | "close") {
+function onAlertAction(a: "repost" | "close") {
   showAlertModal.value = false;
-  if (a === "rescue") {
-    router.push({ name: "article" });
-  } else if (a === "repost") {
+  if (a === "repost") {
     // 真实告警接入后由后端给出推荐补发文案；空示例阶段给出一句通用占位。
     const sample = "在此处粘贴你针对本条告警准备的补发文案。";
     if (typeof navigator !== "undefined" && navigator.clipboard) {

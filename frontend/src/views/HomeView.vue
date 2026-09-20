@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 工作台 — bento 版式（按「图一」）。**全比例布局**：bento 填满 hero 以下的
+ * 工作台 — bento 版式（按「图一」）。**全比例布局**：bento 填满页面的
  * 全部高度，内部行高/列宽都用 flex 权重（比例），所以窗口放大缩小时所有卡片
  * 等比缩放、任何尺寸都填满，不会出现「放到最大中间一大片空白」（图二）。
  *
@@ -12,41 +12,15 @@
  * 比例：主区:右列宽=3:1；数字卡行:留存行高=17:25；右列两卡=1:1；留存:GEO=1.3:1。
  * 全部 min-h-0 让其随窗口收缩；外层 overflow-hidden 兜底不滚。视频抓取卡已移除。
  */
-import { onMounted } from "vue";
-
-import CreateArticleHero from "@/components/home/CreateArticleHero.vue";
 import StatCardLoader from "@/components/home/StatCardLoader.vue";
 import SourceLeaderboardCard from "@/components/home/SourceLeaderboardCard.vue";
 import CommentRetentionCard from "@/components/home/CommentRetentionCard.vue";
 import GaugeCard from "@/components/home/GaugeCard.vue";
 import RecentDocsCard from "@/components/home/RecentDocsCard.vue";
-
-import { useConfig } from "@/stores/config";
-import { useSidecarReady } from "@/composables/useSidecarReady";
-
-const cfg = useConfig();
-const { whenReady } = useSidecarReady();
-
-onMounted(async () => {
-  try {
-    await whenReady();
-    if (!cfg.data) await cfg.load();
-  } catch {
-    /* sidecar bootstrap error already toasted */
-  }
-});
 </script>
 
 <template>
   <div class="flex h-full flex-col overflow-hidden">
-    <!-- 创作区 hero -->
-    <div class="flex-shrink-0">
-      <CreateArticleHero />
-    </div>
-
-    <!-- 创作区 ↔ 卡片间距 -->
-    <div class="flex-shrink-0" :style="{ height: '36px' }"></div>
-
     <!-- bento：flex-1 填满剩余高度，内部全用比例 → 等比缩放、不留空白 -->
     <div class="flex min-h-0 flex-1" :style="{ gap: '16px' }">
       <!-- 左主区 (宽比例 3) -->

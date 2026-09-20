@@ -76,7 +76,7 @@ const emit = defineEmits<{
   (e: "run-batch", batchName: string): void;
   (e: "cancel-batch", batchName: string): void;
   (e: "run-now", taskId: number): void;
-  (e: "alert-action", action: "rescue" | "repost" | "close"): void;
+  (e: "alert-action", action: "repost" | "close"): void;
   (e: "open-alert", payload: { kind: "comment_alert"; data: CommentAlertData | null }): void;
   (e: "cycle-alert", dir: 1 | -1): void;
 }>();

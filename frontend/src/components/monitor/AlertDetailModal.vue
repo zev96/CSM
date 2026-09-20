@@ -100,7 +100,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   (e: "update:open", v: boolean): void;
-  (e: "action", a: "rescue" | "repost" | "close"): void;
+  (e: "action", a: "repost" | "close"): void;
 }>();
 
 function close() {
@@ -697,24 +697,7 @@ const eyebrow = computed(() => {
         @click="close"
       >关闭</button>
       <button
-        v-if="kind === 'zhihu_alert' && zhihuData"
-        type="button"
-        class="inline-flex items-center gap-1.5"
-        :style="{
-          background: 'var(--primary)',
-          color: '#fff',
-          padding: '7px 18px',
-          fontSize: '12.5px',
-          fontWeight: 500,
-          borderRadius: '999px',
-        }"
-        @click="emit('action', 'rescue')"
-      >
-        <Icon name="edit" :size="13" />
-        <span>起一篇救场</span>
-      </button>
-      <button
-        v-else-if="kind === 'comment_alert' && commentData"
+        v-if="kind === 'comment_alert' && commentData"
         type="button"
         class="inline-flex items-center gap-1.5"
         :style="{

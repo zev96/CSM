@@ -235,3 +235,48 @@ def test_login_status_returns_three_platforms(client: TestClient, monitor_db: Pa
 def test_soft_delete_nonexistent_returns_404(client: TestClient, monitor_db: Path):
     r = client.delete("/api/mining/videos/9999")
     assert r.status_code == 404
+
+
+# ── SSE 事件体必须带 job_id（前端 handler 按它对账）─────────────────────────
+def _drain_sse(client: TestClient, url: str, deadline_seconds: float = 3.0) -> str:
+    """读到 done/error 哨兵之后的空行为止（同 test_generate_routes._drain_sse）。"""
+    import time
+
+    raw: list[str] = []
+    deadline = time.monotonic() + deadline_seconds
+    last_event: str | None = None
+    with client.stream("GET", url) as r:
+        for line in r.iter_lines():
+            raw.append(line)
+            if line.startswith("event: "):
+                last_event = line.removeprefix("event: ").strip()
+            if line == "" and last_event in ("error", "done"):
+                break
+            if time.monotonic() > deadline:
+                break
+    return "\n".join(raw)
+
+
+def test_job_events_stream_injects_job_id(client: TestClient, monitor_db: Path):
+    """回归：mining_service._publish_to_bus 会把 payload 里的 job_id 剥掉（EventBus.publish
+    位置参数撞名），事件体里一度没有 job_id → 前端 activeJob.id === d.job_id 永远 false，
+    任务停在「抓取中」。SSE 路由必须按路径参数把 job_id 补回每一条事件（含哨兵）。"""
+    import json
+
+    from csm_sidecar.event_bus import bus
+
+    key = mining_service._event_job_id(42)
+    bus.create_job(key)
+    mining_service._publish_to_bus("job.progress", {
+        "job_id": 42, "platform": "douyin", "phase": "scrolling", "got": 3, "target": 10, "note": "",
+    })
+    mining_service._publish_to_bus("job.finished", {"job_id": 42, "summary": {"status": "done"}})
+    bus.finish(key)
+
+    joined = _drain_sse(client, "/api/mining/jobs/42/events")
+    datas = [json.loads(l.removeprefix("data: ")) for l in joined.split("\n") if l.startswith("data: ")]
+    kinds = [d["kind"] for d in datas]
+    assert kinds == ["job.progress", "job.finished", "done"]
+    assert all(d["job_id"] == 42 for d in datas), datas
+    assert datas[0]["got"] == 3 and datas[0]["platform"] == "douyin"
+    assert datas[1]["summary"]["status"] == "done"

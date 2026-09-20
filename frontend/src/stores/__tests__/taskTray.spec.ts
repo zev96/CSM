@@ -20,8 +20,6 @@ vi.mock("@/api/client", () => ({ subscribe: vi.fn(() => () => {}) }));
 import { useTaskTray } from "@/stores/taskTray";
 import { useMonitorStatus } from "@/stores/monitorStatus";
 import { useMiningStore } from "@/stores/mining";
-import { useBatch } from "@/stores/batch";
-import { useArticle } from "@/stores/article";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -103,33 +101,7 @@ describe("taskTray — 监测聚合", () => {
   });
 });
 
-describe("taskTray — 幽灵完成条目回归", () => {
-  it("batch 提交中间态（running 但 jobId 未返回）不产生卡片与最近完成", async () => {
-    const batch = useBatch();
-    const tray = useTaskTray();
-    batch.$patch({ status: "running", jobId: null, total: 0 });
-    await nextTick();
-    expect(tray.runningTasks.find((t) => t.kind === "batch")).toBeUndefined();
-    batch.$patch({ jobId: "u1", total: 5 });
-    await nextTick();
-    expect(tray.runningTasks.find((t) => t.kind === "batch")).toBeTruthy();
-    expect(tray.recentFinished.length).toBe(0);
-  });
-
-  it("article 提交中间态同样不产生幽灵条目", async () => {
-    const article = useArticle();
-    const tray = useTaskTray();
-    article.$patch({ status: "running", jobId: null, title: "kw" });
-    await nextTick();
-    expect(tray.runningTasks.find((t) => t.kind === "article")).toBeUndefined();
-    article.$patch({ jobId: "g1", currentStage: "扫描资料库", stageIndex: 0 });
-    await nextTick();
-    expect(tray.runningTasks.find((t) => t.kind === "article")).toBeTruthy();
-    expect(tray.recentFinished.length).toBe(0);
-  });
-});
-
-describe("taskTray — 引流/批量/单篇卡片", () => {
+describe("taskTray — 引流卡片", () => {
   it("mining activeJob → 卡片：平台分项 subtitle + Σgot/Σtarget", async () => {
     const mining = useMiningStore();
     const tray = useTaskTray();
@@ -157,54 +129,17 @@ describe("taskTray — 引流/批量/单篇卡片", () => {
     expect(card.cancellable).toBe(true);
   });
 
-  it("batch running → 第 i/N 篇 subtitle + progress getter", async () => {
-    const batch = useBatch();
-    const tray = useTaskTray();
-    batch.$patch({
-      status: "running",
-      jobId: "u1",
-      total: 5,
-      items: [
-        { index: 1, keyword: "a", status: "success", duration_seconds: 1, document: null, error_type: null, error_message: null },
-        { index: 2, keyword: "b", status: "success", duration_seconds: 1, document: null, error_type: null, error_message: null },
-        { index: 3, keyword: "c", status: "running", duration_seconds: 0, document: null, error_type: null, error_message: null },
-        { index: 4, keyword: "d", status: "queued", duration_seconds: 0, document: null, error_type: null, error_message: null },
-        { index: 5, keyword: "e", status: "queued", duration_seconds: 0, document: null, error_type: null, error_message: null },
-      ],
-    });
-    await nextTick();
-    const card = tray.runningTasks.find((t) => t.kind === "batch")!;
-    expect(card.title).toBe("批量生成 · 5 篇");
-    expect(card.subtitle).toContain("第 3/5 篇");
-    expect(card.subtitle).toContain("c");
-    expect(card.progress).toBeCloseTo(0.4);
-  });
-
-  it("article running → 阶段 subtitle，PR2 可取消", async () => {
-    const article = useArticle();
-    const tray = useTaskTray();
-    article.$patch({
-      status: "running",
-      jobId: "g1",
-      title: "无线吸尘器",
-      currentStage: "调用 LLM",
-      stageIndex: 4,
-    });
-    await nextTick();
-    const card = tray.runningTasks.find((t) => t.kind === "article")!;
-    expect(card.title).toContain("无线吸尘器");
-    expect(card.subtitle).toBe("调用 LLM（5/6）");
-    expect(card.progress).toBeCloseTo(5 / 6);
-    expect(card.cancellable).toBe(true);
-  });
-
   it("runningCount = 监测底层任务数 + 其余卡各 1", async () => {
     const monitor = useMonitorStatus();
-    const article = useArticle();
+    const mining = useMiningStore();
     const tray = useTaskTray();
     monitor.markRunning(11);
     monitor.markRunning(12);
-    article.$patch({ status: "running", jobId: "g1", title: "kw", currentStage: "导出", stageIndex: 5 });
+    mining.activeJob = {
+      id: 3, keyword: "k", platforms: ["douyin"], target_per_platform: 50,
+      status: "running", progress: {} as any, error_message: "",
+      created_at: "", started_at: null, finished_at: null,
+    };
     await flushPromises();
     await nextTick();
     expect(tray.runningCount).toBe(3);
@@ -258,16 +193,6 @@ describe("taskTray — 取消分发 + 最近完成", () => {
 
     tray.clearFinished();
     expect(tray.recentFinished.length).toBe(0);
-  });
-
-  it("batch error → 最近完成 outcome=failed", async () => {
-    const batch = useBatch();
-    const tray = useTaskTray();
-    batch.$patch({ status: "running", jobId: "u1", total: 1, items: [] });
-    await nextTick();
-    batch.$patch({ status: "error", error: "boom" });
-    await nextTick();
-    expect(tray.recentFinished[0]?.outcome).toBe("failed");
   });
 
   it("meta 缓存补齐导致组卡改名 → 不产生幽灵完成", async () => {
@@ -356,21 +281,5 @@ describe("taskTray — 最近完成上限与去重", () => {
     monitor._dispatchSse("finished", { task_id: 1, progress_total: 1 });
     await nextTick();
     expect(tray.recentFinished.length).toBe(1); // 去重，未堆叠成 2 条
-  });
-});
-
-describe("taskTray — 单篇取消（PR2）", () => {
-  it("article 卡 cancellable=true 且取消调 /api/generate/{id}/cancel", async () => {
-    const article = useArticle();
-    const tray = useTaskTray();
-    article.$patch({
-      status: "running", jobId: "g1", title: "kw",
-      currentStage: "调用 LLM", stageIndex: 4,
-    });
-    await nextTick();
-    const card = tray.runningTasks.find((t) => t.kind === "article")!;
-    expect(card.cancellable).toBe(true);
-    await tray.cancelTask(card);
-    expect(postMock).toHaveBeenCalledWith("/api/generate/g1/cancel");
   });
 });

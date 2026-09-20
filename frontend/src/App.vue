@@ -15,7 +15,6 @@ import { computed, onMounted, ref } from "vue";
 import LeftNav from "./components/LeftNav.vue";
 import ToastContainer from "./components/ui/ToastContainer.vue";
 import ConfirmModal from "./components/ui/ConfirmModal.vue";
-import FailureAlertModal from "./components/ui/FailureAlertModal.vue";
 import UpdateAvailableModal from "./components/ui/UpdateAvailableModal.vue";
 import Spinner from "./components/ui/Spinner.vue";
 import OnboardingFlow from "./components/OnboardingFlow.vue";
@@ -24,8 +23,6 @@ import { useTweaks } from "./composables/useTweaks";
 import { useConfig } from "./stores/config";
 import { useMonitorStatus } from "./stores/monitorStatus";
 import { useSidecarReady } from "./composables/useSidecarReady";
-import { useFactsChanges } from "./stores/factsChanges";
-import { useNotifications } from "./composables/useNotifications";
 
 // Boot tweaks (loads radius/density/primary from localStorage and
 // applies CSS). Still needed even though the Tweaks panel is gone —
@@ -136,17 +133,6 @@ onMounted(async () => {
     import("./composables/useUpdateFlow")
       .then(({ runUpdateCheck }) => runUpdateCheck({ silent: true }))
       .catch(() => {});
-    // §7.2 事实传导：启动拉一次型号参数变更 → 通知 + 素材库 Pill。fire-and-forget，
-    // pull() 内部 fail-safe（非关键数据，失败静默）。
-    void useFactsChanges().pull().then((changes) => {
-      if (changes.length) {
-        useNotifications().push(`${changes.length} 个型号参数已更新`, {
-          body: changes.map((c) => c.model).join("、"),
-          tone: "info",
-          category: "system",
-        });
-      }
-    });
   }
 });
 </script>
@@ -207,7 +193,7 @@ onMounted(async () => {
         main 自身不滚 —— overflow-hidden + flex column。把 utility row
         和 router-view wrapper 当作两段 flex 子项，剩余高度全部交给
         wrapper。HomeView 用 min-h-full 吃满 wrapper、recent 卡内部滚动；
-        ArticleView 这种内容自然很长的页面，由 wrapper 自己 overflow-y-auto
+        SettingsView / MiningView 这种内容自然很长的页面，由 wrapper 自己 overflow-y-auto
         兜底滚动。这样工作台不会出整页外层滚动条，其他视图也照常工作。
       -->
       <main
@@ -215,7 +201,7 @@ onMounted(async () => {
         :style="{ padding: '66px 30px 30px 30px' }"
       >
     <!--
-      router-view wrapper（min-h-0 flex-1 overflow-y-auto 给 ArticleView
+      router-view wrapper（min-h-0 flex-1 overflow-y-auto 给 SettingsView
       这种内容长的页面兜底滚动；HomeView 自己 min-h-full 不溢出）。
       暂时不挂 <transition> —— 实测 Tauri 的 WebView2 在某些时机会卡
       在 fade-enter-active 状态没还原成 opacity:1，元素在 DOM 里但视觉
@@ -234,8 +220,6 @@ onMounted(async () => {
     <ToastContainer />
     <!-- Global confirm dialog — singleton, driven by useConfirm.ts. -->
     <ConfirmModal />
-    <!-- Global failure alert — singleton, driven by useFailureAlert.ts. -->
-    <FailureAlertModal />
     <!-- 发现新版本弹窗 — singleton, driven by useUpdateAlert.ts. -->
     <UpdateAvailableModal />
     <!--

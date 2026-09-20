@@ -181,3 +181,69 @@ def test_baidu_keyword_config_native_mode_fields_round_trip(client):
     assert bk2["chrome_executable_path"] == "C:/test/chrome.exe"
     assert bk2["chrome_user_data_dir"] == "C:/test/User Data"
     assert bk2["chrome_profile_name"] == "Profile 1"
+
+
+# ── /api/llm/ping（设置页「测试连接」）────────────────────────────────────
+def test_llm_ping_mock_provider_ok(client: TestClient):
+    resp = client.post("/api/llm/ping", json={"provider": "mock"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == {"ok": True, "provider": "mock", "reply": "mock response"}
+
+
+def test_llm_ping_tests_the_requested_provider_not_the_default(client: TestClient, monkeypatch):
+    """被测卡不必是默认 provider —— 这正是它取代 xhs 润色探针的原因。"""
+    from csm_sidecar.services import llm_factory
+
+    client.patch("/api/config", json={"default_provider": "deepseek"})
+    seen: dict = {}
+
+    class _Probe:
+        def complete(self, *, system, user, temperature=None):
+            return "pong"
+
+    def fake_build(*, provider=None, model=None):
+        seen.update(provider=provider, model=model)
+        return _Probe()
+
+    monkeypatch.setattr(llm_factory, "build_client", fake_build)
+    resp = client.post("/api/llm/ping", json={"provider": "kimi", "model": "moonshot-v1-8k"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert seen == {"provider": "kimi", "model": "moonshot-v1-8k"}
+
+
+def test_llm_ping_missing_key_is_503_not_configured(client: TestClient, monkeypatch):
+    from csm_sidecar.services import llm_factory
+
+    monkeypatch.setattr(llm_factory, "get_secret", lambda provider: "")  # 不读本机真实 keyring
+    resp = client.post("/api/llm/ping", json={"provider": "deepseek"})
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "llm_not_configured"
+
+
+def test_llm_ping_provider_failure_is_502(client: TestClient, monkeypatch):
+    from csm_sidecar.services import llm_factory
+
+    class _Boom:
+        def complete(self, *, system, user, temperature=None):
+            raise RuntimeError("401 invalid api key")
+
+    monkeypatch.setattr(llm_factory, "build_client", lambda **kw: _Boom())
+    resp = client.post("/api/llm/ping", json={"provider": "openai"})
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == {"code": "llm_error", "detail": "401 invalid api key"}
+
+
+def test_llm_ping_empty_reply_reports_not_ok(client: TestClient, monkeypatch):
+    from csm_sidecar.services import llm_factory
+
+    class _Silent:
+        def complete(self, *, system, user, temperature=None):
+            return "   "
+
+    monkeypatch.setattr(llm_factory, "build_client", lambda **kw: _Silent())
+    resp = client.post("/api/llm/ping", json={"provider": "qwen"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+

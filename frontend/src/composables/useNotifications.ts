@@ -12,7 +12,7 @@
  * Filtering happens in two layers:
  *   1. master switch  `enabled`  — kill switch for everything
  *   2. per-category   `categories[cat]` — the user can mute e.g.
- *      "评论异动" while still receiving "生成文章成功"
+ *      "评论异动" while still receiving "监测任务完成"
  * Both are persisted to localStorage so they survive a reload before
  * the settings store rehydrates.
  */
@@ -24,14 +24,11 @@ import { computed, reactive, ref, watch } from "vue";
  * so `loadCategories` falls back to the default (true) for missing keys.
  */
 export type NotificationCategory =
-  | "article_success"
-  | "article_failure"
   | "ranking_change"
   | "comment_change"
   | "monitor_alert"
   | "monitor_done"
   | "mining_done"
-  | "export_done"
   | "system";
 
 export interface NotificationCategoryMeta {
@@ -46,16 +43,6 @@ export interface NotificationCategoryMeta {
  * dialog stays a thin v-for; add a category by appending one row.
  */
 export const NOTIFICATION_CATEGORIES: NotificationCategoryMeta[] = [
-  {
-    key: "article_success",
-    label: "生成文章 · 成功",
-    hint: "一篇文章润色 / 生成完成时推送",
-  },
-  {
-    key: "article_failure",
-    label: "生成文章 · 失败",
-    hint: "生成失败 / 中断时推送（建议开启）",
-  },
   {
     key: "ranking_change",
     label: "排名异动",
@@ -80,11 +67,6 @@ export const NOTIFICATION_CATEGORIES: NotificationCategoryMeta[] = [
     key: "mining_done",
     label: "引流任务完成",
     hint: "视频抓取任务结束（含部分完成）时推送",
-  },
-  {
-    key: "export_done",
-    label: "导出完成",
-    hint: "Markdown / DOCX 落盘完成时推送",
   },
   {
     key: "system",

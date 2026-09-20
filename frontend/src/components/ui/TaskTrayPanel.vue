@@ -99,7 +99,7 @@ function outcomeMeta(o: TrayFinished["outcome"]): { icon: string; color: string;
         <Icon name="zap" :size="22" />
         <div class="mt-2">暂无后台任务</div>
         <div class="mt-1 text-[11px]" :style="{ color: 'var(--ink-4)' }">
-          监测 / 引流 / 生成任务运行时会出现在这里
+          监测 / 引流任务运行时会出现在这里
         </div>
       </div>
 

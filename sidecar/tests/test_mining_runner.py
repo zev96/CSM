@@ -810,3 +810,56 @@ def test_local_mode_ignores_balance_latch_entirely(db, monkeypatch, reset_tikhub
     runner.run(jid)
 
     assert called == ["bilibili", "kuaishou"], f"local mode must ignore the balance latch entirely, got {called}"
+
+
+# ── 取消 / 去重跳过 的事件与 note 口径 ──────────────────────────────────────
+def test_runner_cancel_publishes_platform_done_for_skipped_platforms(db, monkeypatch):
+    """取消后被跳过的平台也要推 platform_done(cancelled)：前端 activeJob.progress 只靠
+    事件更新，不推的话这些平台在托盘里会一直显示 "0/N 抓取中"。"""
+    events = []
+    runner = MiningRunner(publish=lambda kind, payload: events.append((kind, payload)))
+    monkeypatch.setattr(
+        "csm_core.mining.runner.get_adapter",
+        lambda p, m=None: FakeAdapter(p, []),
+    )
+    jid = ms.create_job("k", ["bilibili", "douyin"], 50)
+    runner.register_cancel_event(jid).set()
+    runner.run(jid)
+
+    plat_done = [(p["platform"], p["status"]) for k, p in events if k == "job.platform_done"]
+    assert plat_done == [("bilibili", "cancelled"), ("douyin", "cancelled")]
+    assert [k for k, _ in events][-1] == "job.finished"
+    job = ms.get_job(jid)
+    assert all(p["phase"] == "cancelled" for p in job["progress"].values())
+
+
+def test_runner_dedup_skips_are_counted_in_note_not_progress(db, monkeypatch):
+    """用户设 10 条、其中 3 条已在库/已评论 → 进度仍按适配器交付数走到 10/10（不会卡在 7/10），
+    跳过数写进 note 让用户知道列表里为什么少了。"""
+    events = []
+    runner = MiningRunner(publish=lambda kind, payload: events.append((kind, payload)))
+    monkeypatch.setattr("csm_core.mining.runner._data_source_mode", lambda cfg=None: "local")
+    earlier = [
+        VideoCard(platform="bilibili", platform_video_id=f"B{i}", url=f"http://b.com/v/B{i}", title=f"t{i}")
+        for i in range(3)
+    ]
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter(p, earlier))
+    runner.run(ms.create_job("k", ["bilibili"], 50))
+
+    later = earlier + [
+        VideoCard(platform="bilibili", platform_video_id=f"B{i}", url=f"http://b.com/v/B{i}", title=f"t{i}")
+        for i in range(3, 10)
+    ]
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter(p, later))
+    jid = ms.create_job("k", ["bilibili"], 10)
+    runner.run(jid)
+
+    job = ms.get_job(jid)
+    prog = job["progress"]["bilibili"]
+    assert prog["phase"] == "done"
+    assert prog["got"] == 10 and prog["target"] == 10
+    assert "3 条已在监控/已采集过" in prog["note"]
+    # 只有 7 条新视频挂到这个 job 上
+    conn = ms.get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM video_source_keywords WHERE job_id=?", (jid,)).fetchone()[0]
+    assert n == 7

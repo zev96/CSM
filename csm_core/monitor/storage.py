@@ -132,6 +132,55 @@ def init_db(db_path: Path) -> None:
         _initialized = True
 
 
+# v9 反馈学习闭环四表 DDL（原 csm_core/feedback/storage.py，写稿功能下线后
+# 内联到这里）。这些表在老用户的 monitor.db 里已存在；新库走版本链时仍需建出
+# 同样的表，否则 v9→v15 的 schema_version 语义就对不上。幂等（IF NOT EXISTS）。
+_DDL_V9_FEEDBACK: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS creation_records (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id            TEXT UNIQUE NOT NULL,
+        mode              TEXT NOT NULL DEFAULT 'normal',   -- normal | comparison | batch
+        keyword           TEXT, template_id TEXT, title TEXT,
+        angle_json        TEXT, skill_chain_json TEXT, models_json TEXT,
+        contract_mode     TEXT,
+        document_path     TEXT, format TEXT,
+        edit_ratio        REAL,
+        lint_unresolved   INTEGER DEFAULT 0,
+        factcheck_blocked INTEGER DEFAULT 0,
+        score             REAL, score_json TEXT,
+        created_at        TEXT NOT NULL, exported_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_creation_doc ON creation_records(document_path)",
+    """
+    CREATE TABLE IF NOT EXISTS creation_note_usage (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id     INTEGER NOT NULL REFERENCES creation_records(id) ON DELETE CASCADE,
+        note_id       TEXT NOT NULL, variant_index INTEGER, block_id TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_note_usage_note ON creation_note_usage(note_id)",
+    "CREATE INDEX IF NOT EXISTS idx_note_usage_record ON creation_note_usage(record_id)",
+    """
+    CREATE TABLE IF NOT EXISTS fact_snapshots (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id   INTEGER NOT NULL REFERENCES creation_records(id) ON DELETE CASCADE,
+        model       TEXT NOT NULL, fingerprint TEXT NOT NULL, specs_json TEXT NOT NULL,
+        created_at  TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_fact_snap_model ON fact_snapshots(model, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_fact_snap_record ON fact_snapshots(record_id)",
+    """
+    CREATE TABLE IF NOT EXISTS model_fingerprints (
+        model       TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+        specs_json  TEXT NOT NULL, updated_at TEXT NOT NULL
+    )
+    """,
+]
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     for stmt in _DDL_V1:
         conn.execute(stmt)
@@ -156,9 +205,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     #     mining_jobs.brand_keywords_json。
     mining_storage.apply_v8_migration(conn)
     # v9: 反馈学习闭环四表（creation_records / creation_note_usage /
-    #     fact_snapshots / model_fingerprints）。同 v3-v8 lazy import + 幂等。
-    from csm_core.feedback import storage as feedback_storage
-    feedback_storage.apply_v9_migration(conn)
+    #     fact_snapshots / model_fingerprints）。写稿/素材库功能已下线、
+    #     csm_core.feedback 包已删，但版本链必须仍能在新库上把这一步建出来
+    #     （老库已有这些表；_SCHEMA_VERSION 不重排）。DDL 内联在下面，幂等。
+    for stmt in _DDL_V9_FEEDBACK:
+        conn.execute(stmt)
     # v10: geo_cells.fail_reason —— 失败原因分类列(前端替掉写死「够不到平台」)。
     # geo_storage 已在 v7 段 import(同一函数作用域)。幂等。
     geo_storage.apply_v10_migration(conn)

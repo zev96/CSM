@@ -1154,19 +1154,6 @@ defineExpose({ reload: loadTasks, selectTask });
             <Icon name="fileText" :size="14" />
             <span>查看报告</span>
           </button>
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium"
-            :style="{
-              background: 'var(--primary)',
-              color: '#fff',
-              borderRadius: '999px',
-            }"
-            @click="router.push({ name: 'article' })"
-          >
-            <Icon name="edit" :size="14" />
-            <span>新建文章补救</span>
-          </button>
         </div>
       </div>
     </div>
