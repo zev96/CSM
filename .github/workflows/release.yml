@@ -191,7 +191,11 @@ jobs:
           if (Test-Path $liteRoot) { Remove-Item -Recurse -Force $liteRoot }
           New-Item -ItemType Directory -Force -Path $lite | Out-Null
           robocopy $stage $lite /E /XD "$stage\binaries\ms-playwright" /NFL /NDL /NJH /NJS | Out-Null
+          # robocopy 的退出码是位标志：0–7 都算成功（1 = 有文件被复制，正是这里的常态），
+          # >= 8 才是失败。GitHub 的 pwsh 包装器会在脚本末尾 `exit $LASTEXITCODE`，
+          # 而后面全是 cmdlet、不会再改写它 —— 不清零的话这一步会以 1 退出、整个发版失败。
           if ($LASTEXITCODE -ge 8) { Write-Error "robocopy failed ($LASTEXITCODE)"; exit 1 }
+          $global:LASTEXITCODE = 0
           if (Test-Path "$lite\binaries\ms-playwright") { Write-Error "lite stage still contains ms-playwright"; exit 1 }
           if (-not (Test-Path "$lite\csm-tauri.exe")) { Write-Error "lite stage missing csm-tauri.exe"; exit 1 }
           $dirs = (Get-ChildItem "$stage\binaries\ms-playwright" -Directory -Filter "chromium-*" | ForEach-Object { $_.Name }) -join ","
