@@ -10,19 +10,17 @@
  * users who skipped the welcome step but still want to dismiss this on
  * future launches — without it, an empty name would re-trigger forever.
  *
- * State machine — `step` ∈ { "welcome" | "vault" | "model" }:
+ * State machine — `step` ∈ { "welcome" | "model" }:
  *
- *   welcome → vault → model → done (→ home)
+ *   welcome → model → done (→ home)
  *
- * Each step can also "skip" (advance without saving its inputs), and
- * model can also "back" (go to previous step). The first
- * welcome screen is treated as gating — the user has to either type a
- * name + click → OR localStorage will keep showing this. Hard-skipping
- * welcome would defeat the point.
+ * The model step can be skipped (finish without saving). The welcome
+ * screen is treated as gating — the user has to type a name + click →
+ * OR localStorage will keep showing this. Hard-skipping welcome would
+ * defeat the point.
  *
  * Side effects on advance:
  *   - welcome: cfg.patch({ user_name, user_product })
- *   - vault:   cfg.patch({ vault_root })  // 模板库编辑器的属性筛选扫描用
  *   - model:   keyringSet(provider, key) per filled provider
  *              + cfg.patch({ default_provider }) if exactly one was added
  *
@@ -37,14 +35,12 @@ import FormInput from "@/components/forms/FormInput.vue";
 import logoUrl from "@/assets/logo.png";
 import { useConfig } from "@/stores/config";
 import { useToast } from "@/composables/useToast";
-import { usePathPicker } from "@/composables/usePathPicker";
 import { getVersion, keyringSet } from "@/api/client";
 
 const emit = defineEmits<{ (e: "done"): void }>();
 
 const cfg = useConfig();
 const toast = useToast();
-const { pick } = usePathPicker();
 
 // 跟 SettingsView 一致：从 sidecar 实时读版本号，避免常量过期。
 const appVersion = ref("…");
@@ -59,13 +55,11 @@ onMounted(async () => {
 
 const STORAGE_KEY = "csm.onboarded.v1";
 
-type Step = "welcome" | "vault" | "model";
+type Step = "welcome" | "model";
 const step = ref<Step>("welcome");
 
 // ── Step state ──────────────────────────────────────────────────
 const welcomeForm = reactive({ name: "", productLine: "" });
-
-const vaultPath = ref<string>("");
 
 interface ProviderEntry {
   key: "anthropic" | "deepseek" | "openai";
@@ -119,26 +113,10 @@ async function submitWelcome() {
       toast.error("保存失败：服务端未确认。请稍后重试。");
       return;
     }
-    step.value = "vault";
+    step.value = "model";
   } finally {
     welcomeSubmitting.value = false;
   }
-}
-
-async function pickVault() {
-  const v = await pick({ title: "选择 Obsidian Vault", directory: true });
-  if (v) vaultPath.value = v;
-}
-
-async function submitVault() {
-  if (vaultPath.value.trim()) {
-    try {
-      await cfg.patch({ vault_root: vaultPath.value.trim() });
-    } catch (e: any) {
-      toast.error(`保存失败：${e?.message ?? e}`);
-    }
-  }
-  step.value = "model";
 }
 
 async function saveProviderKey(p: ProviderEntry) {
@@ -177,12 +155,7 @@ function skip() {
     toast.warn("姓名是必填项，请先填写");
     return;
   }
-  if (step.value === "vault") step.value = "model";
-  else if (step.value === "model") finish();
-}
-
-function back() {
-  if (step.value === "model") step.value = "vault";
+  finish();
 }
 
 function finish() {
@@ -195,12 +168,6 @@ function finish() {
   emit("done");
 }
 
-// 用于步骤进度点：2 步骤总数（vault/model 是 1/2、2/2）。
-function stepIndex(): number {
-  if (step.value === "vault") return 0;
-  if (step.value === "model") return 1;
-  return -1;
-}
 </script>
 
 <template>
@@ -296,7 +263,7 @@ function stepIndex(): number {
         </div>
       </div>
 
-      <!-- ── 步骤卡（vault / model 共享外壳）─────────────── -->
+      <!-- ── 步骤卡（接入模型）─────────────── -->
       <div
         v-else
         class="relative flex w-full max-w-[680px] flex-col overflow-hidden"
@@ -325,30 +292,6 @@ function stepIndex(): number {
         />
 
         <div class="relative" :style="{ zIndex: 1 }">
-          <!-- 进度条 — 2 个段，当前段亮 primary、已过段也亮 primary 但更深 -->
-          <div class="mb-6 flex items-center gap-2">
-            <div
-              v-for="(_, i) in [0, 1]"
-              :key="i"
-              :style="{
-                height: '4px',
-                flex: i === stepIndex() ? '2 1 0' : '1 1 0',
-                background:
-                  i < stepIndex()
-                    ? 'var(--primary)'
-                    : i === stepIndex()
-                      ? 'var(--primary)'
-                      : 'var(--line)',
-                borderRadius: '999px',
-                opacity: i === stepIndex() ? 1 : i < stepIndex() ? 0.5 : 1,
-              }"
-            />
-            <span
-              class="ml-2 text-[11.5px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >第 {{ stepIndex() + 1 }} / 2 步</span>
-          </div>
-
           <div
             class="text-[11.5px]"
             :style="{ color: 'var(--ink-3)', letterSpacing: '0.5px' }"
@@ -356,69 +299,8 @@ function stepIndex(): number {
             欢迎使用 CSM
           </div>
 
-          <!-- ── 步骤 1：选 Vault ──────────────────────── -->
-          <template v-if="step === 'vault'">
-            <div
-              class="font-display mt-2 font-bold"
-              :style="{ fontSize: '24px', letterSpacing: '-0.5px' }"
-            >
-              选择 Obsidian Vault（可选）
-            </div>
-            <div
-              class="mt-2 text-[12.5px]"
-              :style="{ color: 'var(--ink-3)' }"
-            >
-              模板库编辑器的「属性筛选」会扫描这个 Vault 里笔记的 frontmatter 属性；不用模板库可直接跳过，之后可在设置里修改。
-            </div>
-
-            <div
-              class="mt-6 flex items-center gap-3 p-4"
-              :style="{
-                background: 'var(--card-white)',
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--radius-inner)',
-              }"
-            >
-              <span
-                class="inline-flex items-center justify-center"
-                :style="{
-                  width: '40px',
-                  height: '40px',
-                  borderRadius: '10px',
-                  background: 'var(--dark)',
-                  color: 'var(--primary)',
-                }"
-              >
-                <Icon name="folder" :size="18" />
-              </span>
-              <div class="min-w-0 flex-1">
-                <div class="text-[13px] font-semibold">
-                  {{ vaultPath ? "已选择 Vault" : "尚未选择 Vault" }}
-                </div>
-                <div
-                  class="font-mono mt-0.5 truncate text-[11px]"
-                  :style="{ color: 'var(--ink-3)' }"
-                >
-                  {{ vaultPath || "没有 Vault 可先跳过，之后在设置 → 存储路径里补" }}
-                </div>
-              </div>
-              <Btn variant="ghost" small @click="pickVault">
-                <Icon name="folder" :size="13" />
-                <span>选择…</span>
-              </Btn>
-            </div>
-
-            <div class="mt-8 flex items-center justify-end gap-2">
-              <Btn variant="ghost" small @click="skip">跳过</Btn>
-              <Btn variant="solid" small @click="submitVault">
-                <Icon name="arrowRight" :size="13" />
-                <span>下一步</span>
-              </Btn>
-            </div>
-          </template>
-
-          <!-- ── 步骤 2：接入模型 ──────────────────────── -->
-          <template v-else-if="step === 'model'">
+          <!-- ── 接入模型 ──────────────────────── -->
+          <template v-if="step === 'model'">
             <div
               class="font-display mt-2 font-bold"
               :style="{ fontSize: '24px', letterSpacing: '-0.5px' }"
@@ -526,15 +408,7 @@ function stepIndex(): number {
               </Btn>
             </div>
 
-            <div class="mt-8 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                class="text-[12px]"
-                :style="{ color: 'var(--ink-3)', background: 'transparent' }"
-                @click="back"
-              >
-                ← 上一步
-              </button>
+            <div class="mt-8 flex items-center justify-end gap-2">
               <div class="flex gap-2">
                 <Btn variant="ghost" small @click="skip">跳过</Btn>
                 <Btn variant="solid" small @click="submitModel">

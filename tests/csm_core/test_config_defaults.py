@@ -38,24 +38,6 @@ def test_fresh_config_captcha_timeout_defaults_to_300():
     assert core_config.AppConfig().monitor.baidu_keyword.captcha_visible_timeout_s == 300
 
 
-def test_default_templates_dir_under_config_dir():
-    assert core_config.default_templates_dir() == core_config.default_config_dir() / "Templates"
-
-
-def test_default_skills_dir_under_config_dir():
-    assert core_config.default_skills_dir() == core_config.default_config_dir() / "Skills"
-
-
-def test_default_history_dir_under_config_dir():
-    assert core_config.default_history_dir() == core_config.default_config_dir() / "History"
-
-
-def test_helpers_return_path_objects():
-    assert isinstance(core_config.default_templates_dir(), Path)
-    assert isinstance(core_config.default_skills_dir(), Path)
-    assert isinstance(core_config.default_history_dir(), Path)
-
-
 @pytest.mark.skipif(sys.platform != "win32", reason="windows path layout only")
 def test_default_config_dir_is_outside_install_dir_on_windows(monkeypatch, tmp_path):
     """The CSM data dir MUST NOT be a subdir of the NSIS install dir.

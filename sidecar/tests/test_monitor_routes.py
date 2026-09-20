@@ -34,7 +34,7 @@ def _seed_task(client: TestClient, **overrides) -> int:
 
 
 # ── Storage gate ───────────────────────────────────────────────────────────
-def test_routes_503_when_storage_uninitialized(settings_path, vault_cache_reset):
+def test_routes_503_when_storage_uninitialized(settings_path):
     """Accessing any monitor route without monitor_db fixture → 503."""
     from csm_sidecar import auth
     from csm_sidecar.main import app

@@ -12,8 +12,9 @@
 - **创作区（`/article`）与批量生成（`/batch`）下线**：AI 写稿整套功能移除——组装 / 初稿 / 成稿、整篇润色与 Skill 链、角度、横评、事实核对、禁区 lint、成文契约评分、历史查重 / 素材引用率、标题候选、md / docx 导出、批量生成。左侧导航不再有「创作区」，首页的写稿起飞条、监测告警里的「起一篇救场 / 新建文章补救」、模板卡的「用此模板」、最近文档的「重新生成」等入口一并移除；任务托盘只剩监测与引流两类任务。
 - **素材库（`/materials`）下线**：品牌型号记忆库（型号浏览 / 录入 / AI 拆条 / 使用反馈）以及配套的「型号参数已更新」事实变更通知移除。
 - **设置页瘦身**：「品牌记忆」「历史查重」两个分区，以及成文契约、反馈加权、模型计价卡片、导出格式 / 导出文件名模板 / 导出目录 / 历史索引目录 / 批量并发上限这些只服务写稿的选项移除；首次启动引导去掉「选一种写作风格」一步；通知分类去掉「生成文章成功 / 失败」「导出完成」。模型 API Key / 模型名 / Base URL 配置保留（小红书 AI 与引流 AI 评论仍在用），每张模型卡的「测试连接」改走新的 `/api/llm/ping`，仍可逐卡测试。
-- **保留不动**：模板库（框架模板 + 风格 Skill 编辑器，含 Vault 属性筛选与竞品卡覆盖度）、首页「最近文档」与 `/recent-history`（只读旧版本导出的历史目录）、数据中心、监测中心、引流、小红书。老用户 `settings.json` 里写稿相关的字段原样保留、不会报错；`monitor.db` 里的反馈学习表不删。
-- 后端随之移除 13 组路由及其服务与核心库（assembler 采样 / pipeline / batch / dedup / factcheck / lint / title / angle / comparison / feedback / keyword / export 等），`csm` 命令行入口一并移除；`datasketch`、`python-docx`、`click` 不再是依赖，前端去掉 5 个 `@tiptap/*` 依赖。通用 SSE 端点 `/api/events/{job_id}` 迁到更新路由下（应用内更新的下载进度仍在用）。
+- **模板库（`/templates`）下线**：框架模板与风格 Skill 的编辑器（含 Vault 属性筛选、竞品卡覆盖度）在创作区下线后已无下游，一并移除；设置页「存储路径」分区（Vault / 模板目录 / Skills 目录）与首次启动引导里的「选择 Vault」一步随之去掉，引导只剩「填姓名 → 接入模型」。安装包不再内置示例模板 / 示例 Skill / 示例 Vault。引流与设置页里的「评论模板库」是另一个功能，不受影响。
+- **保留不动**：首页「最近文档」与 `/recent-history`（只读旧版本导出的历史目录）、数据中心、监测中心、引流（含评论模板库）、小红书。老用户 `settings.json` 里写稿相关的字段原样保留、不会报错；`monitor.db` 里的反馈学习表不删。
+- 后端随之移除 16 组路由及其服务与核心库（assembler / pipeline / batch / dedup / factcheck / lint / title / angle / comparison / feedback / keyword / export / template / vault / brand_memory / test_framework 等），`csm` 命令行入口一并移除；`datasketch`、`python-docx`、`click` 不再是依赖，前端去掉 5 个 `@tiptap/*` 依赖。通用 SSE 端点 `/api/events/{job_id}` 迁到更新路由下（应用内更新的下载进度仍在用）。
 - 设计期「状态预览」页（`/states`，导航从未链接）及无引用的前端组件 / 工具与 `clsx`、`tailwind-merge` 依赖；后端删除 Excel 批量导入旧模块、GEO Kimi API 版 provider、未被调用的批量 runner。
 
 ### 变更

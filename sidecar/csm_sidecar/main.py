@@ -19,11 +19,8 @@ from .routes import aggregation as aggregation_routes
 from .routes import config as config_routes
 from .routes import mining as mining_routes
 from .routes import monitor as monitor_routes
-from .routes import skills as skills_routes
 from .routes import system as system_routes
-from .routes import templates as templates_routes
 from .routes import updater as updater_routes
-from .routes import vault as vault_routes
 from .routes import xhs as xhs_routes
 
 logger = logging.getLogger(__name__)
@@ -69,9 +66,6 @@ app.middleware("http")(heartbeat.heartbeat_middleware)
 
 app.include_router(system_routes.router)
 app.include_router(config_routes.router)
-app.include_router(vault_routes.router)
-app.include_router(skills_routes.router)
-app.include_router(templates_routes.router)
 app.include_router(monitor_routes.router)
 app.include_router(mining_routes.router)
 app.include_router(updater_routes.router)

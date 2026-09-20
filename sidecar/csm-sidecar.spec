@@ -48,8 +48,6 @@ datas += collect_data_files("frontmatter")
 # include_py_files=False keeps the bundle slim — patchright's .py is already
 # picked up by collect_submodules below.
 datas += collect_data_files("patchright", include_py_files=False)
-# CSM Skill / template defaults shipped with the app (read-only).
-datas += [("../templates", "templates"), ("../examples", "examples")]
 # csm_core / csm_sidecar 树里**所有**非-py 数据文件 —— 包括将来添加的。
 # 历史教训 (v0.5.6 之前)：kuaishou_search.py 读 _vendor/mc_kuaishou_search.graphql
 # 这个 GraphQL 模板，但 spec 没列它 → PyInstaller bundle 漏包 → 运行时
@@ -78,17 +76,9 @@ datas += copy_metadata("keyring")
 hiddenimports: list[str] = [
     # csm_core core packages — direct imports above only catch the ones
     # actually referenced by sidecar code; PyInstaller still needs the
-    # full set because some submodules are imported lazily inside
-    # routes (routes/vault.py imports cards / identity / note_groups
-    # inside the handler bodies).
+    # full set because some submodules are imported lazily.
     "csm_core",
     "csm_core.config",
-    "csm_core.assembler",
-    "csm_core.assembler.cards",
-    "csm_core.brand_memory",
-    "csm_core.brand_memory.identity",
-    "csm_core.test_framework",
-    "csm_core.test_framework.section_parser",
     "csm_core.scoring",
     "csm_core.scoring.ai_flavor",
     "csm_core.scoring.model",
@@ -154,16 +144,6 @@ hiddenimports: list[str] = [
     "csm_core.monitor.drivers.drission_pool",
     "csm_core.monitor.drivers.drission_driver",
     "csm_core.monitor.drivers.interactive_login",
-    # Template + vault
-    "csm_core.template",
-    "csm_core.template.loader",
-    "csm_core.template.schema",
-    "csm_core.template.lint",
-    "csm_core.vault",
-    "csm_core.vault.scanner",
-    "csm_core.vault.note_parser",
-    "csm_core.vault.index_cache",
-    "csm_core.vault.note_groups",
     # Updater client
     "csm_core.updater_client",
     "csm_core.updater_client.checker",
@@ -185,11 +165,8 @@ hiddenimports: list[str] = [
     "csm_sidecar.routes.config",
     "csm_sidecar.routes.mining",
     "csm_sidecar.routes.monitor",
-    "csm_sidecar.routes.skills",
     "csm_sidecar.routes.system",
-    "csm_sidecar.routes.templates",
     "csm_sidecar.routes.updater",
-    "csm_sidecar.routes.vault",
     "csm_sidecar.routes.xhs",
     "csm_sidecar.services",
     "csm_sidecar.services.aggregation_service",
@@ -198,10 +175,7 @@ hiddenimports: list[str] = [
     "csm_sidecar.services.monitor_lifecycle",
     "csm_sidecar.services.monitor_loop",
     "csm_sidecar.services.monitor_service",
-    "csm_sidecar.services.skills_service",
-    "csm_sidecar.services.templates_service",
     "csm_sidecar.services.updater_service",
-    "csm_sidecar.services.vault_service",
     "csm_sidecar.services.xhs_images_service",
     "csm_sidecar.services.xhs_ai_service",
     # Third-party — SDKs that resolve lazily.

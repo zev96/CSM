@@ -2,8 +2,8 @@
 
 Two responsibilities:
 
-1. Reset module-level singletons (config_service path, vault_service cache,
-   storage db) between tests so test order can't leak state.
+1. Reset module-level singletons (config_service path, storage db)
+   between tests so test order can't leak state.
 2. Build an authenticated TestClient that auto-attaches the bearer token
    so individual tests don't have to repeat the boilerplate.
 """
@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from csm_core.monitor import storage as monitor_storage
 from csm_sidecar import auth
 from csm_sidecar.main import app
-from csm_sidecar.services import config_service, vault_service
+from csm_sidecar.services import config_service
 
 
 @pytest.fixture
@@ -38,12 +38,6 @@ def _reset_shared_comment_store() -> Iterator[None]:
     from csm_core.monitor.platforms import _comment_shared
     _comment_shared.reset_shared_store()
     yield
-
-
-@pytest.fixture
-def vault_cache_reset() -> Iterator[None]:
-    yield
-    vault_service.invalidate()
 
 
 @pytest.fixture
@@ -70,7 +64,7 @@ def xhs_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def client(settings_path: Path, vault_cache_reset) -> Iterator[TestClient]:
+def client(settings_path: Path) -> Iterator[TestClient]:
     """Authenticated TestClient. Token is minted on app startup (lifespan).
 
     The lifespan handler runs on first ``with TestClient(app)`` entry, so

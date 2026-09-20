@@ -24,7 +24,7 @@ frontend/
 │   ├── App.vue             # Outer paper-card layout
 │   ├── style.css           # Design tokens (ported from CSM-RE1)
 │   ├── api/client.ts       # axios + SSE helpers
-│   ├── stores/             # sidecar / config / article / batch
+│   ├── stores/             # sidecar / config / monitorStatus / mining / taskTray / templates（评论模板库）/ xhs
 │   ├── router/index.ts     # 7 routes
 │   ├── composables/        # useToast / usePathPicker / useSidecarReady / useTweaks
 │   ├── components/
@@ -34,9 +34,10 @@ frontend/
 │   │   ├── forms/          # FormInput / FormSelect / FormToggle / FormPathPicker / FormSection / FormField
 │   │   ├── home/           # Home cards (greeting / hero / calendar / alerts / retention / recents)
 │   │   ├── settings/       # 8 sections + ProviderCard
-│   │   ├── monitor/        # AddTaskModal + CookieManagerModal
-│   │   └── templates/      # TemplateBuilder + BlockEditor
-│   └── views/              # Home / Article / Batch / Monitor / Templates / Settings / States
+│   │   ├── monitor/        # 监测任务模块 + 历史分析 + GEO
+│   │   ├── mining/         # 引流三栏：任务 / 视频 / 评论楼 + 评论模板抽屉
+│   │   └── xhs/            # 小红书笔记编辑器
+│   └── views/              # Home / Monitor / DataCenter / Mining / XhsEditor / RecentHistory / Settings
 └── src-tauri/
     ├── Cargo.toml
     ├── tauri.conf.json

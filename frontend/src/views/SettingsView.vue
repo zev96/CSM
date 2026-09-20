@@ -3,11 +3,11 @@
  * 设置页 —— 对齐 V1 设计稿 D:/CSM/CSM-RE1（V1）/src/screens/settings.jsx
  *
  *   - header: 设置 caption + 偏好 & 集成 大标题
- *   - 220px 左侧导航 (8 个 section) + 右侧面板
+ *   - 220px 左侧导航 (7 个 section) + 右侧面板
  *   - 面板 header：section 标题 + 副标题（无保存按钮 — autosave）
  *
  * 字段绑定到 AppConfig（csm_core/config.py）的策略：
- *   - 后端真有的字段（vault_root / api_keys / timeout_seconds...）→
+ *   - 后端真有的字段（api_keys / timeout_seconds / monitor.* ...）→
  *     维护一份 draft，setField 每次调用立即 PATCH /api/config 对应顶层
  *     字段（嵌套字段也发整块 top-level，后端 dict-merge）
  *   - V1 设计稿里有但后端没的（主题色 / 字体 / 文件名模板 / Skill 滑杆…）→
@@ -85,67 +85,6 @@ const SettingsRow = defineComponent({
   },
 });
 
-const PathField = defineComponent({
-  name: "PathField",
-  props: {
-    value: { type: String, default: "" },
-    title: { type: String, default: "选择文件夹" },
-  },
-  emits: ["update"],
-  setup(props, { emit }) {
-    const { pick } = usePathPicker();
-    async function choose() {
-      const v = await pick({
-        title: props.title,
-        directory: true,
-        defaultPath: props.value || undefined,
-      });
-      if (v) emit("update", v);
-    }
-    return () =>
-      h("div", { class: "flex items-center", style: { gap: "6px" } }, [
-        h("input", {
-          value: props.value,
-          placeholder: "/path/to/folder",
-          class: "font-mono px-3 outline-none",
-          style: {
-            height: "34px",
-            minWidth: "280px",
-            maxWidth: "340px",
-            borderRadius: "10px",
-            background: "var(--card-2)",
-            border: "1px solid var(--line)",
-            fontSize: "11px",
-            color: "var(--ink-2)",
-          },
-          onChange: (e: Event) =>
-            emit("update", (e.target as HTMLInputElement).value),
-        }),
-        h(
-          "button",
-          {
-            type: "button",
-            title: props.title,
-            class: "inline-flex items-center justify-center",
-            style: {
-              height: "34px",
-              padding: "0 12px",
-              borderRadius: "10px",
-              background: "var(--card-2)",
-              border: "1px solid var(--line)",
-              color: "var(--ink-2)",
-              cursor: "pointer",
-              fontSize: "11.5px",
-              gap: "5px",
-            },
-            onClick: choose,
-          },
-          [h(Icon, { name: "folder", size: 13 }), h("span", "选择")],
-        ),
-      ]);
-  },
-});
-
 const cfg = useConfig();
 const toast = useToast();
 const notifs = useNotifications();
@@ -170,7 +109,7 @@ async function pickChromePath() {
 
 // ── 8 个 section + 三分组 ────────────────────────────────────
 // group 字段按用户重构方案分三段：
-//   basics   基础配置（通用 / 存储路径）—— 安装后基本不动的
+//   basics   基础配置（通用）—— 安装后基本不动的
 //   workflow 工作流相关（模型 / 监测 / 百度抓取 / 评论模板库）
 //   system   系统/元信息（账号 / 关于）—— 跟用户/版本相关
 // sidebar 模板按 group 分组渲染，组之间加灰色分隔 label。
@@ -183,7 +122,6 @@ interface SectionDef {
 }
 const SECTIONS: SectionDef[] = [
   { k: "general", l: "通用", icon: "settings", sub: "外观 · 行为 · 通知", group: "basics" },
-  { k: "paths", l: "存储路径", icon: "folder", sub: "Vault · 模板 · Skills 目录", group: "basics" },
   { k: "models", l: "模型", icon: "key", sub: "API Key · 模型名 · Base URL", group: "workflow" },
   { k: "monitor", l: "监测", icon: "radar", sub: "并发 · 浏览器 · AI · Cookie", group: "workflow" },
   { k: "baidu-scrape", l: "百度抓取", icon: "radar", sub: "Native Chrome profile · 降低风控", group: "workflow" },
@@ -878,44 +816,6 @@ async function saveAccountEdit() {
               <FormToggle
                 :model-value="notifs.enabled.value"
                 @update:model-value="(v) => notifs.setEnabled(v)"
-              />
-            </SettingsRow>
-          </template>
-
-          <!-- ━━━━━━━━ 存储路径 ━━━━━━━━ -->
-          <!--
-            每个 PathField 自带「选择」按钮，调 Tauri plugin-dialog 弹原生
-            文件夹选择器，避免用户手输路径。默认模板这里仍允许手填一个
-            .json 文件路径（usePathPicker 默认 directory:true，但用户也可
-            直接在 input 里粘贴 .json 路径，下游 cfg.patch 不区分）。
-          -->
-          <template v-else-if="section === 'paths'">
-            <SettingsRow
-              label="Obsidian Vault"
-              hint="模板库编辑器「属性筛选」扫描的笔记目录（frontmatter 属性来源）"
-            >
-              <PathField
-                :value="get('vault_root') ?? ''"
-                title="选择 Obsidian Vault 目录"
-                @update="(v) => setField('vault_root', v)"
-              />
-            </SettingsRow>
-            <SettingsRow label="默认模板目录" hint="模板 .json 所在文件夹 — 首次启动已自动建好，可改位置">
-              <PathField
-                :value="get('default_template') ?? ''"
-                title="选择模板目录"
-                @update="(v) => setField('default_template', v)"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Skills 目录"
-              hint="Skill .md 目录 — 首次启动已自动建好，可改位置"
-              last
-            >
-              <PathField
-                :value="get('skill_dir') ?? ''"
-                title="选择 Skills 目录"
-                @update="(v) => setField('skill_dir', v)"
               />
             </SettingsRow>
           </template>

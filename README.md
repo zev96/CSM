@@ -29,7 +29,7 @@ Tauri 2 + Vue 3 前端 + Python FastAPI sidecar，Windows 单文件 NSIS 安装�
 
 每一环都不强制：可以只跑「监测中心」当排名看板，也可以只用「引流」当视频候选池 + 评论工作台，或只用「小红书」编辑器写笔记。
 
-> 「创作区」（AI 写稿 / 批量生成）与「素材库」两个页面及其后端已下线（见 CHANGELOG）。「模板库」的框架模板 / 风格 Skill 编辑器保留。
+> 「创作区」（AI 写稿 / 批量生成）、「素材库」、「模板库」三个页面及其后端已下线（见 CHANGELOG）。
 
 ---
 
@@ -41,9 +41,8 @@ Tauri 2 + Vue 3 前端 + Python FastAPI sidecar，Windows 单文件 NSIS 安装�
 | **监测中心** | `/monitor` | 知乎问题排名 / 百度关键词排名 / B站·抖音·快手·小红书 评论留存 三类任务统一调度 |
 | **数据中心** | `/data-center` | 历史排名 trend + 评论留存 trend + 百度 SEO 分析 |
 | **引流抓取** | `/mining` | 四平台（抖音 / B站 / 快手 / 小红书）视频搜索 → 全局去重 → 已评论反查 → 评论模板库一键发评 |
-| **模板库** | `/templates` | 框架模板（段落级 schema）+ 风格 Skill（语气/示例/约束）的编辑与管理 |
 | **小红书** | `/xhs` | 图文笔记编辑器：素材面板 + 手机预览 + AI 生成 / 润色（走设置里的模型 Key）|
-| **设置** | `/settings` | 路径 / 模型 API Key / 监测 · 百度抓取 / Cookie 池 / 排除域名 / 评论模板库 / 腾讯文档同步 / 更新 |
+| **设置** | `/settings` | 模型 API Key / 监测 · 百度抓取 / Cookie 池 / 排除域名 / 评论模板库 / 腾讯文档同步 / 更新 |
 
 ---
 
@@ -98,18 +97,6 @@ Tauri 2 + Vue 3 前端 + Python FastAPI sidecar，Windows 单文件 NSIS 安装�
 
 ---
 
-## 模板库
-
-**框架模板（Template）**：段落级 schema 描述「这种文章长什么样」—— 段落标题 / 段落字数范围 / 段落引用素材的属性约束。可以为同类话题（开箱 / 测评 / 干货合集）各做一份。段落的「属性筛选」按 Obsidian Vault 笔记的 frontmatter 属性多选过滤，sidecar 启动时扫描 `vault_root` 建索引；竞品卡段落可查看各小节的覆盖度。
-
-**风格 Skill**：语气 / 措辞示例 / 必须遵守的约束 / 禁用词 — 跟框架解耦，组合使用。
-
-**首次启动自动种子**：内置样例模板 + Skills，可在「设置 → 存储路径」里调位置。
-
-> 创作区下线后，模板库目前只提供模板与 Skill 的编辑管理，不再驱动文章生成。
-
----
-
 ## 安装
 
 ### 用户：双击安装包
@@ -150,9 +137,7 @@ npm run tauri:dev      # 起 Tauri shell（dev 自动起 Vite + 拉 sidecar）
 ├── settings.json
 ├── monitor.db            # 监测 + 引流任务和结果
 ├── browser_profiles\     # 各平台 Cookie 持久化
-├── History\              # 旧版本导出的文章镜像（首页「最近文档」只读这里，新版不再写入）
-├── Templates\
-└── Skills\
+└── History\              # 旧版本导出的文章镜像（首页「最近文档」只读这里，新版不再写入；新装机不会创建）
 ```
 
 ---
@@ -166,7 +151,7 @@ npm run tauri:dev      # 起 Tauri shell（dev 自动起 Vite + 拉 sidecar）
 | 后端 | **FastAPI** sidecar (Python 3.11)，PyInstaller onefile 分发 |
 | 浏览器自动化 | **Patchright** (stealth Playwright fork) + bundled Chromium |
 | 抓取 | curl_cffi (Chrome TLS 指纹) / DrissionPage / 平台 API + 签名 |
-| 存储 | SQLite (monitor + mining schema v3)、JSON (settings)、md+frontmatter (vault/history) |
+| 存储 | SQLite (monitor + mining + xhs)、JSON (settings)、md+frontmatter (旧版导出的历史文档) |
 | 自更新 | 独立 `updater.exe`（从 install dir copy 到 `%TEMP%\csm_update\` 跑，避免 image-lock）+ atomic rename + SHA256 校验 |
 
 ---
@@ -177,18 +162,13 @@ npm run tauri:dev      # 起 Tauri shell（dev 自动起 Vite + 拉 sidecar）
 
 ```
 csm_core/        # Python 业务核心
-├── assembler/       # 竞品卡 H2 小节解析（cards.py，模板库覆盖度检查用）
-├── brand_memory/    # 品牌 / 型号 identity 归一化（同上）
 ├── browser_infra/   # cookie_store / ua_pool / rate_limit / patchright_pool / interactive_login
 ├── llm/             # LLM client + providers 抽象层（小红书 AI / 引流 AI 评论）
 ├── mining/          # 引流抓取
 ├── monitor/         # 监测调度 + 平台 adapter + GEO
 ├── scoring/         # AI 味启发式评分（引流 AI 评论用）
 ├── sync/            # 腾讯文档同步
-├── template/        # 模板 schema + 加载
-├── test_framework/  # 笔记 H2 小节解析
 ├── updater_client/  # 应用内更新检查 + 下载
-├── vault/           # Obsidian Vault 扫描 / 增量索引
 └── xhs/             # 小红书笔记草稿存储
 
 sidecar/csm_sidecar/   # FastAPI sidecar，包 csm_core 成 HTTP
@@ -197,7 +177,7 @@ sidecar/csm_sidecar/   # FastAPI sidecar，包 csm_core 成 HTTP
 
 frontend/
 ├── src/views/        # 路由顶层 view
-├── src/components/   # 复用组件（home/monitor/mining/templates/xhs/settings/forms/ui 分类）
+├── src/components/   # 复用组件（home/monitor/mining/xhs/settings/forms/ui 分类）
 ├── src/stores/       # Pinia store
 ├── src/router/       # vue-router
 └── src-tauri/        # Tauri 配置 + Rust shell + NSIS installer hooks
