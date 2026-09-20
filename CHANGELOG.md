@@ -2,7 +2,9 @@
 
 本项目所有可见变更都记录在这里。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.9.0] - 2026-09-20
+
+> ⚠️ **升级须知**：本版移除了「创作区」（AI 写稿 / 批量生成）、「素材库」、「模板库」三个页面及其功能，升级后不可在应用内恢复，仍需要它们请停留在 0.8.3。旧版本已导出的文档、`settings.json` 与监测 / 引流数据都不受影响。
 
 ### 修复
 - **引流抓取任务卡在「抓取中」/ 停不掉 / 取消无效**：sidecar 推给前端的 SSE 事件体里一直没有 `job_id`（5 月修 EventBus 参数撞名时被剥掉），前端所有进度 / 平台完成 / 任务完成事件都对不上当前任务——表现为进度条不动、抓完了任务卡还显示「抓取中」并带停止按钮、左下角任务托盘常驻「加载中」、点停止后端返回 409 被静默吞掉。现在 SSE 路由按流所属任务补回 `job_id`，前端也改为以订阅的任务为准；另补三条兜底：只收到流结束哨兵没收到完成事件时拉快照对账、停止返回 409 时立即对账刷新、进入引流页时若列表里有仍在跑的任务自动重新挂上进度。停止按钮不再因页面刷新后「当前任务为空」而拒绝。
@@ -18,7 +20,7 @@
 - 设计期「状态预览」页（`/states`，导航从未链接）及无引用的前端组件 / 工具与 `clsx`、`tailwind-merge` 依赖；后端删除 Excel 批量导入旧模块、GEO Kimi API 版 provider、未被调用的批量 runner。
 
 ### 变更
-- **热更新增量包**：每个 release 额外挂 `CSM-vX.Y.Z-lite.upd`（不含 ~400MB 的 Chromium），本机已装的 `chromium-XXXX` 与 `manifest.json` 登记一致时客户端自动选它，`updater.exe` 换目录时把旧安装里的 Chromium 原样搬进新目录（搬不动或后续失败一律整体回滚）。升级 patchright 的版本会自动退回完整包；≤0.8.3 的老客户端只认 `.zip`，不受影响。更新弹窗会标注「增量包」。
+- **热更新增量包**：每个 release 额外挂 `CSM-vX.Y.Z-lite.upd`（不含 ~400MB 的 Chromium），本机已装的 `chromium-XXXX` 与 `manifest.json` 登记一致时客户端自动选它，`updater.exe` 换目录时把旧安装里的 Chromium 原样搬进新目录（搬不动或后续失败一律整体回滚）。升级 patchright 的版本会自动退回完整包；≤0.8.3 的老客户端只认 `.zip`，不受影响（因此从 ≤0.8.3 升到本版仍下载完整包，增量包从下一次升级起生效）。更新弹窗会标注「增量包」。
 - **sidecar 体积**：写稿功能下线后 sidecar 不再打包 datasketch / scipy / numpy / python-docx，另在 PyInstaller 里排除无人 import 的 pygments。macOS 实测单文件 sidecar 由 94MB 降到约 75MB（Windows 同比例）。
 
 ## [0.8.3] - 2026-09-17
