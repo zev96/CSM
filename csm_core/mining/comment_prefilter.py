@@ -9,13 +9,33 @@ Registry confirmed:
 
 hot_comments key confirmed in _comment_common.build_match_result line 99:
     metric["hot_comments"] = hot_slice  (list of {rank, text, author, likes, ...})
+
+评论区级信号 metric["featured_only"]（评论区开启「精选后可见」）由
+_comment_shared.result_from_snapshot 写入，随 ``probe_video_comments`` 一并带回 ——
+runner 据此跳过这类视频。没填品牌词、不抓评论时的轻量探测见 featured_probe.py。
 """
 from __future__ import annotations
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CommentProbe:
+    """一次评论区探测的结果：前 N 条评论 + 评论区级信号。"""
+
+    #: ``[{"text", "likes", "author"}, ...]``；抓取失败 / 评论区为空都是 []。
+    comments: list[dict[str, Any]] = field(default_factory=list)
+    #: 评论区开启了「精选后可见」（适配器的 metric.featured_only）。与 comments 是否
+    #: 为空无关 —— 刚开精选、还没精选任何评论的视频就是「空列表 + True」。
+    featured_only: bool = False
+    #: 适配器真的抓成功了（status=ok）。False = 没结论（抓取失败 / 风控 / 不支持的
+    #: 平台），此时 comments 为空、featured_only=False 都不代表「确认过」——
+    #: 用来区分「评论区确实是空的」和「没抓到」。
+    ok: bool = False
 
 # 匹配前抹掉所有空白：让「希 喂」「希　喂」「CE WEY」也能命中「希喂」「CEWEY」。
 # 评论里在品牌词中间插空格是常见写法（手滑 / 故意规避）。代价：极短英文品牌
@@ -97,9 +117,9 @@ def _resolve_adapter(ctype: str, platform: str):
     return _ADAPTERS.get(ctype)
 
 
-def fetch_video_comments(
+def probe_video_comments(
     platform: str, video_url: str, limit: int = 20,
-) -> list[dict[str, Any]]:
+) -> CommentProbe:
     """Fetch the first ~limit comments for a video, reusing monitor adapters.
 
     Delegates to the same comment-retention adapter that powers the Monitor tab
@@ -117,13 +137,15 @@ def fetch_video_comments(
         limit:     Approximate number of comments to fetch (maps to scrape_top_n).
 
     Returns:
-        List of ``{"text": str, "likes": int|None, "author": str}`` dicts, or []
-        on any failure (fail-open: callers should not exclude a video simply
-        because comments couldn't be fetched).
+        ``CommentProbe``. ``comments`` is a list of
+        ``{"text": str, "likes": int|None, "author": str}`` dicts, or [] on any
+        failure (fail-open: callers should not exclude a video simply because
+        comments couldn't be fetched). ``featured_only`` rides along from the
+        adapter's metric — 目前只有 B 站适配器会给这个信号。
     """
     ctype = _PLATFORM_COMMENT_TYPE.get(platform)
     if ctype is None:
-        return []
+        return CommentProbe()
 
     if platform in _TIKHUB_PREFERRED_PLATFORMS:
         from csm_core.monitor.tikhub.client import balance_exhausted
@@ -135,14 +157,14 @@ def fetch_video_comments(
             logger.info(
                 "[prefilter] tikhub balance exhausted; skip %s comment fetch (fail-open)", platform,
             )
-            return []
+            return CommentProbe()
 
     try:
         from csm_core.monitor.base import MonitorTask
 
         adapter = _resolve_adapter(ctype, platform)
         if adapter is None:
-            return []
+            return CommentProbe()
 
         task = MonitorTask(
             type=ctype,
@@ -157,17 +179,23 @@ def fetch_video_comments(
         result = adapter.fetch(task)
 
         if getattr(result, "status", "") != "ok":
-            return []
+            return CommentProbe()
 
-        hots: list[dict[str, Any]] = (result.metric or {}).get("hot_comments") or []
-        return [
-            {
-                "text": str(c.get("text") or ""),
-                "likes": c.get("likes"),
-                "author": str(c.get("author") or ""),
-            }
-            for c in hots
-        ]
+        metric = result.metric if isinstance(result.metric, dict) else {}
+        hots: list[dict[str, Any]] = metric.get("hot_comments") or []
+        return CommentProbe(
+            comments=[
+                {
+                    "text": str(c.get("text") or ""),
+                    "likes": c.get("likes"),
+                    "author": str(c.get("author") or ""),
+                }
+                for c in hots
+            ],
+            # 严格 `is True`：只认适配器明确写入的布尔值。
+            featured_only=metric.get("featured_only") is True,
+            ok=True,
+        )
 
     except Exception:
         logger.info(
@@ -176,7 +204,14 @@ def fetch_video_comments(
             (video_url or "")[:80],
             exc_info=True,
         )
-        return []
+        return CommentProbe()
+
+
+def fetch_video_comments(
+    platform: str, video_url: str, limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Comments-only wrapper around ``probe_video_comments``（[] on any failure）."""
+    return probe_video_comments(platform, video_url, limit=limit).comments
 
 
 def fetch_video_comment_texts(platform: str, video_url: str, limit: int = 30) -> list[str]:

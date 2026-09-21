@@ -59,7 +59,7 @@ def test_bilibili_fetch_uses_scrape_top_n_as_limit(monkeypatch):
     a = _bili_adapter()
     captured = {}
 
-    def fake_fetch_mode(session, aid, mode, limit, cancel_token=None, progress_cb=None):
+    def fake_fetch_mode(session, aid, mode, limit, cancel_token=None, progress_cb=None, meta=None):
         captured["limit"] = limit
         return [], True, None
 

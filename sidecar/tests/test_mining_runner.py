@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from csm_core.mining import storage as ms
+from csm_core.mining.comment_prefilter import CommentProbe
 from csm_core.mining.models import (
     ProgressUpdate, SearchOutcome, VideoCard,
 )
@@ -21,6 +22,44 @@ def db(tmp_path: Path, monkeypatch):
         delattr(monitor_storage._local, "conn")
     monitor_storage.init_db(tmp_path / "monitor.db")
     yield
+
+
+class FakeProber:
+    """FeaturedProber 替身：按 URL 片段给判定，不发任何请求。"""
+
+    instances: list["FakeProber"] = []
+    verdicts: dict[str, bool | None] = {}   # url 片段 → check() 返回值；未命中 → None
+    trip_after: int | None = None           # 第 N 次 check 之后熔断
+
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+        self.closed = False
+        FakeProber.instances.append(self)
+
+    @property
+    def tripped(self):
+        return FakeProber.trip_after is not None and len(self.calls) >= FakeProber.trip_after
+
+    def check(self, platform, video_url):
+        self.calls.append((platform, video_url))
+        for frag, verdict in FakeProber.verdicts.items():
+            if frag in video_url:
+                return verdict
+        return None
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def no_network_prober(monkeypatch):
+    """没填品牌词的 B 站任务会走精选评论轻量探测 —— 本文件所有用例一律换成替身，
+    保证 runner 测试永不触网。"""
+    FakeProber.instances = []
+    FakeProber.verdicts = {}
+    FakeProber.trip_after = None
+    monkeypatch.setattr("csm_core.mining.runner.FeaturedProber", FakeProber)
+    yield FakeProber
 
 
 class FakeAdapter:
@@ -102,8 +141,13 @@ def test_runner_partial_when_one_needs_login(db, monkeypatch):
 
 
 def _comments(*texts):
-    """fetch_video_comments 返回形状：[{text, likes, author}, ...]。"""
+    """CommentProbe.comments 的形状：[{text, likes, author}, ...]。"""
     return [{"text": t, "likes": None, "author": ""} for t in texts]
+
+
+def _probe(*texts, featured_only=False):
+    """probe_video_comments 抓成功时的返回值（抓取失败 = 裸 CommentProbe()，ok=False）。"""
+    return CommentProbe(comments=_comments(*texts), featured_only=featured_only, ok=True)
 
 
 def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
@@ -131,12 +175,12 @@ def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
     # B3: 0 brand comments → kept, brand_comment_hits=0
     def fake_fetch(platform, video_url, limit=20):
         if "B1" in video_url:
-            return _comments("石头很好", "石头真棒", "石头不错")
+            return _probe("石头很好", "石头真棒", "石头不错")
         if "B2" in video_url:
-            return _comments("石头还行", "其他内容")
-        return _comments("无关评论", "another")
+            return _probe("石头还行", "其他内容")
+        return _probe("无关评论", "another")
 
-    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comments", fake_fetch)
+    monkeypatch.setattr("csm_core.mining.runner.probe_video_comments", fake_fetch)
 
     jid = ms.create_job("keyword", ["bilibili"], 50, brand_keywords=["石头"])
     runner.run(jid)
@@ -177,7 +221,8 @@ def test_runner_prefilter_excludes_brand_seeded(db, monkeypatch):
 
 
 def test_runner_no_brand_keywords_skips_prefilter(db, monkeypatch):
-    """Without brand_keywords the prefilter pass is skipped entirely."""
+    """Without brand_keywords no comments are fetched — 品牌预筛整段不跑。
+    （B 站只剩精选评论的轻量探测，见下面几条 featured 用例。）"""
     events = []
 
     def publish(kind, payload):
@@ -194,15 +239,15 @@ def test_runner_no_brand_keywords_skips_prefilter(db, monkeypatch):
 
     def fake_fetch(platform, video_url, limit=20):
         fetch_calls.append((platform, video_url))
-        return []
+        return CommentProbe()
 
-    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comments", fake_fetch)
+    monkeypatch.setattr("csm_core.mining.runner.probe_video_comments", fake_fetch)
 
     # No brand_keywords (default empty)
     jid = ms.create_job("keyword", ["bilibili"], 50)
     runner.run(jid)
 
-    assert fetch_calls == [], "fetch_video_comments must not be called without brand_keywords"
+    assert fetch_calls == [], "probe_video_comments must not be called without brand_keywords"
 
     # All videos still excluded=0
     conn = ms.get_conn()
@@ -211,6 +256,257 @@ def test_runner_no_brand_keywords_skips_prefilter(db, monkeypatch):
 
     job = ms.get_job(jid)
     assert job["status"] == "done"
+
+
+# ── 精选评论跳过（评论区开启「精选后可见」的视频自动排除）───────────────────
+
+def _video_rows():
+    conn = ms.get_conn()
+    rows = conn.execute(
+        "SELECT platform_video_id, excluded, exclude_reason, brand_comment_hits, top_comments_json "
+        "FROM videos ORDER BY platform_video_id"
+    ).fetchall()
+    return {r["platform_video_id"]: dict(r) for r in rows}
+
+
+def test_runner_brand_pass_excludes_featured_only(db, monkeypatch):
+    """填了品牌词：适配器顺带带回的 featured_only → 排除，原因 featured_comments。
+    空评论列表 + featured_only（刚开精选、还没精选任何评论）同样要排除 ——
+    不能被「抓不到评论 → fail-open」那条分支先截走。"""
+    events = []
+    runner = MiningRunner(publish=lambda k, p: events.append((k, p)))
+    cards = [
+        VideoCard(platform="bilibili", platform_video_id=f"B{i}", url=f"http://b.com/v/B{i}")
+        for i in (1, 2, 3)
+    ]
+    fake_b = FakeAdapter("bilibili", cards)
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: fake_b)
+    monkeypatch.setattr("csm_core.mining.runner._prefilter_params", lambda cfg=None: (20, 1))
+
+    def fake_probe(platform, video_url, limit=20):
+        if "B1" in video_url:
+            return _probe("石头很好", featured_only=True)   # 精选 + 命中品牌词
+        if "B2" in video_url:
+            return _probe(featured_only=True)               # 精选 + 一条评论都没有
+        return _probe("无关评论")
+
+    monkeypatch.setattr("csm_core.mining.runner.probe_video_comments", fake_probe)
+
+    jid = ms.create_job("keyword", ["bilibili"], 50, brand_keywords=["石头"])
+    runner.run(jid)
+
+    rows = _video_rows()
+    for vid in ("B1", "B2"):
+        assert rows[vid]["excluded"] == 1
+        assert rows[vid]["exclude_reason"] == "featured_comments"
+        # 精选优先于品牌判定：不算命中数、不存热评快照
+        assert rows[vid]["brand_comment_hits"] is None
+        assert rows[vid]["top_comments_json"] is None
+    assert rows["B3"]["excluded"] == 0
+    assert rows["B3"]["brand_comment_hits"] == 0
+
+    # 填了品牌词走的是适配器便车，不该再起轻量探测
+    assert FakeProber.instances == []
+
+    job = ms.get_job(jid)
+    assert job["status"] == "done"
+    prog = job["progress"]["bilibili"]
+    assert prog["phase"] == "done"
+    assert prog["featured_skipped"] == 2
+    assert "2 条开启了评论精选" in prog["note"]
+    done_evt = [p for k, p in events if k == "job.platform_done"][-1]
+    assert done_evt["featured_skipped"] == 2
+    # 列表里只剩没开精选的那条
+    _, total = ms.list_videos(commented="all")
+    assert total == 1
+
+
+def test_runner_brand_pass_falls_back_to_probe_when_fetch_failed(db, monkeypatch, no_network_prober):
+    """填了品牌词、但适配器那次抓取没成（B 站匿名偶发 -352 等）→ 精选信号跟着丢了。
+    回落轻量探测补判：True → 排除；探测也没结论 → fail-open 保留、品牌命中数保持 NULL。
+    抓成功的视频不该多打一次探测。"""
+    runner = MiningRunner(publish=lambda k, p: None)
+    cards = [
+        VideoCard(platform="bilibili", platform_video_id=f"B{i}", url=f"http://b.com/v/B{i}")
+        for i in (1, 2, 3)
+    ]
+    monkeypatch.setattr(
+        "csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter("bilibili", cards),
+    )
+    monkeypatch.setattr("csm_core.mining.runner._prefilter_params", lambda cfg=None: (20, 1))
+
+    def fake_probe(platform, video_url, limit=20):
+        if "B3" in video_url:
+            return _probe("无关评论")      # 抓成功
+        return CommentProbe()              # B1 / B2：抓取失败，没结论
+
+    monkeypatch.setattr("csm_core.mining.runner.probe_video_comments", fake_probe)
+    no_network_prober.verdicts = {"B1": True}   # B2 → None
+
+    jid = ms.create_job("keyword", ["bilibili"], 50, brand_keywords=["石头"])
+    runner.run(jid)
+
+    rows = _video_rows()
+    assert rows["B1"]["exclude_reason"] == "featured_comments"
+    assert rows["B2"]["excluded"] == 0 and rows["B2"]["brand_comment_hits"] is None
+    assert rows["B3"]["excluded"] == 0 and rows["B3"]["brand_comment_hits"] == 0
+    (prober,) = no_network_prober.instances
+    assert [u for _, u in prober.calls] == ["http://b.com/v/B1", "http://b.com/v/B2"]
+    assert prober.closed
+    assert ms.get_job(jid)["progress"]["bilibili"]["featured_skipped"] == 1
+
+
+def test_runner_brand_pass_no_probe_fallback_on_unsupported_platform(db, monkeypatch, no_network_prober):
+    """快手抓评论失败：没有可用的精选信号来源，不起探测，照旧 fail-open。"""
+    runner = MiningRunner(publish=lambda k, p: None)
+    cards = [VideoCard(platform="kuaishou", platform_video_id="K1", url="http://k.com/K1")]
+    monkeypatch.setattr(
+        "csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter("kuaishou", cards),
+    )
+    monkeypatch.setattr(
+        "csm_core.mining.runner.probe_video_comments", lambda *a, **k: CommentProbe(),
+    )
+    runner.run(ms.create_job("keyword", ["kuaishou"], 50, brand_keywords=["石头"]))
+    assert no_network_prober.instances == []
+    assert _video_rows()["K1"]["excluded"] == 0
+
+
+def test_runner_no_brand_keywords_probes_featured_on_bilibili(db, monkeypatch, no_network_prober):
+    """没填品牌词：B 站走轻量探测。True → 排除；False / None（探测失败）→ 保留。"""
+    events = []
+    runner = MiningRunner(publish=lambda k, p: events.append((k, p)))
+    cards = [
+        VideoCard(platform="bilibili", platform_video_id=f"B{i}", url=f"http://b.com/v/B{i}")
+        for i in (1, 2, 3)
+    ]
+    fake_b = FakeAdapter("bilibili", cards)
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: fake_b)
+    no_network_prober.verdicts = {"B1": True, "B2": False}   # B3 → None
+
+    def must_not_fetch(*a, **k):
+        raise AssertionError("no brand keywords → must not fetch comments")
+
+    monkeypatch.setattr("csm_core.mining.runner.probe_video_comments", must_not_fetch)
+
+    jid = ms.create_job("keyword", ["bilibili"], 50)
+    runner.run(jid)
+
+    rows = _video_rows()
+    assert rows["B1"]["excluded"] == 1
+    assert rows["B1"]["exclude_reason"] == "featured_comments"
+    assert rows["B2"]["excluded"] == 0
+    assert rows["B3"]["excluded"] == 0, "probe failure must fail open"
+
+    (prober,) = no_network_prober.instances
+    assert [u for _, u in prober.calls] == [c.url for c in cards]
+    assert prober.closed
+
+    prog = ms.get_job(jid)["progress"]["bilibili"]
+    assert prog["phase"] == "done"
+    assert prog["featured_skipped"] == 1
+    assert "1 条开启了评论精选" in prog["note"]
+    # 探测期间的中间进度用「检查评论精选」文案，不冒充品牌预筛
+    notes = {p["note"] for k, p in events if k == "job.progress" and p["phase"] == "prefilter"}
+    assert notes == {"检查评论精选"}
+
+
+def test_runner_no_brand_keywords_no_probe_on_unsupported_platform(db, monkeypatch, no_network_prober):
+    """快手 / 抖音 / 小红书没有可验证的精选信号：没填品牌词就整段不跑。"""
+    runner = MiningRunner(publish=lambda k, p: None)
+    fake_k = FakeAdapter("kuaishou", [
+        VideoCard(platform="kuaishou", platform_video_id="K1", url="http://k.com/K1"),
+    ])
+    monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: fake_k)
+
+    jid = ms.create_job("keyword", ["kuaishou"], 50)
+    runner.run(jid)
+
+    assert no_network_prober.instances == []
+    prog = ms.get_job(jid)["progress"]["kuaishou"]
+    assert prog["phase"] == "done"
+    assert "featured_skipped" not in prog
+    assert prog["note"] == ""
+
+
+def test_runner_skip_featured_disabled_by_config(db, monkeypatch, no_network_prober):
+    """settings.json 关掉 mining_skip_featured_comments：不探测；品牌预筛照跑但无视精选信号。"""
+    monkeypatch.setattr(
+        "csm_core.config.get_config",
+        lambda: SimpleNamespace(mining_data_source_mode="local", mining_skip_featured_comments=False),
+    )
+    runner = MiningRunner(publish=lambda k, p: None)
+    cards = [VideoCard(platform="bilibili", platform_video_id="B1", url="http://b.com/v/B1")]
+    monkeypatch.setattr(
+        "csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter("bilibili", cards),
+    )
+    monkeypatch.setattr(
+        "csm_core.mining.runner.probe_video_comments",
+        lambda platform, video_url, limit=20: _probe("无关评论", featured_only=True),
+    )
+    no_network_prober.verdicts = {"B1": True}
+
+    # 没填品牌词 → 不起探测
+    jid = ms.create_job("kw1", ["bilibili"], 50)
+    runner.run(jid)
+    assert no_network_prober.instances == []
+    assert _video_rows()["B1"]["excluded"] == 0
+
+    # 填了品牌词 → 预筛照跑，featured_only 被无视（没命中品牌词 → 保留）
+    cards2 = [VideoCard(platform="bilibili", platform_video_id="B2", url="http://b.com/v/B2")]
+    monkeypatch.setattr(
+        "csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter("bilibili", cards2),
+    )
+    jid2 = ms.create_job("kw2", ["bilibili"], 50, brand_keywords=["石头"])
+    runner.run(jid2)
+    rows = _video_rows()
+    assert rows["B2"]["excluded"] == 0
+    assert rows["B2"]["brand_comment_hits"] == 0
+    assert "featured_skipped" not in ms.get_job(jid2)["progress"]["bilibili"]
+
+
+def test_runner_featured_probe_trips_and_stops_early(db, monkeypatch, no_network_prober):
+    """轻量探测连续失败熔断：剩余视频不再探测，note 里说明，平台仍是 done。"""
+    runner = MiningRunner(publish=lambda k, p: None)
+    cards = [
+        VideoCard(platform="bilibili", platform_video_id=f"B{i}", url=f"http://b.com/v/B{i}")
+        for i in range(1, 7)
+    ]
+    monkeypatch.setattr(
+        "csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter("bilibili", cards),
+    )
+    no_network_prober.trip_after = 3
+
+    jid = ms.create_job("keyword", ["bilibili"], 50)
+    runner.run(jid)
+
+    (prober,) = no_network_prober.instances
+    assert len(prober.calls) == 3, "tripped prober must not be asked about the remaining videos"
+    assert prober.closed
+    job = ms.get_job(jid)
+    assert job["status"] == "done"
+    prog = job["progress"]["bilibili"]
+    assert "评论精选检查中途失败" in prog["note"]
+    assert all(r["excluded"] == 0 for r in _video_rows().values())
+
+
+def test_runner_featured_excluded_video_is_deduped_next_job(db, monkeypatch, no_network_prober):
+    """被精选排除的视频留在 videos 表里：下个任务靠全局去重直接跳过，不再重复探测。"""
+    runner = MiningRunner(publish=lambda k, p: None)
+    card = VideoCard(platform="bilibili", platform_video_id="B1", url="http://b.com/v/B1")
+    monkeypatch.setattr(
+        "csm_core.mining.runner.get_adapter", lambda p, m=None: FakeAdapter("bilibili", [card]),
+    )
+    no_network_prober.verdicts = {"B1": True}
+
+    runner.run(ms.create_job("kw", ["bilibili"], 50))
+    assert _video_rows()["B1"]["exclude_reason"] == "featured_comments"
+    first_calls = sum(len(p.calls) for p in no_network_prober.instances)
+    assert first_calls == 1
+
+    runner.run(ms.create_job("kw again", ["bilibili"], 50))
+    assert sum(len(p.calls) for p in no_network_prober.instances) == first_calls
+    _, total = ms.list_videos(commented="all")
+    assert total == 0
 
 
 def test_runner_prefilter_fetch_failure_leaves_null(db, monkeypatch):
@@ -233,11 +529,11 @@ def test_runner_prefilter_fetch_failure_leaves_null(db, monkeypatch):
     fake_b = FakeAdapter("bilibili", cards)
     monkeypatch.setattr("csm_core.mining.runner.get_adapter", lambda p, m=None: fake_b)
 
-    # Always return [] — simulates a fetch failure
+    # Always return an empty probe — simulates a fetch failure
     def fake_fetch(platform, video_url, limit=20):
-        return []
+        return CommentProbe()
 
-    monkeypatch.setattr("csm_core.mining.runner.fetch_video_comments", fake_fetch)
+    monkeypatch.setattr("csm_core.mining.runner.probe_video_comments", fake_fetch)
 
     jid = ms.create_job("keyword", ["bilibili"], 50, brand_keywords=["石头"])
     runner.run(jid)

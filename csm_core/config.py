@@ -330,6 +330,11 @@ class AppConfig(BaseModel):
     mining_prefilter_top_n: int = Field(default=20, ge=1, le=100)
     mining_prefilter_threshold: int = Field(default=1, ge=1, le=20)
 
+    # ── Mining 精选评论跳过 ─────────────────────────────────────────────
+    # 评论区开启了「精选后可见」的视频（B 站「评论被up主精选后，对所有人可见」），
+    # 引流评论发了也没人看得见 → 抓取后自动排除。默认开；关掉 = 不识别、照常入库。
+    mining_skip_featured_comments: bool = True
+
     # ── Mining 采集数据源（2026-09-01 拍板：默认走 TikHub 付费搜索）────────
     # tikhub_api = 三平台关键词搜索走 TikHub（免登录、免并发风控，$0.01/次）；
     # local      = 本地浏览器采集（手动兜底：TikHub 宕机 / 额度耗尽时切回）。
