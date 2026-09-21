@@ -77,6 +77,9 @@ class CommentSnapshot:
     error_source: str = "fetch"
     #: 非 None = 风控（risk_control_result 的 source 位），优先于 error。
     risk_source: str | None = None
+    #: 评论区开启了「精选后可见」（如 B 站「评论被up主精选后，对所有人可见」）：
+    #: 访客发的评论要被博主手动精选才公开。False = 未开启 / 平台没给信号。
+    featured_only: bool = False
     #: False = 不入缓存（如用户取消导致的截断快照，只给取消者本人用）。
     cacheable: bool = True
     #: time.monotonic() 打点（store 写入时盖章）。
@@ -103,7 +106,11 @@ def result_from_snapshot(
     if snap.error is not None:
         return fail_result(task, snap.error_source, snap.error)
     comments = [dict(c) for c in snap.comments]
-    return build_match_result(task, comments, source=source, scan_limit=scan_limit)
+    result = build_match_result(task, comments, source=source, scan_limit=scan_limit)
+    if snap.featured_only and isinstance(result.metric, dict):
+        # 只在开启时写：mining 引流预筛读它来跳过这类视频（发了评论也没人看得见）。
+        result.metric["featured_only"] = True
+    return result
 
 
 def group_comment_texts(task: MonitorTask) -> list[str]:

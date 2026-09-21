@@ -39,6 +39,29 @@ _BV_RE = re.compile(r"(BV[a-zA-Z0-9]+)")
 _AV_RE = re.compile(r"av(\d+)", re.IGNORECASE)
 
 
+def featured_only_from_reply_data(data: Any) -> bool:
+    """评论接口的 ``data`` 层 → 该视频是否开启了「UP 主精选评论」。
+
+    开启后评论框提示变成「评论被up主精选后，对所有人可见」：访客发的评论要被
+    UP 主手动精选才公开，其他人一律看不到。2026-09 实测（x/v2/reply/main，
+    免登录即返回）：开启时 ``control.web_selection=true``、列表标题
+    ``cursor.name="精选评论"``；普通视频是 ``false`` / ``"热门评论"``。
+
+    主信号是 web_selection；两条文案兜底只防字段改名 —— 它们都只在该模式下
+    出现，不会把普通视频误判成精选。
+    """
+    if not isinstance(data, dict):
+        return False
+    control = data.get("control")
+    if isinstance(control, dict):
+        if control.get("web_selection") is True:
+            return True
+        if "精选后" in str(control.get("root_input_text") or ""):
+            return True
+    cursor = data.get("cursor")
+    return isinstance(cursor, dict) and str(cursor.get("name") or "").strip() == "精选评论"
+
+
 class BilibiliCommentAdapter:
     platform: str = "bilibili_comment"
 
@@ -135,9 +158,10 @@ class BilibiliCommentAdapter:
             # 2. Pull hot comments (mode=3). If we don't have enough, top up
             # with mode=2 (time-sorted) but mark those rank=-1 so the matcher
             # only counts the hot-sorted slice.
+            meta: dict[str, Any] = {}
             hot, ok, err = self._fetch_comments_by_mode(
                 session, aid, mode=3, limit=scrape_top_n,
-                cancel_token=cancel_token, progress_cb=progress_cb,
+                cancel_token=cancel_token, progress_cb=progress_cb, meta=meta,
             )
             if not ok:
                 self._breaker.record_failure()
@@ -157,6 +181,7 @@ class BilibiliCommentAdapter:
             return CommentSnapshot(
                 comments=hot, depth=scrape_top_n,
                 exhausted=len(hot) < scrape_top_n,
+                featured_only=bool(meta.get("featured_only")),
             )
 
         snap = store.run(
@@ -193,7 +218,10 @@ class BilibiliCommentAdapter:
         limit: int,
         cancel_token: threading.Event | None = None,
         progress_cb: "ProgressCb | None" = None,
+        meta: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], bool, str | None]:
+        # meta 是出参：首页顺带读到的评论区级信号（目前只有 featured_only）写进去，
+        # 不改三元组返回值 —— 老调用方 / 测试桩不传也照常工作。
         all_comments: list[dict[str, Any]] = []
         next_cursor: int | str = 0
         api = "https://api.bilibili.com/x/v2/reply/main"
@@ -237,6 +265,8 @@ class BilibiliCommentAdapter:
 
             # First page: pinned comment + hot picks (mode=3 only)
             if next_cursor in (0, "0"):
+                if meta is not None:
+                    meta["featured_only"] = featured_only_from_reply_data(body)
                 top = (body.get("upper") or {}).get("top")
                 if top:
                     self._append_comment(all_comments, top, limit)

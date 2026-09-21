@@ -222,6 +222,45 @@ def test_mark_brand_excluded_unknown_id_returns_false(db):
     assert ms.mark_brand_excluded(999999, hits=1) is False
 
 
+def test_mark_featured_excluded_sets_reason_and_hides_from_lists(db):
+    """评论区开启「精选后可见」→ excluded=1 + exclude_reason='featured_comments'；
+    不碰 brand_comment_hits（没做品牌判定，保持 NULL=未检查）。"""
+    jid = ms.create_job("空气净化器", ["bilibili"], 50)
+    keep = ms.upsert_video_and_link(_make_card(platform="bilibili", vid="BV1keep"), jid)
+    skip = ms.upsert_video_and_link(_make_card(platform="bilibili", vid="BV1skip"), jid)
+
+    assert ms.mark_featured_excluded(skip) is True
+    assert ms.mark_featured_excluded(999999) is False
+
+    conn = monitor_storage.get_conn()
+    row = conn.execute(
+        "SELECT excluded, exclude_reason, brand_comment_hits FROM videos WHERE id=?", (skip,),
+    ).fetchone()
+    assert (row["excluded"], row["exclude_reason"], row["brand_comment_hits"]) == (
+        1, "featured_comments", None)
+
+    rows, total = ms.list_videos(commented="all")
+    assert [r["id"] for r in rows] == [keep] and total == 1
+    # 任务卡的视频数、预筛候选都不再算它；但行还在 → 后续任务去重直接跳过
+    assert ms.list_jobs()[0]["video_count"] == 1
+    assert [v["id"] for v in ms.videos_for_prefilter(jid, "bilibili")] == [keep]
+    assert ms.is_video_tracked_anywhere(conn, "bilibili", "BV1skip") is True
+
+
+def test_update_platform_progress_featured_skipped_only_when_positive(db):
+    jid = ms.create_job("k", ["bilibili", "douyin"], 50)
+    ms.update_platform_progress(jid, "bilibili", got=50, target=50, phase="done",
+                                note="3 条开启了评论精选", featured_skipped=3)
+    ms.update_platform_progress(jid, "douyin", got=50, target=50, phase="done")
+    progress = ms.get_job(jid)["progress"]
+    assert progress["bilibili"]["featured_skipped"] == 3
+    # 0 不落库：progress 形状对老前端 / 老断言保持不变
+    assert progress["douyin"] == {"got": 50, "target": 50, "phase": "done", "note": ""}
+    # finalize 的 summary 原样带出，前端完成通知靠它报数
+    summary = ms.finalize_job(jid)
+    assert summary["progress"]["bilibili"]["featured_skipped"] == 3
+
+
 def test_create_job_with_brand_keywords(db):
     """create_job accepts brand_keywords; get_job surfaces them via brand_keywords key."""
     jid = ms.create_job("扫地机器人", ["douyin"], 50, brand_keywords=["石头", "roborock"])

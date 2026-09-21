@@ -27,7 +27,9 @@ PlatformPhase = Literal[
     # 里 poll 等用户手动解。这个 phase 期间 job.status 保持 "running"，
     # 前端能看到任务"等待验证"的中间态。解完回 scrolling；超时才 bail。
     "captcha_waiting",
-    # v0.8: 预筛 pass — search 收齐后对候选视频抓首页评论做品牌词计数。
+    # v0.8: 预筛 pass — search 收齐后对候选视频抓首页评论做品牌词计数；
+    # 同一 pass 里顺带识别「评论精选后才可见」的视频并排除（没填品牌词时
+    # 只跑这一项的轻量探测，note 为「检查评论精选」）。
     "prefilter",
 ]
 

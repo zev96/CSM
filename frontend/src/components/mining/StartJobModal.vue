@@ -432,7 +432,7 @@ function onSubmit() {
           <div class="text-[11.5px] leading-snug" style="color: var(--ink-2)">
             预计抓取 <b class="font-display" style="color: var(--ink)">{{ total }}</b> 条视频，约需
             <b class="font-mono" style="color: var(--ink)">{{ Math.max(2, Math.round(total / 25)) }}–{{ Math.max(4, Math.round(total / 15)) }} 分钟</b>。
-            抓完后自动去重<template v-if="brandList.length"> &amp; 按品牌词预筛已种草视频</template>。
+            抓完后自动去重<template v-if="picked.bilibili">、跳过开启了「评论精选」的 B站视频（评论要被 UP 主精选才可见）</template><template v-if="brandList.length"> &amp; 按品牌词预筛已种草视频</template>。
           </div>
         </div>
       </div>

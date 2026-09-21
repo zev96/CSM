@@ -14,7 +14,8 @@ import time
 from typing import Callable
 
 from csm_core.mining import storage as mining_storage
-from csm_core.mining.comment_prefilter import count_brand_hits, fetch_video_comments
+from csm_core.mining.comment_prefilter import count_brand_hits, probe_video_comments
+from csm_core.mining.featured_probe import FEATURED_PROBE_PLATFORMS, FeaturedProber
 from csm_core.mining.models import (
     Platform, ProgressUpdate, SearchOutcome, VideoCard,
 )
@@ -68,6 +69,20 @@ def _prefilter_params(cfg=None) -> tuple[int, int]:
     except Exception:
         logger.info("[runner] config read failed, using prefilter fallbacks", exc_info=True)
         return PREFILTER_SCRAPE_TOP_N, PREFILTER_THRESHOLD
+
+
+def _skip_featured(cfg=None) -> bool:
+    """AppConfig.mining_skip_featured_comments（默认开）：评论区开启了「精选后可见」
+    的视频抓取后自动排除。cfg 约定同 _prefilter_params；读不到配置 → 按默认开。"""
+    try:
+        if cfg is None:
+            from csm_core.config import get_config
+
+            cfg = get_config()
+        return bool(getattr(cfg, "mining_skip_featured_comments", True))
+    except Exception:
+        logger.info("[runner] config read failed, defaulting skip-featured to on", exc_info=True)
+        return True
 
 
 def _data_source_mode(cfg=None) -> str:
@@ -157,6 +172,106 @@ class MiningRunner:
             return True
         return False
 
+    def _comment_check_pass(
+        self,
+        job_id: int,
+        platform: str,
+        *,
+        brand_keywords: list[str],
+        skip_featured: bool,
+        top_n: int,
+        threshold: int,
+        cancel_event: threading.Event,
+    ) -> tuple[int, bool]:
+        """逐视频看评论区：精选评论跳过 + 品牌预筛。
+
+        brand_keywords 非空 → 抓前 top_n 条评论（适配器顺带带回精选信号；那次抓取
+        没结论时回落轻量探测补判）；为空 → 只做精选评论的轻量探测（调用方保证平台
+        支持，见 run()）。
+
+        Returns ``(featured_skipped, probe_aborted)``：因评论精选被排除的视频数；
+        轻量探测是否连续失败熔断（部分视频没检查到）。任何异常都在这里兜住 ——
+        预筛是锦上添花，不能把整个平台的采集结果拖成 failed；已排除的计数照常返回。
+        """
+        featured_skipped = 0
+        probe_only = not brand_keywords
+        can_probe = skip_featured and platform in FEATURED_PROBE_PLATFORMS
+        prober: FeaturedProber | None = None  # 用到才建（品牌预筛一路顺利就不需要）
+        note = "检查评论精选" if probe_only else "筛重复评论"
+
+        def probe_says_featured(url: str) -> bool:
+            # None（不知道 / 已熔断）按 fail-open 处理：不排除。
+            nonlocal prober
+            if prober is None:
+                prober = FeaturedProber()
+            return prober.check(platform, url) is True
+
+        try:
+            vids = mining_storage.videos_for_prefilter(job_id, platform)
+            for i, v in enumerate(vids):
+                if cancel_event.is_set():
+                    break
+                if probe_only and prober is not None and prober.tripped:
+                    break  # 只剩探测这一件事、探测又熔断了 → 提前收工
+                # Transient prefilter progress — will be overwritten by
+                # the final "done" write in run(), keeping phase integrity.
+                mining_storage.update_platform_progress(
+                    job_id, platform,
+                    got=i, target=len(vids),
+                    phase="prefilter", note=note,
+                )
+                self.publish("job.progress", {
+                    "job_id": job_id, "platform": platform,
+                    "phase": "prefilter", "got": i, "target": len(vids),
+                    "note": note,
+                })
+                if probe_only:
+                    if probe_says_featured(v["url"]):
+                        mining_storage.mark_featured_excluded(v["id"])
+                        featured_skipped += 1
+                    continue
+                probe = probe_video_comments(platform, v["url"], limit=top_n)
+                featured = probe.featured_only
+                if not probe.ok and can_probe:
+                    # 适配器这次没抓成（B 站匿名请求偶发 -352 风控等）→ 精选信号
+                    # 也跟着丢了。换轻量探测补判，别让精选视频借一次偶发失败漏网。
+                    featured = probe_says_featured(v["url"])
+                if skip_featured and featured:
+                    # 先于「抓不到评论」判断：刚开精选、还没精选任何评论的视频
+                    # 就是「空列表 + featured_only」。品牌命中数不用算了。
+                    mining_storage.mark_featured_excluded(v["id"])
+                    featured_skipped += 1
+                    continue
+                comments = probe.comments
+                if not comments:
+                    # fail-open：抓不到评论 → 不排除，且不写 brand_comment_hits（保持 NULL=未检查，
+                    # 区别于「检查过、0 条品牌评论」的 0）。
+                    continue
+                # 快照持久化（排除与否都存）：AI 生成环节复用当
+                # 评论区语料，免二次抓取；被排除的视频 UI 可回看
+                # 命中了哪条评论。
+                try:
+                    mining_storage.set_top_comments(v["id"], comments)
+                except Exception:
+                    logger.exception(
+                        "[runner] set_top_comments failed video=%s", v["id"],
+                    )
+                texts = [c["text"] for c in comments]
+                hits = count_brand_hits(texts, brand_keywords)
+                if hits >= threshold:
+                    mining_storage.mark_brand_excluded(v["id"], hits)
+                else:
+                    mining_storage.set_brand_hits(v["id"], hits)
+        except Exception:
+            logger.exception(
+                "[runner] prefilter pass failed for platform=%s job=%s",
+                platform, job_id,
+            )
+        finally:
+            if prober is not None:
+                prober.close()
+        return featured_skipped, bool(prober is not None and prober.tripped)
+
     def run(self, job_id: int) -> None:
         job = mining_storage.get_job(job_id)
         if job is None:
@@ -177,6 +292,7 @@ class MiningRunner:
             logger.info("[runner] config read failed for job %d, using fallbacks", job_id, exc_info=True)
             cfg = None
         prefilter_top_n, prefilter_threshold = _prefilter_params(cfg)
+        skip_featured = _skip_featured(cfg)
         mining_storage.mark_started(job_id)
         self.publish("job.started", {"job_id": job_id, "keyword": job["keyword"]})
 
@@ -341,54 +457,27 @@ class MiningRunner:
                     job_latched = True
                 continue
 
-            # Brand pre-filter pass — only when the search completed successfully
-            # and brand keywords are configured. Runs BEFORE the final "done"
-            # progress write so any transient "prefilter" phase is overwritten.
-            if outcome.status == "done" and brand_keywords:
-                try:
-                    vids = mining_storage.videos_for_prefilter(job_id, platform)
-                    for i, v in enumerate(vids):
-                        if cancel_event.is_set():
-                            break
-                        # Transient prefilter progress — will be overwritten by
-                        # the final "done" write below, keeping phase integrity.
-                        mining_storage.update_platform_progress(
-                            job_id, platform,
-                            got=i, target=len(vids),
-                            phase="prefilter", note="筛重复评论",
-                        )
-                        self.publish("job.progress", {
-                            "job_id": job_id, "platform": platform,
-                            "phase": "prefilter", "got": i, "target": len(vids),
-                            "note": "筛重复评论",
-                        })
-                        comments = fetch_video_comments(
-                            platform, v["url"], limit=prefilter_top_n,
-                        )
-                        if not comments:
-                            # fail-open：抓不到评论 → 不排除，且不写 brand_comment_hits（保持 NULL=未检查，
-                            # 区别于「检查过、0 条品牌评论」的 0）。
-                            continue
-                        # 快照持久化（排除与否都存）：AI 生成环节复用当
-                        # 评论区语料，免二次抓取；被排除的视频 UI 可回看
-                        # 命中了哪条评论。
-                        try:
-                            mining_storage.set_top_comments(v["id"], comments)
-                        except Exception:
-                            logger.exception(
-                                "[runner] set_top_comments failed video=%s", v["id"],
-                            )
-                        texts = [c["text"] for c in comments]
-                        hits = count_brand_hits(texts, brand_keywords)
-                        if hits >= prefilter_threshold:
-                            mining_storage.mark_brand_excluded(v["id"], hits)
-                        else:
-                            mining_storage.set_brand_hits(v["id"], hits)
-                except Exception:
-                    logger.exception(
-                        "[runner] prefilter pass failed for platform=%s job=%s",
-                        platform, job_id,
-                    )
+            # 评论区检查 pass — only when the search completed successfully. Runs
+            # BEFORE the final "done" progress write so any transient "prefilter"
+            # phase is overwritten. 两件事共用一次逐视频遍历：
+            #   ① 精选评论：评论区开启了「精选后可见」→ 引流评论发了也没人看得见，排除；
+            #   ② 品牌预筛：仅当配置了 brand_keywords。
+            # 填了品牌词时 ① 搭 ② 抓评论的便车（零额外请求）；没填时 ① 只对支持
+            # 轻量探测的平台跑（每视频 1 个小请求，见 featured_probe）。
+            featured_skipped = 0
+            probe_aborted = False
+            probe_only = (
+                skip_featured and not brand_keywords
+                and platform in FEATURED_PROBE_PLATFORMS
+            )
+            if outcome.status == "done" and (brand_keywords or probe_only):
+                featured_skipped, probe_aborted = self._comment_check_pass(
+                    job_id, platform,
+                    brand_keywords=brand_keywords,
+                    skip_featured=skip_featured,
+                    top_n=prefilter_top_n, threshold=prefilter_threshold,
+                    cancel_event=cancel_event,
+                )
                 # No finally needed — the "done" progress write below always
                 # restores the correct phase, whether prefilter ran or not.
 
@@ -407,17 +496,23 @@ class MiningRunner:
             if skipped_dup[0]:
                 # 我们自己的中文提示，两种数据源模式都可落库（不受 R7 限制）。
                 note_parts.append(f"{skipped_dup[0]} 条已在监控/已采集过，未重复入库")
+            if featured_skipped:
+                note_parts.append(f"{featured_skipped} 条开启了评论精选（评论需博主精选后才可见），已自动跳过")
+            if probe_aborted:
+                note_parts.append("评论精选检查中途失败（接口异常/风控），部分视频未检查")
             mining_storage.update_platform_progress(
                 job_id, platform,
                 got=outcome.cards_emitted,
                 target=eff_target,
                 phase=outcome.status if outcome.status != "done" else "done",
                 note="；".join(note_parts)[:200],
+                featured_skipped=featured_skipped,
             )
             self.publish("job.platform_done", {
                 "job_id": job_id, "platform": platform,
                 "status": outcome.status, "count": outcome.cards_emitted,
                 "error": outcome.error_message,
+                "featured_skipped": featured_skipped,
             })
 
             if data_source_mode == "tikhub_api" and balance_exhausted():

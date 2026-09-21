@@ -307,13 +307,20 @@ def mark_started(job_id: int) -> None:
     )
 
 
-def update_platform_progress(job_id: int, platform: str, *, got: int, target: int, phase: str, note: str = "") -> None:
+def update_platform_progress(
+    job_id: int, platform: str, *, got: int, target: int, phase: str, note: str = "",
+    featured_skipped: int = 0,
+) -> None:
     conn = get_conn()
     row = conn.execute("SELECT progress_json FROM mining_jobs WHERE id=?", (job_id,)).fetchone()
     if row is None:
         return
     progress: dict[str, Any] = json.loads(row["progress_json"]) if row["progress_json"] else {}
     progress[platform] = {"got": got, "target": target, "phase": phase, "note": note}
+    if featured_skipped > 0:
+        # 因「评论区开启精选后可见」被跳过的视频数。只在 >0 时写 —— 前端完成通知
+        # 读它报数；结构化字段，免得去解析 note 里的中文。
+        progress[platform]["featured_skipped"] = int(featured_skipped)
     conn.execute(
         "UPDATE mining_jobs SET progress_json=? WHERE id=?",
         (json.dumps(progress, ensure_ascii=False), job_id),
@@ -1600,6 +1607,22 @@ def mark_brand_excluded(video_id: int, hits: int) -> bool:
     cur = conn.execute(
         "UPDATE videos SET excluded=1, exclude_reason='brand_seeded', brand_comment_hits=? WHERE id=?",
         (int(hits), video_id),
+    )
+    return cur.rowcount > 0
+
+
+def mark_featured_excluded(video_id: int) -> bool:
+    """Mark a video as excluded because its comment area is curated-only.
+
+    评论区开启了「精选后可见」（B 站「评论被up主精选后，对所有人可见」）：引流评论
+    发了也没人看得见。Sets excluded=1, exclude_reason='featured_comments'；行留在
+    videos 表里，后续任务靠全局去重直接跳过，不会反复抓到、反复探测。
+    Returns True if the row existed and was updated.
+    """
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE videos SET excluded=1, exclude_reason='featured_comments' WHERE id=?",
+        (video_id,),
     )
     return cur.rowcount > 0
 

@@ -26,7 +26,8 @@ const subscribeMock = vi.fn((_path: string, handlers: any, opts: any) => {
 });
 vi.mock("@/api/client", () => ({ subscribe: (...a: any[]) => subscribeMock(...(a as [string, any, any])) }));
 
-import { useMiningStore, type MiningJob } from "@/stores/mining";
+import { useMiningStore, sumFeaturedSkipped, type MiningJob } from "@/stores/mining";
+import { useNotifications } from "@/composables/useNotifications";
 
 function job(over: Partial<MiningJob> = {}): MiningJob {
   return {
@@ -144,6 +145,73 @@ describe("mining store — SSE 事件对账", () => {
     await flushPromises();
     expect(store.hasRunningJob).toBe(false);
     expect(stopSse).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("mining store — 精选评论跳过数（完成通知报数）", () => {
+  const doneBodies = () =>
+    useNotifications().items.value.filter(n => n.category === "mining_done").map(n => n.body);
+  const biliProgress = (n: number) =>
+    ({ bilibili: { got: 50, target: 50, phase: "done", note: "", featured_skipped: n } }) as any;
+
+  beforeEach(() => useNotifications().clear());
+
+  it("sumFeaturedSkipped：跨平台求和，缺字段 / 脏值 / 空输入都当 0", () => {
+    expect(sumFeaturedSkipped({
+      bilibili: { got: 1, target: 1, phase: "done", featured_skipped: 3 },
+      douyin: { got: 1, target: 1, phase: "done" },
+      kuaishou: { got: 1, target: 1, phase: "done", featured_skipped: 2 },
+    })).toBe(5);
+    expect(sumFeaturedSkipped({ bilibili: { got: 0, target: 0, phase: "done", featured_skipped: -1 } })).toBe(0);
+    expect(sumFeaturedSkipped({ bilibili: { got: 0, target: 0, phase: "done", featured_skipped: "x" as any } })).toBe(0);
+    expect(sumFeaturedSkipped(null)).toBe(0);
+    expect(sumFeaturedSkipped(undefined)).toBe(0);
+  });
+
+  it("job.finished 的 summary.progress 带 featured_skipped → 通知里报数", async () => {
+    await startJob();
+    jobsList = [job({ status: "done" })];
+    sseHandlers["job.finished"]({ summary: { status: "done", progress: biliProgress(3) } });
+    await flushPromises();
+    expect(doneBodies()).toEqual(["「空气净化器」全部平台完成，已跳过 3 条开启评论精选的视频"]);
+  });
+
+  it("summary 不带 progress（老 sidecar）→ 退回 platform_done 事件攒下的计数", async () => {
+    const store = await startJob();
+    sseHandlers["job.platform_done"]({ platform: "douyin", status: "done", count: 10, error: "", featured_skipped: 2 });
+    expect(store.activeJob!.progress.douyin.featured_skipped).toBe(2);
+    expect(store.jobs[0].progress.douyin.featured_skipped).toBe(2);
+    jobsList = [job({ status: "done" })];
+    sseHandlers["job.finished"]({ summary: { status: "done" } });
+    await flushPromises();
+    expect(doneBodies()).toEqual(["「空气净化器」全部平台完成，已跳过 2 条开启评论精选的视频"]);
+  });
+
+  it("没有跳过任何视频 → 通知文案保持原样；platform_done 也不写 featured_skipped", async () => {
+    const store = await startJob();
+    sseHandlers["job.platform_done"]({ platform: "douyin", status: "done", count: 10, error: "", featured_skipped: 0 });
+    expect("featured_skipped" in store.activeJob!.progress.douyin).toBe(false);
+    jobsList = [job({ status: "done" })];
+    sseHandlers["job.finished"]({ summary: { status: "done", progress: { douyin: { got: 10, target: 10, phase: "done" } } } });
+    await flushPromises();
+    expect(doneBodies()).toEqual(["「空气净化器」全部平台完成"]);
+  });
+
+  it("断线快照拿到终态 → 同样报数", async () => {
+    await startJob();
+    jobSnapshot = job({ status: "done", progress: biliProgress(4) });
+    jobsList = [job({ status: "done" })];
+    sseOpts.onError!();
+    await flushPromises();
+    expect(doneBodies()).toEqual(["「空气净化器」全部平台完成，已跳过 4 条开启评论精选的视频"]);
+  });
+
+  it("loadJobs 兜底对账拿到终态 → 同样报数", async () => {
+    const store = await startJob();
+    jobsList = [job({ status: "partial_done", progress: biliProgress(1) })];
+    await store.loadJobs();
+    await flushPromises();
+    expect(doneBodies()).toEqual(["「空气净化器」部分平台未完成，已跳过 1 条开启评论精选的视频"]);
   });
 });
 

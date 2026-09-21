@@ -9,6 +9,29 @@ const mountOpts = (props: Record<string, unknown>) => ({
   global: { stubs: { teleport: true } },
 });
 
+describe("StartJobModal — 精选评论跳过提示", () => {
+  const HINT = "跳过开启了「评论精选」的 B站视频";
+
+  it("选了 B站 → 预估文案里说明会自动跳过；取消勾选 B站 → 不再提", async () => {
+    const w = mount(StartJobModal, mountOpts({ tikhubMode: false }));
+    expect(w.text()).toContain(HINT);
+
+    const bili = w.findAllComponents({ name: "PlatformPickerCard" })
+      .find(c => c.props("platform") === "bilibili")!;
+    await bili.vm.$emit("toggle");
+    expect(w.text()).not.toContain(HINT);
+    expect(w.text()).toContain("抓完后自动去重");
+  });
+
+  it("B站 没登录（本地模式默认不勾选）→ 不提", () => {
+    const w = mount(StartJobModal, mountOpts({
+      tikhubMode: false,
+      loginStatus: { bilibili: false, douyin: true, kuaishou: true, xiaohongshu: false },
+    }));
+    expect(w.text()).not.toContain(HINT);
+  });
+});
+
 describe("StartJobModal — TikHub 模式采集上限钳制", () => {
   it("TikHub 模式：滑条 max 钳到 80，提示文案可见", () => {
     const w = mount(StartJobModal, mountOpts({ tikhubMode: true }));

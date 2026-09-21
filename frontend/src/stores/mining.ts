@@ -86,6 +86,21 @@ export interface PlatformProgress {
   target: number
   phase: string
   note?: string
+  /** 因评论区开启了「精选后可见」（B 站「评论被up主精选后，对所有人可见」）被
+   *  自动跳过的视频数。后端只在 > 0 时写这个字段。 */
+  featured_skipped?: number
+}
+
+/** 一个任务各平台 featured_skipped 之和 —— 完成通知报数用。 */
+export function sumFeaturedSkipped(
+  progress: Partial<Record<Platform, PlatformProgress>> | null | undefined,
+): number {
+  let n = 0
+  for (const p of Object.values(progress ?? {})) {
+    const v = Number(p?.featured_skipped)
+    if (Number.isFinite(v) && v > 0) n += v
+  }
+  return n
 }
 
 export interface MiningJob {
@@ -336,13 +351,18 @@ export const useMiningStore = defineStore("mining", () => {
    * 这里；调用方负责只在真正发生状态转换时调用（wasRunning 判定），所以
    * 不会重复推通知。
    */
-  function _settleFinished(status: string, keyword: string) {
+  function _settleFinished(status: string, keyword: string, featuredSkipped = 0) {
     if (stopSse) { stopSse(); stopSse = null }
     if (status !== "cancelled") {
       // 用户主动取消不推「完成」通知 —— 与 monitor 的取消静默一致
       const ok = status === "done" || status === "completed"
+      // 评论区开了「精选后可见」的视频被自动跳过 —— 报个数，免得用户纳闷
+      // 「设了 50 条怎么列表里少了几条」。
+      const skipped = featuredSkipped > 0
+        ? `，已跳过 ${featuredSkipped} 条开启评论精选的视频`
+        : ""
       bell.push("引流任务完成", {
-        body: `「${keyword}」${ok ? "全部平台完成" : "部分平台未完成"}`,
+        body: `「${keyword}」${ok ? "全部平台完成" : "部分平台未完成"}${skipped}`,
         tone: ok ? "success" : "warn",
         category: "mining_done",
       })
@@ -378,12 +398,17 @@ export const useMiningStore = defineStore("mining", () => {
         }))
       },
       "job.platform_done": (d: any) => {
+        // 与后端落库口径一致：featured_skipped 只在 > 0 时带上。
+        const skipped = Number(d.featured_skipped) > 0
+          ? { featured_skipped: Number(d.featured_skipped) }
+          : {}
         if (isActive(d)) {
           activeJob.value!.progress[d.platform as Platform] = {
             ...(activeJob.value!.progress[d.platform as Platform] || { target: 50 }),
             got: d.count,
             phase: d.status === "done" ? "done" : d.status,
             note: d.error || "",
+            ...skipped,
           }
         }
         _patchJobInList(jid(d), j => ({
@@ -395,6 +420,7 @@ export const useMiningStore = defineStore("mining", () => {
               got: d.count,
               phase: d.status === "done" ? "done" : d.status,
               note: d.error || "",
+              ...skipped,
             },
           },
         }))
@@ -416,7 +442,11 @@ export const useMiningStore = defineStore("mining", () => {
           ? activeJob.value.keyword
           : (jobs.value.find(j => j.id === id)?.keyword ?? "")
         if (wasRunning) {
-          _settleFinished(st, kw)
+          // summary.progress 是 finalize 时从库里读的终态；老 sidecar 没有它时
+          // 退回 platform_done 事件攒在 activeJob 上的计数。
+          const skipped = sumFeaturedSkipped(d.summary?.progress)
+            || sumFeaturedSkipped(activeJob.value?.progress)
+          _settleFinished(st, kw, skipped)
         } else if (stopSse) {
           stopSse(); stopSse = null
         }
@@ -462,7 +492,7 @@ export const useMiningStore = defineStore("mining", () => {
         commented_count: j.commented_count,
       }))
       if (wasRunning && !isRunningStatus(fresh.status)) {
-        _settleFinished(fresh.status, fresh.keyword)
+        _settleFinished(fresh.status, fresh.keyword, sumFeaturedSkipped(fresh.progress))
       }
     } catch {
       /* 瞬时网络问题 —— EventSource 自己会重连，下次事件兜底 */
@@ -596,7 +626,7 @@ export const useMiningStore = defineStore("mining", () => {
       const fresh = jobs.value.find(j => j.id === aj.id)
       if (fresh && !isRunningStatus(fresh.status)) {
         activeJob.value = fresh
-        _settleFinished(fresh.status, fresh.keyword)
+        _settleFinished(fresh.status, fresh.keyword, sumFeaturedSkipped(fresh.progress))
       }
     } else if (!hasRunningJob.value) {
       const running = jobs.value.find(j => isRunningStatus(j.status))

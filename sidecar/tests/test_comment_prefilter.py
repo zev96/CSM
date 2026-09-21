@@ -180,6 +180,60 @@ def test_fetch_video_comment_texts_passes_limit(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# probe_video_comments（评论 + 评论区级信号 featured_only）
+# ---------------------------------------------------------------------------
+
+def test_probe_carries_featured_only_even_with_no_comments():
+    """评论区开了「精选后可见」、还没精选任何评论：空列表 + featured_only=True。
+    （fetch_video_comments 老接口照旧只给评论列表。）"""
+    from csm_core.mining import comment_prefilter as mod
+
+    fake_adapter = MagicMock()
+    result = _make_ok_result([])
+    result.metric["featured_only"] = True
+    fake_adapter.fetch.return_value = result
+    with patch.dict("csm_core.monitor.platforms.ALL", {"bilibili_comment": fake_adapter}, clear=False):
+        probe = mod.probe_video_comments("bilibili", "https://www.bilibili.com/video/BV1rAeH6JE5k")
+        comments = mod.fetch_video_comments("bilibili", "https://www.bilibili.com/video/BV1rAeH6JE5k")
+
+    # ok=True：抓成功了，「空列表」是确认过的空，不是没抓到
+    assert probe == mod.CommentProbe(comments=[], featured_only=True, ok=True)
+    assert comments == []
+
+
+def test_probe_featured_only_defaults_false():
+    """适配器没给信号（其它平台 / 普通视频）→ False；只认布尔 True。"""
+    from csm_core.mining import comment_prefilter as mod
+
+    fake_adapter = MagicMock()
+    truthy_but_not_true = _make_ok_result(["a"])
+    truthy_but_not_true.metric["featured_only"] = "yes"
+    fake_adapter.fetch.side_effect = [_make_ok_result(["a"]), truthy_but_not_true]
+    with patch.dict("csm_core.monitor.platforms.ALL", {"kuaishou_comment": fake_adapter}, clear=False):
+        first = mod.probe_video_comments("kuaishou", "https://www.kuaishou.com/short-video/x")
+        second = mod.probe_video_comments("kuaishou", "https://www.kuaishou.com/short-video/x")
+
+    assert first.featured_only is False and [c["text"] for c in first.comments] == ["a"]
+    assert first.ok is True
+    assert second.featured_only is False
+
+
+def test_probe_failure_paths_return_empty_probe():
+    from csm_core.mining import comment_prefilter as mod
+
+    assert mod.probe_video_comments("weibo", "https://weibo.com/x") == mod.CommentProbe()
+
+    failing = MagicMock()
+    failing.fetch.return_value = _make_failed_result()
+    raising = MagicMock()
+    raising.fetch.side_effect = RuntimeError("network error")
+    with patch.dict("csm_core.monitor.platforms.ALL", {"bilibili_comment": failing}, clear=False):
+        assert mod.probe_video_comments("bilibili", "https://b/x") == mod.CommentProbe()
+    with patch.dict("csm_core.monitor.platforms.ALL", {"bilibili_comment": raising}, clear=False):
+        assert mod.probe_video_comments("bilibili", "https://b/x") == mod.CommentProbe()
+
+
+# ---------------------------------------------------------------------------
 # fetch_video_comments（dict 形状 + 抖音 TikHub 路由）
 # ---------------------------------------------------------------------------
 
